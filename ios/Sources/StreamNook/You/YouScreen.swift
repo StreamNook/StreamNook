@@ -55,7 +55,19 @@ struct YouScreen: View {
         .toolbarTitleDisplayMode(.inlineLarge)
     }
 
+    @ViewBuilder
     private var identity: some View {
+        if let user {
+            OwnIdentityHeader(model: model, user: user)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+        } else {
+            signedOutIdentity
+        }
+    }
+
+    private var signedOutIdentity: some View {
         HStack(alignment: .top, spacing: 12) {
             Avatar(url: user?.profileImageURL, size: 56)
             VStack(alignment: .leading, spacing: 2) {

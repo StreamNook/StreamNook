@@ -1,26 +1,17 @@
 // Tap a name in chat, see who they are: every cosmetic source the app decorates
 // a profile with, in one sheet.
 //
-// Replaces a 46-line stub that painted the display name and printed the 7TV
-// badge as a line of TEXT. The data was always reachable — `useMobileBoot`
-// already calls the same cache for the signed-in account — so this is mostly a
-// matter of rendering what was already being fetched.
-//
-// Badge normalisation is shared with the desktop card via
-// `utils/profileBadges`, because the merge and dedupe rules are per-source and
-// fiddly: each provider spells its image fields differently, cache and Rust can
-// both carry the same badge, and Twitch splits one badge across display and
-// earned lists.
+// Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
+// badge groups merged and deduped per provider, the worn paint, the Helix
+// picture and StreamNook membership, cached per person and room. The same
+// answer draws the iPhone's native sheet, so the two cannot drift; this lays it
+// out.
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
-import { useChatUserStore } from '../../stores/chatUserStore';
 import { computePaintStyle } from '../../services/seventvService';
-import { getFullProfileWithFallback, getProfileFromMemoryCache } from '../../services/cosmeticsCache';
-import { memberIdFor } from '../../utils/memberIdentity';
-import { getStreamNookUserNumber } from '../../services/supabaseService';
-import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profileBadges';
+import type { ProfileBadge, ProfileSheetView } from '../../types/profileView';
 import { FallbackImage } from '../../components/FallbackImage';
 import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { MobileSheet } from '../ui/MobileSheet';
@@ -66,12 +57,9 @@ const clock = (at: number | null): string =>
 
 const BadgeGrid: React.FC<{
   title: string;
-  badges: NormalizedBadge[];
-  onPick: (b: NormalizedBadge) => void;
-}> = ({ title, badges: all, onPick }) => {
-  // A source can hand back an entry with no usable image (a provider changing
-  // its payload, mostly). Rendering it would just be a broken tile.
-  const badges = all.filter((b) => !!b.src);
+  badges: ProfileBadge[];
+  onPick: (b: ProfileBadge) => void;
+}> = ({ title, badges, onPick }) => {
   if (!badges.length) return null;
   return (
     <div className="mt-3">
@@ -87,9 +75,8 @@ const BadgeGrid: React.FC<{
             aria-label={b.title || b.name || 'Badge'}
           >
             <FallbackImage
-              src={b.src as string}
-              fallbackUrls={b.fallbackUrls}
-              srcSet={b.srcSet}
+              src={b.url}
+              fallbackUrls={b.fallbacks}
               alt={b.title || ''}
               className="w-7 h-7 object-contain"
             />
@@ -129,14 +116,9 @@ const ProfileBody: React.FC<{
   channelName?: string | null;
   onClose: () => void;
 }> = ({ user, channelId, channelName, onClose }) => {
-  // The live chat store already holds paint and badge for anyone who has
-  // spoken, so the sheet paints correctly on frame one and the fetch below only
-  // fills in what chat does not carry.
-  const storeUser = useChatUserStore((s) => s.users.get(user.userId));
-  // Seeded synchronously from the LRU so reopening a profile does not flash.
-  const [profile, setProfile] = useState(() => getProfileFromMemoryCache(user.userId));
-  const [avatar, setAvatar] = useState<string | null>(null);
-  const [picked, setPicked] = useState<NormalizedBadge | null>(null);
+  // Rust's answer: its cached copy first (a reopen paints at once), then fresh.
+  const [sheet, setSheet] = useState<ProfileSheetView | null>(null);
+  const [picked, setPicked] = useState<ProfileBadge | null>(null);
   // null until the store has answered, so "nothing yet" is never painted
   // over a list that is still on its way.
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
@@ -214,41 +196,36 @@ const ProfileBody: React.FC<{
     let cancelled = false;
     (async () => {
       try {
-        const p = await getFullProfileWithFallback(
+        const cached = await invoke<ProfileSheetView | null>('user_profile_sheet_cached', {
           userId,
-          username,
-          channelId ?? undefined,
-          channelName ?? undefined,
-        );
-        if (!cancelled) setProfile(p);
-      } catch (err) {
-        Logger.debug('[UserProfile] cosmetics unavailable:', err);
-      }
-      try {
-        const u = await invoke<{ profile_image_url?: string } | null>('get_user_by_id', {
-          userId,
+          channelId: channelId ?? null,
         });
-        if (!cancelled && u?.profile_image_url) setAvatar(u.profile_image_url);
-      } catch {
-        /* avatar is decoration; a profile without one still renders */
+        if (!cancelled && cached) setSheet(cached);
+        const fresh = await invoke<ProfileSheetView>('user_profile_sheet', {
+          userId,
+          login: username,
+          displayName: user.displayName,
+          color: user.color || null,
+          channelId: channelId ?? null,
+          channelLogin: channelName ?? null,
+        });
+        if (!cancelled) setSheet(fresh);
+      } catch (err) {
+        Logger.debug('[UserProfile] profile unavailable:', err);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId, username, channelId, channelName]);
+  }, [userId, username, user.displayName, user.color, channelId, channelName]);
 
-  const paint = storeUser?.paint ?? profile?.seventvCosmetics?.paints?.find((p) => p.selected);
+  const paint = sheet?.paint_def;
   const adjustNameColor = useNameColorAdjust();
-  const shownColor = adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
+  const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
   const nameStyle = paint ? computePaintStyle(paint, shownColor, 'all') : { color: shownColor };
-
-  const badges = normalizeProfileBadges({ cachedProfile: profile });
-  // `user.userId` is a CHAT key, the same string the store row above is read by.
-  // Membership is filed under a Twitch id, so it goes through the resolver: a
-  // bare Twitch id passes straight through, and a Kick or YouTube key resolves
-  // only if that account has been claimed, never by coincidence of number.
-  const userNumber = getStreamNookUserNumber(memberIdFor(user.userId));
+  const avatar = sheet?.avatar_url ?? null;
+  const groups = sheet?.groups ?? [];
+  const member = !!sheet?.streamnook;
 
   return (
     <MobileSheet open={!!user} onClose={onClose} maxHeightFraction={0.8}>
@@ -304,18 +281,15 @@ const ProfileBody: React.FC<{
           </div>
         )}
 
-        <BadgeGrid title="Twitch" badges={badges.twitch} onPick={setPicked} />
-        <BadgeGrid title="7TV" badges={badges.seventv} onPick={setPicked} />
-        <BadgeGrid title="Chat clients" badges={badges.thirdParty} onPick={setPicked} />
+        {groups.map((group) => (
+          <BadgeGrid key={group.title} title={group.title} badges={group.badges} onPick={setPicked} />
+        ))}
 
         {/* Last, as on the desktop card and in chat (utils/badgeOrder). Its OWN
-            group, and gated on membership. StreamNookBadge carries no
-            membership guard of its own — the desktop card gates the call site on
-            `streamNookUserNumber !== null`, and its internal comment says as
-            much ("shouldn't happen given isSN was true"). Rendered
-            unconditionally it falls back to a plain "StreamNook Member" label,
-            which hands every non-member a badge they do not have. */}
-        {userNumber !== null && (
+            group, and only for a member (Rust sends `streamnook` for members
+            alone): StreamNookBadge carries no membership guard of its own and
+            would hand every non-member a plain "StreamNook" badge. */}
+        {member && (
           <div className="mt-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted mb-1.5">
               StreamNook
@@ -324,7 +298,7 @@ const ProfileBody: React.FC<{
           </div>
         )}
 
-        {badges.total === 0 && userNumber === null && (
+        {sheet && groups.length === 0 && !member && (
           <div className="mt-4 text-[12.5px] text-textMuted text-center">
             No badges to show for this user.
           </div>

@@ -11,6 +11,9 @@ final class ChatRowCell: UIView {
     private var groupLayers: [CALayer] = []
     private var flashLayer: CALayer?
     private var animateImages = true
+    /// A member's Atmosphere behind the row, with the text bitmap on its own layer above it.
+    private var wash: AtmosphereWashLayer?
+    private var textLayer: CALayer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -31,8 +34,39 @@ final class ChatRowCell: UIView {
         accessibilityLabel = layout.accessibilityText
         guard !same else { return }
         layer.contentsScale = scale
-        layer.contents = layout.renderBitmap(scale: scale)
+        showBitmap(layout.renderBitmap(scale: scale), layout: layout, scale: scale)
         rebuildImages(layout, scale: scale)
+    }
+
+    /// The text bitmap straight on the view's layer, or over the author's Atmosphere when they
+    /// wear one (a layer's own contents draw under its sublayers, so the text moves up a layer).
+    private func showBitmap(_ bitmap: CGImage?, layout: ChatRowLayout, scale: CGFloat) {
+        guard let look = layout.decor.atmosphere else {
+            wash?.removeFromSuperlayer()
+            textLayer?.removeFromSuperlayer()
+            wash = nil
+            textLayer = nil
+            layer.contents = bitmap
+            return
+        }
+        let size = CGSize(width: layout.width, height: layout.height)
+        let wash = wash ?? AtmosphereWashLayer()
+        let text = textLayer ?? CALayer()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        text.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
+        text.contentsGravity = .topLeft
+        text.contentsScale = scale
+        text.frame = CGRect(origin: .zero, size: size)
+        text.contents = bitmap
+        layer.contents = nil
+        wash.show(look, cologne: layout.decor.cologne, size: size, scale: scale,
+                  animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
+        if wash.superlayer == nil { layer.insertSublayer(wash, at: 0) }
+        if text.superlayer == nil { layer.insertSublayer(text, above: wash) }
+        CATransaction.commit()
+        self.wash = wash
+        textLayer = text
     }
 
     private func rebuildImages(_ layout: ChatRowLayout, scale: CGFloat) {

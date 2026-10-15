@@ -169,17 +169,3 @@ private struct SupportPanel: View {
     }
 }
 
-/// Cosmetics: the badges, atmosphere and 7TV paint you wear. Built with the profile screens.
-struct CosmeticsFrame: View {
-    let model: AppModel
-
-    var body: some View {
-        ScrollView {
-            EmptyNote(text: "Your cosmetics are built next.", hint: nil)
-        }
-        .background(SN.background)
-        .navigationTitle("Cosmetics")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
-    }
-}

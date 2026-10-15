@@ -9,8 +9,9 @@ import {
   isUserCosmeticsHardFailed,
   subscribeToCosmetics,
 } from '../services/cosmeticsCache';
-import { notifyMemberIdentityChanged, isStreamNookUser, getProfilePrefs, whenAtmospheresReady, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, subscribeToProfileThemeChanges, getOwnedCosmeticSlugs, isCosmeticsRegistryLoaded } from '../services/supabaseService';
-import { resolveEntitlement } from '../services/cosmetics/ownership';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { notifyMemberIdentityChanged, isStreamNookUser, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, type MemberTheme } from '../services/supabaseService';
 import { getAtmosphere } from '../services/atmospheres';
 import { parseCologneTheme, type CologneCosmetics } from '../services/cologneEvent';
 import {
@@ -339,11 +340,12 @@ function removeBttvPro(userId: string) {
   });
 }
 
-// ── StreamNook Atmosphere chat wash (subscriber profile theme -> chat) ───────
-// A subscriber who themes their profile with an Atmosphere also gets a subtle
-// STATIC wash + edge bar behind their chat messages, so the cosmetic follows
-// them into chat. Resolved once per MEMBER (no-op for non-members), gated on
-// subscriber status. No animation in chat (perf): a static gradient only.
+// ── StreamNook Atmosphere chat wash (member profile theme -> chat) ───────────
+// A member who themes their profile with an Atmosphere also gets its wash behind
+// their chat messages, so the cosmetic follows them into chat. Rust resolves
+// each MEMBER's theme once for every window and refuses an atmosphere they may
+// not wear (services/member_theme.rs); this keeps the per-row copy and fans a
+// member's answer out to every chat key they occupy.
 const pendingAtmosphereUpdates = new Map<string, string | null>();
 let pendingAtmosphereFlushScheduled = false;
 // Resolved atmosphere id per user (null = none). Doubles as the once-per-user
@@ -368,7 +370,7 @@ const RESOLVE_TTL_MS = 120_000;
  * TWO key spaces meet in this block, and mixing them is silent.
  *
  *   - Everything that dedupes a FETCH (`atmosphereCache`, `atmosphereInFlight`,
- *     `lastResolvedAt`, `cologneCache`, `ownAtmosphereAccounts`) is keyed by the
+ *     `lastResolvedAt`, `cologneCache`) is keyed by the
  *     MEMBER id, because what it caches is a property of the person. One member
  *     seen on Twitch and on Kick is one lookup, not two.
  *   - Everything that feeds a store flush (`pending*Updates`) is keyed by the
@@ -469,131 +471,41 @@ function scheduleAtmosphereFlush() {
   });
 }
 
-/**
- * Whether this member may actually WEAR the atmosphere they have selected.
- *
- * `user_profile_prefs` is world-writable under the anon key that ships in the
- * bundle, and nothing on the render path re-checked ownership, so anyone could
- * set their theme to a paid atmosphere and have it paint in every StreamNook
- * user's chat. Rendering is the last place that can refuse, so it refuses here.
- *
- * Deliberately per-CLASS, not per-item, for subscriber atmospheres: a viewer has
- * no way to see whether someone else is currently subscribed, and a strict
- * owned-only check would blank a real subscriber whose per-item ownership row
- * has not been granted yet (that RPC runs on their login, not ours).
- *
- * Accolade-gated atmospheres pass through unchecked ON PURPOSE. A viewer cannot
- * verify another member's accolades (they are not loaded cross-user, and adding
- * a fetch here would put a network round trip on the chat render path). Those
- * close when `user_accolades` stops being anon-writable, which makes the
- * accolade itself trustworthy. Do not "fix" this asymmetry by granting accolade
- * atmospheres into `user_cosmetics`: that converts a forgeable accolade into a
- * permanent ownership row and defeats this gate entirely.
- */
-/** `memberId` is a TWITCH user id, never a chat key: every ownership record this
- *  reads is filed under one, so a `kick:` key here reads as "owns nothing" and
- *  blanks a paying member's atmosphere on their own row. */
-export function mayWearAtmosphere(memberId: string, id: string | null): boolean {
-  const userId = memberId;
-  if (!id) return true; // clearing is always allowed
-  // Our own accounts paint immediately. The server already gated the write, and
-  // gating here would make a member's own pick stop previewing.
-  if (ownAtmosphereAccounts.has(userId)) return true;
-  // Missing data must never read as "not owned", or a paying member is blanked
-  // during the registry load window or a Supabase outage.
-  if (!isCosmeticsRegistryLoaded()) return true;
-
-  const atm = getAtmosphere(id);
-  if (!atm) return true; // unknown to the catalog; nothing will paint anyway
-  if (atm.unlock?.kind === 'accolade') return true;
-
-  // Cologne carries '+coin' / '+border' modifiers on the id; ownership is
-  // recorded against the base atmosphere.
-  const baseId = id.split('+')[0];
-  const owned = getOwnedCosmeticSlugs(userId);
-  const { everSubscribed } = resolveEntitlement({ ownedSlugs: owned, activeSubscription: false });
-  return owned.has(baseId) || everSubscribed;
-}
-
+/** `id` is already decided: Rust gated another member's pick, and our own
+ *  pick paints as chosen. */
 function pushAtmosphere(memberId: string, chatKey: string, id: string | null) {
-  const effective = mayWearAtmosphere(memberId, id) ? id : null;
-  atmosphereCache.set(memberId, effective);
-  pendingAtmosphereUpdates.set(chatKey, effective);
+  atmosphereCache.set(memberId, id);
+  pendingAtmosphereUpdates.set(chatKey, id);
   scheduleAtmosphereFlush();
-  if (ownAtmosphereAccounts.has(memberId)) persistOwnAtmosphere(memberId);
-}
-
-// Disk persistence of OUR OWN accounts' resolved Atmosphere id (primary + every
-// linked account), so the wash behind our messages paints on frame one of a cold
-// launch instead of after the per-sighting prefs fetch. Keyed by account id.
-const OWN_ATMOSPHERE_KEY = 'streamnook_own_atmosphere_v1';
-// Our own accounts that keep their theme off chat, persisted beside the id so a
-// cold launch does not flash the wash behind our rows before the prefs fetch.
-const OWN_CHAT_THEME_HIDDEN_KEY = 'streamnook_own_chat_theme_hidden_v1';
-const ownAtmosphereAccounts = new Set<string>();
-
-function readOwnChatThemeHidden(): string[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(OWN_CHAT_THEME_HIDDEN_KEY) ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistOwnChatThemeHidden(userId: string, hidden: boolean): void {
-  try {
-    const next = new Set(readOwnChatThemeHidden());
-    if (hidden) next.add(userId);
-    else next.delete(userId);
-    localStorage.setItem(OWN_CHAT_THEME_HIDDEN_KEY, JSON.stringify([...next]));
-  } catch {
-    /* ignore (private mode / unavailable storage) */
-  }
-}
-
-function readPersistedAtmospheres(): Record<string, string | null> {
-  try {
-    const raw = localStorage.getItem(OWN_ATMOSPHERE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string | null>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function persistOwnAtmosphere(userId: string): void {
-  try {
-    const store = readPersistedAtmospheres();
-    store[userId] = atmosphereCache.get(userId) ?? null;
-    localStorage.setItem(OWN_ATMOSPHERE_KEY, JSON.stringify(store));
-  } catch {
-    /* ignore (private mode / unavailable storage) */
-  }
 }
 
 /**
- * Register all of OUR account ids (primary + linked) and seed each one's
- * Atmosphere wash from the id persisted last session, so a cold launch paints it
- * on frame one for every account. The stored value is the already-resolved id, so
- * no catalog wait is needed. Marks them own so a later theme change persists. An
- * explicit change still overwrites live via refreshAtmosphere; the per-sighting
- * resolve still backfills any account with nothing stored yet.
+ * Register all of OUR account ids (primary + linked). Rust keeps their resolved
+ * themes on disk, so a cold launch paints the wash behind our own rows on frame
+ * one, and our picks skip the wear gate there; this asks for each one so the
+ * rows filed under our Twitch ids paint straight away.
  */
 export function registerOwnAtmospheres(userIds: string[]): void {
-  const store = readPersistedAtmospheres();
-  const hiddenInChat = new Set(readOwnChatThemeHidden());
-  for (const userId of userIds) {
-    if (!userId || ownAtmosphereAccounts.has(userId)) continue; // already registered/seeded
-    ownAtmosphereAccounts.add(userId);
-    if (hiddenInChat.has(userId)) chatThemeHiddenCache.set(userId, true);
-    // Seeded under our own Twitch key, which is both the member id and the chat
-    // key for a Twitch row. Our rows on other platforms have no alias yet at
-    // cold launch; the cache this fills is per member, so the first Kick message
-    // we send paints from it immediately rather than waiting on a fetch.
-    if (userId in store) pushAtmosphere(userId, userId, store[userId]);
+  const ids = userIds.filter(Boolean);
+  if (ids.length === 0) return;
+  void invoke('register_own_member_themes', { memberIds: ids })
+    .then(() => Promise.all(ids.map((id) => invoke<MemberTheme | null>('get_member_theme', { memberId: id }))))
+    .then((themes) => {
+      for (const theme of themes) if (theme) applyMemberTheme(theme, theme.memberId);
+    })
+    .catch(() => {});
+}
+
+/** Rust's answer for a member, onto one chat key (or every key they occupy). */
+function applyMemberTheme(theme: MemberTheme, chatKey?: string) {
+  const memberId = theme.memberId;
+  chatThemeHiddenCache.set(memberId, theme.hiddenInChat);
+  for (const key of chatKey ? [chatKey] : chatTargetsFor(memberId)) {
+    pendingChatThemeHidden.set(key, theme.hiddenInChat);
+    pushAtmosphere(memberId, key, theme.atmosphereId ?? null);
+    pushCologne(memberId, key, theme.cologne ?? null);
   }
+  lastResolvedAt.set(memberId, Date.now());
 }
 
 // Resolve a profile_theme into the store's atmosphere / Cologne fields and cache
@@ -610,10 +522,7 @@ function applyResolvedTheme(
   profileTheme: string | null | undefined,
   hiddenInChat?: boolean,
 ) {
-  if (hiddenInChat !== undefined) {
-    chatThemeHiddenCache.set(memberId, hiddenInChat);
-    if (ownAtmosphereAccounts.has(memberId)) persistOwnChatThemeHidden(memberId, hiddenInChat);
-  }
+  if (hiddenInChat !== undefined) chatThemeHiddenCache.set(memberId, hiddenInChat);
   pendingChatThemeHidden.set(chatKey, chatThemeHiddenCache.get(memberId) ?? false);
   const cologne = parseCologneTheme(profileTheme);
   if (cologne) {
@@ -664,21 +573,18 @@ export function ensureAtmosphereResolved(chatKey: string) {
   }
   if (atmosphereInFlight.has(userId)) return;
   atmosphereInFlight.add(userId);
-  void (async () => {
-    try {
-      // Visibility reads the world-readable profile_theme (not gated on subscriber
-      // status), so a member's selection shows for every viewer like a badge.
-      const prefs = await getProfilePrefs(userId);
-      // Wait for the atmosphere catalog so we never resolve a real theme to null
-      // just because the catalog had not loaded yet.
-      await whenAtmospheresReady();
-      applyResolvedTheme(userId, chatKey, prefs.profileTheme, !prefs.chatAtmosphere);
-    } catch {
+  // Rust reads the world-readable profile_theme once per member for every
+  // window, waits for the atmosphere catalog, and applies the wear gate.
+  void invoke<MemberTheme | null>('get_member_theme', { memberId: userId })
+    .then((theme) => {
+      if (theme) applyMemberTheme(theme, chatKey);
+    })
+    .catch(() => {
       /* leave cached so a later sighting retries */
-    } finally {
+    })
+    .finally(() => {
       atmosphereInFlight.delete(userId);
-    }
-  })();
+    });
 }
 
 // Set a member's theme to a KNOWN value now (they just changed it), so their
@@ -695,7 +601,6 @@ export function refreshAtmosphere(memberId: string, atmosphereId: string | null)
  *  refreshAtmosphere applies a theme pick: no Supabase read to race the write. */
 export function setOwnThemeHiddenInChat(memberId: string, hidden: boolean) {
   chatThemeHiddenCache.set(memberId, hidden);
-  if (ownAtmosphereAccounts.has(memberId)) persistOwnChatThemeHidden(memberId, hidden);
   for (const chatKey of chatTargetsFor(memberId)) pendingChatThemeHidden.set(chatKey, hidden);
   scheduleAtmosphereFlush();
 }
@@ -1009,12 +914,12 @@ subscribeAtmospheresVersion(() => {
 });
 
 // Live cross-user theme updates: when any member changes the atmosphere / Cologne
-// look they wear, the new value is pushed here so their rows repaint for everyone
-// already in chat with them, instead of waiting for a re-sighting or channel
-// switch. Only members we track (or have cached this session) are touched; the
-// rest of the change stream is ignored. Wait for the catalog so a real theme
-// never resolves to null.
-subscribeToProfileThemeChanges((userId, profileTheme, chatAtmosphere) => {
+// look they wear (or a catalog change re-gates it), Rust pushes the resolved
+// theme so their rows repaint for everyone already in chat with them. Only
+// members we track (or have cached this session) are touched.
+void listen<MemberTheme>('member-theme-changed', (event) => {
+  const theme = event.payload;
+  const userId = theme?.memberId;
   if (!userId || !isStreamNookUser(userId)) return;
   const state = useChatUserStore.getState();
   // `userId` here is a TWITCH id, but the member may be on screen only under a
@@ -1022,9 +927,8 @@ subscribeToProfileThemeChanges((userId, profileTheme, chatAtmosphere) => {
   // than looking for one filed under their Twitch id.
   const onScreen = chatTargetsFor(userId).some((k) => state.users.has(k));
   if (!onScreen && !atmosphereCache.has(userId)) return;
-  const hiddenInChat = chatAtmosphere === undefined ? undefined : !chatAtmosphere;
-  void whenAtmospheresReady().then(() => applyResolvedThemeForMember(userId, profileTheme, hiddenInChat));
-});
+  applyMemberTheme(theme);
+}).catch(() => {});
 
 // Reactive bridge from the shared cosmetics cache into the per-user chat
 // store. Anything that writes to cosmeticsCache (chat's own addUser fetch,

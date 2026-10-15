@@ -9,7 +9,8 @@
 //! row gets a `ROW_COSMETICS` frame. Nothing here runs for the web renderers.
 
 use crate::models::chat_layout::{
-    ChatMessage, MessageSegment, PaintShadow, PaintStop, PaintView, RowView, ViewBadge, ViewEmote, ViewSpan,
+    ChatMessage, MessageSegment, PaintLayerView, PaintShadow, PaintStop, PaintView, RowView, ViewBadge, ViewEmote,
+    ViewSpan,
 };
 use crate::models::settings::Settings;
 use lru::LruCache;
@@ -174,6 +175,12 @@ pub fn readable_name_color(color: &str, dark_theme: bool) -> String {
     format!("#{:02x}{:02x}{:02x}", out[0], out[1], out[2])
 }
 
+/// A name colour after the viewer's readability pass, for surfaces outside the
+/// row (the profile sheet); the row's own fallback purple when there is none.
+pub fn readable_color(raw: Option<&str>) -> String {
+    shown_color(raw, &prefs())
+}
+
 fn shown_color(raw: Option<&str>, prefs: &Prefs) -> String {
     let base = raw.map(str::trim).filter(|c| !c.is_empty()).unwrap_or(FALLBACK_NAME_COLOR);
     if prefs.readable_colors {
@@ -318,6 +325,11 @@ pub fn paint_view(def: &Value) -> Option<PaintView> {
     let mut view = view.or_else(|| {
         solid.map(|c| PaintView { id: id.clone(), kind: "solid".to_string(), stops: vec![PaintStop { at: 0.0, color: c }], ..Default::default() })
     })?;
+    let (all, base_color, opacity) = paint_layers(&layers);
+    view.name = def.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+    view.layers = all;
+    view.base_color = base_color;
+    view.opacity = opacity;
     view.shadows = def
         .pointer("/data/shadows")
         .and_then(Value::as_array)
@@ -336,6 +348,78 @@ pub fn paint_view(def: &Value) -> Option<PaintView> {
         })
         .unwrap_or_default();
     Some(view)
+}
+
+/// Every gradient and image layer of a paint in CSS stacking order (top first),
+/// its first single colour, and the lowest layer opacity under 1, the way the
+/// page's `computePaintStyle` builds its background.
+fn paint_layers(layers: &[Value]) -> (Vec<PaintLayerView>, Option<String>, f32) {
+    let mut out = Vec::new();
+    let mut base = None;
+    let mut opacity: f32 = 1.0;
+    for layer in layers {
+        let Some(ty) = layer.get("ty") else { continue };
+        let layer_opacity = layer.get("opacity").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        let stops = || -> Vec<PaintStop> {
+            ty.get("stops")
+                .and_then(Value::as_array)
+                .map(|stops| {
+                    stops
+                        .iter()
+                        .filter_map(|s| Some(PaintStop { at: s.get("at")?.as_f64()? as f32, color: color_hex(s.get("color")?)? }))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let next = match ty.get("__typename").and_then(Value::as_str).unwrap_or_default() {
+            "PaintLayerTypeLinearGradient" => Some(PaintLayerView {
+                kind: "linear".into(),
+                angle: ty.get("angle").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                repeating: ty.get("repeating").and_then(Value::as_bool).unwrap_or(false),
+                stops: stops(),
+                ..Default::default()
+            })
+            .filter(|l| !l.stops.is_empty()),
+            "PaintLayerTypeRadialGradient" => Some(PaintLayerView {
+                kind: "radial".into(),
+                repeating: ty.get("repeating").and_then(Value::as_bool).unwrap_or(false),
+                circle: ty.get("shape").and_then(Value::as_str) == Some("CIRCLE"),
+                stops: stops(),
+                ..Default::default()
+            })
+            .filter(|l| !l.stops.is_empty()),
+            "PaintLayerTypeImage" => {
+                let images = ty.get("images").and_then(Value::as_array).cloned().unwrap_or_default();
+                let animated = images.iter().any(|i| i.get("frameCount").and_then(Value::as_u64).unwrap_or(1) > 1);
+                images
+                    .iter()
+                    .find(|i| {
+                        i.get("scale").and_then(Value::as_u64) == Some(1)
+                            && (!animated || i.get("frameCount").and_then(Value::as_u64).unwrap_or(1) > 1)
+                    })
+                    .and_then(|i| i.get("url"))
+                    .and_then(Value::as_str)
+                    .map(|url| PaintLayerView { kind: "image".into(), image_url: Some(url.to_string()), ..Default::default() })
+            }
+            "PaintLayerTypeSingleColor" => {
+                if base.is_none() {
+                    base = ty.get("color").and_then(color_hex);
+                }
+                if layer_opacity < 1.0 {
+                    opacity = opacity.min(layer_opacity);
+                }
+                continue;
+            }
+            _ => None,
+        };
+        if let Some(next) = next {
+            if layer_opacity < 1.0 {
+                opacity = opacity.min(layer_opacity);
+            }
+            out.push(next);
+        }
+    }
+    (out, base, opacity)
 }
 
 /// A 7TV colour object as `#rrggbbaa`: from its channels when present, else
@@ -812,7 +896,67 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             }
         }
     }
+    // A StreamNook member's own badge, last, as every surface orders it.
+    if prefs.show_third_party_badges && twitch && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook") {
+        if let Some(badge) = member_badge(&msg.user_id) {
+            out.push(badge);
+        }
+    }
     out
+}
+
+/// A member's StreamNook badge as row art, at the chat-size cut.
+fn member_badge(member_id: &str) -> Option<ViewBadge> {
+    let badge = crate::services::cosmetics_registry::member_badge(member_id, true)?;
+    Some(ViewBadge { url: badge.image_url, title: badge.label, provider: "streamnook".to_string() })
+}
+
+/// The theme a Twitch row's author wears, when known; for a member whose theme
+/// is not known yet a read starts, and its answer is posted as `ROW_MEMBER`.
+fn known_member_theme(msg: &ChatMessage) -> Option<crate::services::member_theme::MemberTheme> {
+    use crate::services::{cosmetics_registry, member_theme};
+    let twitch = msg.provider.is_empty() || msg.provider == "twitch";
+    if !twitch || msg.user_id.is_empty() || !cosmetics_registry::is_member(&msg.user_id) {
+        return None;
+    }
+    if let Some(theme) = member_theme::peek(&msg.user_id) {
+        return Some(theme);
+    }
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let member = msg.user_id.clone();
+        tokio::spawn(async move {
+            // The answer reaches rows through the theme's own change frame.
+            let _ = member_theme::resolve(&member).await;
+        });
+    }
+    None
+}
+
+/// The frame that repaints every row of one member, in every room, after their
+/// theme or badge changed. Only native shells read it.
+pub fn member_frame(theme: &crate::services::member_theme::MemberTheme) -> String {
+    let prefs = prefs();
+    let badge = member_badge(&theme.member_id)
+        .filter(|_| prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook"));
+    serde_json::json!({
+        "type": "ROW_MEMBER",
+        "user_id": theme.member_id,
+        "atmosphere": theme.chat_atmosphere(),
+        "cologne": theme.chat_cologne(),
+        "badge": badge,
+    })
+    .to_string()
+}
+
+/// Posts `member_frame` to every room while a native shell draws rows.
+pub fn post_member_frame(theme: &crate::services::member_theme::MemberTheme) {
+    if !enabled() || tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let frame = member_frame(theme);
+    tokio::spawn(async move {
+        crate::services::irc_service::post_frame_to_all(frame).await;
+    });
 }
 
 /// Stamps `metadata.view` on a row about to be sent, while a native shell
@@ -837,12 +981,15 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         .as_ref()
         .and_then(|r| r.parent_segments.as_ref())
         .map(|segs| spans_with(segs, &channel, prefs.clone()));
+    let theme = known_member_theme(msg);
     msg.metadata.view = Some(RowView {
         name_color,
         badges: badges(msg, &prefs, worn.as_ref()),
         paint: worn.and_then(|w| w.paint),
         spans: body,
         parent_spans,
+        atmosphere: theme.as_ref().and_then(|t| t.chat_atmosphere().map(String::from)),
+        cologne: theme.as_ref().and_then(|t| t.chat_cologne()),
     });
 }
 

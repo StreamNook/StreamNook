@@ -46,6 +46,11 @@ enum ChatRowRenderer {
             let h = 1 / max(ctx.ctm.a, 1)
             ctx.fill(CGRect(x: 0, y: size.height - h, width: size.width, height: h))
         }
+        for frost in decor.frost {
+            ctx.setFillColor(UIColor(red: 5 / 255, green: 6 / 255, blue: 13 / 255, alpha: 0.66 * frost.alpha).cgColor)
+            ctx.addPath(UIBezierPath(roundedRect: frost.rect, cornerRadius: frost.radius).cgPath)
+            ctx.fillPath()
+        }
         for shape in layout.shapes { drawShape(shape, ctx) }
 
         ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
@@ -62,7 +67,11 @@ enum ChatRowRenderer {
                 let bounds = CGRect(x: x, y: placed.origin.y - ascent, width: width, height: ascent + descent)
                 ctx.textPosition = placed.origin
                 if let box = attrs[ChatRowLayoutBuilder.paintKey] as? PaintBox {
-                    drawPainted(run, box.paint, bounds: bounds, ctx)
+                    if box.paint.layers.isEmpty {
+                        drawPainted(run, box.paint, bounds: bounds, ctx)
+                    } else {
+                        PaintedRun.draw(run, box.paint, bounds: bounds, shadows: layout.paintShadows, ctx)
+                    }
                 } else {
                     CTRunDraw(run, ctx, CFRange(location: 0, length: 0))
                 }

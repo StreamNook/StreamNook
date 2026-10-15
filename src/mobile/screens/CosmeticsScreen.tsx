@@ -1,7 +1,8 @@
 // Cosmetics equip: your StreamNook badge and Atmosphere, same server writes
-// the desktop editor uses (setActiveCosmetic / setProfileTheme). Rendering
-// reuses the shared catalog + asset resolution, so what you equip here paints
-// identically in chat and on your profile everywhere.
+// the desktop editor uses (setActiveCosmetic / setProfileTheme). What you own,
+// what you wear and which Atmospheres you may pick come from Rust in two
+// answers (`cosmetics_picker_state`, `external_cosmetics_state`), the same the
+// iPhone's screen draws, so the gates live in one place.
 //
 // 7TV paints and badges sit alongside them, equipped through the same
 // set_seventv_paint / set_seventv_badge commands the desktop editor calls. What
@@ -23,11 +24,13 @@ import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { FallbackImage } from '../../components/FallbackImage';
 import { computePaintStyle, clearUserCache as clear7TVCache } from '../../services/seventvService';
-import {
-  applyLocalCosmeticSelection,
-  getFullProfileWithFallback,
-} from '../../services/cosmeticsCache';
-import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profileBadges';
+import { applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
+import type {
+  ChatIdentityBadge,
+  ExternalPickerView,
+  ProfileBadge,
+  StreamNookPickerView,
+} from '../../types/profileView';
 import { connectSevenTv, getSevenTvStatus } from '../cosmetics/sevenTvConnect';
 
 /**
@@ -39,15 +42,6 @@ import { connectSevenTv, getSevenTvStatus } from '../cosmetics/sevenTvConnect';
  * the count says what is inside without opening it. Same shape and timings as
  * the drops groups, so the two read as one idea.
  */
-/** Mirrors the Rust `ChatIdentityBadge`. `version` is what the mutation needs. */
-interface ChatIdentityBadge {
-  id: string;
-  version: string;
-  title: string;
-  image_url: string;
-  is_selected: boolean;
-}
-
 const CollapsibleSection: React.FC<{
   title: string;
   count: number;
@@ -88,18 +82,8 @@ const CollapsibleSection: React.FC<{
     </AnimatePresence>
   </div>
 );
-import {
-  getAccolades,
-  getActiveCosmeticSlug,
-  getAllCosmetics,
-  getOwnedCosmeticSlugs,
-  getProfilePrefs,
-  setActiveCosmetic,
-  setProfileTheme,
-  setChatAtmosphere,
-} from '../../services/supabaseService';
-import { getAtmosphere, listAtmospheres, type Atmosphere } from '../../services/atmospheres';
-import { isSubscriber } from '../../services/subscriberService';
+import { setActiveCosmetic, setProfileTheme, setChatAtmosphere } from '../../services/supabaseService';
+import { getAtmosphere } from '../../services/atmospheres';
 import { resolveCosmeticAsset } from '../../components/cosmeticAssets';
 import { Logger } from '../../utils/logger';
 
@@ -110,110 +94,57 @@ export const CosmeticsScreen: React.FC = () => {
   const addToast = useAppStore((s) => s.addToast);
 
   const userId = currentUser?.user_id ?? '';
-  const [ownedSlugs, setOwnedSlugs] = useState<Set<string>>(new Set());
-  const [activeBadge, setActiveBadge] = useState<string | null>(null);
+  const username = currentUser?.login || currentUser?.username || '';
+  // StreamNook's half: owned badges, the worn one, every Atmosphere with its
+  // gate decided, the theme and whether it shows in chat.
+  const [snBadges, setSnBadges] = useState<StreamNookPickerView['badges']>([]);
+  const [atmospheres, setAtmospheres] = useState<StreamNookPickerView['atmospheres']>([]);
   const [profileTheme, setProfileThemeState] = useState<string>('tier');
-  // Whether our atmosphere also paints behind our chat messages.
   const [chatAtmosphere, setChatAtmosphereState] = useState(true);
-  const [subscribed, setSubscribed] = useState(false);
-  const [earnedAccolades, setEarnedAccolades] = useState<Set<string>>(new Set());
 
-  // 7TV and Twitch. Both come out of one profile read, which is already the
-  // path the mobile profile sheet uses, so nothing new is being fetched.
+  // 7TV and Twitch.
   const [sevenTvConnected, setSevenTvConnected] = useState(false);
   const [sevenTvUserId, setSevenTvUserId] = useState<string | null>(null);
-  const [paints, setPaints] = useState<any[]>([]);
-  const [sevenTvBadges, setSevenTvBadges] = useState<any[]>([]);
-  const [activePaintId, setActivePaintId] = useState<string | null>(null);
-  const [activeSevenTvBadgeId, setActiveSevenTvBadgeId] = useState<string | null>(null);
-  const [twitchBadges, setTwitchBadges] = useState<NormalizedBadge[]>([]);
+  const [paints, setPaints] = useState<ExternalPickerView['paints']>([]);
+  const [sevenTvBadges, setSevenTvBadges] = useState<ExternalPickerView['seventv_badges']>([]);
+  const [twitchBadges, setTwitchBadges] = useState<ProfileBadge[]>([]);
   const [identityBadges, setIdentityBadges] = useState<ChatIdentityBadge[]>([]);
   const [dropsAuthed, setDropsAuthed] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
 
+  const activeBadge = snBadges.find((b) => b.worn)?.slug ?? null;
+  const activePaintId = paints.find((p) => p.worn)?.id ?? null;
+  const activeSevenTvBadgeId = sevenTvBadges.find((b) => b.worn)?.badge.id ?? null;
+
   const refresh = useCallback(async () => {
     if (!userId) return;
-    // Gather everything first, then commit state once after the awaits, so no
-    // setState lands synchronously inside the calling effect.
-    const owned = getOwnedCosmeticSlugs(userId);
-    const active = getActiveCosmeticSlug(userId);
-    let theme = 'tier';
-    let inChat = true;
     try {
-      const prefs = await getProfilePrefs(userId);
-      theme = prefs.profileTheme || 'tier';
-      inChat = prefs.chatAtmosphere;
+      const view = await invoke<StreamNookPickerView>('cosmetics_picker_state', { userId });
+      setSnBadges(view.badges);
+      setAtmospheres(view.atmospheres);
+      setProfileThemeState(view.theme || 'tier');
+      setChatAtmosphereState(view.chat_atmosphere);
     } catch (err) {
-      Logger.warn('[Cosmetics] prefs read failed:', err);
+      Logger.warn('[Cosmetics] picker state unavailable:', err);
     }
-    let sub = false;
-    try {
-      sub = await isSubscriber(userId);
-    } catch {
-      sub = false;
-    }
-    // Accolade-gated atmospheres unlock off user_accolades, NOT owned cosmetic
-    // slugs, and stay hidden until earned (the unlock is meant to be a
-    // surprise). Same rule the desktop cosmetics panel uses.
-    let accolades = new Set<string>();
-    try {
-      accolades = new Set(await getAccolades(userId));
-    } catch {
-      /* leave empty; accolade atmospheres simply stay hidden */
-    }
-    setOwnedSlugs(owned);
-    setActiveBadge(active);
-    setProfileThemeState(theme);
-    setChatAtmosphereState(inChat);
-    setSubscribed(sub);
-    setEarnedAccolades(accolades);
   }, [userId]);
-
-  const username = currentUser?.login || currentUser?.username || '';
-
-  /** Applies a freshly-read 7TV cosmetics set, selection included. */
-  const applySevenTv = useCallback((cosmetics: { paints: any[]; badges: any[]; seventvUserId?: string }) => {
-    setPaints(cosmetics.paints ?? []);
-    setSevenTvBadges(cosmetics.badges ?? []);
-    setActivePaintId((cosmetics.paints ?? []).find((p) => p?.selected)?.id ?? null);
-    setActiveSevenTvBadgeId((cosmetics.badges ?? []).find((b) => b?.selected)?.id ?? null);
-    if (cosmetics.seventvUserId) setSevenTvUserId(cosmetics.seventvUserId);
-  }, []);
 
   const loadProfileCosmetics = useCallback(async () => {
     if (!userId) return;
-    // Whether 7TV is signed in is independent of what is owned: the catalog is
-    // public, the token only authorises changing the selection.
     try {
-      const status = await getSevenTvStatus();
-      setSevenTvConnected(status.is_authenticated);
-      if (status.user_id) setSevenTvUserId(status.user_id);
+      const view = await invoke<ExternalPickerView>('external_cosmetics_state', { userId, login: username });
+      setSevenTvConnected(view.seventv_signed_in);
+      if (view.seventv_user_id) setSevenTvUserId(view.seventv_user_id);
+      setPaints(view.paints);
+      setSevenTvBadges(view.seventv_badges);
+      setTwitchBadges(view.twitch_earned);
+      setDropsAuthed(view.drops_signed_in);
+      setIdentityBadges(view.twitch_selectable);
     } catch (err) {
-      Logger.debug('[Cosmetics] 7TV status unavailable:', err);
+      Logger.debug('[Cosmetics] 7TV and Twitch cosmetics unavailable:', err);
     }
-    try {
-      const profile = await getFullProfileWithFallback(userId, username);
-      applySevenTv(profile.seventvCosmetics);
-      setTwitchBadges(normalizeProfileBadges({ cachedProfile: profile }).twitch);
-    } catch (err) {
-      Logger.debug('[Cosmetics] profile cosmetics unavailable:', err);
-    }
-    // The selectable Twitch list is a different set from the earned one: global
-    // badges only, carrying the version the mutation needs and which is worn.
-    // It rides the Drops token, so there is nothing to ask for without it.
-    try {
-      const authed = await invoke<boolean>('is_drops_authenticated');
-      setDropsAuthed(authed);
-      if (authed && username) {
-        setIdentityBadges(
-          await invoke<ChatIdentityBadge[]>('fetch_chat_identity_badges_gql', { username }),
-        );
-      }
-    } catch (err) {
-      Logger.debug('[Cosmetics] Twitch badge list unavailable:', err);
-    }
-  }, [userId, username, applySevenTv]);
+  }, [userId, username]);
 
   useEffect(() => {
     // Load-on-open sync from external stores (Supabase registries + prefs,
@@ -227,21 +158,7 @@ export const CosmeticsScreen: React.FC = () => {
   // stay mounted for the length of the exit, and a component that returns null
   // when closed can never animate away.
 
-  const badges = getAllCosmetics().filter(
-    (c) => (c.kind ?? 'badge') === 'badge' && ownedSlugs.has(c.slug),
-  );
-  const atmospheres = listAtmospheres();
-
-  // Reuses the same image resolution the profile sheet renders other people's
-  // 7TV badges with, rather than a second guess at 7TV's CDN layout. Ids come
-  // through unchanged, so the raw list's `selected` still lines up.
-  const sevenTvBadgeTiles = useMemo(
-    () =>
-      normalizeProfileBadges({
-        cachedProfile: { seventvCosmetics: { paints: [], badges: sevenTvBadges } } as never,
-      }).seventv.filter((b) => !!b.src),
-    [sevenTvBadges],
-  );
+  const sevenTvBadgeTiles = useMemo(() => sevenTvBadges.map((b) => b.badge), [sevenTvBadges]);
 
   const isOpen = (key: string) => openSections.has(key);
   const toggleSection = (key: string) =>
@@ -251,31 +168,24 @@ export const CosmeticsScreen: React.FC = () => {
       return next;
     });
 
+  const setWornBadge = (slug: string | null) =>
+    setSnBadges((all) => all.map((b) => ({ ...b, worn: b.slug === slug })));
+
   const equipBadge = async (slug: string) => {
     const next = activeBadge === slug ? null : slug;
     const prev = activeBadge;
-    setActiveBadge(next);
+    setWornBadge(next);
     const res = await setActiveCosmetic(userId, next);
     if (!res.ok) {
-      setActiveBadge(prev);
+      setWornBadge(prev);
       addToast(res.error || 'Could not equip that badge.', 'error');
     }
   };
 
-  // Mirrors the desktop rule: accolade atmospheres unlock for ANY member who
-  // earned the accolade (no subscription); subscriber atmospheres are owned
-  // per-item, so lapsing keeps everything already unlocked.
-  const atmosphereAllowed = (atm: Atmosphere): boolean =>
-    atm.unlock?.kind === 'accolade'
-      ? earnedAccolades.has(atm.unlock.accoladeId)
-      : ownedSlugs.has(atm.id) || subscribed;
-
-  // Accolade-gated atmospheres stay hidden until earned. Event atmospheres
-  // (Cologne) ARE included: excluding them here is what hid the CS2 one from
-  // the picker entirely, so an owner could not equip it at all.
-  const visibleAtmospheres = atmospheres.filter(
-    (a) => a.unlock?.kind !== 'accolade' || earnedAccolades.has(a.unlock.accoladeId),
-  );
+  // Rust decided every tile: accolade atmospheres arrive only once earned (and
+  // then allowed), subscriber ones allowed when owned or subscribed. The Default
+  // tile (`tier`) comes first.
+  const visibleAtmospheres = atmospheres.filter((a) => a.id !== 'tier');
 
   const equipTheme = async (theme: string) => {
     const prev = profileTheme;
@@ -405,22 +315,25 @@ export const CosmeticsScreen: React.FC = () => {
   // cache the PREVIOUS pick and the change would not show until a reload. The
   // desktop editor settled on the same approach for the same reason. Clearing
   // the lower-level 7TV cache keeps a later natural fetch fresh.
+  const setWornPaint = (id: string | null) => setPaints((all) => all.map((p) => ({ ...p, worn: p.id === id })));
+  const setWornSevenTvBadge = (id: string | null) =>
+    setSevenTvBadges((all) => all.map((b) => ({ ...b, worn: b.badge.id === id })));
+
   const equipPaint = (paintId: string) =>
     withSevenTvAuth(async (sevenTvId) => {
       const next = activePaintId === paintId ? null : paintId;
       const prev = activePaintId;
-      setActivePaintId(next);
+      setWornPaint(next);
       try {
         const res = await invoke<{ success: boolean }>('set_seventv_paint', {
           userId: sevenTvId,
           paintId: next,
         });
         if (!res.success) throw new Error('7TV rejected the paint change');
-        setPaints((all) => all.map((p) => ({ ...p, selected: p.id === next })));
         clear7TVCache();
         applyLocalCosmeticSelection(userId, { paintId: next });
       } catch (err) {
-        setActivePaintId(prev);
+        setWornPaint(prev);
         handleSevenTvWriteError(err, 'paint');
       }
     });
@@ -429,18 +342,17 @@ export const CosmeticsScreen: React.FC = () => {
     withSevenTvAuth(async (sevenTvId) => {
       const next = activeSevenTvBadgeId === badgeId ? null : badgeId;
       const prev = activeSevenTvBadgeId;
-      setActiveSevenTvBadgeId(next);
+      setWornSevenTvBadge(next);
       try {
         const res = await invoke<{ success: boolean }>('set_seventv_badge', {
           userId: sevenTvId,
           badgeId: next,
         });
         if (!res.success) throw new Error('7TV rejected the badge change');
-        setSevenTvBadges((all) => all.map((b) => ({ ...b, selected: b.id === next })));
         clear7TVCache();
         applyLocalCosmeticSelection(userId, { badgeId: next });
       } catch (err) {
-        setActiveSevenTvBadgeId(prev);
+        setWornSevenTvBadge(prev);
         handleSevenTvWriteError(err, 'badge');
       }
     });
@@ -469,14 +381,15 @@ export const CosmeticsScreen: React.FC = () => {
         <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mb-1.5">
           Badge
         </div>
-        {badges.length === 0 ? (
+        {snBadges.length === 0 ? (
           <div className="glass-panel p-4 text-[13px] text-textMuted mb-4">
             No badges owned yet. Earned and event badges land here.
           </div>
         ) : (
           <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-2 mb-4">
-            {badges.map((badge) => {
-              const asset = resolveCosmeticAsset(badge);
+            {snBadges.map((badge) => {
+              // House art is bundled with the page; everything else is Rust's URL.
+              const asset = resolveCosmeticAsset({ slug: badge.slug, asset_path: badge.image_url ?? null });
               const isActive = activeBadge === badge.slug;
               return (
                 <button
@@ -522,7 +435,7 @@ export const CosmeticsScreen: React.FC = () => {
             </div>
           </button>
           {visibleAtmospheres.map((atm) => {
-            const allowed = atmosphereAllowed(atm);
+            const allowed = atm.allowed;
             const isActive = profileTheme === atm.id || profileTheme.startsWith(`${atm.id}+`);
             return (
               <button
@@ -533,7 +446,7 @@ export const CosmeticsScreen: React.FC = () => {
                   isActive ? 'ring-2 ring-accent' : ''
                 }`}
               >
-                <div className="w-full h-12 rounded mb-1.5" style={{ background: atm.swatch }} />
+                <div className="w-full h-12 rounded mb-1.5" style={{ background: getAtmosphere(atm.id)?.swatch }} />
                 <div className="flex items-center justify-between">
                   <span className="text-[12.5px] text-textPrimary truncate">{atm.name}</span>
                   {isActive ? (
@@ -610,7 +523,7 @@ export const CosmeticsScreen: React.FC = () => {
                         the only way to see what it looks like. */}
                     <span
                       className="text-[14px] font-bold truncate leading-snug"
-                      style={computePaintStyle(paint, '#9146FF')}
+                      style={computePaintStyle(paint.def, '#9146FF')}
                     >
                       {paint.name}
                     </span>
@@ -643,9 +556,8 @@ export const CosmeticsScreen: React.FC = () => {
                     }`}
                   >
                     <FallbackImage
-                      src={badge.src as string}
-                      fallbackUrls={badge.fallbackUrls}
-                      srcSet={badge.srcSet}
+                      src={badge.url}
+                      fallbackUrls={badge.fallbacks}
                       alt={badge.title || ''}
                       className="w-9 h-9 object-contain"
                     />
@@ -714,9 +626,8 @@ export const CosmeticsScreen: React.FC = () => {
                   {twitchBadges.map((badge, i) => (
                     <FallbackImage
                       key={`${badge.id}-${i}`}
-                      src={badge.src as string}
-                      fallbackUrls={badge.fallbackUrls}
-                      srcSet={badge.srcSet}
+                      src={badge.url}
+                      fallbackUrls={badge.fallbacks}
                       alt={badge.title || ''}
                       title={badge.title}
                       className="w-8 h-8 object-contain"

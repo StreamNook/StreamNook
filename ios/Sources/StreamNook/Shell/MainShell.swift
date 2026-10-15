@@ -46,6 +46,9 @@ struct MainShell: View {
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
         .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        .sheet(item: $model.cosmetics.profile) { target in
+            ProfileSheet(model: ProfileSheetModel(target: target, core: model.core))
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
@@ -70,7 +73,7 @@ struct MainShell: View {
         case .settings(let section):
             SettingsPage(model: model, section: section)
         case .cosmetics:
-            CosmeticsFrame(model: model)
+            CosmeticsScreen(model: model)
         }
     }
 }

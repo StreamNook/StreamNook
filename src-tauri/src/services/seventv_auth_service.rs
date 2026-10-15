@@ -163,6 +163,20 @@ impl SevenTVAuthService {
         payload.get("exp").and_then(|v| v.as_i64())
     }
 
+    /// The 7TV account a token belongs to: the JWT `sub` claim, else `user_id`,
+    /// decoded without signature verification. `None` for a token that names
+    /// no account.
+    pub fn token_user_id(access_token: &str) -> Option<String> {
+        let parts: Vec<&str> = access_token.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let payload: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).ok()?).ok()?;
+        ["sub", "user_id"]
+            .iter()
+            .find_map(|k| payload.get(*k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from))
+    }
+
     /// Decode the JWT exp claim without signature verification (fast-path expiry check).
     /// Returns true if the token is expired or malformed.
     fn is_token_expired(access_token: &str) -> bool {
