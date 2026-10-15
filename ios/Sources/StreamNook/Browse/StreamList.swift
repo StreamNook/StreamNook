@@ -41,20 +41,29 @@ struct StreamGrid: View {
     }
 }
 
-/// The toolbar menu that picks cards or rows, one choice shared by every stream list.
-struct StreamViewMenu: View {
+/// The two toolbar buttons that pick cards or rows, one choice shared by every stream list: the
+/// chosen one in the accent colour (cards filled, the list bold), the other muted.
+struct StreamViewButtons: View {
     @Binding var view: StreamView
 
     var body: some View {
-        Menu {
-            Picker("View", selection: $view) {
-                Label("Cards", systemImage: Symbol.cardView).tag(StreamView.cards)
-                Label("List", systemImage: Symbol.listView).tag(StreamView.list)
-            }
-        } label: {
-            Image(systemName: view == .list ? Symbol.listView : Symbol.cardView)
-                .accessibilityLabel(view == .list ? "List view" : "Card view")
+        HStack(spacing: 0) {
+            pick(.cards, symbol: view == .cards ? "\(Symbol.cardView).fill" : Symbol.cardView, label: "Card view")
+            pick(.list, symbol: Symbol.listView, label: "List view")
         }
+    }
+
+    private func pick(_ choice: StreamView, symbol: String, label: String) -> some View {
+        Button { view = choice } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: view == choice ? .bold : .regular))
+                .foregroundStyle(view == choice ? SN.accent : SN.textMuted)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(view == choice ? .isSelected : [])
     }
 }
 

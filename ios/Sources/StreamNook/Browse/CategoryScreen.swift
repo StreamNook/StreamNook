@@ -36,7 +36,10 @@ struct CategoryScreen: View {
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .refreshable { await load() }
+        .refreshable {
+            model.home.renewPreviews()
+            await load()
+        }
         .task { if !loaded { await load() } }
         .reportsChannels(streams, to: model.core)
     }
