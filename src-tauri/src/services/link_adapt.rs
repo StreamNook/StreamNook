@@ -272,6 +272,9 @@ impl Governor {
         if rung < self.current && bps * UP_FACTOR >= self.bw(rung) as f64 && self.up_ready(now) {
             return Some(Decision::Switch { to: rung, why: "the link carries more" });
         }
+        // A probe costs a whole segment of the richer rung: on a link that
+        // cannot carry it, ask less and less often.
+        self.up_hold = (self.up_hold * 2.0).min(UP_HOLD_MAX);
         None
     }
 
@@ -860,9 +863,12 @@ mod tests {
         assert_eq!(g.tick(41.0), None, "one probe per hold");
         let (b, s) = seg(8_200_000, 5e6);
         assert_eq!(g.note_probe(0, b, s, 42.0), None, "5 Mbit/s cannot carry the source");
+        assert_eq!(g.up_hold, UP_HOLD_BASE * 2.0, "a failed probe waits longer for the next");
+        assert_eq!(g.tick(42.0 + UP_HOLD_BASE + 1.0), None);
+        assert_eq!(g.tick(42.0 + UP_HOLD_BASE * 2.0), Some(Decision::Probe { rung: 0 }));
         let (b, s) = seg(8_200_000, 20e6);
         assert_eq!(
-            g.note_probe(0, b, s, 80.0),
+            g.note_probe(0, b, s, 110.0),
             Some(Decision::Switch { to: 0, why: "the link carries more" })
         );
     }
