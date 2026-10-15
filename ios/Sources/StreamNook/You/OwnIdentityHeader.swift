@@ -58,10 +58,13 @@ struct OwnIdentityCard: View {
         .task(id: model.cosmetics.registryVersion) { if identity != nil { await refresh() } }
     }
 
-    /// Your Atmosphere, from the theme you wear.
+    /// Your Atmosphere: the theme you just picked when Edit profile has read it, else the one the
+    /// core says you wear.
     private var look: AtmosphereLook? {
-        guard let theme = picks.sn?.theme, theme != "tier" else { return nil }
-        return AtmosphereCatalog.shared.look(theme)
+        if let theme = picks.sn?.theme {
+            return theme == "tier" || theme == "paint" ? nil : AtmosphereCatalog.shared.look(theme)
+        }
+        return identity?.atmosphere?.look
     }
 
     private var details: some View {

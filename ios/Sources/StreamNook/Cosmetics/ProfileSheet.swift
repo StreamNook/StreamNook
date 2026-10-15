@@ -124,7 +124,7 @@ struct ProfileSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AtmosphereBand(look: nil, tint: nameColor(sheet?.nameColor ?? target.color))
+            AtmosphereBand(look: sheet?.atmosphere?.look, tint: nameColor(sheet?.nameColor ?? target.color))
                 .frame(height: Self.band)
             CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
                          medal: sheet?.streamnook?.imageURL, medalLabel: sheet?.streamnook?.label ?? "")
@@ -167,17 +167,20 @@ struct ProfileSheet: View {
                         fallback: nameColor(sheet?.nameColor ?? target.color), shadows: .all, lineLimit: 2)
                 .fixedSize(horizontal: false, vertical: true)
             let login = sheet?.shownLogin ?? fallbackLogin
-            let paint = sheet?.paint.flatMap { $0.name.isEmpty ? nil : "\($0.name) paint" }
-            if login != nil || paint != nil {
+            // What they have on, in words: the Atmosphere, then the paint.
+            let parts = [sheet?.atmosphere?.name, sheet?.paint.flatMap { $0.name.isEmpty ? nil : "\($0.name) paint" }]
+                .compactMap { $0 }.filter { !$0.isEmpty }
+            let wearing: String? = parts.isEmpty ? nil : parts.joined(separator: " · ")
+            if login != nil || wearing != nil {
                 HStack(spacing: 6) {
                     if let login {
                         Text("@\(login)").font(.sn(13)).foregroundStyle(SN.textMuted).lineLimit(1)
                     }
-                    if login != nil && paint != nil {
+                    if login != nil && wearing != nil {
                         Text("·").font(.sn(13)).foregroundStyle(SN.textMuted)
                     }
-                    if let paint {
-                        Text(paint).font(.snRowDetail).foregroundStyle(SN.textSecondary).lineLimit(1)
+                    if let wearing {
+                        Text(wearing).font(.snRowDetail).foregroundStyle(SN.textSecondary).lineLimit(1)
                     }
                 }
                 .padding(.top, 2)

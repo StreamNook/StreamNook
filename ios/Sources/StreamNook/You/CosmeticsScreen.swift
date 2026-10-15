@@ -1,6 +1,7 @@
 import Observation
 import SNKit
 import SwiftUI
+import UIKit
 
 /// Edit profile: how you look, pinned at the top and redrawn with every pick (your Atmosphere as
 /// the band, your picture, your painted name and badges, and a line of your chat), then every
@@ -10,6 +11,9 @@ struct CosmeticsScreen: View {
     let model: AppModel
     @State private var screen: CosmeticsScreenModel
     @State private var identity: OwnIdentityData?
+    /// A picture just picked and the name as typed, shown in the pinned preview before Twitch has them.
+    @State private var localPicture: UIImage?
+    @State private var draftName = ""
 
     init(model: AppModel) {
         self.model = model
@@ -26,12 +30,12 @@ struct CosmeticsScreen: View {
         ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    profileSection.id("profile")
                     atmosphereSection.id("atmosphere")
                     badgeSection.id("badge")
                     sevenTvSection.id("seventv")
                     twitchSection.id("twitch")
                     colorSection.id("color")
-                    bioSection.id("bio")
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 32)
@@ -56,6 +60,9 @@ struct CosmeticsScreen: View {
             }
             await screen.load()
         }
+        .sheet(isPresented: $screen.editingBio) {
+            BioEditor(initial: screen.bio ?? "") { text in await screen.saveBio(text) }
+        }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
             SevenTvSignInSheet(core: model.core) { stored in
                 Task { await screen.sevenTvSignInFinished(stored) }
@@ -75,10 +82,10 @@ struct CosmeticsScreen: View {
                     .frame(height: 60)
                     .animation(.easeOut(duration: 0.25), value: screen.sn?.theme)
                 HStack(alignment: .bottom, spacing: 10) {
-                    CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56)
+                    CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56, local: localPicture)
                         .padding(.top, -34)
                     HStack(spacing: 6) {
-                        PaintedText(text: user.displayName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
+                        PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
                                     fallback: nameColor(screen.ext?.chatColor), shadows: .all)
                             .lineLimit(1)
                             .fixedSize()
@@ -92,7 +99,7 @@ struct CosmeticsScreen: View {
                 }
                 .padding(.horizontal, 12)
                 if screen.sn != nil || screen.ext != nil {
-                    ProfilePreviewRow(name: user.displayName, picks: screen, framed: false)
+                    ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen, framed: false)
                         .padding(.horizontal, 10)
                         .padding(.top, 12)
                 }
@@ -323,28 +330,13 @@ struct CosmeticsScreen: View {
         }
     }
 
-    // MARK: Bio
+    // MARK: Twitch profile
 
     @ViewBuilder
-    private var bioSection: some View {
-        if let bio = screen.bio {
-            ProfileSectionHeader("Bio", platform: .twitch) {
-                Button("Edit") { screen.editingBio = true }
-                    .font(.sn(14, 600))
-                    .foregroundStyle(SN.accent)
-                    .frame(minHeight: 44)
-            }
-            .padding(.top, 14)
-            Text(bio.isEmpty ? "No bio yet. It shows on your Twitch channel and on profile cards." : bio)
-                .font(.snBody)
-                .foregroundStyle(bio.isEmpty ? SN.textSecondary : SN.textPrimary)
-                .lineSpacing(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .snPanel()
-                .sheet(isPresented: $screen.editingBio) {
-                    BioEditor(initial: bio) { text in await screen.saveBio(text) }
-                }
+    private var profileSection: some View {
+        if let user {
+            header("Profile", platform: .twitch)
+            TwitchProfileSection(model: model, screen: screen, user: user, picture: $localPicture, draftName: $draftName)
         }
     }
 

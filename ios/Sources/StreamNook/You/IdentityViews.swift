@@ -1,5 +1,6 @@
 import SNKit
 import SwiftUI
+import UIKit
 
 // The pieces every identity surface shares (the You card, the Edit profile preview, a chatter's
 // profile sheet): the Atmosphere as a band across the top, the avatar cut into the card's edge
@@ -39,11 +40,19 @@ struct CutoutAvatar: View {
     let size: CGFloat
     var medal: String?
     var medalLabel = ""
+    /// A picture just picked, shown before Twitch serves it.
+    var local: UIImage?
 
     private var ring: CGFloat { max(3, (size * 0.05).rounded()) }
 
     var body: some View {
-        SevenTvAvatar(platformURL: platformURL, picture: picture, size: size)
+        Group {
+            if let local {
+                Image(uiImage: local).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+            } else {
+                SevenTvAvatar(platformURL: platformURL, picture: picture, size: size)
+            }
+        }
             .padding(ring)
             .background { Circle().fill(SN.background).overlay { Circle().fill(SN.floor) }.overlay { Circle().fill(SN.backgroundSecondary) } }
             .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
