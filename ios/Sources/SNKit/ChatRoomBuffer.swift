@@ -111,6 +111,22 @@ public struct ChatRoomBuffer: Sendable {
                     replaceAppended(next, &change)
                     updated[next.id] = next
                 }
+            case .member(let userID, let atmosphere, let cologne, let badge):
+                for (offset, row) in rows.enumerated() where row.message.userID == userID {
+                    guard var view = row.message.metadata.view else { continue }
+                    let before = view
+                    view.atmosphere = atmosphere
+                    view.cologne = cologne
+                    view.badges.removeAll { $0.provider == "streamnook" }
+                    if let badge { view.badges.append(badge) }
+                    guard view != before else { continue }
+                    var next = row
+                    next.message.metadata.view = view
+                    next.revision += 1
+                    rows[offset] = next
+                    replaceAppended(next, &change)
+                    updated[next.id] = next
+                }
             case .patch(_, let patches):
                 for patch in patches {
                     guard let i = index[patch.id] else { continue }

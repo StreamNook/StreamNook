@@ -27,13 +27,10 @@ struct YouScreen: View {
                     .padding(.bottom, 16)
 
                 label("Open the app on")
-                Picker("Open the app on", selection: $startTab) {
-                    ForEach(MobileTab.allCases, id: \.self) { tab in
-                        Text(tab.title).tag(tab.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
+                GlazeSegments(MobileTab.allCases.map { Segment(value: $0, label: $0.title) },
+                              selection: Binding(get: { MobileTab(rawValue: startTab) },
+                                                 set: { if let tab = $0 { startTab = tab.rawValue } }))
+                    .padding(.horizontal, 16)
                 .padding(.bottom, 16)
 
                 label("Settings")
@@ -55,7 +52,19 @@ struct YouScreen: View {
         .toolbarTitleDisplayMode(.inlineLarge)
     }
 
+    @ViewBuilder
     private var identity: some View {
+        if let user {
+            OwnIdentityHeader(model: model, user: user)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+        } else {
+            signedOutIdentity
+        }
+    }
+
+    private var signedOutIdentity: some View {
         HStack(alignment: .top, spacing: 12) {
             Avatar(url: user?.profileImageURL, size: 56)
             VStack(alignment: .leading, spacing: 2) {
@@ -115,8 +124,9 @@ struct AccountsCard: View {
             HStack(spacing: 12) {
                 AccountAvatar(url: user?.profileImageURL, platform: .twitch)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(user?.displayName ?? "Twitch").font(.snRowStrong).foregroundStyle(SN.textPrimary).lineLimit(1)
-                    Text(user == nil ? "Not signed in" : twitchArmed ? "Signs you out of StreamNook" : "Your StreamNook account")
+                    // The header above already names you; this row names the platform.
+                    Text("Twitch").font(.snRowStrong).foregroundStyle(SN.textPrimary).lineLimit(1)
+                    Text(user.map { twitchArmed ? "Signs you out of StreamNook" : "@\($0.login)" } ?? "Not signed in")
                         .font(.snRowDetail)
                         .foregroundStyle(SN.textMuted)
                 }
@@ -141,7 +151,7 @@ struct AccountsCard: View {
                     Text("Not signed in").font(.snRowDetail).foregroundStyle(SN.textMuted)
                 }
                 Spacer(minLength: 8)
-                BrandPill(label: "Sign in with Kick", fill: SN.kick, text: .black, enabled: false) {}
+                BrandPill(label: "Sign in with Kick", fill: SN.kick, text: .white, enabled: false) {}
             }
             .padding(14)
         }

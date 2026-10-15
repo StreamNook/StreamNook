@@ -10,6 +10,7 @@ public final class FakeFixtures: Sendable {
     }
 
     private let state: Mutex<State>
+    private let cosmetics = FakeCosmetics()
 
     public init(signedIn: Bool) {
         state = Mutex(State(signedIn: signedIn, settings: [
@@ -84,7 +85,7 @@ public final class FakeFixtures: Sendable {
             let found = FakeCore.categories.filter { $0.name.lowercased().contains(query) }
             return try FakeCore.json(found.map(FakeCore.object))
         default:
-            return nil
+            return try cosmetics.answer(cmd, args, userID: Self.user.id)
         }
     }
 

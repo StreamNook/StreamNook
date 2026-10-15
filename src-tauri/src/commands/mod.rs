@@ -72,6 +72,7 @@ pub mod song_id;
 // Cosmetics (7TV paints/badges apply + auth status) are kept on mobile; only the
 // individual 7TV login *popup* functions inside are #[cfg(desktop)]-gated.
 pub mod seventv_cosmetics;
+pub mod sn_cosmetics;
 pub mod seventv_cosmetics_fetch;
 pub mod streamnook_api;
 pub mod streaming;
