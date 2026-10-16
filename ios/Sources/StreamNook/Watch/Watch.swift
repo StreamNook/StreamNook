@@ -416,10 +416,16 @@ final class Watch {
     /// Playback could not start, but chat runs on: an offline channel says so; a live one keeps
     /// the band's failure line and a toast saying chat still works.
     private func failed(_ stream: TwitchStream, core: CoreBridge) async {
-        let online = try? await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
-                                            as: TwitchStream?.self)
+        // An unanswerable check counts as live: the honest message is then about playback.
+        var offline = false
+        do {
+            offline = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
+                                            as: TwitchStream?.self) == nil
+        } catch {
+            log.error("check_stream_online failed: \(String(describing: error), privacy: .public)")
+        }
         guard !Task.isCancelled, self.stream?.userLogin == stream.userLogin else { return }
-        if case .some(.none) = online {
+        if offline {
             showOffline()
             return
         }
