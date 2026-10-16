@@ -113,7 +113,7 @@ pub fn report(app: &AppHandle, slot: Option<String>, state: PlayerState) {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(PAUSE_GRACE).await;
                 if with_gate(|g| g.expire(&player, generation)) {
-                    log::debug!("[EarningGate] pause outlived the grace ({})", if player.is_empty() { "main" } else { &player });
+                    log::info!("[EarningGate] pause outlived the grace ({})", if player.is_empty() { "main" } else { &player });
                     apply(&app, &slot, false);
                 }
             });
