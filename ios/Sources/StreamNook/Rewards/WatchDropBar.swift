@@ -18,7 +18,11 @@ struct WatchDropBar: View {
     private var stream: TwitchStream? { model.watch.stream }
 
     var body: some View {
-        Group {
+        // A ZStack, not a Group: with no drop a Group has no child for `.task` to attach to, so
+        // the read never ran and the bar could never appear. The zero-size clear base keeps the
+        // reader alive while the bar takes no room.
+        ZStack(alignment: .top) {
+            Color.clear.frame(width: 0, height: 0)
             if visible, let drop {
                 // The slot adds no padding, so an empty bar takes no room; the gutter is the card's.
                 card(drop)
