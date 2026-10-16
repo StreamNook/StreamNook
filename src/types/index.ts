@@ -1608,6 +1608,11 @@ export interface FollowingLists {
   favorites: TwitchStream[];
   live: TwitchStream[];
   offline: TwitchStream[];
+  /** Every live follow on every platform, favourite or not, most watched
+   *  first: the phones' Following list (they keep the platforms they play). */
+  followed_live?: TwitchStream[];
+  /** The platforms you follow at least one channel on, in platform order. */
+  platforms?: string[];
 }
 
 /** One card in Home's Continue Watching row. Rust builds these from the local
@@ -1648,7 +1653,15 @@ export type HomeSnapshotUpdate =
   /** The Sidebar's second section, built in Rust for `scope` ('all' or one
    *  provider id): ranked, minus what its Favourites and Followed show. */
   | { section: 'sidebar_discover'; scope: string; streams: TwitchStream[]; at: number }
-  | { section: 'following'; favorites: TwitchStream[]; live: TwitchStream[]; offline: TwitchStream[]; at: number }
+  | {
+      section: 'following';
+      favorites: TwitchStream[];
+      live: TwitchStream[];
+      offline: TwitchStream[];
+      followed_live?: TwitchStream[];
+      platforms?: string[];
+      at: number;
+    }
   | { section: 'other_categories'; categories: ProviderCategory[]; at: number };
 
 /**

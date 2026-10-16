@@ -267,6 +267,8 @@ pub enum HomeUpdate {
         favorites: Vec<DiscoverRow>,
         live: Vec<DiscoverRow>,
         offline: Vec<DiscoverRow>,
+        followed_live: Vec<DiscoverRow>,
+        platforms: Vec<String>,
         at: u64,
     },
     /// The unified Categories tab's "On other platforms" row.
@@ -781,8 +783,8 @@ async fn rebuild_following(inner: &Inner) {
         return;
     }
     *last = Some(following.clone());
-    let Following { favorites, live, offline } = following;
-    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, at: now_secs() });
+    let Following { favorites, live, offline, followed_live, platforms } = following;
+    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, followed_live, platforms, at: now_secs() });
 }
 
 /// The "On other platforms" row as it stands: every other platform's cached

@@ -1221,7 +1221,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingMore: false,
   unifiedDiscover: [],
   sidebarDiscover: null,
-  following: { favorites: [], live: [], offline: [] },
+  following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [] },
   otherCategories: [],
   streamUrl: null,
   isRestartingStream: false,
@@ -1475,7 +1475,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ sidebarDiscover: { scope: update.scope, streams: update.streams } });
         break;
       case 'following':
-        set({ following: { favorites: update.favorites, live: update.live, offline: update.offline } });
+        set({
+          following: {
+            favorites: update.favorites,
+            live: update.live,
+            offline: update.offline,
+            followed_live: update.followed_live ?? [],
+            platforms: update.platforms ?? [],
+          },
+        });
         break;
       case 'other_categories':
         set({ otherCategories: update.categories });
