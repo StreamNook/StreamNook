@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import MediaPlayer
 import SNKit
 import SwiftUI
 
@@ -15,6 +16,7 @@ import SwiftUI
 ///   switch its mode; `search:TEXT` searches it
 /// - `open:watch:INDEX` (or `play:INDEX`) opens the watch layer on the Browse list's stream at INDEX;
 ///   `login:NAME` opens it on a bare login, the way a notification tap or a raid seed does
+/// - `nowplaying` logs the lock screen card (title, channel, artwork, live, rate, seek)
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
@@ -105,6 +107,11 @@ enum Drive {
                 let login = model.streams[index].userLogin
                 model.startWatching(TwitchStream(id: "", userLogin: login, userName: login, title: "", viewerCount: 0, gameName: ""))
             case "clip": await openTopClip(model)
+            case "nowplaying":
+                let info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                let rate = info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? -1
+                let live = info[MPNowPlayingInfoPropertyIsLiveStream] as? Bool ?? false
+                log.notice("drive nowplaying title \(info[MPMediaItemPropertyTitle] as? String ?? "-", privacy: .public) artist \(info[MPMediaItemPropertyArtist] as? String ?? "-", privacy: .public) artwork \(info[MPMediaItemPropertyArtwork] != nil) live \(live) rate \(rate) seek \(MPRemoteCommandCenter.shared().changePlaybackPositionCommand.isEnabled)")
             case "mini": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .mini }
             case "full": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .full }
             case "back", "close": model.stopWatching()
