@@ -878,15 +878,12 @@ async function applyOfflineDecision(
     case 'switch_to':
       set({ isAutoSwitching: true });
       try {
-        await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
+        // The relay, the watch session, drops and channel points (services/watch_start.rs).
+        await invoke('watch_stop', { preserveBackend: false }).catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
         await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
-        await invoke('stop_drops_monitoring').catch((e) => Logger.warn('[AutoSwitch] Error stopping drops monitoring:', e));
         set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
         say(decision.notice);
-        if (decision.action === 'stop') {
-          await invoke('watch_session_stop', { preserveBackend: false }).catch(() => {});
-          return;
-        }
+        if (decision.action === 'stop') return;
         // A beat between the old stream closing and the new one opening.
         await new Promise((resolve) => setTimeout(resolve, 500));
         await get().startStream(decision.stream.user_login, decision.stream);

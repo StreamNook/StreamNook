@@ -2115,7 +2115,7 @@ pub fn run() {
             start_drops_monitoring,
             stop_drops_monitoring,
             update_monitoring_channel,
-            report_player_playing,
+            report_player_state,
             // Automation commands
             // Drops Authentication commands
             start_drops_login,

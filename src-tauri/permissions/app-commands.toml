@@ -455,7 +455,7 @@ allow = [
   "start_drops_monitoring",
   "stop_drops_monitoring",
   "update_monitoring_channel",
-  "report_player_playing",
+  "report_player_state",
   "start_drops_login",
   "start_drops_device_flow",
   "poll_drops_token",
