@@ -11,6 +11,8 @@ struct WatchDropBar: View {
     var visible = true
     @State private var drop: WatchDrop?
     @State private var claiming = false
+    /// The first answer for a stream is logged even when it is "nothing".
+    @State private var reported: String?
     @Environment(\.scenePhase) private var phase
 
     private var stream: TwitchStream? { model.watch.stream }
@@ -45,7 +47,8 @@ struct WatchDropBar: View {
                        "gameId": stream.gameID ?? "", "gameName": stream.gameName],
                 as: WatchDrop?.self)
             guard model.watch.stream?.userLogin == stream.userLogin else { return }
-            if next != drop {
+            if next != drop || reported != stream.userLogin {
+                reported = stream.userLogin
                 log.notice("drop bar \(stream.userLogin, privacy: .public) game '\(stream.gameName, privacy: .public)' (\(stream.gameID ?? "-", privacy: .public)): \(next.map { "\($0.name) \($0.trailing)" } ?? "nothing", privacy: .public), visible \(visible)")
             }
             drop = next
