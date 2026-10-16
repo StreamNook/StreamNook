@@ -136,7 +136,6 @@ impl WatchHeartbeatService {
     /// was being watched, if any.
     pub async fn clear_target(&self) -> Option<String> {
         self.playing.store(false, Ordering::SeqCst);
-        crate::services::credit_traffic::follow(None);
         self.target.write().await.take().map(|t| t.channel_id)
     }
 
@@ -147,18 +146,10 @@ impl WatchHeartbeatService {
     }
 
     async fn tick(&self) {
-        let playing = self.playing.load(Ordering::SeqCst);
-        let snapshot = { self.target.read().await.clone() };
-        // Drops count only with the viewer's own segment traffic: a relay- or
-        // plugin-served stream gets it from `credit_traffic` while it plays.
-        let traffic = snapshot
-            .as_ref()
-            .filter(|t| playing && crate::services::credit_traffic::needed_for(&t.login))
-            .map(|t| t.login.clone());
-        crate::services::credit_traffic::follow(traffic.as_deref());
-        if !playing {
+        if !self.playing.load(Ordering::SeqCst) {
             return;
         }
+        let snapshot = { self.target.read().await.clone() };
         let Some(mut target) = snapshot else {
             return;
         };

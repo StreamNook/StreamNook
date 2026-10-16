@@ -354,12 +354,6 @@ impl DropsAuthService {
     /// without a client secret. Instead, we use the token until Twitch rejects it (401),
     /// at which point validate_token() will delete it and require re-authentication.
     /// This matches the official Android app's behavior.
-    /// The client id the drops credential belongs to (its playback tokens and
-    /// GQL calls must be sent under it).
-    pub fn client_id() -> &'static str {
-        DROPS_CLIENT_ID
-    }
-
     pub async fn get_token() -> Result<String> {
         // NOTE: We don't check expires_at here - just use the token until it fails
         // Twitch will reject it with 401 when it's actually invalid
