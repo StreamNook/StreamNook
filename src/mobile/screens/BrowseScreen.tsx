@@ -1,5 +1,5 @@
 // Discover: Live streams and Categories, with search covering both modes.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ListBullets, MagnifyingGlass, SquaresFour, X } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -7,6 +7,7 @@ import { useMobileNavStore } from '../navStore';
 import { useHypeTrains } from '../useHypeTrains';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
+import { OfflineChannelsGroup } from './OfflineChannelsGroup';
 import { readStreamView, writeStreamView, type StreamViewMode } from './FollowingScreen';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards, SkeletonTiles } from '../ui/SkeletonCards';
@@ -67,6 +68,7 @@ export const BrowseScreen: React.FC = () => {
   const recommendedStreams = useAppStore((s) => s.recommendedStreams);
   const loadRecommendedStreams = useAppStore((s) => s.loadRecommendedStreams);
   const startStream = useAppStore((s) => s.startStream);
+  const startOfflineChat = useAppStore((s) => s.startOfflineChat);
   const openBrowseCategory = useMobileNavStore((s) => s.openBrowseCategory);
 
   const [mode, setMode] = useState<BrowseMode>('live');
@@ -254,6 +256,10 @@ export const BrowseScreen: React.FC = () => {
   };
 
   const shownStreams = streamResults ?? recommendedStreams;
+  // A search also finds channels that are not streaming; Rust marks them
+  // `is_live: false` from Twitch's streams answer. They get their own group.
+  const liveStreams = useMemo(() => shownStreams.filter((s) => s.is_live !== false), [shownStreams]);
+  const offlineChannels = useMemo(() => shownStreams.filter((s) => s.is_live === false), [shownStreams]);
   // Browse already drew the badge but never fetched the statuses, so a train
   // only ever showed for channels that happened to also be in your following.
   useHypeTrains(platform === 'twitch' ? shownStreams : NO_STREAMS);
@@ -395,23 +401,35 @@ export const BrowseScreen: React.FC = () => {
                 <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
               </div>
             ) : (
-              <AdaptiveGrid
-                variant={view === 'list' ? 'row' : 'card'}
-                gap={view === 'list' ? 8 : 12}
-                className="px-4 sn-tabbar-clearance"
-              >
-                {shownStreams.map((s, i) => (
-                  <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
-                    <MobileStreamCard
-                      stream={s}
-                      hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
-                      watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
-                      onPress={(stream) => void startStream(stream.user_login, stream)}
-                      variant={view === 'list' ? 'row' : 'card'}
+              <div className="sn-tabbar-clearance">
+                {liveStreams.length > 0 && (
+                  <AdaptiveGrid
+                    variant={view === 'list' ? 'row' : 'card'}
+                    gap={view === 'list' ? 8 : 12}
+                    className="px-4"
+                  >
+                    {liveStreams.map((s, i) => (
+                      <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
+                        <MobileStreamCard
+                          stream={s}
+                          hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
+                          watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
+                          onPress={(stream) => void startStream(stream.user_login, stream)}
+                          variant={view === 'list' ? 'row' : 'card'}
+                        />
+                      </SettleIn>
+                    ))}
+                  </AdaptiveGrid>
+                )}
+                {offlineChannels.length > 0 && (
+                  <div className={`px-4 ${liveStreams.length > 0 ? 'mt-5' : ''}`}>
+                    <OfflineChannelsGroup
+                      channels={offlineChannels}
+                      onOpen={(c) => void startOfflineChat(c.user_login, c)}
                     />
-                  </SettleIn>
-                ))}
-              </AdaptiveGrid>
+                  </div>
+                )}
+              </div>
             )
           ) : categoriesLoading || (searching && shownCategories.length === 0) ? (
             <SkeletonTiles />

@@ -20,6 +20,7 @@ import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
 import { collabLabel } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
+import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
@@ -67,6 +68,8 @@ export const MobilePlayer: React.FC<{
   const { state } = useMobileHlsEngine(videoRef);
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
+  // A channel that is not streaming, opened as its offline room.
+  const offline = useAppStore((s) => s.streamUrl === 'offline');
   // Channel state, avatar repair and live alerts are Twitch services keyed by
   // login or numeric id; a Kick slug or id would address an unrelated Twitch
   // channel of the same name.
@@ -370,7 +373,11 @@ export const MobilePlayer: React.FC<{
         </div>
       )}
 
-      {state === 'error' && (
+      {/* An offline room: who, when, what is next, and the stream starts here
+          when they go live. Not an error, so no Retry and no live chrome. */}
+      {offline && !compact && <MobileOfflineRoom />}
+
+      {state === 'error' && !offline && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70">
           <div className="text-sm text-white/80">Stream unavailable</div>
           <button
@@ -390,7 +397,7 @@ export const MobilePlayer: React.FC<{
           and chat, matching how the Twitch app does it. */}
       <div
         className={`absolute inset-0 transition-opacity duration-200 ${
-          controlsVisible && !compact ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          controlsVisible && !compact && !offline ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         style={{
           background:
