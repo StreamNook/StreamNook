@@ -14,6 +14,7 @@
 use crate::commands::streaming::{self, StartError, StreamStartResult};
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
+use crate::services::offline_room::OfflineRoom;
 use crate::rt::AppHandle;
 use crate::services::twitch_service::TwitchService;
 use crate::services::watch_session::{self, WatchTarget};
@@ -244,6 +245,105 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     log::info!("[WatchStart] {login}: drops, points and the watch session follow it");
 }
 
+/// An offline room opened: the room's facts, or the live row when the card that
+/// opened it was stale (the caller starts the stream instead), or nothing when
+/// a newer start or a stop won meanwhile.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoomOpen {
+    pub superseded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<OfflineRoom>,
+    /// The channel is live after all: watch it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live: Option<TwitchStream>,
+    /// The row the view shows for the room (the room's facts first, the seed's second).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<TwitchStream>,
+}
+
+/// The view's row for an offline room: what the room knows first, then the seed.
+pub fn room_row(login: &str, room: Option<&OfflineRoom>, seed: &WatchSeed) -> TwitchStream {
+    let pick = |mine: Option<&String>, seeded: &Option<String>| -> String {
+        mine.filter(|v| !v.is_empty()).cloned().or_else(|| filled(seeded).map(str::to_string)).unwrap_or_default()
+    };
+    let name = pick(room.map(|r| &r.display_name), &seed.user_name);
+    TwitchStream {
+        id: String::new(),
+        user_id: pick(room.map(|r| &r.user_id), &seed.user_id),
+        user_name: if name.is_empty() { login.to_string() } else { name },
+        user_login: login.to_string(),
+        title: pick(room.and_then(|r| r.last_title.as_ref()), &seed.title),
+        viewer_count: 0,
+        game_id: String::new(),
+        game_name: pick(room.and_then(|r| r.last_category.as_ref()), &seed.game_name),
+        thumbnail_url: String::new(),
+        started_at: String::new(),
+        broadcaster_type: seed.broadcaster_type.clone(),
+        profile_image_url: room
+            .and_then(|r| r.avatar_url.clone())
+            .or_else(|| filled(&seed.profile_image_url).map(str::to_string)),
+        is_live: Some(false),
+        tags: None,
+        language: None,
+        drops_earnable: false,
+    }
+}
+
+/// Open a Twitch channel's offline room in the main view: its facts in one
+/// answer, whatever played stops, and the watch session waits for the channel
+/// to go live (not for `chat_only`, a live channel whose playback failed). A
+/// stale card for a live channel answers with the live row instead.
+pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, chat_only: bool) -> RoomOpen {
+    let login = login.trim().trim_start_matches('#').to_lowercase();
+    let ticket = take_ticket();
+    let seed = seed.unwrap_or_default();
+    let room = match crate::services::offline_room::open(&login).await {
+        Ok(room) => Some(room),
+        Err(e) => {
+            log::warn!("[WatchStart] offline room for {login}: {e}");
+            None
+        }
+    };
+    if !current(ticket) {
+        return RoomOpen { superseded: true, room: None, live: None, row: None };
+    }
+    if !chat_only {
+        if let Some(mut live) = room.as_ref().and_then(|r| r.live.clone()) {
+            if live.profile_image_url.as_deref().unwrap_or("").is_empty() {
+                live.profile_image_url = room.as_ref().and_then(|r| r.avatar_url.clone());
+            }
+            return RoomOpen { superseded: false, room, live: Some(live), row: None };
+        }
+    }
+    // Whatever the main view played (an ended stream, a recording) stops.
+    let _ = streaming::stop_stream().await;
+    let row = room_row(&login, room.as_ref(), &seed);
+    if !current(ticket) {
+        return RoomOpen { superseded: true, room: None, live: None, row: None };
+    }
+    if !chat_only {
+        let authenticated = app.state::<AppState>().twitch_auth.get_token().await.is_ok();
+        watch_session::start(
+            app,
+            WatchTarget {
+                provider: "twitch".to_string(),
+                login: login.clone(),
+                user_id: row.user_id.clone(),
+                user_name: row.user_name.clone(),
+                title: row.title.clone(),
+                game_id: None,
+                game_name: row.game_name.clone(),
+                started_at: String::new(),
+                authenticated,
+                offline: true,
+            },
+        )
+        .await;
+    }
+    log::info!("[WatchStart] {login}: offline room open");
+    RoomOpen { superseded: false, room, live: None, row: Some(row) }
+}
+
 /// Stop watching: the relay goes down, the watch session ends, and unless
 /// MultiNook takes the channel over (`preserve_backend`), drops and channel
 /// points stop following it. Any start still resolving is superseded.
@@ -322,6 +422,17 @@ mod tests {
         assert!(has_gaps(&seed));
         let full = WatchSeed { title: Some("t".into()), ..seed };
         assert!(!has_gaps(&full));
+    }
+
+    #[test]
+    fn a_room_row_takes_the_rooms_facts_then_the_seed() {
+        let seed = WatchSeed { title: Some("seed title".into()), user_id: Some("7".into()), ..Default::default() };
+        let row = room_row("caster", None, &seed);
+        assert_eq!(row.title, "seed title");
+        assert_eq!(row.user_id, "7");
+        assert_eq!(row.user_name, "caster");
+        assert_eq!(row.is_live, Some(false));
+        assert_eq!(row.started_at, "", "an offline row never has a start");
     }
 
     #[test]

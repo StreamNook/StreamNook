@@ -5,7 +5,7 @@ use crate::services::watch_session::{self, OfflineDecision, WatchTarget};
 use crate::commands::streaming::StartError;
 use crate::models::settings::AppState;
 // Named apart: the command macros make a same-named item for each command.
-use crate::services::watch_start::{self as starts, WatchSeed, WatchStart};
+use crate::services::watch_start::{self as starts, RoomOpen, WatchSeed, WatchStart};
 use crate::rt::AppHandle;
 use tauri::State;
 
@@ -29,6 +29,18 @@ pub async fn watch_start(
 pub async fn watch_stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: Option<bool>) -> Result<(), String> {
     starts::stop(app, state, preserve_backend.unwrap_or(false)).await;
     Ok(())
+}
+
+/// Open a Twitch channel's offline room in the main view (see
+/// services/watch_start.rs `open_room`).
+#[tauri::command]
+pub async fn watch_open_room(
+    app: AppHandle,
+    login: String,
+    seed: Option<WatchSeed>,
+    chat_only: Option<bool>,
+) -> Result<RoomOpen, String> {
+    Ok(starts::open_room(app, login, seed, chat_only.unwrap_or(false)).await)
 }
 
 /// The main window started playing this stream.
