@@ -391,7 +391,7 @@ pub(crate) fn badge_with_backdrop(png: &[u8], color: &str) -> Option<String> {
 
 /// A PNG as 8-bit RGBA: (width, height, pixels). `None` for bytes that aren't
 /// a PNG or one past `BACKDROP_MAX_SIDE`.
-fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
