@@ -10,6 +10,9 @@ import SNKit
 /// - `dsheet:INDEX` opens the campaign sheet of the INDEXth campaign (in progress, then available)
 /// - `dfocus:ID` asks for a campaign the way the player's drop bar does
 /// - `dstate` logs what the segment holds
+/// - `bsort:NAME` sorts the badge wall (`newest`, `available`, `soon`, `usage`, `oldest`);
+///   `bsheet:INDEX` opens a tile's sheet; `bmissing:all` shows every missing row; `bstate` logs
+///   the wall
 /// - `fakedrops:on`, `fakedrops:off` connect or disconnect FakeCore's drops
 @MainActor
 enum RewardsDrive {
@@ -37,6 +40,18 @@ enum RewardsDrive {
         case "dfocus":
             rewards.focusCampaign = value
             model.nav.tab = .rewards
+        case "bsort":
+            rewards.badgeSort = BadgeSort(rawValue: value) ?? .newest
+        case "bsheet":
+            for _ in 0..<50 where rewards.wall?.tiles.isEmpty ?? true { try? await Task.sleep(for: .milliseconds(200)) }
+            let tiles = rewards.wall?.tiles ?? []
+            let index = Int(value) ?? 0
+            if tiles.indices.contains(index) { rewards.badgeSheet = tiles[index] }
+        case "bmissing":
+            rewards.missingExpanded = value == "all"
+        case "bstate":
+            let wall = rewards.wall
+            log.notice("drive bstate tiles \(wall?.tiles.count ?? -1) \(wall?.countLabel ?? "", privacy: .public) missing \(wall?.missing.state ?? "-", privacy: .public) rows \(wall?.missing.rows.count ?? -1) sync \(wall?.syncLeft ?? -1) first \(wall?.tiles.first?.title ?? "", privacy: .public)")
         case "dstate":
             let drops = rewards.drops
             log.notice("drive dstate connected \(drops?.connected ?? false) progress \(drops?.inProgress.count ?? -1) available \(drops?.available.count ?? -1) earned \(drops?.earned.count ?? -1) query '\(drops?.query ?? "", privacy: .public)'")

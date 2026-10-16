@@ -20,7 +20,7 @@ struct RewardsScreen: View {
                             .padding(.top, 4)
                         switch rewards.segment {
                         case .drops: DropsSegment(model: model, scroller: scroller)
-                        case .badges: badges
+                        case .badges: BadgesSegment(model: model)
                         }
                     } else {
                         SignedOutRewards(model: model)
@@ -48,14 +48,10 @@ struct RewardsScreen: View {
         .onChange(of: model.host.sheet == nil) { _, closed in if closed { rewards.sheetClosed() } }
     }
 
-    private var badges: some View {
-        EmptyNote(text: "Your badge wall shows here once it is built.", hint: nil)
-    }
-
     private func refresh() async {
         switch rewards.segment {
         case .drops: await rewards.load(refresh: true)
-        case .badges: break
+        case .badges: await rewards.loadWall(force: true)
         }
     }
 }

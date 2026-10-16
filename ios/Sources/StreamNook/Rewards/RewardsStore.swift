@@ -27,6 +27,17 @@ final class RewardsStore {
     private(set) var flashed: String?
     private var listening: Task<Void, Never>?
 
+    /// The badge wall, kept across visits so a return paints at once.
+    private(set) var wall: BadgeWall?
+    private(set) var wallLoading = false
+    /// Newest on each visit.
+    var badgeSort = BadgeSort.newest
+    /// The badge whose sheet is up.
+    var badgeSheet: BadgeTile?
+    /// The missing strip shows every row instead of the first four.
+    var missingExpanded = false
+    private var wallRequest = 0
+
     init(core: CoreBridge) {
         self.core = core
     }
@@ -47,6 +58,31 @@ final class RewardsStore {
         segment = .drops
         query = ""
         openGroups = []
+        badgeSort = .newest
+        missingExpanded = false
+    }
+
+    /// Reads the wall in the chosen sort. `force` also has the core re-read the account's
+    /// collection in the background (opening the segment, a pull); `badge-standing-changed`
+    /// follows when it lands. A failed read keeps the wall on screen.
+    func loadWall(force: Bool) async {
+        wallRequest += 1
+        let request = wallRequest
+        wallLoading = true
+        defer { if request == wallRequest { wallLoading = false } }
+        do {
+            let next = try await core.invoke("get_badge_wall", args: ["sort": badgeSort.rawValue, "force": force],
+                                             as: BadgeWall.self)
+            guard request == wallRequest else { return }
+            wall = next
+        } catch {
+            log.error("get_badge_wall failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The tile holding a missing row's badge, opened in the sheet.
+    func openMissing(_ key: String) {
+        badgeSheet = wall?.tile(holding: key)
     }
 
     /// Reads the segment: `refresh` asks Twitch again (a visit, a pull); otherwise the core
@@ -108,6 +144,13 @@ final class RewardsStore {
                     let reason = CoreFailure.command(json: event.payloadJSON).description
                     self.connectError = reason
                     toasts.show("Drops connection failed: \(reason)")
+                case "badge-standing-changed":
+                    // The collection, a claim or a window boundary moved: read the wall again
+                    // when it has been read at all.
+                    if self.wall != nil { await self.loadWall(force: false) }
+                case "badge-wall-sync":
+                    let payload = (try? JSONSerialization.jsonObject(with: Data(event.payloadJSON.utf8))) as? [String: Any]
+                    if let left = payload?["left"] as? Int { self.wall?.syncLeft = left }
                 default:
                     continue
                 }

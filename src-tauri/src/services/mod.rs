@@ -8,6 +8,7 @@ pub mod badge_polling_service;
 pub mod badge_earn;
 pub mod badge_service;
 pub mod badge_standing;
+pub mod badge_wall;
 pub mod badge_window;
 pub mod bttv_pro_service;
 

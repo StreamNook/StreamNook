@@ -47,4 +47,14 @@ import Testing
         _ = try rewards.answer("claim_drop", ["dropId": "d2"])
         #expect(rewards.claims == ["d2"])
     }
+
+    @Test func theFakeWallDecodes() throws {
+        let json = try #require(try FakeRewards().answer("get_badge_wall", ["sort": "available"]))
+        let wall = try JSONDecoder().decode(BadgeWall.self, from: Data(json.utf8))
+        #expect(wall.tiles.first?.status == "available")
+        #expect(wall.missing.state == "list")
+        #expect(wall.tile(holding: "mouse/1")?.title == "Mouse Pad")
+        #expect(wall.tiles.first { $0.owned }?.lit == true)
+        #expect(wall.tiles.first { $0.status == "expired" }?.word == "ENDED")
+    }
 }

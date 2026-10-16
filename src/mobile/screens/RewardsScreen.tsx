@@ -3,11 +3,13 @@
 // Named Activity until it was pointed out that the word describes neither of
 // the things on it. Both tabs are collections of rewards, so the tab says that.
 //
-// Uses the same backend surface as the desktop Drops Center; connecting uses
-// the device-code flow directly (the desktop's authorize popup is
-// desktop-gated), showing the code here and opening the browser, mirroring the
-// main Twitch login pattern on mobile.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// Both segments are built in Rust and shared with the iPhone app: the Drops
+// segment (`get_rewards_drops`, services/rewards_drops.rs: grouping, order,
+// search, every row's words) and the badge wall (`get_badge_wall`,
+// services/badge_wall.rs). This file lays them out. Connecting drops uses the
+// redirect grant in the in-app login overlay; Twitch closed the device-code
+// grant on the drops client.
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowSquareOut, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,53 +19,20 @@ import { useMobileNavStore } from '../navStore';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { MobileSheet } from '../ui/MobileSheet';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
-import {
-  badgeGalleryIsWarm,
-  loadBadgeGallery,
-  refreshBadgeStanding,
-  useBadgeGallery,
-  type GlobalBadge,
-} from '../rewards/badgeGalleryStore';
+import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery } from '../rewards/badgeGalleryStore';
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
-import { refetchDelay } from '../../services/badgeStanding';
-import { orderBadges, type BadgeSort } from '../rewards/badgeSort';
-import { gameBoxArt } from '../../utils/boxArt';
+import {
+  blurbText,
+  getRewardsDrops,
+  type BadgeSort,
+  type BadgeTile,
+  type CampaignCard,
+  type RewardsDrops,
+} from '../rewards/rewardsModel';
 import { openExternal } from '../../utils/openExternal';
-import { dropRequirementText, twitchProgressLine } from '../../utils/dropRequirement';
 import { Logger } from '../../utils/logger';
-import type {
-  DropCampaign,
-  InventoryItem,
-  InventoryResponse,
-} from '../../types';
 
 type RewardsTab = 'drops' | 'badges';
-
-interface GameGroup<T> {
-  game: string;
-  art: string;
-  items: T[];
-}
-
-function groupByGame<T>(
-  items: T[],
-  getGame: (t: T) => string,
-  getArt: (t: T) => string,
-): GameGroup<T>[] {
-  const map = new Map<string, GameGroup<T>>();
-  for (const item of items) {
-    const game = getGame(item) || 'Other';
-    const existing = map.get(game);
-    if (existing) existing.items.push(item);
-    else map.set(game, { game, art: getArt(item), items: [item] });
-  }
-  // Busiest game first, then alphabetical. The tiebreak matters: without it the
-  // order follows whatever the API happened to return and the list reshuffles
-  // itself under the reader on every poll.
-  return [...map.values()].sort(
-    (a, b) => b.items.length - a.items.length || a.game.localeCompare(b.game),
-  );
-}
 
 /**
  * One game, collapsed to a single row until you open it.
@@ -79,25 +48,20 @@ function groupByGame<T>(
 const GameGroupSection: React.FC<{
   art: string;
   game: string;
-  count: number;
+  countLabel: string;
   expanded: boolean;
   onToggle: () => void;
   children: React.ReactNode;
-}> = ({ art, game, count, expanded, onToggle, children }) => (
+}> = ({ art, game, countLabel, expanded, onToggle, children }) => (
   <div>
     <button
       onClick={onToggle}
       aria-expanded={expanded}
       className="w-full flex items-center gap-2 mt-3 mb-1.5 text-left active:opacity-70 transition-opacity"
     >
-      {/* Through gameBoxArt, not straight into src. Twitch hands back box art in
-          two shapes and one of them is a TEMPLATE carrying literal
-          {width}x{height} placeholders, which is not a loadable URL. The
-          Available now campaigns come back in that shape, which is why they
-          were the ones rendering with no art at all. */}
       {art ? (
         <img
-          src={gameBoxArt(art, 144, 192)}
+          src={art}
           alt=""
           loading="lazy"
           draggable={false}
@@ -108,9 +72,7 @@ const GameGroupSection: React.FC<{
       )}
       <div className="flex-1 min-w-0">
         <div className="text-[14px] font-semibold text-textPrimary truncate">{game}</div>
-        <div className="text-[12px] text-textMuted">
-          {count} {count === 1 ? 'campaign' : 'campaigns'}
-        </div>
+        <div className="text-[12px] text-textMuted">{countLabel}</div>
       </div>
       <motion.span
         className="ml-auto shrink-0 flex text-textMuted"
@@ -123,9 +85,6 @@ const GameGroupSection: React.FC<{
     <AnimatePresence>
       {expanded && (
         <motion.div
-          // Height to `auto` is measured by framer, so this animates properly
-          // rather than snapping. `overflow-hidden` is what makes the content
-          // wipe rather than spill out during the transition.
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
@@ -139,10 +98,6 @@ const GameGroupSection: React.FC<{
   </div>
 );
 
-// The badge wall itself (GlobalBadge, loading, the metadata backfill) lives in
-// rewards/badgeGalleryStore so it survives this screen unmounting on every
-// tab switch. This file only sorts and draws it.
-
 const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
   { id: 'newest', label: 'Newest' },
   { id: 'available', label: 'Available' },
@@ -151,49 +106,15 @@ const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
   { id: 'oldest', label: 'Oldest' },
 ];
 
-// How long is left to earn a campaign, at the coarsest useful resolution.
-// Anything past a couple of days does not need an hour count, and anything
-// under a day very much does.
-function campaignEndsIn(campaign: DropCampaign): string | null {
-  const end = new Date(campaign.end_at).getTime();
-  if (Number.isNaN(end)) return null;
-  const ms = end - Date.now();
-  if (ms <= 0) return null;
-  const hours = Math.floor(ms / 3_600_000);
-  if (hours < 1) return `${Math.max(1, Math.round(ms / 60_000))}m left`;
-  if (hours < 48) return `${hours}h left`;
-  return `${Math.floor(hours / 24)}d left`;
-}
+const wordColor = (tile: BadgeTile) =>
+  tile.owned
+    ? 'text-accent'
+    : tile.status === 'available'
+      ? 'text-success'
+      : tile.status === 'coming-soon'
+        ? 'text-warning'
+        : 'text-textMuted';
 
-// Split a badge blurb into its parts so each gets its own treatment instead of
-// one wall of text: the earn prose, the event window line, and any
-// eligibility caveat (the "Prime subs don't count" class of parenthetical).
-const WINDOW_LINE_RE = /^\s*(?:event duration|available)\s*:?\s*(.+)$/im;
-const CAVEAT_RE = /\(([^)]*(?:don't count|do not count|not eligible|excluded|doesn't count)[^)]*)\)/i;
-
-function splitBadgeBlurb(text: string): {
-  prose: string;
-  window: string | null;
-  caveat: string | null;
-} {
-  if (!text) return { prose: '', window: null, caveat: null };
-  let rest = text;
-
-  const win = rest.match(WINDOW_LINE_RE);
-  const window = win ? win[1].trim() : null;
-  if (win) rest = rest.replace(win[0], '');
-
-  const cav = rest.match(CAVEAT_RE);
-  const caveat = cav ? cav[1].trim() : null;
-  if (cav) rest = rest.replace(cav[0], '');
-
-  const prose = rest
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([.,])/g, '$1')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return { prose, window, caveat };
-}
 export const RewardsScreen: React.FC = () => {
   const addToast = useAppStore((s) => s.addToast);
   const currentUser = useAppStore((s) => s.currentUser);
@@ -210,72 +131,64 @@ export const RewardsScreen: React.FC = () => {
   const campaignRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [flashedCampaign, setFlashedCampaign] = useState<string | null>(null);
   // Tapping a campaign opens every reward in it, the way the desktop Drops
-  // Center does. The card alone only says "2/5", which tells you nothing about
-  // WHAT the remaining three are.
-  // One sheet serves both lists. An inventory entry knows how many of its drops
-  // you have already claimed; a campaign you have not started has no such entry,
-  // so `claimed` is null and the sheet says how many rewards it holds instead.
-  const [campaignDetail, setCampaignDetail] = useState<{
-    campaign: DropCampaign;
-    claimed: number | null;
-    total: number;
-  } | null>(null);
-  const [campaigns, setCampaigns] = useState<DropCampaign[]>([]);
+  // Center does.
+  const [campaignDetail, setCampaignDetail] = useState<CampaignCard | null>(null);
   const [dropsQuery, setDropsQuery] = useState('');
   // Participating-channels list inside the campaign sheet. Stamped with the
   // campaign it was opened for and compared during render, so opening a
   // different campaign starts closed without an effect to reset it.
   const [channelsOpenFor, setChannelsOpenFor] = useState<string | null>(null);
   const startStream = useAppStore((s) => s.startStream);
-  // The wall comes from the gallery store, which outlives this screen.
-  const globalBadges = useBadgeGallery((s) => s.badges);
-  const owned = useBadgeGallery((s) => s.owned);
-  const missingNow = useBadgeGallery((s) => s.missingNow);
-  const standing = useBadgeGallery((s) => s.standing);
-  const isOwned = (badge: GlobalBadge) => badge.keys.some((k) => owned.has(k));
+  const wall = useBadgeGallery((s) => s.wall);
   const badgesLoading = useBadgeGallery((s) => s.loading);
-  const metaProgress = useBadgeGallery((s) => s.metaProgress);
+  const syncLeft = useBadgeGallery((s) => s.syncLeft);
   // Whether the wall was already in memory when this screen mounted: a warm
   // wall snaps in rather than replaying the settle over every tile.
   const [warmOnMount] = useState(() => badgeGalleryIsWarm());
   const [badgeSort, setBadgeSort] = useState<BadgeSort>('newest');
-  const [badgeDetail, setBadgeDetail] = useState<GlobalBadge | null>(null);
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  const [inventory, setInventory] = useState<InventoryResponse | null>(null);
+  const [badgeDetail, setBadgeDetail] = useState<BadgeTile | null>(null);
+  const [drops, setDrops] = useState<RewardsDrops | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  // A read on mount and on pull-to-refresh asks Twitch again; a new search
+  // re-filters Rust's last read.
+  const queryRef = useRef(dropsQuery);
+  queryRef.current = dropsQuery;
+  const load = useCallback(async (refresh = true) => {
     try {
-      const ok = await invoke<boolean>('is_drops_authenticated');
-      setAuthed(ok);
-      if (ok) {
-        const inv = await invoke<InventoryResponse>('get_drops_inventory').catch(() => null);
-        setInventory(inv);
-        // Everything currently running, not just what you have already started.
-        // The inventory only lists a campaign once it has progress, so on its
-        // own it can never answer "what could I be earning right now". The
-        // backend caches this for a few minutes, so asking on load and on
-        // pull-to-refresh is cheap.
-        const active = await invoke<DropCampaign[]>('get_active_drop_campaigns').catch(() => []);
-        setCampaigns(active ?? []);
-      }
+      setDrops(await getRewardsDrops(queryRef.current, refresh));
     } catch (err) {
       Logger.warn('[Rewards] load failed:', err);
-      setAuthed(false);
+      setDrops({ connected: false, query: '', in_progress: [], available: [], earned: [], in_progress_empty: '' });
     }
   }, []);
 
   useEffect(() => {
-    void load();
+    void load(true);
   }, [load]);
 
-  // Consume a pending focus once the campaign has actually rendered. Runs off
-  // `inventory` too because the tap usually lands before the list has loaded,
-  // and scrolling to an element that does not exist yet does nothing.
+  useEffect(() => {
+    if (!drops?.connected) return;
+    const timer = setTimeout(() => void load(false), 200);
+    return () => clearTimeout(timer);
+    // Re-filters on a new search only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dropsQuery]);
+
+  // A jump from the drop bar opens the campaign's group, then scrolls to it
+  // once the card has rendered.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!focusDropCampaignId) return;
     if (tab !== 'drops') setTab('drops');
+    const group = [...(drops?.in_progress ?? []), ...(drops?.available ?? [])].find((g) =>
+      g.campaigns.some((c) => c.id === focusDropCampaignId),
+    );
+    if (group && !openGroups.has(group.key)) {
+      setOpenGroups((prev) => new Set(prev).add(group.key));
+      return;
+    }
     const el = campaignRefs.current[focusDropCampaignId];
     if (!el) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -283,55 +196,35 @@ export const RewardsScreen: React.FC = () => {
     clearDropFocus();
     const t = setTimeout(() => setFlashedCampaign(null), 1800);
     return () => clearTimeout(t);
-  }, [focusDropCampaignId, inventory, tab, clearDropFocus]);
+  }, [focusDropCampaignId, drops, tab, clearDropFocus, openGroups]);
 
-  // The GLOBAL Twitch badge collection (every badge currently available),
-  // with the ones you already own marked. Loading, the metadata backfill and
-  // the memory that survives this screen unmounting all live in the gallery
-  // store; this only asks for it. `force` is the refresh gesture and the
-  // relay push, both of which mean "what you have may be stale".
   // The account is the signed-in main one, which Rust resolves itself; the id
   // only re-runs the load when the account changes.
   const uid = currentUser?.user_id;
-  const loadBadges = useCallback(() => loadBadgeGallery({ force: true }), []);
-
   useEffect(() => {
     if (tab !== 'badges') return;
-    void loadBadgeGallery();
-    // Opening the tab is when someone checks what they have: re-read the
+    followBadgeSync();
+    // Opening the tab is when someone checks what they have: Rust re-reads the
     // collection in the background even when the wall is still warm.
-    void refreshBadgeStanding(true);
-  }, [tab, uid]);
+    void loadBadgeGallery(badgeSort, true);
+  }, [tab, uid, badgeSort]);
 
-  // Relay pushed badges (or corrected some), or the collection refresh landed:
-  // Rust has already merged the global cache and stored the enrichment, so
-  // re-reading surfaces new tiles with their real windows. Desktop's
-  // BadgesOverlay listens for the same event.
+  // A relay push, a claim, a finished collection read, the metadata backfill
+  // or an earn window opening or closing: Rust says so, and the wall is read again.
   useEffect(() => {
     const unlisten = listen('badge-standing-changed', () => {
-      void loadBadges();
+      void loadBadgeGallery(badgeSort, false);
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [loadBadges]);
-
-  // Ask again when the next earn window opens or closes, so the missing list
-  // and the tiles move on their own. Clamped: see refetchDelay.
-  const nextChangeMs = standing?.next_change_ms;
-  useEffect(() => {
-    const delay = refetchDelay(nextChangeMs);
-    if (delay == null) return;
-    const timer = setTimeout(() => void refreshBadgeStanding(), delay);
-    return () => clearTimeout(timer);
-  }, [nextChangeMs]);
+  }, [badgeSort]);
 
   // The redirect grant, the same one desktop moved to when Twitch closed the
   // device-code grant on the drops client. The authorize page opens in the
-  // in-app login WebView (already signed in from the main login, so an account
-  // that has approved before sees no consent screen at all), Twitch redirects
-  // back with the credential, the native overlay keeps it and closes itself,
-  // and Rust collects and stores it. The page never sees the token.
+  // in-app login WebView, Twitch redirects back with the credential, the
+  // native overlay keeps it and closes itself, and Rust collects and stores
+  // it. The page never sees the token.
   const connect = async () => {
     setConnecting(true);
     setConnectError(null);
@@ -358,13 +251,8 @@ export const RewardsScreen: React.FC = () => {
       }
       await invoke('finish_mobile_drops_login');
       addToast('Drops connected!', 'success');
-      // Trust the stored grant like desktop does; load() then fills the
-      // inventory (and the backend check now agrees post-connect).
-      setAuthed(true);
-      await load();
+      await load(true);
     } catch (err) {
-      // Surface the real backend reason (denied, network, storage) instead of
-      // a generic failure, so a stuck connect is diagnosable from the phone.
       const reason = err instanceof Error ? err.message : String(err);
       Logger.error('[Rewards] drops connect failed:', err);
       setConnectError(reason);
@@ -375,55 +263,12 @@ export const RewardsScreen: React.FC = () => {
     }
   };
 
-  const ownedCount = globalBadges.filter(isOwned).length;
   const openMissing = (key: string) => {
-    const badge = globalBadges.find((b) => b.keys.includes(key));
-    if (badge) setBadgeDetail(badge);
+    const tile = wall?.tiles.find((t) => t.keys.includes(key));
+    if (tile) setBadgeDetail(tile);
   };
 
-  const sortedBadges = useMemo(() => orderBadges(globalBadges, badgeSort), [globalBadges, badgeSort]);
-
-  const inProgress = (inventory?.items ?? []).filter(
-    (i: InventoryItem) => i.status === 'Active' || i.drops_in_progress > 0,
-  );
-  const completed = inventory?.completed_drops ?? [];
-
-  // Everything running that is not already listed above, soonest to end first.
-  // A campaign you have progress on appears in both feeds otherwise, and the
-  // one with a progress bar on it is the more useful of the two.
-  const available = useMemo(() => {
-    const started = new Set(inProgress.map((i) => i.campaign.id));
-    return campaigns
-      .filter((c) => !started.has(c.id))
-      .sort((a, b) => new Date(a.end_at).getTime() - new Date(b.end_at).getTime());
-    // inProgress is rebuilt every render from `inventory`, so depend on that.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaigns, inventory]);
-
-  // Grouped by game, and filtered by the search box.
-  //
-  // A busy game routinely runs several campaigns at once, and flat lists showed
-  // them as the same game's art and name repeated down the screen with no
-  // indication they belonged together. One heading per game with its campaigns
-  // beneath says what the list actually contains.
-  const q = dropsQuery.trim().toLowerCase();
-  const matchesQuery = (game: string, name: string) =>
-    !q || game.toLowerCase().includes(q) || name.toLowerCase().includes(q);
-
-  const inProgressGroups = groupByGame(
-    inProgress.filter((i) => matchesQuery(i.campaign.game_name || '', i.campaign.name || '')),
-    (i) => i.campaign.game_name || '',
-    (i) => i.campaign.image_url || '',
-  );
-  const availableGroups = groupByGame(
-    available.filter((c) => matchesQuery(c.game_name || '', c.name || '')),
-    (c) => c.game_name || '',
-    (c) => c.image_url || '',
-  );
-
-  // Which game groups are open. Keyed by section too, since the same game can
-  // appear under both In progress and Available and they open independently.
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const q = dropsQuery.trim();
   const toggleGroup = (key: string) =>
     setOpenGroups((prev) => {
       const next = new Set(prev);
@@ -431,18 +276,18 @@ export const RewardsScreen: React.FC = () => {
       else next.add(key);
       return next;
     });
-  // A search opens everything it matched. Making someone tap again to see what
-  // their own search found would be a strange thing to ask.
+  // A search opens everything it matched.
   const isGroupOpen = (key: string) => !!q || openGroups.has(key);
 
-  // Re-settles on each new search, so results arrive the same way the rest of
-  // the app's lists do. Refreshing the same view keeps its key and stays put.
-  // The headings are what settle, since the campaigns start collapsed.
+  const inProgressGroups = drops?.in_progress ?? [];
+  const availableGroups = drops?.available ?? [];
+  const tiles = wall?.tiles ?? [];
+
   const dropsSettled = useSettleIn(
-    authed === true && inProgressGroups.length + availableGroups.length > 0,
+    drops?.connected === true && inProgressGroups.length + availableGroups.length > 0,
     `drops:${q}`,
   );
-  const badgesSettled = useSettleIn(sortedBadges.length > 0, `badges:${badgeSort}`, warmOnMount);
+  const badgesSettled = useSettleIn(tiles.length > 0, `badges:${badgeSort}`, warmOnMount);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -463,28 +308,19 @@ export const RewardsScreen: React.FC = () => {
           ))}
         </div>
       </div>
-      <PullToRefresh onRefresh={tab === 'drops' ? load : loadBadges}>
+      <PullToRefresh onRefresh={tab === 'drops' ? () => load(true) : () => loadBadgeGallery(badgeSort, true)}>
         <div className={`px-4 sn-tabbar-clearance ${tab === 'badges' ? '' : 'hidden'}`}>
-          {badgesLoading && globalBadges.length === 0 ? (
-            <div className="py-10 text-center text-sm text-textMuted">Loading badges…</div>
-          ) : globalBadges.length === 0 ? (
+          {tiles.length === 0 ? (
             <div className="py-10 text-center text-sm text-textMuted">
-              No badges available right now.
+              {badgesLoading || !wall || wall.loading ? 'Loading badges…' : 'No badges available right now.'}
             </div>
           ) : (
             <>
               <div className="flex items-center gap-2 pt-1 pb-2">
-                <span className="text-[12px] text-textMuted">
-                  {ownedCount} of {globalBadges.length} collected
-                </span>
-                {metaProgress > 0 && (
-                  <span className="ml-auto text-[11.5px] text-textMuted">
-                    {metaProgress} to sync
-                  </span>
-                )}
+                <span className="text-[12px] text-textMuted">{wall?.count_label}</span>
+                {syncLeft > 0 && <span className="ml-auto text-[11.5px] text-textMuted">{syncLeft} to sync</span>}
               </div>
-              <MobileMissingNow standing={standing} missing={missingNow} onOpen={openMissing} />
-              {/* Sort options, mirroring the desktop gallery's set. */}
+              {wall && <MobileMissingNow missing={wall.missing} onOpen={openMissing} />}
               {/* The sort row wears the glaze and the chosen sort is the darker
                   pill inside it. The options scroll inside the glass, so its
                   rim stays put. */}
@@ -504,61 +340,33 @@ export const RewardsScreen: React.FC = () => {
                 </div>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-7 gap-2">
-                {sortedBadges.map((badge, bi) => {
-                  const owned = isOwned(badge);
-                  const available = badge.status === 'available';
-                  const comingSoon = badge.status === 'coming-soon';
+                {tiles.map((tile, bi) => {
+                  const lit = tile.owned || tile.status === 'available';
                   return (
-                    <SettleIn key={badge.key} index={bi} settled={badgesSettled} className="sn-badge-tile">
-                    <button
-                      onClick={() => setBadgeDetail(badge)}
-                      className={`glass-panel p-2 flex flex-col items-center gap-1.5 relative active:opacity-80 w-full h-full ${
-                        available && !owned ? 'ring-1 ring-success/70' : ''
-                      } ${owned ? 'ring-1 ring-accent/60' : ''}`}
-                    >
-                      <img
-                        src={badge.image}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        className={`w-11 h-11 object-contain ${
-                          owned || available ? '' : 'opacity-45 grayscale'
-                        }`}
-                        draggable={false}
-                      />
-                      <span
-                        className={`text-[10.5px] text-center line-clamp-2 leading-tight ${
-                          owned || available ? 'text-textPrimary' : 'text-textMuted'
-                        }`}
+                    <SettleIn key={tile.key} index={bi} settled={badgesSettled} className="sn-badge-tile">
+                      <button
+                        onClick={() => setBadgeDetail(tile)}
+                        className={`glass-panel p-2 flex flex-col items-center gap-1.5 relative active:opacity-80 w-full h-full ${
+                          tile.status === 'available' && !tile.owned ? 'ring-1 ring-success/70' : ''
+                        } ${tile.owned ? 'ring-1 ring-accent/60' : ''}`}
                       >
-                        {badge.title}
-                      </span>
-                      {/* Live earn status: owned wins, then the window state. */}
-                      {owned ? (
-                        <span className="text-[9.5px] font-semibold text-accent leading-none">
-                          OWNED
+                        <img
+                          src={tile.image}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className={`w-11 h-11 object-contain ${lit ? '' : 'opacity-45 grayscale'}`}
+                          draggable={false}
+                        />
+                        <span
+                          className={`text-[10.5px] text-center line-clamp-2 leading-tight ${
+                            lit ? 'text-textPrimary' : 'text-textMuted'
+                          }`}
+                        >
+                          {tile.title}
                         </span>
-                      ) : available ? (
-                        <span className="text-[9.5px] font-semibold text-success leading-none">
-                          AVAILABLE
-                        </span>
-                      ) : comingSoon ? (
-                        <span className="text-[9.5px] font-semibold text-warning leading-none">
-                          SOON
-                        </span>
-                      ) : (
-                        <span className="text-[9.5px] text-textMuted leading-none">
-                          {/* Only a KNOWN-over window says so. A null status is
-                              "no window known" (permanent badges, and live ones
-                              whose dates the relay has not confirmed yet), and
-                              claiming ENDED there is a confident lie: the Hulk
-                              badge launched with "duration unconfirmed" prose
-                              and spent a day marked ended before it started.
-                              The detail sheet has always gated on expired. */}
-                          {badge.status === 'expired' ? 'ENDED' : ''}
-                        </span>
-                      )}
-                    </button>
+                        <span className={`text-[9.5px] font-semibold leading-none ${wordColor(tile)}`}>{tile.word}</span>
+                      </button>
                     </SettleIn>
                   );
                 })}
@@ -567,7 +375,7 @@ export const RewardsScreen: React.FC = () => {
           )}
         </div>
         <div className={`px-4 sn-tabbar-clearance ${tab === 'drops' ? '' : 'hidden'}`}>
-          {authed === false && (
+          {drops?.connected === false && (
             <div className="glass-panel p-4 mt-2">
               <div className="flex items-center gap-2 mb-1.5">
                 <Gift size={18} className="text-accent" />
@@ -585,23 +393,17 @@ export const RewardsScreen: React.FC = () => {
                 {!connecting && <ArrowSquareOut size={15} />}
               </button>
               {connectError && (
-                <div className="mt-2 text-[12px] text-error leading-snug break-words">
-                  {connectError}
-                </div>
+                <div className="mt-2 text-[12px] text-error leading-snug break-words">{connectError}</div>
               )}
             </div>
           )}
 
-          {authed && (
+          {drops?.connected && (
             <>
               {/* Searching by game, since that is how anyone thinks about
-                  drops. Campaign names are matched too, because a lot of them
-                  read like event names and are what someone actually remembers. */}
+                  drops. Campaign names are matched too. */}
               <div className="relative mt-1 mb-1">
-                <MagnifyingGlass
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted z-10"
-                />
+                <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted z-10" />
                 <input
                   value={dropsQuery}
                   onChange={(e) => setDropsQuery(e.target.value)}
@@ -623,66 +425,43 @@ export const RewardsScreen: React.FC = () => {
                 In progress
               </div>
               {inProgressGroups.length === 0 ? (
-                <div className="glass-panel p-4 text-[13px] text-textMuted">
-                  {q
-                    ? 'No drops in progress match that search.'
-                    : 'No drop campaigns in progress. Watch a drops-enabled stream to start earning.'}
-                </div>
+                <div className="glass-panel p-4 text-[13px] text-textMuted">{drops.in_progress_empty}</div>
               ) : (
                 inProgressGroups.map((group, gIdx) => (
-                  <SettleIn key={group.game} index={gIdx} settled={dropsSettled}>
+                  <SettleIn key={group.key} index={gIdx} settled={dropsSettled}>
                     <GameGroupSection
                       art={group.art}
                       game={group.game}
-                      count={group.items.length}
-                      expanded={isGroupOpen(`progress:${group.game}`)}
-                      onToggle={() => toggleGroup(`progress:${group.game}`)}
+                      countLabel={group.count_label}
+                      expanded={isGroupOpen(group.key)}
+                      onToggle={() => toggleGroup(group.key)}
                     >
-                      {group.items.map((item) => (
-                        <React.Fragment key={item.campaign.id}>
-                    <div
-                      ref={(el) => {
-                        campaignRefs.current[item.campaign.id] = el;
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() =>
-                        setCampaignDetail({
-                          campaign: item.campaign,
-                          claimed: item.claimed_drops,
-                          total: item.total_drops,
-                        })
-                      }
-                      className={`glass-panel p-2.5 flex gap-2.5 transition-shadow duration-500 active:opacity-80 ${
-                        flashedCampaign === item.campaign.id ? 'ring-2 ring-accent' : ''
-                      }`}
-                    >
-                      {/* No art on the card. `image_url` is the GAME's box art,
-                          so inside a group it is the heading's image repeated
-                          once per row, eating a third of the width to say the
-                          same thing six times. The name and the progress are
-                          what differ between these, so they get the space. */}
-                      <div className="flex-1 min-w-0 flex flex-col justify-center">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[13.5px] font-medium text-textPrimary truncate">
-                            {item.campaign.name}
-                          </span>
-                          <span className="text-[12px] text-textMuted shrink-0">
-                            {item.claimed_drops}/{item.total_drops}
-                          </span>
+                      {group.campaigns.map((card) => (
+                        <div
+                          key={card.id}
+                          ref={(el) => {
+                            campaignRefs.current[card.id] = el;
+                          }}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setCampaignDetail(card)}
+                          className={`glass-panel p-2.5 flex gap-2.5 transition-shadow duration-500 active:opacity-80 ${
+                            flashedCampaign === card.id ? 'ring-2 ring-accent' : ''
+                          }`}
+                        >
+                          <div className="flex-1 min-w-0 flex flex-col justify-center">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
+                              <span className="text-[12px] text-textMuted shrink-0">{card.claimed_label}</span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-surface overflow-hidden mt-1.5">
+                              <div
+                                className="h-full rounded-full bg-accent transition-[width]"
+                                style={{ width: `${card.percent}%` }}
+                              />
+                            </div>
+                          </div>
                         </div>
-                        {/* No game name here: the heading above the group
-                            already says it, and repeating it on every card is
-                            what made these lists read as noise. */}
-                        <div className="h-1.5 rounded-full bg-surface overflow-hidden mt-1.5">
-                          <div
-                            className="h-full rounded-full bg-accent transition-[width]"
-                            style={{ width: `${Math.min(100, item.progress_percentage)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                        </React.Fragment>
                       ))}
                     </GameGroupSection>
                   </SettleIn>
@@ -695,111 +474,69 @@ export const RewardsScreen: React.FC = () => {
                     Available now
                   </div>
                   {availableGroups.map((group, gIdx) => (
-                    <SettleIn
-                      key={group.game}
-                      index={inProgressGroups.length + gIdx}
-                      settled={dropsSettled}
-                    >
+                    <SettleIn key={group.key} index={inProgressGroups.length + gIdx} settled={dropsSettled}>
                       <GameGroupSection
                         art={group.art}
                         game={group.game}
-                        count={group.items.length}
-                        expanded={isGroupOpen(`available:${group.game}`)}
-                        onToggle={() => toggleGroup(`available:${group.game}`)}
+                        countLabel={group.count_label}
+                        expanded={isGroupOpen(group.key)}
+                        onToggle={() => toggleGroup(group.key)}
                       >
-                        {group.items.map((campaign) => {
-                          const rewards = campaign.time_based_drops?.length ?? 0;
-                          // What the row is FOR is showing the reward, so show
-                          // the reward: the first tier's benefit art, the same
-                          // image the detail sheet lists below.
-                          //
-                          // `campaign.image_url` was being used here and is not
-                          // that. It is the GAME's box art (desktop feeds the
-                          // very same field into getOrCreateGame), and it arrives
-                          // as a `{width}x{height}` template. Handed to an img
-                          // unresolved, Twitch's CDN answers with its generic
-                          // grey box art, which is why every one of these tiles
-                          // turned into the same placeholder gamepad. It stays
-                          // as the fallback, but resolved through gameBoxArt
-                          // this time.
-                          const rewardArt =
-                            campaign.time_based_drops?.[0]?.benefit_edges?.[0]?.image_url;
-                          const art =
-                            rewardArt ||
-                            (campaign.image_url ? gameBoxArt(campaign.image_url, 144, 192) : '');
-                          return (
-                            <React.Fragment key={campaign.id}>
-                              <div
-                                role="button"
-                                tabIndex={0}
-                                onClick={() =>
-                                  setCampaignDetail({ campaign, claimed: null, total: rewards })
-                                }
-                                className="glass-panel p-2.5 flex gap-2.5 active:opacity-80"
-                              >
-                                {art ? (
-                                  <img
-                                    src={art}
-                                    alt=""
-                                    loading="lazy"
-                                    draggable={false}
-                                    className="w-[52px] h-[52px] shrink-0 object-cover rounded-md ring-1 ring-white/10"
-                                  />
-                                ) : (
-                                  <div className="w-[52px] h-[52px] shrink-0 rounded-md bg-surface flex items-center justify-center">
-                                    <Gift size={18} className="text-textMuted" />
-                                  </div>
-                                )}
-                                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[13.5px] font-medium text-textPrimary truncate">
-                                      {campaign.name}
-                                    </span>
-                                    {!campaign.is_account_connected && (
-                                      <Warning size={14} className="text-warning shrink-0" />
-                                    )}
-                                  </div>
-                                  {/* Game name lives on the group heading now. */}
-                                  <div className="text-[11.5px] text-textMuted mt-1">
-                                    {rewards} {rewards === 1 ? 'reward' : 'rewards'}
-                                    {campaignEndsIn(campaign)
-                                      ? ` · ${campaignEndsIn(campaign)}`
-                                      : ''}
-                                  </div>
-                                </div>
+                        {group.campaigns.map((card) => (
+                          <div
+                            key={card.id}
+                            ref={(el) => {
+                              campaignRefs.current[card.id] = el;
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setCampaignDetail(card)}
+                            className="glass-panel p-2.5 flex gap-2.5 active:opacity-80"
+                          >
+                            {card.art ? (
+                              <img
+                                src={card.art}
+                                alt=""
+                                loading="lazy"
+                                draggable={false}
+                                className="w-[52px] h-[52px] shrink-0 object-cover rounded-md ring-1 ring-white/10"
+                              />
+                            ) : (
+                              <div className="w-[52px] h-[52px] shrink-0 rounded-md bg-surface flex items-center justify-center">
+                                <Gift size={18} className="text-textMuted" />
                               </div>
-                            </React.Fragment>
-                          );
-                        })}
+                            )}
+                            <div className="flex-1 min-w-0 flex flex-col justify-center">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
+                                {card.needs_link && <Warning size={14} className="text-warning shrink-0" />}
+                              </div>
+                              <div className="text-[11.5px] text-textMuted mt-1">{card.detail}</div>
+                            </div>
+                          </div>
+                        ))}
                       </GameGroupSection>
                     </SettleIn>
                   ))}
                 </>
               )}
 
-              {completed.length > 0 && (
+              {drops.earned.length > 0 && (
                 <>
                   <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-4 mb-1.5">
                     Recently earned
                   </div>
                   <div className="flex flex-col gap-2">
-                    {completed.slice(0, 10).map((drop) => (
+                    {drops.earned.map((drop) => (
                       <div key={drop.id} className="glass-panel p-2.5 flex items-center gap-2.5">
-                        {drop.image_url ? (
-                          <img
-                            src={drop.image_url}
-                            alt=""
-                            className="w-9 h-9 rounded object-cover shrink-0"
-                            draggable={false}
-                          />
+                        {drop.image ? (
+                          <img src={drop.image} alt="" className="w-9 h-9 rounded object-cover shrink-0" draggable={false} />
                         ) : (
                           <Gift size={20} className="text-accent shrink-0" />
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="text-[13.5px] text-textPrimary truncate">{drop.name}</div>
-                          {drop.game_name && (
-                            <div className="text-[12px] text-textMuted truncate">{drop.game_name}</div>
-                          )}
+                          {drop.game && <div className="text-[12px] text-textMuted truncate">{drop.game}</div>}
                         </div>
                         <CheckCircle size={16} className="text-success shrink-0" />
                       </div>
@@ -812,39 +549,20 @@ export const RewardsScreen: React.FC = () => {
         </div>
       </PullToRefresh>
 
-      {/* Badge detail: art, status, when it was added, how it is earned. */}
-      <MobileSheet
-        open={!!badgeDetail}
-        onClose={() => setBadgeDetail(null)}
-        maxHeightFraction={0.66}
-      >
+      {/* Badge detail: art, status, how it is earned and when. */}
+      <MobileSheet open={!!badgeDetail} onClose={() => setBadgeDetail(null)} maxHeightFraction={0.66}>
         {badgeDetail && (
           <div className="flex flex-col items-center text-center pb-1">
-            <img
-              src={badgeDetail.image}
-              alt=""
-              className="w-20 h-20 object-contain mb-2.5"
-              draggable={false}
-            />
+            <img src={badgeDetail.image} alt="" className="w-20 h-20 object-contain mb-2.5" draggable={false} />
             <div className="text-[16px] font-semibold text-textPrimary">{badgeDetail.title}</div>
             <div className="mt-1 mb-2.5">
-              {isOwned(badgeDetail) ? (
-                <span className="text-[11px] font-semibold text-accent">OWNED</span>
-              ) : badgeDetail.status === 'available' ? (
-                <span className="text-[11px] font-semibold text-success">AVAILABLE NOW</span>
-              ) : badgeDetail.status === 'coming-soon' ? (
-                <span className="text-[11px] font-semibold text-warning">COMING SOON</span>
-              ) : badgeDetail.status === 'expired' ? (
-                <span className="text-[11px] font-semibold text-textMuted">NO LONGER EARNABLE</span>
-              ) : null}
+              {badgeDetail.sheet_word && (
+                <span className={`text-[11px] font-semibold ${wordColor(badgeDetail)}`}>{badgeDetail.sheet_word}</span>
+              )}
             </div>
-            {/* ONE body, split into parts. `dateInfo` is the full more_info
-                blurb with its dates localized (not a short date label), so it
-                is the source for all three pieces below. */}
             {(() => {
-              const { prose, window, caveat } = splitBadgeBlurb(
-                badgeDetail.dateInfo || badgeDetail.description,
-              );
+              const prose = blurbText(badgeDetail.prose);
+              const window = blurbText(badgeDetail.window);
               return (
                 <>
                   {prose && (
@@ -852,12 +570,10 @@ export const RewardsScreen: React.FC = () => {
                       {prose}
                     </p>
                   )}
-                  {caveat && (
+                  {badgeDetail.caveat && (
                     <div className="mt-3 w-full flex items-start gap-2 rounded-lg px-3 py-2 bg-amber-500/10 border border-amber-500/25">
                       <Warning size={14} weight="fill" className="text-amber-400 shrink-0 mt-px" />
-                      <span className="text-[12.5px] text-amber-300/90 leading-snug text-left">
-                        {caveat}
-                      </span>
+                      <span className="text-[12.5px] text-amber-300/90 leading-snug text-left">{badgeDetail.caveat}</span>
                     </div>
                   )}
                   {window && (
@@ -874,15 +590,13 @@ export const RewardsScreen: React.FC = () => {
                 </>
               );
             })()}
-            {badgeDetail.usage > 0 && (
-              <p className="text-[12px] text-textMuted mt-3 self-center">
-                {badgeDetail.usage.toLocaleString()} users have this badge
-              </p>
+            {badgeDetail.usage_label && (
+              <p className="text-[12px] text-textMuted mt-3 self-center">{badgeDetail.usage_label}</p>
             )}
-            {badgeDetail.infoUrl && (
+            {badgeDetail.info_url && (
               <button
                 onClick={() => {
-                  void invoke('open_browser_url', { url: badgeDetail.infoUrl }).catch(() => {});
+                  void invoke('open_browser_url', { url: badgeDetail.info_url }).catch(() => {});
                 }}
                 className="glass-button sn-touch mt-4 w-full text-[13.5px] font-semibold text-textPrimary"
               >
@@ -897,144 +611,109 @@ export const RewardsScreen: React.FC = () => {
       <MobileSheet
         open={!!campaignDetail}
         onClose={() => setCampaignDetail(null)}
-        title={campaignDetail?.campaign.name}
+        title={campaignDetail?.name}
         maxHeightFraction={0.8}
       >
         {campaignDetail && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-[12.5px] text-textMuted">
-              {campaignDetail.campaign.game_name && (
-                <span className="truncate">{campaignDetail.campaign.game_name}</span>
-              )}
-              <span className="ml-auto shrink-0">
-                {campaignDetail.claimed !== null
-                  ? `${campaignDetail.claimed}/${campaignDetail.total} claimed`
-                  : `${campaignDetail.total} ${campaignDetail.total === 1 ? 'reward' : 'rewards'}`}
-              </span>
+              {campaignDetail.game_name && <span className="truncate">{campaignDetail.game_name}</span>}
+              <span className="ml-auto shrink-0">{campaignDetail.meta_label}</span>
             </div>
 
             {/* Twitch will not credit watch time until the game account is
                 linked, so saying this up front is the difference between a
                 wasted evening and a working one. */}
-            {!campaignDetail.campaign.is_account_connected && (
+            {campaignDetail.needs_link && (
               <button
                 onClick={() => {
-                  const url = campaignDetail.campaign.account_link;
+                  const url = campaignDetail.link_url;
                   if (!url) return;
                   void openExternal(url).then((ok) => {
                     if (!ok) addToast('Could not open the account link page.', 'error');
                   });
                 }}
-                disabled={!campaignDetail.campaign.account_link}
+                disabled={!campaignDetail.link_url}
                 className="glass-panel p-2.5 flex items-center gap-2 text-left disabled:opacity-70"
               >
                 <Warning size={16} className="text-warning shrink-0" />
                 <span className="flex-1 text-[12.5px] text-textSecondary leading-snug">
                   Your game account is not linked, so this campaign will not earn yet.
                 </span>
-                {campaignDetail.campaign.account_link && (
-                  <ArrowSquareOut size={14} className="text-textMuted shrink-0" />
-                )}
+                {campaignDetail.link_url && <ArrowSquareOut size={14} className="text-textMuted shrink-0" />}
               </button>
             )}
 
-            {/* Where it can be earned. An ACL campaign only credits on these
-                channels, so it is the whole plan for the evening rather than
-                trivia; a category-wide one lists none and needs no list.
-
-                Collapsed, and a list rather than prose. These run to dozens of
-                names, and joining them with commas produced a paragraph nobody
-                could read or act on. Each name is now a row you can tap to go
-                and watch it, which is the only thing anyone wanted from this
-                list in the first place. */}
-            {campaignDetail.campaign.allowed_channels?.length > 0 && (() => {
-              const channelsOpen = channelsOpenFor === campaignDetail.campaign.id;
-              return (
-              <div>
-                <button
-                  onClick={() =>
-                    setChannelsOpenFor(channelsOpen ? null : campaignDetail.campaign.id)
-                  }
-                  aria-expanded={channelsOpen}
-                  className="w-full glass-panel px-3 py-2.5 flex items-center gap-2 text-left active:opacity-80"
-                >
-                  <span className="text-[12.5px] text-textSecondary flex-1">
-                    Earn on {campaignDetail.campaign.allowed_channels.length}{' '}
-                    {campaignDetail.campaign.allowed_channels.length === 1
-                      ? 'channel'
-                      : 'channels'}
-                  </span>
-                  <motion.span
-                    className="shrink-0 flex text-textMuted"
-                    animate={{ rotate: channelsOpen ? 90 : 0 }}
-                    transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-                  >
-                    <CaretRight size={13} weight="bold" />
-                  </motion.span>
-                </button>
-                <AnimatePresence>
-                  {channelsOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
-                      className="overflow-hidden"
+            {/* Where it can be earned: collapsed, each name a row to tap and watch. */}
+            {campaignDetail.channels.length > 0 &&
+              (() => {
+                const channelsOpen = channelsOpenFor === campaignDetail.id;
+                return (
+                  <div>
+                    <button
+                      onClick={() => setChannelsOpenFor(channelsOpen ? null : campaignDetail.id)}
+                      aria-expanded={channelsOpen}
+                      className="w-full glass-panel px-3 py-2.5 flex items-center gap-2 text-left active:opacity-80"
                     >
-                      {/* Capped height so a campaign with eighty channels does
-                          not push the rest of the sheet off the bottom. */}
-                      <div className="max-h-[40vh] overflow-y-auto mt-1 flex flex-col">
-                        {campaignDetail.campaign.allowed_channels.map((c) => (
-                          <button
-                            key={c.id || c.name}
-                            onClick={() => {
-                              setCampaignDetail(null);
-                              setChannelsOpenFor(null);
-                              // Pass the broadcaster id through. Without it
-                              // startStream falls back to a channel-info lookup,
-                              // and if that throws it lands on an empty user_id,
-                              // which skips drops monitoring entirely and leaves
-                              // the watch heartbeat pointed at whatever channel
-                              // came before. A campaign's channel list is exactly
-                              // where someone starts a streamer they do not
-                              // follow, so the followed-streams shortcut cannot
-                              // cover for it. Title and category are left blank
-                              // on purpose; startStream backfills both.
-                              void startStream(c.name.toLowerCase(), {
-                                id: '',
-                                user_id: c.id,
-                                user_name: c.name,
-                                user_login: c.name.toLowerCase(),
-                                title: '',
-                                viewer_count: 0,
-                                game_name: '',
-                                thumbnail_url: '',
-                                started_at: new Date().toISOString(),
-                              });
-                            }}
-                            className="px-3 py-2.5 text-left text-[13px] text-textPrimary border-b border-borderSubtle last:border-b-0 active:opacity-70"
-                          >
-                            {c.name}
-                          </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-              );
-            })()}
+                      <span className="text-[12.5px] text-textSecondary flex-1">{campaignDetail.channels_label}</span>
+                      <motion.span
+                        className="shrink-0 flex text-textMuted"
+                        animate={{ rotate: channelsOpen ? 90 : 0 }}
+                        transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                      >
+                        <CaretRight size={13} weight="bold" />
+                      </motion.span>
+                    </button>
+                    <AnimatePresence>
+                      {channelsOpen && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="max-h-[40vh] overflow-y-auto mt-1 flex flex-col">
+                            {campaignDetail.channels.map((c) => (
+                              <button
+                                key={c.id || c.name}
+                                onClick={() => {
+                                  setCampaignDetail(null);
+                                  setChannelsOpenFor(null);
+                                  // The broadcaster id rides along so drops
+                                  // monitoring targets this channel even when it
+                                  // is not followed; startStream backfills the rest.
+                                  void startStream(c.name.toLowerCase(), {
+                                    id: '',
+                                    user_id: c.id,
+                                    user_name: c.name,
+                                    user_login: c.name.toLowerCase(),
+                                    title: '',
+                                    viewer_count: 0,
+                                    game_name: '',
+                                    thumbnail_url: '',
+                                    started_at: new Date().toISOString(),
+                                  });
+                                }}
+                                className="px-3 py-2.5 text-left text-[13px] text-textPrimary border-b border-borderSubtle last:border-b-0 active:opacity-70"
+                              >
+                                {c.name}
+                              </button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })()}
 
-            {campaignDetail.campaign.game_id && campaignDetail.campaign.game_name && campaignDetail.campaign.has_category !== false && (
+            {campaignDetail.find_stream && (
               <button
                 onClick={() => {
-                  const c = campaignDetail.campaign;
+                  const category = campaignDetail.find_stream!;
                   setCampaignDetail(null);
-                  openBrowseCategory({
-                    id: c.game_id,
-                    name: c.game_name,
-                    box_art_url: c.image_url || '',
-                  });
+                  openBrowseCategory(category);
                   setNavTab('browse');
                 }}
                 className="glass-button rounded-lg py-2.5 text-[13px] font-medium text-textPrimary"
@@ -1043,73 +722,46 @@ export const RewardsScreen: React.FC = () => {
               </button>
             )}
 
-            {[...(campaignDetail.campaign.time_based_drops || [])]
-              .sort((a, b) => a.required_minutes_watched - b.required_minutes_watched)
-              .map((drop) => {
-                const need = drop.required_minutes_watched;
-                const have = Math.min(drop.progress?.current_minutes_watched ?? 0, need);
-                const claimed = !!drop.progress?.is_claimed;
-                // Twitch reports multi-day and subscription drops in detail,
-                // including when one is earned and waiting.
-                const twitch = drop.progress?.twitch_progress;
-                const done = claimed || !!twitch?.ready_to_claim || (!twitch && need > 0 && have >= need);
-                const pct = need > 0 ? Math.min(100, (have / need) * 100) : 0;
-                // What it turned into once Twitch says; an unopened draw's first
-                // reward is its container.
-                const benefit = twitch?.earned ?? drop.next_reward ?? drop.benefit_edges?.[0];
-                const detail = twitchProgressLine(drop.progress, drop) ?? dropRequirementText(drop);
-                return (
-                  <div key={drop.id} className="flex items-center gap-2.5 py-1">
-                    {benefit?.image_url ? (
-                      <img
-                        src={benefit.image_url}
-                        alt=""
-                        draggable={false}
-                        className={`w-10 h-10 rounded-md object-cover shrink-0 ring-1 ring-white/10 ${
-                          claimed ? '' : 'opacity-90'
-                        }`}
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-md bg-surface flex items-center justify-center shrink-0">
-                        <Gift size={16} className="text-textMuted" />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-[13px] text-textPrimary truncate">
-                          {benefit?.name || drop.name}
-                        </span>
-                        <span
-                          className={`ml-auto text-[11px] shrink-0 tabular-nums ${
-                            claimed
-                              ? 'text-success'
-                              : done
-                                ? 'text-success font-semibold'
-                                : 'text-textMuted'
-                          }`}
-                        >
-                          {claimed ? 'Claimed' : done ? 'Ready' : need > 0 ? `${need - have}m left` : ''}
-                        </span>
-                      </div>
-                      {detail && !claimed && (
-                        <div className="text-[11px] text-textMuted truncate mt-0.5">{detail}</div>
-                      )}
-                      {/* A 0-minute drop is event or action based, not something
-                          watch time earns, so it gets no bar to imply otherwise. */}
-                      {need > 0 && (
-                        <div className="h-1 rounded-full bg-surface overflow-hidden mt-1.5">
-                          <div
-                            className={`h-full rounded-full ${
-                              done ? 'bg-success' : 'bg-accent'
-                            }`}
-                            style={{ width: `${claimed ? 100 : pct}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
+            {campaignDetail.drops.map((drop) => (
+              <div key={drop.id} className="flex items-center gap-2.5 py-1">
+                {drop.image ? (
+                  <img
+                    src={drop.image}
+                    alt=""
+                    draggable={false}
+                    className={`w-10 h-10 rounded-md object-cover shrink-0 ring-1 ring-white/10 ${
+                      drop.claimed ? '' : 'opacity-90'
+                    }`}
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-md bg-surface flex items-center justify-center shrink-0">
+                    <Gift size={16} className="text-textMuted" />
                   </div>
-                );
-              })}
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-[13px] text-textPrimary truncate">{drop.name}</span>
+                    <span
+                      className={`ml-auto text-[11px] shrink-0 tabular-nums ${
+                        drop.claimed ? 'text-success' : drop.done ? 'text-success font-semibold' : 'text-textMuted'
+                      }`}
+                    >
+                      {drop.status}
+                    </span>
+                  </div>
+                  {drop.detail && <div className="text-[11px] text-textMuted truncate mt-0.5">{drop.detail}</div>}
+                  {/* A drop watch time does not earn gets no bar to imply otherwise. */}
+                  {drop.bar != null && (
+                    <div className="h-1 rounded-full bg-surface overflow-hidden mt-1.5">
+                      <div
+                        className={`h-full rounded-full ${drop.done ? 'bg-success' : 'bg-accent'}`}
+                        style={{ width: `${drop.bar}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </MobileSheet>

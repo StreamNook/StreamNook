@@ -35,6 +35,8 @@ public final class FakeRewards: Sendable {
                                                              "available": [Any](), "earned": [Any](),
                                                              "in_progress_empty": ""] as [String: Any]) }
             return try FakeCore.json(Self.drops(query: (args["query"] as? String ?? "").trimmingCharacters(in: .whitespaces)))
+        case "get_badge_wall":
+            return try FakeCore.json(Self.wall(sort: args["sort"] as? String ?? "newest"))
         case "claim_drop":
             state.withLock { $0.claims.append(args["dropId"] as? String ?? "") }
             return "null"
@@ -72,6 +74,64 @@ public final class FakeRewards: Sendable {
     private static func group(_ section: String, _ game: String, art: String, _ campaigns: [[String: Any]]) -> [String: Any] {
         ["key": "\(section):\(game)", "game": game, "art": art,
          "count_label": "\(campaigns.count) campaign\(campaigns.count == 1 ? "" : "s")", "campaigns": campaigns]
+    }
+
+    private static let badgeCDN = "https://static-cdn.jtvnw.net/badges/v1/"
+
+    private static func tile(_ id: String, _ title: String, image: String, owned: Bool = false, status: String? = nil,
+                             usage: Int = 0) -> [String: Any] {
+        let (word, sheet): (String, String) = owned ? ("OWNED", "OWNED")
+            : status == "available" ? ("AVAILABLE", "AVAILABLE NOW")
+            : status == "coming-soon" ? ("SOON", "COMING SOON")
+            : status == "expired" ? ("ENDED", "NO LONGER EARNABLE") : ("", "")
+        return [
+            "key": "\(id)-1", "keys": ["\(id)/1"], "title": title, "image": badgeCDN + image + "/3",
+            "owned": owned, "status": status.map { $0 as Any } ?? NSNull(), "word": word, "sheet_word": sheet,
+            "prose": [["text": "Watch 30 minutes of a participating stream during the event.", "ms": NSNull()]],
+            "window": status == nil ? [Any]() : [["text": NSNull(), "ms": 1_791_000_000_000], ["text": " to Oct 30", "ms": NSNull()]],
+            "caveat": status == "available" ? "Prime subs don't count" as Any : NSNull(),
+            "usage_label": usage > 0 ? "\(usage.formatted()) users have this badge" as Any : NSNull(),
+            "info_url": "https://example.com/badge",
+        ]
+    }
+
+    static func wall(sort: String) -> [String: Any] {
+        var tiles: [[String: Any]] = [
+            tile("glhf", "GLHF Pledge", image: "3158e758-3cb4-43c5-94b3-7639810451c5", owned: true, usage: 120_442),
+            tile("twitchcon", "TwitchCon 2026", image: "e33d8b46-f63b-4e67-996d-4a7dcec0ad33", status: "available", usage: 8_210),
+            tile("hype", "Hype Train Conductor", image: "fae4086c-3190-44d4-83c8-8ef0cbe1a515", status: "coming-soon"),
+            tile("gold", "Golden Kappa", image: "c7d6b8fe-0e5c-4b30-8f9c-c4d1a1a0b5b1", status: "expired"),
+            tile("sub", "Sub Gifter", image: "a5ef6c17-2e5b-4d8f-9b80-2779fd722414", owned: true, usage: 2_000_000),
+            tile("bits", "Bits Leader", image: "8bedf8c3-7a6d-4df2-b62f-791b96a5dd31"),
+            tile("mouse", "Mouse Pad", image: "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a", status: "available"),
+        ]
+        if sort == "available" {
+            tiles.sort { ($0["status"] as? String == "available" ? 0 : 1) < ($1["status"] as? String == "available" ? 0 : 1) }
+        } else if sort == "oldest" {
+            tiles.reverse()
+        }
+        let chip: (String, String, String) -> [String: Any] = { kind, text, hint in
+            ["kind": kind, "ticket": kind == "purchase", "text": text, "hint": hint, "icon_url": NSNull()]
+        }
+        return [
+            "loading": false, "tiles": tiles, "count_label": "2 of 7 collected", "sync_left": 0,
+            "next_change_ms": NSNull(),
+            "missing": [
+                "state": "list", "refreshing": false, "closes": "in 3d",
+                "catch_up": ["label": "To catch up, at least",
+                             "stats": [["value": "$5.99", "label": "in 1 sub"], ["value": "1h 30m", "label": "of watching"]],
+                             "notes": ["Subs and watch time in the same category count toward every badge there, so they are counted once. Subs at the US price of $5.99.",
+                                       "One badge is drawn at random, so it may take more."]] as [String: Any],
+                "rows": [
+                    ["key": "twitchcon/1", "title": "TwitchCon 2026", "image": badgeCDN + "e33d8b46-f63b-4e67-996d-4a7dcec0ad33/3",
+                     "chips": [chip("purchase", "Ticket", "Granted with a ticket purchase")], "icons_only": false,
+                     "random_note": NSNull(), "time_left": "3d left"],
+                    ["key": "mouse/1", "title": "Mouse Pad", "image": badgeCDN + "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a/3",
+                     "chips": [chip("subscribe", "Sub", "Subscribe or gift a subscription"), chip("watch", "30 min", "Watch 30 min")],
+                     "icons_only": false, "random_note": "1 of 3 at random", "time_left": "5h left"],
+                ],
+            ] as [String: Any],
+        ]
     }
 
     static func drops(query: String) -> [String: Any] {
