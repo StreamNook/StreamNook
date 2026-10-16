@@ -2222,6 +2222,7 @@ pub fn run() {
             // Main-window watch session
             watch_start,
             watch_stop,
+            watch_open_room,
             watch_session_start,
             watch_session_stop,
             watch_session_resolve_offline,

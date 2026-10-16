@@ -180,3 +180,25 @@ import Testing
         #expect(group.summary == "One chat across 2 channels")
     }
 }
+
+@Suite struct OfflineRoomTests {
+    @Test func theCoresRoomDecodes() throws {
+        let json = #"{"superseded":false,"room":{"user_id":"1","login":"caster","display_name":"Caster","avatar_url":"a","offline_image_url":null,"live":null,"last_live_at":"2026-10-16T08:00:00Z","last_title":"Last time","last_category":"Chess","latest_vod":{"id":"99","title":"VOD","created_at":"2026-10-16T05:00:00Z","length_seconds":3600,"thumbnail_url":"t","category":"Chess"},"next_stream":{"start_at":"2026-10-17T19:00:00Z","end_at":null,"title":"Next","category":null},"sad_emote_url":"s","happy_emote_url":"h","shiny":false,"chatters":12},"row":{"id":"","user_login":"caster","user_name":"Caster","title":"Last time","viewer_count":0,"game_name":"Chess","thumbnail_url":"","is_live":false}}"#
+        let opened = try JSONDecoder().decode(RoomOpen.self, from: Data(json.utf8))
+        #expect(opened.room?.latestVod?.id == "99" && opened.room?.chatters == 12)
+        #expect(opened.row?.isOffline == true && opened.live == nil)
+    }
+
+    @Test func theRoomSaysWhenAndHowMany() {
+        let now = ISO8601DateFormatter().date(from: "2026-10-16T11:00:00Z")!
+        #expect(RoomText.lastLive("2026-10-16T08:00:00Z", now: now) == "Last live 3 hours ago")
+        #expect(RoomText.ago(30) == "just now")
+        #expect(RoomText.ago(60) == "1 minute ago")
+        #expect(RoomText.ago(3 * 86_400) == "3 days ago")
+        #expect(RoomText.lastLive(nil) == nil)
+        #expect(RoomText.waiting(12) == "12 waiting in chat")
+        #expect(RoomText.waiting(0) == nil)
+        #expect(RoomText.next(nil) == nil)
+        #expect(RoomText.next(.init(startAt: "2026-10-17T19:00:00Z"), now: now)?.hasPrefix("Next stream") == true)
+    }
+}
