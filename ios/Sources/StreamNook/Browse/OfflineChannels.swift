@@ -25,7 +25,8 @@ struct OfflineChannels: View {
                         .buttonStyle(CardPress())
                 }
             }
-            .snPanel()
+            // The stream cards' own surface, so the group and the live cards above read as one list.
+            .snMediaCard()
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 24)
@@ -40,7 +41,7 @@ struct OfflineChannels: View {
                     .foregroundStyle(SN.textPrimary)
                 Text(channel.gameName.isEmpty ? "Offline" : channel.gameName)
                     .font(.snRowDetail)
-                    .foregroundStyle(SN.textMuted)
+                    .foregroundStyle(SN.textSecondary)
             }
             .lineLimit(1)
             Spacer(minLength: 0)

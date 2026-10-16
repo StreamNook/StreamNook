@@ -238,7 +238,7 @@ Cross-area files referenced below: `shell-design.md` (tab bar, sheets, PullToRef
 
 Not parity lines: open questions found while reading, each to be settled before its screen is built.
 
-- offline channels in Twitch Live search (and an offline Kick exact match) render as LIVE cards with "0" viewers on Android; copy that, or follow desktop's separate "Offline Channels" group that opens the profile (m:screens/BrowseScreen.tsx:L403-L414) (d:components/Home.tsx:L4056-L4095) (iPhone: recommended: follow desktop) **Decided (Brandon, 2026-10-14): parity first, extras later; the iPhone follows Android for now.**
+- offline channels in Twitch Live search (and an offline Kick exact match) render as LIVE cards with "0" viewers on Android; copy that, or follow desktop's separate "Offline Channels" group that opens the profile (m:screens/BrowseScreen.tsx:L403-L414) (d:components/Home.tsx:L4056-L4095) (iPhone: recommended: follow desktop) **Decided (Brandon, 2026-10-14): parity first, extras later; the iPhone follows Android for now.** Superseded 2026-10-16: Android now groups offline channels apart (`ios/android` `d0d852c0`, Rust settles liveness from Helix streams via `mark_search_liveness`), and the iPhone matches it (see the backlog line below).
 - which platforms the iPhone Following list carries (Android: Twitch and Kick only; Rust's `following` section also has YouTube and TikTok) (m:followingMerge.ts:L9-L10) (iPhone: Twitch and Kick until the iPhone can watch the others)
 - whether Browse keeps its Live/Categories mode and search text across tab switches (Android drops both because the tab unmounts) (m:MobileApp.tsx:L157-L158) (m:screens/BrowseScreen.tsx:L72) (m:screens/BrowseScreen.tsx:L90)
 - whether the category screen follows the shared card/list preference (Android: always cards) (m:screens/CategoryStreamsScreen.tsx:L183) (iPhone: Android behavior unless changed)
@@ -250,7 +250,7 @@ Not parity lines: open questions found while reading, each to be settled before 
 - [ ] (backlog, not parity) Favourites shelf above the Following list, from Rust's `following.favorites` (desktop has it)
 - [ ] (backlog, not parity) Offline follows at the bottom of Following ("Offline Channels" with last-broadcast time), from Rust's `following.offline` (desktop has it)
 - [ ] (backlog, not parity) Show YouTube and TikTok follows in Following once the iPhone can watch them, with platform marks since the list mixes
-- [ ] (backlog, not parity) Offline channels in Live search as desktop's "Offline Channels" group of avatar rows that open the profile, live results staying cards (Rust `search_channels` returning `{ live, offline }`, see rust-moves)
+- [x] (now parity with Android) Offline channels in Live search as an "Offline channels" group of avatar rows (picture, name, last category; Twitch only, so no logos) under the live cards, opening the channel's offline room rather than the profile (iPhone: `Browse/OfflineChannels.swift`, rows on the stream cards' surface; Rust marks `is_live: false` from Helix streams). Seen 2026-10-16: "dnd" shows the ended `dnd` channel in the group and one live card.
 - [ ] (backlog, not parity) Recent searches under the search field, scoped per tab, with clear (desktop has it)
 - [ ] (backlog, not parity) Search suggestions while typing via `.searchSuggestions` (channels from the followed list and recent searches first)
 - [ ] (backlog, not parity) Infinite scroll on Browse Live through `load_more_home_recommended` (desktop has it)
