@@ -84,7 +84,6 @@ provider-live-update
 provider-send-unconfirmed
 provider-stream-layout
 provider-stream-offline
-reminders://fire
 seventv-connected
 seventv-connected-account
 seventv-profile-pictures

@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Repeat, Square } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { BURST_EVENT, burstLabel, type BurstStatus } from '../../utils/burstStatus';
+import { BURST_EVENT, type BurstStatus } from '../../utils/burstStatus';
 
 // How long a finished run stays on screen.
 const LINGER_MS = 4000;
@@ -32,7 +32,7 @@ const ChatBurstStatus = ({ channelLogin }: { channelLogin?: string | null }) => 
       if (clear) clearTimeout(clear);
       setStatus(payload);
       if (payload.state !== 'running') {
-        if (payload.state === 'failed') useAppStore.getState().addToast(burstLabel(payload), 'warning');
+        if (payload.state === 'failed') useAppStore.getState().addToast(payload.label, 'warning');
         clear = setTimeout(() => live && setStatus(null), LINGER_MS);
       }
     });
@@ -48,7 +48,7 @@ const ChatBurstStatus = ({ channelLogin }: { channelLogin?: string | null }) => 
   return (
     <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
       <Repeat size={14} className={`flex-shrink-0 ${status.state === 'failed' ? 'text-warning' : 'text-accent'}`} />
-      <span className="text-xs text-textSecondary flex-1 min-w-0 truncate tabular-nums">{burstLabel(status)}</span>
+      <span className="text-xs text-textSecondary flex-1 min-w-0 truncate tabular-nums">{status.label}</span>
       {running && (
         <button
           type="button"

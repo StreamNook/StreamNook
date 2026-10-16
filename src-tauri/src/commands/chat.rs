@@ -726,6 +726,12 @@ pub async fn send_chat_message(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // The picker offers the emotes you just used first.
+    if sent.is_sent {
+        if let Some(channel) = target_channel.as_deref() {
+            crate::services::recent_emotes::record(channel, &message).await;
+        }
+    }
     let pin_error = if pin_after_send.unwrap_or(false) {
         pin_sent(&sent, broadcaster_id.as_deref()).await.err()
     } else {
