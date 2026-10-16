@@ -91,7 +91,7 @@ struct RewardsScreen: View {
     }
 }
 
-/// Drops not connected: the gift, "Twitch Drops", what connecting gets you, and the button.
+/// Drops not connected: the Twitch mark and "Drops", what connecting gets you, and the button.
 private struct ConnectDropsCard: View {
     let connecting: Bool
     let connect: () -> Void
@@ -99,8 +99,8 @@ private struct ConnectDropsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: Symbol.gift).font(.system(size: 15, weight: .semibold)).foregroundStyle(SN.accent)
-                Text("Twitch Drops").font(.snRowStrong).foregroundStyle(SN.textPrimary)
+                PlatformMark(platform: .twitch, size: 15)
+                Text("Drops").font(.snRowStrong).foregroundStyle(SN.textPrimary)
             }
             Text("Connect drops to track campaign progress and earn while you watch.")
                 .font(.sn(13))

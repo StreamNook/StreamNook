@@ -17,6 +17,9 @@ final class ProfileSheetModel {
     var failed: Set<String> = []
     @ObservationIgnored private let core: CoreBridge
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    /// The user key whose history is being followed: the target's id, or for a login-only
+    /// target (a mention, the long-press Profile item) the id the core resolved.
+    @ObservationIgnored private var watchedKey: String?
 
     static let historyLimit = 50
 
@@ -41,6 +44,9 @@ final class ProfileSheetModel {
                 ], as: ProfileSheetData.self)
                 guard !Task.isCancelled else { return }
                 self?.sheet = fresh
+                if target.userID.isEmpty, !fresh.userID.isEmpty {
+                    await self?.followHistory(key: fresh.userID)
+                }
             } catch {
                 log.debug("profile sheet unavailable: \(String(describing: error), privacy: .public)")
             }
@@ -58,23 +64,26 @@ final class ProfileSheetModel {
                 }
             })
         }
-        tasks.append(Task { [weak self] in
-            await self?.followHistory()
-        })
+        if !target.userID.isEmpty {
+            tasks.append(Task { [weak self] in
+                await self?.followHistory(key: target.userID)
+            })
+        }
     }
 
     func stop() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
+        guard let key = watchedKey else { return }
+        watchedKey = nil
         let core = core
-        let key = target.userID
         Task { _ = try? await core.invoke("unwatch_user_history", args: ["userKey": key]) }
     }
 
     /// The session's messages from this person: the store's latest 50, then each new one pushed
     /// while the sheet is open (deduped by id, trimmed to the newest 50).
-    private func followHistory() async {
-        let key = target.userID
+    private func followHistory(key: String) async {
+        watchedKey = key
         let events = core.events.stream("user-history-message")
         _ = try? await core.invoke("watch_user_history", args: ["userKey": key])
         do {
@@ -108,82 +117,83 @@ final class ProfileSheetModel {
     }
 }
 
-/// The profile sheet a name tap opens: who they are (7TV picture, painted name), their sub in this
-/// room, every badge they have by provider, and what they said this session. No actions, no
-/// title row; the system sheet sized to its content, at most 80% of the screen.
+/// The profile sheet a name tap opens, in the same shape as your own card: their Atmosphere as a
+/// band across the top, their picture cut into its edge with their StreamNook badge on it, their
+/// name in their paint below the art, their sub in this room, every badge they have under its
+/// platform's mark, and what they said this session. No actions; the system sheet sized to its
+/// content, at most 80% of the screen.
 struct ProfileSheet: View {
     @State var model: ProfileSheetModel
 
     private var target: ProfileTarget { model.target }
     private var sheet: ProfileSheetData? { model.sheet }
 
+    static let band: CGFloat = 92
+    static let avatar: CGFloat = 76
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            if let standing = model.standing {
-                SubStandingTile(standing: standing, wornArt: wornSubArt)
-                    .padding(.top, 12)
-            }
-            if let picked = model.picked {
-                pickedPanel(picked).padding(.top, 12)
-            }
-            ForEach(sheet?.groups ?? []) { group in
-                if group.badges.contains(where: { !model.failed.contains("\(group.title)/\($0.id)") }) {
-                    badgeGroup(group).padding(.top, 12)
+            AtmosphereBand(look: sheet?.atmosphere?.look, tint: nameColor(sheet?.nameColor ?? target.color))
+                .frame(height: Self.band)
+            CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
+                         medal: sheet?.streamnook?.imageURL, medalLabel: sheet?.streamnook?.label ?? "")
+                .padding(.leading, 14)
+                .padding(.top, -(Self.avatar / 2 + 4))
+            VStack(alignment: .leading, spacing: 0) {
+                identity.padding(.top, 8)
+                if let standing = model.standing {
+                    SubStandingTile(standing: standing, wornArt: wornSubArt)
+                        .padding(.top, 16)
                 }
-            }
-            if let member = sheet?.streamnook {
-                VStack(alignment: .leading, spacing: 6) {
-                    groupTitle("StreamNook")
-                    CosmeticImage(member.imageURL, animate: true)
-                        .frame(width: 24, height: 24)
-                        .accessibilityLabel(member.label)
+                if let picked = model.picked {
+                    pickedPanel(picked).padding(.top, 12)
                 }
-                .padding(.top, 12)
+                ForEach(sheet?.groups ?? []) { group in
+                    badgeGroup(group).padding(.top, 20)
+                }
+                if sheet?.hasNoBadges == true && sheet?.streamnook == nil {
+                    Text("No badges to show for this user.")
+                        .font(.snRowDetail)
+                        .foregroundStyle(SN.textMuted)
+                        .padding(.top, 16)
+                }
+                recent.padding(.top, 20)
             }
-            if sheet?.hasNoBadges == true {
-                Text("No badges to show for this user.")
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.textMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 16)
-            }
-            recent.padding(.top, 16)
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
         .padding(.bottom, 8)
         .fittedSheet(maxFraction: 0.8)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
 
-    // MARK: Header
+    // MARK: Identity
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            SevenTvAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: 56)
-            VStack(alignment: .leading, spacing: 0) {
-                let name = sheet?.displayName.isEmpty == false ? sheet!.displayName : target.displayName
-                PaintedText(text: name, font: .sn(18, 700), paint: sheet?.paint,
-                            fallback: Color(cgColor: FillPainter.color(sheet?.nameColor ?? "#9147FF")
-                                ?? CGColor(red: 0.57, green: 0.28, blue: 1, alpha: 1)),
-                            shadows: .all)
-                if let login = sheet?.shownLogin ?? fallbackLogin {
-                    Text("@\(login)")
-                        .font(.sn(13))
-                        .foregroundStyle(SN.textMuted)
-                        .lineLimit(1)
+    private var identity: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            let name = sheet?.displayName.isEmpty == false ? sheet!.displayName : target.displayName
+            PaintedText(text: name, font: .sn(OwnIdentityCard.nameSize(name) - 2, 700), paint: sheet?.paint,
+                        fallback: nameColor(sheet?.nameColor ?? target.color), shadows: .all, lineLimit: 2)
+                .fixedSize(horizontal: false, vertical: true)
+            let login = sheet?.shownLogin ?? fallbackLogin
+            // What they have on, in words: the Atmosphere, then the paint.
+            let parts = [sheet?.atmosphere?.name, sheet?.paint.flatMap { $0.name.isEmpty ? nil : "\($0.name) paint" }]
+                .compactMap { $0 }.filter { !$0.isEmpty }
+            let wearing: String? = parts.isEmpty ? nil : parts.joined(separator: " · ")
+            if login != nil || wearing != nil {
+                HStack(spacing: 6) {
+                    if let login {
+                        Text("@\(login)").font(.sn(13)).foregroundStyle(SN.textMuted).lineLimit(1)
+                    }
+                    if login != nil && wearing != nil {
+                        Text("·").font(.sn(13)).foregroundStyle(SN.textMuted)
+                    }
+                    if let wearing {
+                        Text(wearing).font(.snRowDetail).foregroundStyle(SN.textSecondary).lineLimit(1)
+                    }
                 }
-                if let paint = sheet?.paint, !paint.name.isEmpty {
-                    Text("Paint: \(paint.name)")
-                        .font(.sn(11.5))
-                        .foregroundStyle(SN.textSecondary)
-                        .lineLimit(1)
-                        .padding(.top, 2)
-                }
+                .padding(.top, 2)
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -198,68 +208,56 @@ struct ProfileSheet: View {
 
     // MARK: Badges
 
-    private func groupTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.sn(11, 600))
-            .textCase(.uppercase)
-            .tracking(0.6)
-            .foregroundStyle(SN.textMuted)
-    }
-
     private func badgeGroup(_ group: ProfileBadgeGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            groupTitle(group.title)
+        VStack(alignment: .leading, spacing: 8) {
+            ProfileSectionHeader(PlatformMark.Platform(named: group.title) == nil ? group.title : "Badges",
+                                 platform: PlatformMark.Platform(named: group.title),
+                                 detail: "\(group.badges.count)")
             FlowLayout(spacing: 8) {
                 ForEach(group.badges) { badge in
-                    ProfileBadgeButton(badge: badge, onFailure: { model.failed.insert("\(group.title)/\(badge.id)") }) {
-                        model.picked = badge
-                    }
+                    ProfileBadgeButton(badge: badge) { model.picked = badge }
                 }
             }
         }
     }
 
     private func pickedPanel(_ badge: ProfileBadge) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            (Text(badge.title.isEmpty ? (badge.name ?? "") : badge.title).font(.sn(12, 700)).foregroundColor(SN.textPrimary)
-                + Text(badge.provider.map { " · \($0)" } ?? "").font(.sn(12)).foregroundColor(SN.textMuted))
-            if let description = badge.description, !description.isEmpty {
-                Text(description).font(.sn(11.5)).foregroundStyle(SN.textMuted)
+        HStack(alignment: .top, spacing: 10) {
+            CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true).frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(badge.title.isEmpty ? (badge.name ?? "") : badge.title)
+                    .font(.sn(13.5, 600))
+                    .foregroundStyle(SN.textPrimary)
+                if let description = badge.description, !description.isEmpty {
+                    Text(description).font(.snRowDetail).foregroundStyle(SN.textSecondary)
+                }
             }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SN.surface.opacity(0.6)))
+        .padding(12)
+        .snPanel()
     }
 
     // MARK: Recent messages
 
     private var recent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                groupTitle("Recent messages")
-                if let history = model.history, !history.isEmpty {
-                    Text("\(history.count)").font(.sn(11, 500)).foregroundStyle(SN.textMuted)
-                }
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            ProfileSectionHeader("Recent messages", detail: model.history.flatMap { $0.isEmpty ? nil : "\($0.count)" })
             if let history = model.history {
                 if history.isEmpty {
                     Text("Nothing from them in this chat yet.")
-                        .font(.sn(12.5))
+                        .font(.snRowDetail)
                         .foregroundStyle(SN.textMuted)
                 } else {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(history) { row in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(row.date.map { $0.formatted(.dateTime.hour().minute()) } ?? "")
-                                    .font(.sn(11.5).monospacedDigit())
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(row.date.map { $0.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute()) } ?? "")
+                                    .font(.sn(12).monospacedDigit())
                                     .foregroundStyle(SN.textMuted)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                                    .frame(minWidth: 52, alignment: .leading)
+                                    .frame(width: 42, alignment: .leading)
                                 Text(row.content)
-                                    .font(.sn(13))
+                                    .font(.sn(14))
                                     .foregroundStyle(SN.textPrimary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -305,9 +303,11 @@ struct BadgePress: ButtonStyle {
     }
 }
 
-/// A profile picture whose box never changes size: the plain surface until the platform picture
-/// is known, then that picture, with the 7TV picture over it once it has decoded (and the
-/// platform picture back if the 7TV one fails).
+/// The one picture a person shows in StreamNook chat, in a box that never changes size: their 7TV
+/// picture when they have one, else their platform picture, never one over the other (a 7TV
+/// picture with transparent parts let the Twitch photo show through and read as one blended
+/// image). The plain surface shows until the picture decodes; the platform picture takes over
+/// only if the 7TV one fails.
 struct SevenTvAvatar: View {
     let platformURL: String?
     let picture: AvatarPick?
@@ -317,13 +317,12 @@ struct SevenTvAvatar: View {
     var body: some View {
         ZStack {
             Circle().fill(SN.surface)
-            if let platformURL {
+            if let picture, !sevenTvFailed {
+                CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
+                              animate: picture.animated != nil, alwaysMove: true, fill: true,
+                              onFailure: { sevenTvFailed = true })
+            } else if let platformURL {
                 CosmeticImage(platformURL, animate: false, fill: true)
-                if let picture, !sevenTvFailed {
-                    CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
-                                  animate: picture.animated != nil, alwaysMove: true, fill: true,
-                                  onFailure: { sevenTvFailed = true })
-                }
             }
         }
         .frame(width: size, height: size)

@@ -26,6 +26,7 @@ struct BrowseScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .scrollDismissesKeyboard(.immediately)
         .background(SN.background)
         .navigationTitle("Browse")
@@ -132,7 +133,7 @@ final class BrowseModel {
         searching = false
     }
 
-    /// Searches 350 ms after the last keystroke, in the mode showing; a cancelled search writes
+    /// Searches 350 ms after the last keystroke, in the mode showing; a canceled search writes
     /// nothing, and a failed one shows no results.
     func search(_ core: CoreBridge, immediate: Bool = false) async {
         let text = trimmed
@@ -229,9 +230,8 @@ struct CategoryGrid: View {
 }
 
 /// One category: the box art is the tile, with nothing around it and nothing over it, and a chin
-/// under it of the same height everywhere: the name and the live viewers when the core sends them
-/// (the top list), or the name on up to two lines when it does not (search), so long names that
-/// share a start ("Tom Clancy's Rainbow Six ...") stay apart.
+/// under it: the name on one line, then Twitch's live total for the category. Every chin is one
+/// height (a long name ends in an ellipsis, and VoiceOver reads it whole), so no row grows.
 struct CategoryTile: View {
     let category: TwitchCategory
     /// The box art's size in pixels, the size the tile is drawn at.
@@ -256,19 +256,26 @@ struct CategoryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             artwork
-            VStack(alignment: .leading, spacing: 0) {
-                Text(category.name)
-                    .font(.sn(12.5, 500))
-                    .foregroundStyle(SN.textPrimary)
-                    .lineLimit(viewers == nil ? 2 : 1, reservesSpace: viewers == nil)
-                if let viewers {
-                    Text(viewers)
-                        .font(.snCaption)
-                        .foregroundStyle(SN.textSecondary)
-                        .lineLimit(1)
+            CategoryChin.block
+                .overlay(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(category.name)
+                            .font(CategoryChin.nameFont)
+                            .foregroundStyle(SN.textPrimary)
+                            .lineLimit(1)
+                            .allowsTightening(true)
+                        if let viewers {
+                            Text(viewers)
+                                .font(CategoryChin.viewersFont)
+                                // Nobody live is the least useful fact, so it is a step quieter (still AA).
+                                .foregroundStyle(category.viewerCount == 0 ? SN.textSecondary.opacity(0.7) : SN.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
-            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([category.name, viewers].compactMap { $0 }.joined(separator: ", "))
     }
 
     private var artwork: some View {
@@ -276,8 +283,19 @@ struct CategoryTile: View {
         return Color.clear
             .aspectRatio(3 / 4, contentMode: .fit)
             .background {
-                AsyncImage(url: TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height)) { phase in
-                    if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
+                if let url = TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height),
+                   !url.absoluteString.contains("404_boxart") {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
+                    }
+                } else {
+                    // A category with no art of its own: our quiet placeholder, not Twitch's gray box.
+                    ZStack {
+                        SN.surface
+                        Image(systemName: "gamecontroller")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundStyle(SN.textMuted)
+                    }
                 }
             }
             .clipShape(shape)
@@ -285,8 +303,31 @@ struct CategoryTile: View {
             .overlay { shape.strokeBorder(SN.textPrimary.opacity(0.10), lineWidth: 1 / scale) }
     }
 
+    /// Absent only when the core could not count (its fallback search carries no viewers).
     private var viewers: String? {
-        guard let count = category.viewerCount, count > 0 else { return nil }
-        return "\(count.formatted(.number.notation(.compactName))) viewers"
+        guard let count = category.viewerCount else { return nil }
+        switch count {
+        case 0: return "No live streams"
+        case 1: return "1 viewer"
+        default: return "\(count.formatted(.number.notation(.compactName))) viewers"
+        }
+    }
+}
+
+/// The category chin's type and its fixed height, shared by the tile and its skeleton.
+@MainActor
+enum CategoryChin {
+    static let nameFont = Font.sn(12.5, 500)
+    static let viewersFont = Font.snCaption
+
+    /// An invisible block the chin's height: a name line, then the viewers line, so a tile the core
+    /// sent no viewers for still lines up with its row.
+    static var block: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: " ").font(nameFont)
+            Text(verbatim: " ").font(viewersFont)
+        }
+        .hidden()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

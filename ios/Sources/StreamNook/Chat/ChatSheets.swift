@@ -16,7 +16,8 @@ struct ChannelRelationship: Decodable, Equatable {
 }
 
 /// The chat menu behind the composer's round button: the room's modes, then the actions for
-/// this room. It stays open while following or unfollowing, so the row flips in place.
+/// this room in the phone's order (follow, subscribe, add a chat, reload, commands, moderator
+/// tools, close). It stays open while following or unfollowing, so the row flips in place.
 struct ChatMenuSheet: View {
     let model: ChatComposerModel
     let session: ChatSession
@@ -28,7 +29,8 @@ struct ChatMenuSheet: View {
     private var label: String { session.channel }
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            SheetTitle(text: label)
             List {
                 if let modes = session.modes, !modes.modes.isEmpty {
                     Section {
@@ -45,7 +47,11 @@ struct ChatMenuSheet: View {
                         Text("This chat is in")
                             .foregroundStyle(Color(red: 0x8C / 255, green: 0xA0 / 255, blue: 0xA7 / 255))
                     } footer: {
-                        if let standing = modes.standing { Text(standing) }
+                        if let standing = modes.standing {
+                            Text(standing)
+                                .font(.sn(12.5))
+                                .foregroundStyle(SN.textSecondary)
+                        }
                     }
                 }
                 Section {
@@ -79,9 +85,17 @@ struct ChatMenuSheet: View {
                                 }
                                 Spacer()
                                 if relationship?.subscribed == true {
-                                    Text("Subscribed").font(.sn(12.5)).foregroundStyle(.tertiary)
+                                    Text("Subscribed").font(.sn(12.5)).foregroundStyle(SN.textSecondary)
                                 }
                             }
+                        }
+                    }
+                    if let rooms = session.rooms {
+                        Button {
+                            dismiss()
+                            rooms.addOpen = true
+                        } label: {
+                            Label("Add a chat", systemImage: "plus.bubble")
                         }
                     }
                     Button {
@@ -96,31 +110,46 @@ struct ChatMenuSheet: View {
                     } label: {
                         Label("Chat commands", systemImage: "terminal")
                     }
-                    if moderates {
+                    // Only where the actions would succeed: Helix refuses them without mod powers here.
+                    if moderates || session.isModerator {
                         Button {
-                            session.moderatorTools.toggle()
+                            session.setModeratorTools(!session.moderatorTools)
                         } label: {
                             HStack {
                                 Label {
                                     Text("Moderator tools")
                                 } icon: {
                                     Image(systemName: session.moderatorTools ? "checkmark.shield.fill" : "checkmark.shield")
-                                        .foregroundStyle(session.moderatorTools ? Color(ChatTheme.accent) : .secondary)
+                                        .foregroundStyle(session.moderatorTools ? SN.accent : SN.textSecondary)
                                 }
                                 Spacer()
-                                Text(session.moderatorTools ? "On" : "Off").font(.sn(12.5)).foregroundStyle(.tertiary)
+                                Text(session.moderatorTools ? "On" : "Off")
+                                    .font(.sn(12.5))
+                                    .foregroundStyle(SN.textSecondary)
                             }
                         }
                     }
+                    if let tab = session.rooms?.tabs.first(where: { $0.login == session.channel }), !tab.pinnedToStream {
+                        Button(role: .destructive) {
+                            dismiss()
+                            session.rooms?.close(tab.channel)
+                        } label: {
+                            Label("Close this chat", systemImage: "xmark")
+                                .foregroundStyle(SN.error)
+                        }
+                    }
                 } footer: {
-                    if moderates, session.moderatorTools {
+                    if moderates || session.isModerator, session.moderatorTools {
                         Text("Long-press any message for delete, timeout and ban.")
+                            .font(.sn(12.5))
+                            .foregroundStyle(SN.textSecondary)
                     }
                 }
             }
+            .listSectionSpacing(16)
+            .contentMargins(.top, 4, for: .scrollContent)
+            .scrollContentBackground(.hidden)
             .tint(Color(ChatTheme.textPrimary))
-            .navigationTitle(label)
-            .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDragIndicator(.visible)
         // Only while the sheet is open: the follow and subscription lookups and the role.
@@ -171,10 +200,16 @@ struct ChatMenuSheet: View {
     }
 }
 
-/// Drops and retakes the room's connection.
+/// "Reload this chat": an open room rebuilds the whole Twitch connection with every room (a
+/// reload is reached for because messages stopped, and a re-join has no connection to ride);
+/// the chat stage drops and retakes its own.
 @MainActor
 enum ChatReload {
     static func reload(_ session: ChatSession) {
+        if let rooms = session.rooms {
+            rooms.reload(session)
+            return
+        }
         session.stop()
         session.restart()
     }

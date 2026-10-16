@@ -22,8 +22,8 @@ enum PlayRoute: String, Sendable {
     case direct
 }
 
-/// One stream being watched: the player on the URL the core serves, how far behind the live
-/// edge it sits, and the room's chat.
+/// One stream being watched: the player on the URL the core serves and how far behind the live
+/// edge it sits. Its chat is one of the open rooms (`ChatRooms`).
 @Observable @MainActor
 final class Watch {
     let player = AVPlayer()
@@ -38,15 +38,13 @@ final class Watch {
     private(set) var behindMS: Int?
     /// From the tap to the player first playing, in milliseconds.
     private(set) var firstPlayMS: Int?
-    /// The open stream's chat room; the chat panel starts it when it shows.
-    private(set) var chat: ChatSession?
     /// The route the player is on now (after any fallback).
     private(set) var playing: PlayRoute?
     /// Every quality the stream offers, in the core's order (`best` first); empty until it resolves.
     private(set) var available: [String] = []
     /// The quality picked in the sheet this session; nil until one is picked.
     private(set) var pickedQuality: String?
-    /// The player is not playing (paused here, from the lock screen, or by a call). The centre
+    /// The player is not playing (paused here, from the lock screen, or by a call). The center
     /// button follows the player, never only its own taps.
     private(set) var paused = false
     private(set) var muted = false
@@ -128,7 +126,6 @@ final class Watch {
         self.stream = stream
         opened = .now
         status = "Resolving"
-        chat = ChatSession(channel: stream.userLogin, core: core, source: .core)
         showCard()
         tasks.append(Task { await self.play(stream, core: core) })
         tasks.append(Task { await self.follow(stream, core: core) })
@@ -271,11 +268,6 @@ final class Watch {
         Task.detached { _ = try? await core.invoke("report_playback_health", args: report.args) }
     }
 
-    /// Back from the background: the core's chat bridge may listen on a new port.
-    func foregrounded(chatPort: Int) {
-        chat?.reconnect(port: chatPort)
-    }
-
     /// The core moved playback to another upstream mid-stream (an ad-free pivot): the player
     /// reloads on the new URL, on the route it was on.
     func pivot(url: String, channel: String?) {
@@ -318,8 +310,6 @@ final class Watch {
         live = nil
         pip.eligible = false
         nowPlaying.clear()
-        chat?.stop()
-        chat = nil
         Task.detached {
             _ = try? await core.invoke("stop_stream", "{}")
             _ = try? await core.invoke("unwatch_channel_state", args: ["login": login])

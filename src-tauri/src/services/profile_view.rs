@@ -291,6 +291,22 @@ pub async fn profile_sheet(
     channel_id: Option<&str>,
     channel_login: Option<&str>,
 ) -> ProfileSheet {
+    // A login alone (a mention, the long-press Profile item) resolves to its
+    // account first: every lookup below is keyed by the user id.
+    let looked_up = if user_id.is_empty() && !login.is_empty() {
+        crate::services::twitch_service::TwitchService::get_user_by_login(login)
+            .await
+            .map_err(|e| log::debug!("[ProfileView] no account for {login}: {e}"))
+            .ok()
+    } else {
+        None
+    };
+    let user_id = looked_up.as_ref().map(|u| u.id.as_str()).unwrap_or(user_id);
+    let display_name = looked_up
+        .as_ref()
+        .map(|u| u.display_name.as_str())
+        .filter(|_| display_name.is_empty() || display_name.eq_ignore_ascii_case(login))
+        .unwrap_or(display_name);
     let channel_id = channel_id.filter(|c| !c.is_empty()).unwrap_or(user_id).to_string();
     let channel_login = channel_login.filter(|c| !c.is_empty()).unwrap_or(login).to_string();
     let (badges, inventory, helix, pictures, (atmosphere, cologne)) = tokio::join!(

@@ -41,7 +41,7 @@ final class Toasts {
     }
 }
 
-/// The toasts, bottom centre just above the tab bar, newest lowest, each sliding up 32 points
+/// The toasts, bottom center just above the tab bar, newest lowest, each sliding up 32 points
 /// with a fade. Drawn in a window of their own (see `ToastWindow`) so they float over sheets,
 /// popovers and menus too.
 struct ToastHost: View {

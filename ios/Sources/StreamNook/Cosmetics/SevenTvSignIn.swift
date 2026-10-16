@@ -30,6 +30,14 @@ struct SevenTvSignInSheet: View {
             .navigationTitle("Sign in to 7TV")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // The title as 7TV's own mark and the words, not the brand in plain text.
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 7) {
+                        PlatformMark(platform: .sevenTV, size: 13)
+                        Text("Sign in").font(.sn(17, 700)).foregroundStyle(SN.textPrimary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: Symbol.close) { finish(false) }
                 }

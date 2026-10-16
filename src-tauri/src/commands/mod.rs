@@ -13,6 +13,8 @@ pub mod channel_panels;
 pub mod channel_state;
 pub mod chat;
 pub mod chat_burst;
+// The phone chat pane's tabs and its Add a chat sheet (registered on the phones only).
+pub mod chat_tabs;
 // The chats docked in the main window (desktop only).
 #[cfg(desktop)]
 pub mod chat_dock;
