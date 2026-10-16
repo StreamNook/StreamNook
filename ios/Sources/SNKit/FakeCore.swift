@@ -20,7 +20,7 @@ public final class FakeCore: CoreBridge {
     private let state = Mutex(State())
     /// Canned answers for the screens beyond the spike (settings, the home snapshot, the account),
     /// so their signed-in states can be drawn without a real account. Nil answers none of them.
-    let fixtures: FakeFixtures?
+    public let fixtures: FakeFixtures?
 
     public init(fixtures: FakeFixtures? = nil) {
         self.fixtures = fixtures

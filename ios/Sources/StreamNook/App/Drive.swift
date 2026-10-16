@@ -183,7 +183,8 @@ enum Drive {
                 try? await Task.sleep(for: .seconds(5))
             default:
                 if !(await ChatDrive.run(name, value, model: model)),
-                   !(await CosmeticsDrive.run(name, value, model: model)) {
+                   !(await CosmeticsDrive.run(name, value, model: model)),
+                   !(await RewardsDrive.run(name, value, model: model)) {
                     log.error("drive: unknown step \(name, privacy: .public)")
                 }
             }

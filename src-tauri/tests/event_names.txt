@@ -13,6 +13,7 @@ badge-available
 badge-metadata-amended
 badge-notification
 badge-standing-changed
+badge-wall-sync
 bundle-update-progress
 channel-avatars
 channel-links

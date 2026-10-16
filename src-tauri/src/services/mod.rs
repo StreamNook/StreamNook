@@ -8,6 +8,7 @@ pub mod badge_polling_service;
 pub mod badge_earn;
 pub mod badge_service;
 pub mod badge_standing;
+pub mod badge_wall;
 pub mod badge_window;
 pub mod bttv_pro_service;
 
@@ -63,11 +64,14 @@ pub mod discord_service;
 #[cfg(target_os = "macos")]
 pub mod discord_ipc_macos;
 pub mod drops_auth_service;
+pub mod drop_words;
 pub mod drops_overview;
 pub mod drops_service;
 pub mod game_suggest;
 pub mod watched_chest;
 pub mod reward_drops;
+pub mod rewards_drops;
+pub mod watch_drop;
 pub mod emoji_service;
 pub mod spellcheck;
 pub mod asset_cache_queue;

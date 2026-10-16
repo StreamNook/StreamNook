@@ -337,6 +337,20 @@ pub async fn get_badge_standing(
     Ok(crate::services::badge_standing::get_standing(&app_handle, force.unwrap_or(false)).await)
 }
 
+/// The phones' badge wall (services/badge_wall.rs): the global catalogue with
+/// owned badges marked, each tile's status and sheet copy, in `sort`
+/// (`newest`, `available`, `soon`, `usage`, `oldest`), and the missing strip.
+/// `force` re-reads the account's collection in the background.
+#[tauri::command]
+pub async fn get_badge_wall(
+    app_handle: crate::rt::AppHandle,
+    sort: Option<String>,
+    force: Option<bool>,
+) -> Result<crate::services::badge_wall::BadgeWall, String> {
+    let sort = crate::services::badge_wall::Sort::parse(sort.as_deref().unwrap_or("newest"));
+    Ok(crate::services::badge_wall::get(&app_handle, sort, force.unwrap_or(false)).await)
+}
+
 /// One badge's earn window, for a surface that shows a single badge.
 #[tauri::command]
 pub async fn get_badge_window(
