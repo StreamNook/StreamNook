@@ -277,6 +277,25 @@ export const MobilePlayer: React.FC<{
     return () => window.removeEventListener('sn:pip-mute', onPipMute);
   }, []);
 
+  // The buttons follow the element, not the last tap: a headset, the lock
+  // screen, a call or the engine's muted-autoplay fallback all pause or mute
+  // the video without going through these controls.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlay = () => setPaused(false);
+    const onPause = () => setPaused(true);
+    const onVolume = () => setMuted(video.muted);
+    video.addEventListener('play', onPlay);
+    video.addEventListener('pause', onPause);
+    video.addEventListener('volumechange', onVolume);
+    return () => {
+      video.removeEventListener('play', onPlay);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('volumechange', onVolume);
+    };
+  }, []);
+
   const onSurfaceTap = () => {
     setControlsVisible((v) => {
       const next = !v;
@@ -419,7 +438,10 @@ export const MobilePlayer: React.FC<{
                   channel, not about this session's playback. */}
               {streamIsTwitch && (
                 <button
-                  onClick={() => void toggleChannelMuted(currentStream.user_login)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void toggleChannelMuted(currentStream.user_login);
+                  }}
                   aria-label={
                     alertsOff
                       ? `Turn on live alerts for ${currentStream.user_name}`
@@ -435,7 +457,10 @@ export const MobilePlayer: React.FC<{
               )}
               {canSubscribe && (
                 <button
-                  onClick={() => void sub.handleSubscribeClick()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void sub.handleSubscribeClick();
+                  }}
                   className="shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
                 >
                   {sub.subscriberBadgeUrl ? (
@@ -449,7 +474,10 @@ export const MobilePlayer: React.FC<{
               <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
                 {collab && (
                   <button
-                    onClick={() => setTogetherOpen(true)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTogetherOpen(true);
+                    }}
                     aria-label={collabLabel(collab)}
                     className="flex items-center gap-1 rounded-full bg-white/15 py-0.5 pl-0.5 pr-2 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
                   >
@@ -483,7 +511,13 @@ export const MobilePlayer: React.FC<{
           className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-glass-ink/45 flex items-center justify-center text-white active:scale-95 transition-transform"
           aria-label={paused ? 'Play' : 'Pause'}
         >
-          {paused ? <Play size={30} weight="fill" /> : <Pause size={30} weight="fill" />}
+          {/* A triangle's visual weight sits left of its box center; the
+              nudge puts it where the eye expects the middle. */}
+          {paused ? (
+            <Play size={30} weight="fill" style={{ transform: 'translateX(7%)' }} />
+          ) : (
+            <Pause size={30} weight="fill" />
+          )}
         </button>
 
         {/* Bottom bar */}

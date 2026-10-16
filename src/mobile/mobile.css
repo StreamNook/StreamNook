@@ -81,6 +81,9 @@
   width: 40px;
   width: clamp(22px, 18cqh, 60px);
   height: auto;
+  /* The mark's mass leans left of its box, so box-centered it reads off
+     center; it moves right by 6 percent of its width. */
+  transform: translateX(6%);
 }
 
 /* One tile of the badge wall. Several hundred of these mount at once; with
