@@ -3673,7 +3673,9 @@ export async function sendChannelMessage(
       });
       slice.seenMessageIds.delete(tempId);
       bumpRevisionFor([key]);
-      if (result.drop_reason) {
+      // The phone's composer says it beside the kept draft, with Retry and
+      // Discard, so a row here would say it twice.
+      if (result.drop_reason && !IS_MOBILE) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
       return result;

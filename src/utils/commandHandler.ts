@@ -66,13 +66,14 @@ async function sendSpecial(channel: string, text: string, replyTo: string | unde
       addToast(pin ? '/pin: chat is not connected' : 'Chat is not connected', 'error');
       return;
     }
-    if (!pin) return;
-    // A dropped message is not pinned; a reason, when Twitch gave one, is
-    // already shown in chat.
+    // A dropped message is not pinned. Desktop prints Twitch's reason in the
+    // room; the phone prints no row for it, so it is said here.
     if (!outcome.is_sent) {
-      if (!outcome.drop_reason) addToast('Message not sent, so nothing was pinned', 'error');
+      if (IS_MOBILE && outcome.drop_reason) addToast(`Not sent: ${outcome.drop_reason}`, 'error');
+      else if (pin && !outcome.drop_reason) addToast('Message not sent, so nothing was pinned', 'error');
       return;
     }
+    if (!pin) return;
     if (outcome.pin_error) {
       addToast(outcome.pin_error, 'error');
       return;

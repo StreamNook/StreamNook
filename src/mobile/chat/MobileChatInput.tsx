@@ -12,11 +12,11 @@
 // Channel comes in as a prop rather than being read off `currentStream`: with
 // several chat tabs open the composer must target the tab you are looking at,
 // which is not necessarily the stream playing.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { DotsThreeVertical, X } from 'phosphor-react';
+import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage } from '../../stores/chatConnectionStore';
@@ -33,7 +33,7 @@ import { ComposerMenuSheet } from './ComposerMenuSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
-import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
+import type { RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
@@ -55,6 +55,19 @@ import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 // straight up past the status bar once the keyboard opens.
 const PANEL_CLASS =
   'absolute bottom-full left-0 right-0 mb-2 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-borderSubtle rounded-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
+
+/** A message the room did not take: the text as sent and why. */
+interface SendFailure {
+  text: string;
+  why: string;
+}
+
+/** An invoke rejection in words: Rust commands reject with a plain string. */
+function failureWords(err: unknown): string {
+  if (typeof err === 'string' && err.trim()) return err;
+  if (err instanceof Error && err.message) return err.message;
+  return 'something went wrong';
+}
 
 /** Whether you can send in this room, as Rust decided it (room_modes.rs). */
 export interface ChatGating {
@@ -117,7 +130,39 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
   const kickBusy = usePlatformAccountStore((s) => s.kick.busy);
   const needsKickSignIn = provider === 'kick' && !kickConnected;
-  const [text, setText] = useState('');
+  // One draft per room. A single field shared by every tab carried what you
+  // typed in one room into the next, and Send then posted it there. A send
+  // that is still in flight answers into the room it was typed in.
+  const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const text = drafts[roomKey] ?? '';
+  const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
+    setDrafts((d) => {
+      const prev = d[key] ?? '';
+      const value = typeof next === 'function' ? next(prev) : next;
+      if (value === prev) return d;
+      const out = { ...d };
+      if (value) out[key] = value;
+      else delete out[key];
+      return out;
+    });
+  }, []);
+  const setText = (next: string | ((prev: string) => string)) => setDraftFor(roomKey, next);
+  // A message the room did not take stays in its draft with why, until it is
+  // sent again or discarded. Editing it makes it a new message, so the line
+  // shows only while the field still holds the text that failed.
+  const [failures, setFailures] = useState<Record<string, SendFailure>>({});
+  const setFailureFor = useCallback((key: string, failure: SendFailure | null) => {
+    setFailures((f) => {
+      if (!failure && !(key in f)) return f;
+      const out = { ...f };
+      if (failure) out[key] = failure;
+      else delete out[key];
+      return out;
+    });
+  }, []);
+  const failure = failures[roomKey];
+  const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -210,6 +255,13 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const send = async () => {
     const message = text.trim();
     if (!message || !channel || sending) return;
+    // Captured now: the answer lands in this room even if you switch tabs.
+    const key = roomKey;
+    const sent = () => {
+      setDraftFor(key, '');
+      setFailureFor(key, null);
+    };
+    const failed = (why: string) => setFailureFor(key, { text: message, why });
     if (!isTwitch) {
       // Slash commands are Twitch calls; typed here they would post as text.
       if (message.startsWith('/')) {
@@ -219,7 +271,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       setSending(true);
       try {
         // The platform can accept the request and still refuse the message
-        // (slow mode, followers-only, a banned word). Say so and keep the draft.
+        // (slow mode, followers-only, a banned word).
         const outcome = await invoke<{ is_sent: boolean; drop_reason: string | null }>(
           'provider_send_message',
           {
@@ -230,23 +282,30 @@ const MobileChatInputImpl: React.FC<Props> = ({
           },
         );
         if (outcome && outcome.is_sent === false) {
-          useAppStore
-            .getState()
-            .addToast(`Your message was not sent: ${outcome.drop_reason || 'the room refused it'}`, 'error');
+          failed(outcome.drop_reason || 'the room refused it');
           return;
         }
-        setText('');
+        sent();
         onCancelReply?.();
       } catch (err) {
         Logger.warn('[MobileChatInput] send failed:', err);
+        failed(failureWords(err));
       } finally {
         setSending(false);
       }
       return;
     }
     if (!currentUser) return;
+    const identity = {
+      username: currentUser.login || currentUser.username,
+      displayName: currentUser.display_name || currentUser.username,
+      userId: currentUser.user_id,
+      color: undefined,
+      badges: '',
+    };
     setSending(true);
     try {
+      let outcome: SendChannelOutcome | null;
       // Slash commands are Helix/GQL calls on the desktop handler, never chat
       // text. The phone dropped them as "desktop affordances"; moderating from
       // a phone is not one. Same handler, same identity, the room's own
@@ -254,46 +313,48 @@ const MobileChatInputImpl: React.FC<Props> = ({
       if (message.startsWith('/')) {
         if (!channelId) {
           useAppStore.getState().addToast("Open this channel's stream to run commands here", 'info');
-          setText('');
           return;
         }
-        const identity = {
-          username: currentUser.login || currentUser.username,
-          displayName: currentUser.display_name || currentUser.username,
-          userId: currentUser.user_id,
-          color: undefined,
-          badges: '',
-        };
+        // A command may answer with text to send (/me); that send is judged
+        // like any other, so a dropped one keeps the draft too.
+        const chat: { pending?: Promise<SendChannelOutcome | null> } = {};
         const handled = await handleSlashCommand(message, channelId, channel, (msg) => {
-          void sendChannelMessage(channel, msg, identity);
+          chat.pending = sendChannelMessage(channel, msg, identity);
         });
-        if (handled) {
-          setText('');
+        if (handled && !chat.pending) {
+          sent();
           return;
         }
+        outcome = chat.pending
+          ? await chat.pending
+          : await sendChannelMessage(channel, message, identity, replyTo?.messageId);
+      } else {
+        outcome = await sendChannelMessage(channel, message, identity, replyTo?.messageId);
       }
-      await sendChannelMessage(
-        channel,
-        message,
-        {
-          username: currentUser.login || currentUser.username,
-          displayName: currentUser.display_name || currentUser.username,
-          userId: currentUser.user_id,
-          color: undefined,
-          badges: '',
-        },
-        replyTo?.messageId,
-      );
-      setText('');
+      if (!outcome) {
+        failed('chat is not connected');
+        return;
+      }
+      if (outcome.is_sent === false) {
+        failed(outcome.drop_reason || 'the room refused it');
+        return;
+      }
+      sent();
       onCancelReply?.();
       incrementStat(currentUser.user_id, 'messages_sent', 1).catch((err) => {
         Logger.warn('[MobileChatInput] messages_sent stat failed:', err);
       });
     } catch (err) {
       Logger.error('[MobileChatInput] send failed:', err);
+      failed(failureWords(err));
     } finally {
       setSending(false);
     }
+  };
+
+  const discardFailure = () => {
+    setDraftFor(roomKey, '');
+    setFailureFor(roomKey, null);
   };
 
   // The shared picker hands back the literal token to insert, which is an emote
@@ -377,6 +438,27 @@ const MobileChatInputImpl: React.FC<Props> = ({
           placeholder alone says why the field is dead, and it says it in the
           field you were about to type in. The chat menu carries the room's full
           state, and now the Follow action alongside it. */}
+      {/* A message the room did not take. The text stays in the field; this
+          says why once, beside it, with the two ways forward. */}
+      {shownFailure && (
+        <div className="flex items-center gap-1.5 px-3 pt-1.5 text-[12.5px]" role="alert">
+          <WarningCircle size={14} weight="fill" className="shrink-0 text-warning" />
+          <span className="min-w-0 flex-1 line-clamp-2 text-textSecondary">Not sent: {shownFailure.why}</span>
+          <button
+            onClick={() => void send()}
+            disabled={sending}
+            className="shrink-0 px-1.5 py-1 font-semibold text-accent active:opacity-70 disabled:opacity-50"
+          >
+            Retry
+          </button>
+          <button
+            onClick={discardFailure}
+            className="shrink-0 px-1.5 py-1 text-textMuted active:text-textPrimary"
+          >
+            Discard
+          </button>
+        </div>
+      )}
       {replyTo && (
         <div className="flex items-center gap-1.5 px-3 pt-1.5 text-[12.5px] text-textSecondary">
           <span className="truncate">
