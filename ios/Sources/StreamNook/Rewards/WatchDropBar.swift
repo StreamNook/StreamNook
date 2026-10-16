@@ -18,7 +18,10 @@ struct WatchDropBar: View {
     var body: some View {
         Group {
             if visible, let drop {
+                // The slot adds no padding, so an empty bar takes no room; the gutter is the card's.
                 card(drop)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
                     .transition(.opacity.combined(with: .offset(y: -6)))
             }
         }
