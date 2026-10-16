@@ -15,6 +15,8 @@ export interface TooltipState {
   /** Run `fire` after `delayMs` unless cancelled; one pending timer per id. */
   scheduleShow: (id: string, delayMs: number, fire: () => void) => void;
   cancelShow: (id: string) => void;
+  /** Whether `id` has a show pending or is the tooltip on screen now. */
+  isArmed: (id: string) => boolean;
   // A unique ID or ref to track which element triggered the tooltip
   triggerId: string | null;
 }
@@ -24,7 +26,7 @@ export interface TooltipState {
 // timer is manager state, not render state.
 const pendingShows = new Map<string, ReturnType<typeof setTimeout>>();
 
-export const useTooltipStore = create<TooltipState>((set) => ({
+export const useTooltipStore = create<TooltipState>((set, get) => ({
   isVisible: false,
   content: null,
   rect: null,
@@ -54,6 +56,7 @@ export const useTooltipStore = create<TooltipState>((set) => ({
       pendingShows.delete(id);
     }
   },
+  isArmed: (id) => pendingShows.has(id) || (get().isVisible && get().triggerId === id),
   hideTooltip: (id?: string) => set((state) => {
     // If an ID is provided, only hide if it matches the currently active triggerId.
     if (id && state.triggerId !== id) {

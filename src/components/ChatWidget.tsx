@@ -154,6 +154,8 @@ import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { lastLiveLabel } from '../utils/lastLive';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
+import { openBadgeInfo } from '../stores/badgeSpotlightStore';
+import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../utils/badgeSpotlight';
 
 /** Lets ChatWidget render against a caller-supplied channel instead of the
  *  AppStore's currentStream — same pattern as the MultiNook synthesis branch
@@ -2860,13 +2862,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setChatPaused(false, { scrollToBottom: true, force: true });
   };
 
-  const handleBadgeClick = useCallback(async (badgeKey: string, badgeInfo: any) => {
-    const [setId] = badgeKey.split('/');
-    // In a popout the badges overlay lives in main, so route there (opening main if
-    // Go Live closed it) rather than flipping the popout's own overlay-less store,
-    // which renders nothing. In the main window this opens the overlay directly.
-    const { openBadgeDetailInMain } = await import('../utils/openBadgesInMain');
-    openBadgeDetailInMain(badgeInfo, setId);
+  // A Twitch badge click opens its badge page in the Badges overlay with the
+  // version id (the page's metadata, earn guide and window lookups key on it).
+  // Kick / YouTube / TikTok badges have no such page and open the small card
+  // in this window instead.
+  const handleBadgeClick = useCallback((badgeKey: string, badgeInfo: TwitchRowBadgeInfo) => {
+    openBadgeInfo(twitchRowBadgeRef(badgeKey, badgeInfo));
   }, []);
 
   // Helper function to scroll to a specific message by ID

@@ -64,6 +64,8 @@ import { historyKey } from '../utils/chatterIdentity';
 import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { isImeComposing } from '../utils/imeComposing';
+import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
+import { thirdPartyBadgeRef } from '../utils/badgeSpotlight';
 
 // messageHistory arrives from two sources:
 //   1. The frontend's in-session userMessageHistory Map (full ParsedMessage shape
@@ -1503,7 +1505,10 @@ const UserProfileCard = ({
         ? `${b.image1x} 1x, ${b.image2x} 2x, ${b.image4x} 4x`
         : undefined,
       title: b.title,
-      provider: b.provider
+      provider: b.provider,
+      // For the badge spotlight card.
+      description: b.description,
+      link: b.link,
     }));
 
     // BTTV Pro loyalty badge (resolved over the BTTV socket, not the cached
@@ -1516,6 +1521,8 @@ const UserProfileCard = ({
           srcSet: undefined,
           title: 'BTTV Pro',
           provider: 'BTTV',
+          description: undefined,
+          link: undefined,
         })
       : thirdPartyBadges;
 
@@ -1813,14 +1820,17 @@ const UserProfileCard = ({
                         src={b.src}
                         alt={b.title}
                         className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
-                        onClick={() => openBadgesWithTargetInMain(
-                          // Case-insensitive for the same reason the groups are:
-                          // contributor badges come from Rust as 'bttv', while the
-                          // Pro badge is tagged 'BTTV' to match its loadout key.
-                          providerGroupKey(b.provider) === 'bttv'
-                            ? { tab: 'bttv', query: b.title }
-                            : { tab: 'chat-clients', query: b.title },
-                        )}
+                        // The badge's spotlight card, in this window. Rust
+                        // normalises the provider case ('bttv' contributor
+                        // badges, 'BTTV' Pro) and the loadout id space.
+                        onClick={() => openBadgeSpotlight(thirdPartyBadgeRef({
+                          id: b.id,
+                          title: b.title,
+                          provider: b.provider,
+                          description: b.description,
+                          image4x: b.src,
+                          link: b.link,
+                        }))}
                         onError={e => { e.currentTarget.style.display = 'none'; }}
                       />
                     </Tooltip>
@@ -1861,7 +1871,7 @@ const UserProfileCard = ({
                             alt={cosmetic.name}
                             className="w-5 h-5 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
                             draggable={false}
-                            onClick={openBadgesOnStreamNookInMain}
+                            onClick={() => openBadgesOnStreamNookInMain()}
                           />
                         </Tooltip>
                       ))}

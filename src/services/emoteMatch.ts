@@ -30,6 +30,16 @@ export interface EmoteMatchRow {
   group?: string;
   isZeroWidth?: boolean;
   modifierFlags?: number;
+  emoteType?: string;
+  /** Who made it, where the provider's set says (the menu's hover credit). */
+  ownerName?: string;
+  /** The emote's own name when the set shows it under an alias. */
+  originalName?: string;
+  animated?: boolean;
+  width?: number;
+  favorite?: boolean;
+  /** An FFZ subscriber effect this account cannot use (picker mode only). */
+  locked?: boolean;
 }
 
 export interface EmoteMatchResult {
@@ -38,6 +48,8 @@ export interface EmoteMatchResult {
   total: number;
   /** False while the channel's emotes are still loading. */
   ready: boolean;
+  /** Matches per provider before the cap (`twitch`, `7tv`, `bttv`, ...). */
+  counts: Partial<Record<EmoteMatchRow['provider'], number>>;
 }
 
 export interface EmoteMatchChannel {
@@ -61,19 +73,28 @@ interface WireRow {
   group?: string;
   is_zero_width?: boolean;
   modifier_flags?: number;
+  emote_type?: string;
+  owner_name?: string;
+  original_name?: string;
+  animated?: boolean;
+  width?: number;
+  favorite?: boolean;
+  locked?: boolean;
 }
 
-const EMPTY: EmoteMatchResult = { rows: [], total: 0, ready: false };
+const EMPTY: EmoteMatchResult = { rows: [], total: 0, ready: false, counts: {} };
 
 export async function matchEmotes(
   target: EmoteMatchChannel,
   query: string,
   profile: EmoteMatchProfile,
-  options: { twitchFirst?: boolean; limit?: number } = {},
+  /** `picker`: the emote menu's search, which also lists FFZ subscriber
+   *  effects this account cannot send (marked `locked`). */
+  options: { twitchFirst?: boolean; limit?: number; picker?: boolean } = {},
 ): Promise<EmoteMatchResult> {
   if (!target.channel) return EMPTY;
   try {
-    const res = await invoke<{ rows: WireRow[]; total: number; ready: boolean }>('match_emote_tokens', {
+    const res = await invoke<{ rows: WireRow[]; total: number; ready: boolean; counts?: EmoteMatchResult['counts'] }>('match_emote_tokens', {
       provider: target.provider,
       channel: target.channel,
       channelId: target.channelId || null,
@@ -82,10 +103,12 @@ export async function matchEmotes(
       order: options.twitchFirst ? 'twitch_first' : 'default',
       tier: inlineEmoteTier(),
       limit: options.limit ?? null,
+      picker: options.picker ?? null,
     });
     return {
       total: res.total,
       ready: res.ready,
+      counts: res.counts ?? {},
       rows: res.rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -100,6 +123,13 @@ export async function matchEmotes(
         group: r.group,
         isZeroWidth: r.is_zero_width,
         modifierFlags: r.modifier_flags,
+        emoteType: r.emote_type,
+        ownerName: r.owner_name,
+        originalName: r.original_name,
+        animated: r.animated,
+        width: r.width,
+        favorite: r.favorite,
+        locked: r.locked,
       })),
     };
   } catch {

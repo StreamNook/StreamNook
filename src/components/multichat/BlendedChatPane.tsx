@@ -29,6 +29,8 @@ import { Tooltip } from '../ui/Tooltip';
 import { isImeComposing } from '../../utils/imeComposing';
 import { CheerBar } from '../chat/CheerBar';
 import { useCheerPromptStore } from '../../stores/cheerPromptStore';
+import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
+import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
 
 interface BlendedChannel {
   channel: string;
@@ -388,14 +390,12 @@ export function BlendedChatPane({
     [idToChannelRef],
   );
 
-  // Click a badge on a message -> open its detail in the badges overlay, which lives
-  // in the main app (opening main if Go Live closed it).
+  // Click a badge on a message -> its Twitch badge page in main, with the
+  // version id the page keys its lookups on. Kick / YouTube / TikTok badges
+  // have no such page and open the small card in this window instead.
   const handleBadgeClick = useCallback(
-    (badgeKey: string, badgeInfo: { url?: string; image_url_4x?: string }) => {
-      const [setId] = badgeKey.split('/');
-      void import('../../utils/openBadgesInMain').then(({ openBadgeDetailInMain }) =>
-        openBadgeDetailInMain(badgeInfo, setId),
-      );
+    (badgeKey: string, badgeInfo: TwitchRowBadgeInfo) => {
+      openBadgeInfo(twitchRowBadgeRef(badgeKey, badgeInfo));
     },
     [],
   );

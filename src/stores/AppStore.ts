@@ -378,7 +378,8 @@ interface AppState {
   showBadgesOverlay: boolean;
   badgesOverlayInitialPaintId: string | null;
   badgesOverlayInitialBadgeId: string | null;
-  badgesOverlayInitialStreamNook: boolean;
+  /** Open on the StreamNook tab; a string also opens that cosmetic's card. */
+  badgesOverlayInitialStreamNook: boolean | string;
   // Generic deep-link target for tabs without a dedicated detail modal (Twitch,
   // BetterTTV, Chat Clients): open the overlay on `tab` and filter to `query`
   // (a badge title) so the clicked badge surfaces. Set by openBadgesWithTarget.
@@ -587,7 +588,7 @@ interface AppState {
   setShowBadgesOverlay: (show: boolean) => void;
   openBadgesWithPaint: (paintId: string) => void;
   openBadgesWithBadge: (badgeId: string) => void;
-  openBadgesOnStreamNook: () => void;
+  openBadgesOnStreamNook: (slug?: string) => void;
   openBadgesWithTarget: (target: { tab: string; query?: string }) => void;
   setShowEmoteSetsOverlay: (show: boolean) => void;
   openEmoteSets: (opts?: { twitchId?: string; tab?: 'emotes' | 'sets' | 'editors' }) => void;
@@ -3093,9 +3094,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     trackActivity('Opened Badges with Badge');
     set({ showBadgesOverlay: true, badgesOverlayInitialBadgeId: badgeId, badgesOverlayInitialPaintId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null });
   },
-  openBadgesOnStreamNook: () => {
+  openBadgesOnStreamNook: (slug?: string) => {
     trackActivity('Opened Badges on StreamNook');
-    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null });
+    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: slug || true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null });
   },
   openBadgesWithTarget: (target: { tab: string; query?: string }) => {
     trackActivity('Opened Badges with Target');

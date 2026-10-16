@@ -200,6 +200,8 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let animated = data.get("animated").and_then(|v| v.as_bool());
+            let original_name = seventv_original_name(data, name);
+            let owner_ref = seventv_owner_ref(data);
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -211,6 +213,8 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 owner_id: None,
                 width,
                 owner_name,
+                original_name,
+                owner_ref,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated,
@@ -380,6 +384,20 @@ pub(crate) fn apply_seventv_delta(
 /// into ready-to-render Emotes. Both channel-set sources carry this shape: the
 /// inline `emote_set.emotes` array (pre-change user payloads) and the
 /// `/v3/emote-sets/{id}` endpoint (the post-change fetch).
+/// The uploader's 7TV user id (their profile is `7tv.app/users/{id}`).
+pub(crate) fn seventv_owner_ref(data: &serde_json::Value) -> Option<String> {
+    data.pointer("/owner/id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// A 7TV set entry's `name` is what the channel calls the emote; `data.name`
+/// is the emote's own name. Some only when the two differ (an alias).
+fn seventv_original_name(data: &serde_json::Value, shown: &str) -> Option<String> {
+    data.get("name")
+        .and_then(|v| v.as_str())
+        .filter(|own| !own.is_empty() && *own != shown)
+        .map(str::to_string)
+}
+
 pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Emote> {
     let mut out = Vec::new();
     for active_emote in items {
@@ -404,6 +422,8 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let animated = emote_data.get("animated").and_then(|v| v.as_bool());
+            let original_name = seventv_original_name(emote_data, name);
+            let owner_ref = seventv_owner_ref(emote_data);
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -415,6 +435,8 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 owner_id: None,
                 width,
                 owner_name,
+                original_name,
+                owner_ref,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated,
@@ -496,6 +518,15 @@ pub struct Emote {
     /// Owner/author display name for emote attribution
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_name: Option<String>,
+    /// The emote's own name when the set shows it under an alias (7TV lets a
+    /// channel rename an emote in its set), so a hover can credit the original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
+    /// The creator's id on the emote's own provider, for a link to their page:
+    /// 7TV user id, BetterTTV user id, FFZ user name. (`owner_id` stays the
+    /// owner's Twitch id where one is known.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<String>,
     /// Emote width in pixels (for aspect ratio sorting - wide emotes > 32)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
@@ -1237,6 +1268,8 @@ impl EmoteService {
                             owner_id,
                             width: None,
                             owner_name: None,
+                            original_name: None,
+                            owner_ref: None,
                             modifier_flags: None,
                             ffz_sub_only: None,
                             animated,
@@ -1291,6 +1324,17 @@ impl EmoteService {
         };
         let is_overlay = BTTV_OVERLAY_EMOTE_IDS.contains(&id);
         let animated = item.get("animated").and_then(|v| v.as_bool());
+        // Shared emotes name their uploader; channel emotes carry only the
+        // channel's own BTTV id (the caller credits the channel instead).
+        let owner_name = item
+            .pointer("/user/displayName")
+            .or_else(|| item.pointer("/user/name"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        // Their BetterTTV id (for `betterttv.com/users/{id}`) and Twitch id.
+        let owner_ref = item.pointer("/user/id").and_then(|v| v.as_str()).map(str::to_string);
+        let owner_id = item.pointer("/user/providerId").and_then(|v| v.as_str()).map(str::to_string);
 
         Some(Emote {
             id: id.to_string(),
@@ -1304,9 +1348,11 @@ impl EmoteService {
             },
             local_url: None,
             emote_type: None,
-            owner_id: None,
+            owner_id,
             width: None,
-            owner_name: None,
+            owner_name,
+            original_name: None,
+            owner_ref,
             modifier_flags,
             ffz_sub_only: None,
             animated,
@@ -1315,7 +1361,7 @@ impl EmoteService {
 
     async fn fetch_bttv_emotes(
         &self,
-        _channel_name: Option<String>,
+        channel_name: Option<String>,
         channel_id: Option<String>,
     ) -> Result<(Vec<Emote>, bool)> {
         // True when every part of the result is a real answer: globals came
@@ -1383,7 +1429,18 @@ impl EmoteService {
                             // the same parser.
                             for key in ["channelEmotes", "sharedEmotes"] {
                                 if let Some(list) = json.get(key).and_then(|v| v.as_array()) {
-                                    emotes.extend(list.iter().filter_map(Self::parse_bttv_emote));
+                                    let channel_owned = key == "channelEmotes";
+                                    // The channel's own BetterTTV id.
+                                    let channel_ref = json.get("id").and_then(|v| v.as_str()).map(str::to_string);
+                                    emotes.extend(list.iter().filter_map(Self::parse_bttv_emote).map(|mut e| {
+                                        // A channel emote was uploaded by the channel.
+                                        if channel_owned && e.owner_name.is_none() {
+                                            e.owner_name = channel_name.clone();
+                                            e.owner_ref = channel_ref.clone();
+                                            e.owner_id = Some(channel_id.clone());
+                                        }
+                                        e
+                                    }));
                                 }
                             }
                         }
@@ -1587,7 +1644,19 @@ impl EmoteService {
             emote_type: None,
             owner_id: None,
             width: None,
-            owner_name: None,
+            owner_name: item
+                .pointer("/owner/display_name")
+                .or_else(|| item.pointer("/owner/name"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            original_name: None,
+            // Their FFZ page is `frankerfacez.com/{name}/submissions`.
+            owner_ref: item
+                .pointer("/owner/name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             modifier_flags,
             ffz_sub_only: if sub_only { Some(true) } else { None },
             animated: Some(item.get("animated").is_some_and(|v| !v.is_null())),
@@ -1738,6 +1807,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1753,6 +1824,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1769,6 +1842,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1785,6 +1860,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1800,6 +1877,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1815,6 +1894,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1830,6 +1911,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1845,6 +1928,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1860,6 +1945,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1875,6 +1962,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1891,6 +1980,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1907,6 +1998,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1923,6 +2016,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1938,6 +2033,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -1953,6 +2050,8 @@ impl EmoteService {
                 owner_id: None,
                 width: None,
                 owner_name: None,
+                original_name: None,
+                owner_ref: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
                 animated: None,
@@ -2083,6 +2182,8 @@ mod tests {
             owner_id: None,
             width: None,
             owner_name: None,
+            original_name: None,
+            owner_ref: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,
@@ -2484,6 +2585,8 @@ mod keep_held_rows_tests {
             owner_id: None,
             width: None,
             owner_name: None,
+            original_name: None,
+            owner_ref: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,

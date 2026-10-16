@@ -25,6 +25,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { MousePointer2, MousePointerBan, X } from 'lucide-react';
 import BlendedChatPane from './BlendedChatPane';
+import BadgeSpotlightHost from '../BadgeSpotlightHost';
 import { Tooltip } from '../ui/Tooltip';
 import { useAppStore } from '../../stores/AppStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
@@ -317,6 +318,7 @@ export default function ChatOverlayWindow() {
       <div className="sn-overlay-feed flex min-h-0 flex-1 flex-col">
         <BlendedChatPane channels={channels} readOnly transparent />
       </div>
+      <BadgeSpotlightHost />
     </div>
   );
 }

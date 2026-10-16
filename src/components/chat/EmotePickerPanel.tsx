@@ -42,7 +42,15 @@ type EmojiData = {
 };
 let emojiDataCache: EmojiData | null = null;
 import { getAppleEmojiUrl } from '../../services/emojiService';
-import { personalEmoteOverrides, type PersonalOverride } from '../../services/emoteMatch';
+import {
+  matchEmotes,
+  personalEmoteOverrides,
+  type EmoteMatchChannel,
+  type EmoteMatchResult,
+  type EmoteMatchRow,
+  type PersonalOverride,
+} from '../../services/emoteMatch';
+import { EmoteCreditLine } from './EmoteCreditLine';
 import {
   getGifPickerStatus,
   searchGifs,
@@ -62,6 +70,73 @@ import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
+/** While searching, the tabs filter the results: `all` is every source. */
+type SearchScope = 'all' | ProviderTab;
+type EmoteSource = Emote['provider'];
+const EMOTE_SOURCES: EmoteSource[] = ['twitch', '7tv', 'bttv', 'ffz', 'kick', 'youtube'];
+
+/** The most rows one search shows; Rust ranks everything and returns these. */
+const SEARCH_LIMIT = 200;
+/** Emoji shown under the emotes in the All results (the Emoji tab shows all). */
+const SEARCH_EMOJI_IN_ALL = 24;
+
+/** A ranked search result with its Emote: the one the menu already holds, or
+ *  one built from the row (a personal 7TV emote is in no channel set). */
+function rowToEmote(row: EmoteMatchRow, held: Map<string, Emote>): Emote {
+  const known = held.get(`${row.provider}:${row.id}`);
+  if (known) return known;
+  return {
+    id: row.id,
+    name: row.name,
+    url: row.url,
+    provider: row.provider as EmoteSource,
+    isZeroWidth: row.isZeroWidth,
+    localUrl: row.localUrl,
+    emote_type: row.emoteType,
+    owner_name: row.ownerName,
+    original_name: row.originalName,
+    width: row.width,
+    modifierFlags: row.modifierFlags,
+    animated: row.animated,
+    insertText: row.insertText,
+    ffzSubOnly: row.locked || undefined,
+  };
+}
+
+/** The menu's own search over the sets it holds, for a host Rust has no
+ *  channel for (the mod room) or while the channel's sets are still loading. */
+function localSearch(emotes: EmoteSet | null, query: string): EmoteMatchResult {
+  const q = query.toLowerCase();
+  const rows: EmoteMatchRow[] = [];
+  const counts: EmoteMatchResult['counts'] = {};
+  let total = 0;
+  if (emotes) {
+    for (const source of EMOTE_SOURCES) {
+      for (const e of emotes[source] ?? []) {
+        if (!e.name.toLowerCase().includes(q)) continue;
+        total++;
+        counts[source] = (counts[source] ?? 0) + 1;
+        if (rows.length < SEARCH_LIMIT) {
+          rows.push({ id: e.id, name: e.name, url: e.url, provider: source, sourceLabel: '', sourceDetail: '' });
+        }
+      }
+    }
+  }
+  return { rows, total, ready: true, counts };
+}
+
+/** Grid columns a result takes: wide 7TV emotes span two or three cells. */
+function widthSpan(e: Emote): string {
+  const w = e.width || 32;
+  return w <= 48 ? '' : w <= 80 ? 'col-span-2' : 'col-span-3';
+}
+
+/** A bigger image for a hover card where the provider has one. */
+function hoverImageUrl(emote: Emote): string {
+  if (emote.provider === '7tv') return `https://cdn.7tv.app/emote/${emote.id}/4x.avif`;
+  if (emote.provider === 'twitch') return emote.url.replace(/\/1\.0$/, '/3.0');
+  return emote.localUrl || emote.url;
+}
 
 // ── swapping smiley (shared trigger icon) ────────────────────────────────────
 const SMILEY_POOL = ['😀', '😄', '😁', '😆', '🤣', '😂', '😊', '😇', '🙂', '😉', '😌', '😍', '🥰', '😜', '🤪', '😎', '🤩', '🥳', '😏', '😋', '🤗', '🫠', '🫡', '😺'];
@@ -96,6 +171,8 @@ const EmoteGridItem = memo(
     replacedBy,
     onInsert,
     onToggleFavorite,
+    channelLogin,
+    channelId,
   }: {
     emote: Emote;
     isFavorited: boolean;
@@ -105,6 +182,9 @@ const EmoteGridItem = memo(
     replacedBy?: PersonalOverride;
     onInsert: () => void;
     onToggleFavorite: () => void;
+    /** The room the menu is open for, so the credit can come from its sets. */
+    channelLogin?: string;
+    channelId?: string;
   }) => {
     const [hovered, setHovered] = useState(false);
     const is7tv = emote.provider === '7tv';
@@ -138,12 +218,16 @@ const EmoteGridItem = memo(
         content={
           <div className="flex flex-col items-center gap-1.5 py-0.5">
             <img
-              src={emote.provider === '7tv' ? `https://cdn.7tv.app/emote/${emote.id}/4x.avif` : emote.localUrl || emote.url}
+              src={hoverImageUrl(emote)}
               alt={emote.name}
               className="w-auto object-contain mx-auto drop-shadow-md"
               style={{ height: hoverPreviewSize, maxWidth: hoverPreviewSize * 2, ...staticModifierStyle(emote.modifierFlags) }}
               onError={(e) => {
                 const t = e.currentTarget;
+                if (emote.provider === 'twitch' && t.src !== emote.url) {
+                  t.src = emote.url;
+                  return;
+                }
                 if (emote.provider === '7tv') {
                   const ladder = ['4x', '3x', '2x', '1x'].flatMap((s) => [
                     `https://cdn.7tv.app/emote/${emote.id}/${s}.avif`,
@@ -162,9 +246,15 @@ const EmoteGridItem = memo(
             />
             <div className="text-center flex flex-col items-center gap-0.5">
               <span className="font-bold text-[13px] leading-tight">{emote.name}</span>
-              <span className="text-[10px] text-white/60 leading-tight">
-                {emote.owner_name ? `by ${emote.owner_name}` : emote.provider}
-              </span>
+              <EmoteCreditLine
+                provider={emote.provider}
+                id={emote.id}
+                name={emote.name}
+                ownerHint={emote.owner_name}
+                originalHint={emote.original_name}
+                channelLogin={channelLogin}
+                channelId={channelId}
+              />
               {isModifier ? (
                 <span className="text-[9px] font-bold tracking-wider uppercase text-purple-300 mt-0.5 mix-blend-screen drop-shadow-sm">
                   {isPrefixModifier
@@ -414,8 +504,10 @@ const PANEL_MAX_PX = 520;
 // The same frosted surface as the Tools menu and the command list's dialog
 // (`.sn-popover`: blur plus a tint that rides the Glassiness slider and goes
 // solid at 0%), so every menu over the message box reads as one family.
+// z-50: above a pinned prediction or poll (z-40), which otherwise covered the
+// top of the open menu, where search results land.
 const DEFAULT_PANEL_CLASS =
-  'sn-popover absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom';
+  'sn-popover absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom z-50';
 /** A host that places the menu itself (the phone) keeps the plain fill. */
 const HOST_PANEL_FILL =
   'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)';
@@ -460,6 +552,11 @@ export function EmotePickerPanel({
   // The emote tab to come back to from GIFs.
   const [lastEmoteTab, setLastEmoteTab] = useState<ProviderTab>(selectedProvider);
   const [searchQuery, setSearchQuery] = useState('');
+  // Typing searches every source at once; the tabs then filter the results.
+  const [searchScope, setSearchScope] = useState<SearchScope>('all');
+  // Kept with the query it answers. The last answer stays on screen until the
+  // next one lands, so narrowing a search never flickers.
+  const [searchResult, setSearchResult] = useState<(EmoteMatchResult & { query: string }) | null>(null);
   const [favoriteEmotes, setFavoriteEmotes] = useState<Emote[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Fit the default popover into the room above the message box. A host that
@@ -487,6 +584,7 @@ export function EmotePickerPanel({
     };
   }, [mounted]);
   const animateGrid = animateSetting === 'always' && scrollSettled;
+  const hoverPreviewSize = useAppStore((s) => s.settings.chat_design?.emote_hover_size) ?? 96;
 
   // ── Twitch chat GIFs ───────────────────────────────────────────────────────
   // Eligibility is Twitch's call (the server-side Tier 2/3 gate), so the tab
@@ -615,6 +713,57 @@ export function EmotePickerPanel({
     [emojiData],
   );
 
+  const trimmedQuery = searchQuery.trim();
+  const searching = trimmedQuery.length > 0 && selectedProvider !== 'gifs';
+  const matchTarget = useMemo<EmoteMatchChannel | null>(
+    () =>
+      channelLogin
+        ? { provider: isKick ? 'kick' : isYouTube ? 'youtube' : 'twitch', channel: channelLogin, channelId: channelId ?? null }
+        : null,
+    [channelLogin, channelId, isKick, isYouTube],
+  );
+
+  // Rust ranks across every source over the sets it holds (the same matcher
+  // as the message box's `:` list). A host it has no channel for, or a channel
+  // still loading, falls back to the menu's own search over what it holds.
+  useEffect(() => {
+    if (!open || !searching) return;
+    let alive = true;
+    const timer = setTimeout(() => {
+      const ask = matchTarget
+        ? matchEmotes(matchTarget, trimmedQuery, 'search', { limit: SEARCH_LIMIT, picker: true })
+        : Promise.resolve(null);
+      void ask.then((res) => {
+        if (!alive) return;
+        const result = res && res.ready ? res : localSearch(emotes, trimmedQuery);
+        setSearchResult({ ...result, query: trimmedQuery });
+      });
+    }, 40);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [open, searching, trimmedQuery, matchTarget, emotes]);
+
+  const heldEmotes = useMemo(() => {
+    const map = new Map<string, Emote>();
+    if (!emotes) return map;
+    for (const source of EMOTE_SOURCES) for (const e of emotes[source] ?? []) map.set(`${source}:${e.id}`, e);
+    return map;
+  }, [emotes]);
+
+  const searchEmotes = useMemo((): Emote[] => {
+    if (!searching || !searchResult) return [];
+    const all = searchResult.rows.map((row) => ({ row, emote: rowToEmote(row, heldEmotes) }));
+    const scoped =
+      searchScope === 'all'
+        ? all
+        : searchScope === 'favorites'
+          ? all.filter(({ emote }) => isFavoriteEmote(emote.id))
+          : all.filter(({ row }) => row.provider === searchScope);
+    return scoped.map(({ emote }) => emote);
+  }, [searching, searchResult, heldEmotes, searchScope]);
+
   const filteredEmotes = useMemo((): Emote[] => {
     // Emoji and GIFs are not EmoteSet-backed: both render their own pane.
     if (selectedProvider === 'emoji' || selectedProvider === 'gifs') return [];
@@ -731,14 +880,14 @@ export function EmotePickerPanel({
   }, [filteredEmotes]);
 
   const filteredEmojis = useMemo(() => {
-    if (!searchQuery) return allEmojis;
-    const query = searchQuery.toLowerCase();
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return allEmojis;
     return allEmojis.filter(({ emoji, category }) => {
-      if (category.toLowerCase().includes(query)) return true;
+      if (emoji.includes(query) || category.toLowerCase().includes(query)) return true;
       const keywords = emojiData?.EMOJI_KEYWORDS[emoji];
       return keywords ? keywords.some((k) => k.includes(query)) : false;
     });
-  }, [searchQuery, allEmojis]);
+  }, [searchQuery, allEmojis, emojiData]);
 
   const toggleFavorite = useCallback(
     async (emote: Emote, isFavorited: boolean) => {
@@ -784,6 +933,24 @@ export function EmotePickerPanel({
     borderRadius: '8px',
     ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
   });
+
+  // While searching, the tabs filter the ranked results and count the hits in
+  // each source; otherwise they pick a source and count what it holds.
+  const activeTab: SearchScope = searching ? searchScope : selectedProvider;
+  const pickTab = (tab: ProviderTab) => (searching ? setSearchScope(tab) : setSelectedProvider(tab));
+  const emojiHits = searching ? filteredEmojis.length : 0;
+  const tabCount = (tab: ProviderTab | 'all'): number => {
+    if (searching) {
+      const counts = searchResult?.counts ?? {};
+      if (tab === 'all') return (searchResult?.total ?? 0) + emojiHits;
+      if (tab === 'favorites') return searchResult?.rows.filter((r) => isFavoriteEmote(r.id)).length ?? 0;
+      if (tab === 'emoji') return emojiHits;
+      return counts[tab as EmoteSource] ?? 0;
+    }
+    if (tab === 'favorites') return favoriteEmotes.length;
+    if (tab === 'all' || tab === 'emoji' || tab === 'gifs') return 0;
+    return emotes?.[tab]?.length || 0;
+  };
 
   type Section = 'emotes' | 'gifs' | 'commands';
   const section: Section =
@@ -831,6 +998,133 @@ export function EmotePickerPanel({
       : []),
   ];
 
+  const sectionHeadingStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)',
+  };
+
+  const renderEmojiButton = (emoji: string, key: string) => (
+    <Tooltip key={key} content={emoji}>
+      <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
+        <img
+          src={getAppleEmojiUrl(emoji)}
+          alt={emoji}
+          className="w-6 h-6 object-contain"
+          onError={(e) => {
+            const t = e.currentTarget;
+            if (!t.dataset.fe0f && t.src.endsWith('.png') && !t.src.includes('-fe0f')) {
+              t.dataset.fe0f = '1';
+              t.src = t.src.replace(/\.png$/, '-fe0f.png');
+              return;
+            }
+            t.style.display = 'none';
+            if (t.nextSibling?.textContent !== emoji) t.insertAdjacentText('afterend', emoji);
+          }}
+        />
+      </button>
+    </Tooltip>
+  );
+
+  /** One ranked grid across every source, best match first. Wide emotes take
+   *  two or three cells and the grid packs around them, so the order holds
+   *  without the ragged rows a flat 7-across grid would leave. */
+  function renderSearchResults() {
+    const showEmotes = searchScope !== 'emoji';
+    const showEmoji = searchScope === 'all' || searchScope === 'emoji';
+    const emoji = showEmoji
+      ? searchScope === 'emoji'
+        ? filteredEmojis
+        : filteredEmojis.slice(0, SEARCH_EMOJI_IN_ALL)
+      : [];
+    const scopeTotal = searchScope === 'all' ? (searchResult?.total ?? 0) : tabCount(searchScope);
+    const capped = showEmotes && scopeTotal > searchEmotes.length;
+    if (!searchResult && showEmotes) {
+      return <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">Searching...</p></div>;
+    }
+    if ((!showEmotes || searchEmotes.length === 0) && emoji.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-32 px-6">
+          <p className="text-xs text-textSecondary text-center leading-relaxed">
+            {searchScope === 'emoji' ? 'No emoji found' : `No emotes found for "${trimmedQuery}"`}
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-4 pt-2">
+        {showEmotes && searchEmotes.length > 0 && (
+          <div className="flex flex-col">
+            {chunkArray(searchEmotes, TWITCH_COLS * WIDTH_BLOCK_ROWS).map((block, bi) => (
+              <LazyEmoteBlock
+                key={`search-${searchScope}-blk-${bi}`}
+                scrollRef={scrollRef}
+                estimatedHeight={Math.ceil(block.length / TWITCH_COLS) * WIDTH_ROW_PX}
+                gridClass="grid grid-cols-7 grid-flow-row-dense gap-2 px-1"
+                animate={animateGrid}
+                onActivate={() => {
+                  const tier = inlineEmoteTier();
+                  for (const e of block) queueEmoteForDisplayCaching(e.id, e.provider, e.url, tier, true);
+                }}
+              >
+                {(still) =>
+                  block.map((emote) => {
+                    const isFavorited = isFavoriteEmote(emote.id);
+                    return (
+                      <div key={`${emote.provider}-${emote.id}`} className={widthSpan(emote)}>
+                        <EmoteGridItem
+                          emote={emote}
+                          isFavorited={isFavorited}
+                          still={still}
+                          replacedBy={emote.provider !== 'twitch' ? overrides?.get(emote.name) : undefined}
+                          onInsert={() => onInsert(emote.insertText ?? emote.name)}
+                          onToggleFavorite={() => void toggleFavorite(emote, isFavorited)}
+                          channelLogin={channelLogin}
+                          channelId={channelId}
+                        />
+                      </div>
+                    );
+                  })
+                }
+              </LazyEmoteBlock>
+            ))}
+            {capped && (
+              <p className="text-[10px] text-textSecondary opacity-70 text-center pt-2">
+                Showing the best {searchEmotes.length} of {scopeTotal}. Keep typing to narrow it down.
+              </p>
+            )}
+          </div>
+        )}
+        {emoji.length > 0 && (
+          <div className="flex flex-col">
+            {searchScope === 'all' && (
+              <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={sectionHeadingStyle}>
+                <span className="text-textPrimary">Emoji</span> <span className="opacity-50">({filteredEmojis.length})</span>
+              </h3>
+            )}
+            {chunkArray(emoji, EMOJI_COLS * EMOJI_BLOCK_ROWS).map((block, bi) => (
+              <LazyEmoteBlock
+                key={`search-emoji-${searchScope}-blk-${bi}`}
+                scrollRef={scrollRef}
+                estimatedHeight={Math.ceil(block.length / EMOJI_COLS) * EMOJI_ROW_PX}
+                gridClass="grid grid-cols-8 gap-1 px-1"
+                animate={false}
+              >
+                {() => block.map(({ emoji: ch }) => renderEmojiButton(ch, `search-emoji-${ch}`))}
+              </LazyEmoteBlock>
+            ))}
+            {searchScope === 'all' && filteredEmojis.length > emoji.length && (
+              <button
+                onClick={() => setSearchScope('emoji')}
+                className="self-center mt-2 text-[10px] text-textSecondary hover:text-white transition-colors"
+              >
+                Show all {filteredEmojis.length} emoji
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <motion.div
       initial="closed"
@@ -860,7 +1154,13 @@ export function EmotePickerPanel({
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              // A fresh search looks everywhere, except from the Emoji tab,
+              // where the person is plainly after an emoji.
+              if (!searchQuery.trim() && next.trim()) setSearchScope(selectedProvider === 'emoji' ? 'emoji' : 'all');
+              setSearchQuery(next);
+            }}
             placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
             className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
           />
@@ -893,38 +1193,47 @@ export function EmotePickerPanel({
         </div>
         {section === 'emotes' && (
         <div className="flex gap-1 mt-2">
-          <Tooltip content={`Favorites (${favoriteEmotes.length})`} side="top">
-            <button onClick={() => setSelectedProvider('favorites')} className={tabClass(selectedProvider === 'favorites')} style={{ borderRadius: '8px' }}>
+          {searching && (
+            <Tooltip content={`Everything (${tabCount('all')})`} side="top">
+              <button onClick={() => setSearchScope('all')} className={tabClass(activeTab === 'all')} style={{ borderRadius: '8px' }}>
+                <span className="text-[11px] font-semibold leading-4">All</span>
+                <span className="text-[10px] opacity-70">{tabCount('all')}</span>
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip content={`Favorites (${tabCount('favorites')})`} side="top">
+            <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={{ borderRadius: '8px' }}>
               <span className="text-yellow-400">★</span>
-              <span className="text-[10px] opacity-70">{favoriteEmotes.length}</span>
+              <span className="text-[10px] opacity-70">{tabCount('favorites')}</span>
             </button>
           </Tooltip>
           <Tooltip content="Emoji" side="top">
-            <button onClick={() => setSelectedProvider('emoji')} className={tabClass(selectedProvider === 'emoji')} style={{ borderRadius: '8px' }}>
+            <button onClick={() => pickTab('emoji')} className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
               <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
+              {searching && <span className="text-[10px] opacity-70">{tabCount('emoji')}</span>}
             </button>
           </Tooltip>
           {isTwitch && (
-            <Tooltip content={`Twitch (${emotes?.twitch.length || 0})`} side="top">
-              <button onClick={() => setSelectedProvider('twitch')} className={tabClass(selectedProvider === 'twitch')} style={tabStyle(selectedProvider === 'twitch', 'twitch')}>
+            <Tooltip content={`Twitch (${tabCount('twitch')})`} side="top">
+              <button onClick={() => pickTab('twitch')} className={tabClass(activeTab === 'twitch')} style={tabStyle(activeTab === 'twitch', 'twitch')}>
                 <EmoteProviderLogo provider="twitch" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.twitch.length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('twitch')}</span>
               </button>
             </Tooltip>
           )}
           {isTwitch && (
-            <Tooltip content={`BetterTTV (${emotes?.bttv.length || 0})`} side="top">
-              <button onClick={() => setSelectedProvider('bttv')} className={tabClass(selectedProvider === 'bttv')} style={tabStyle(selectedProvider === 'bttv', 'bttv')}>
+            <Tooltip content={`BetterTTV (${tabCount('bttv')})`} side="top">
+              <button onClick={() => pickTab('bttv')} className={tabClass(activeTab === 'bttv')} style={tabStyle(activeTab === 'bttv', 'bttv')}>
                 <EmoteProviderLogo provider="bttv" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.bttv.length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('bttv')}</span>
               </button>
             </Tooltip>
           )}
           {isKick && (
-            <Tooltip content={`Kick (${emotes?.kick.length || 0})`} side="top">
-              <button onClick={() => setSelectedProvider('kick')} className={tabClass(selectedProvider === 'kick')} style={tabStyle(selectedProvider === 'kick', 'kick')}>
+            <Tooltip content={`Kick (${tabCount('kick')})`} side="top">
+              <button onClick={() => pickTab('kick')} className={tabClass(activeTab === 'kick')} style={tabStyle(activeTab === 'kick', 'kick')}>
                 <EmoteProviderLogo provider="kick" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.kick.length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('kick')}</span>
               </button>
             </Tooltip>
           )}
@@ -937,9 +1246,9 @@ export function EmotePickerPanel({
               }
               side="top"
             >
-              <button onClick={() => setSelectedProvider('youtube')} className={tabClass(selectedProvider === 'youtube')} style={tabStyle(selectedProvider === 'youtube', 'youtube')}>
+              <button onClick={() => pickTab('youtube')} className={tabClass(activeTab === 'youtube')} style={tabStyle(activeTab === 'youtube', 'youtube')}>
                 <EmoteProviderLogo provider="youtube" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.youtube.length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('youtube')}</span>
               </button>
             </Tooltip>
           )}
@@ -947,18 +1256,18 @@ export function EmotePickerPanel({
               Twitch and Kick. A channel whose community does not use 7TV simply
               shows zero, the same as anywhere else. */}
           {(isTwitch || isKick || isYouTube) && (
-            <Tooltip content={`7TV (${emotes?.['7tv'].length || 0})`} side="top">
-              <button onClick={() => setSelectedProvider('7tv')} className={tabClass(selectedProvider === '7tv')} style={tabStyle(selectedProvider === '7tv', '7tv')}>
+            <Tooltip content={`7TV (${tabCount('7tv')})`} side="top">
+              <button onClick={() => pickTab('7tv')} className={tabClass(activeTab === '7tv')} style={tabStyle(activeTab === '7tv', '7tv')}>
                 <EmoteProviderLogo provider="7tv" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.['7tv'].length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('7tv')}</span>
               </button>
             </Tooltip>
           )}
           {isTwitch && (
-            <Tooltip content={`FrankerFaceZ (${emotes?.ffz.length || 0})`} side="top">
-              <button onClick={() => setSelectedProvider('ffz')} className={tabClass(selectedProvider === 'ffz')} style={tabStyle(selectedProvider === 'ffz', 'ffz')}>
+            <Tooltip content={`FrankerFaceZ (${tabCount('ffz')})`} side="top">
+              <button onClick={() => pickTab('ffz')} className={tabClass(activeTab === 'ffz')} style={tabStyle(activeTab === 'ffz', 'ffz')}>
                 <EmoteProviderLogo provider="ffz" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{emotes?.ffz.length || 0}</span>
+                <span className="text-[10px] opacity-70">{tabCount('ffz')}</span>
               </button>
             </Tooltip>
           )}
@@ -966,7 +1275,9 @@ export function EmotePickerPanel({
         )}
       </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
-        {selectedProvider === 'gifs' ? (
+        {searching ? (
+          renderSearchResults()
+        ) : selectedProvider === 'gifs' ? (
           !gifStatus?.can_use ? (
             // Three distinct answers, so an empty pane is never ambiguous:
             // the channel turned GIFs off, or you are not eligible to send here.
@@ -1030,9 +1341,7 @@ export function EmotePickerPanel({
           ) : (
             <div className="flex flex-col gap-4 pt-2">
               {Object.entries(emojiData?.EMOJI_CATEGORIES ?? {}).map(([category, emojis]) => {
-                const filteredCategoryEmojis = searchQuery
-                  ? emojis.filter((emoji) => emoji.includes(searchQuery) || category.toLowerCase().includes(searchQuery.toLowerCase()))
-                  : emojis;
+                const filteredCategoryEmojis = emojis;
                 if (filteredCategoryEmojis.length === 0) return null;
                 return (
                   <div key={category} className="flex flex-col">
@@ -1124,7 +1433,35 @@ export function EmotePickerPanel({
                             : getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
                           return (
                             <div key={`${groupKey}-${emote.provider}-${emote.id}-${idx}`} className="relative group">
-                              <Tooltip content={emote.name}>
+                              <Tooltip
+                                side="top"
+                                delay={200}
+                                content={
+                                  <div className="flex flex-col items-center gap-1.5 py-0.5">
+                                    <img
+                                      src={hoverImageUrl(emote)}
+                                      alt={emote.name}
+                                      className="w-auto object-contain mx-auto drop-shadow-md"
+                                      style={{ height: hoverPreviewSize, maxWidth: hoverPreviewSize * 2 }}
+                                      onError={(e) => {
+                                        const t = e.currentTarget;
+                                        if (t.src !== emote.url) t.src = emote.url;
+                                      }}
+                                    />
+                                    <div className="text-center flex flex-col items-center gap-0.5">
+                                      <span className="font-bold text-[13px] leading-tight">{emote.name}</span>
+                                      <EmoteCreditLine
+                                        provider={emote.provider}
+                                        id={emote.id}
+                                        name={emote.name}
+                                        ownerHint={emote.owner_name ?? (emote.owner_id ? channelNameCache?.get(emote.owner_id) : undefined)}
+                                        channelLogin={channelLogin}
+                                        channelId={channelId}
+                                      />
+                                    </div>
+                                  </div>
+                                }
+                              >
                                 <button onClick={() => onInsert(emote.insertText ?? emote.name)} className="flex flex-col items-center gap-1 p-1.5 hover:bg-glass rounded transition-colors w-full">
                                   <img
                                     src={liveSrc}
@@ -1202,6 +1539,8 @@ export function EmotePickerPanel({
                                 replacedBy={emote.provider !== 'twitch' ? overrides?.get(emote.name) : undefined}
                                 onInsert={() => onInsert(emote.insertText ?? emote.name)}
                                 onToggleFavorite={() => void toggleFavorite(emote, isFavorited)}
+                                channelLogin={channelLogin}
+                                channelId={channelId}
                               />
                             );
                           })

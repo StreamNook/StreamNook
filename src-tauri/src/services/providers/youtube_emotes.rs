@@ -41,6 +41,15 @@ pub struct YouTubeEmote {
     pub id: String,
     pub url: String,
     pub zero_width: bool,
+    /// The 7TV uploader, for the hover credit. Defaulted: stored maps predate it.
+    #[serde(default)]
+    pub owner_name: Option<String>,
+    /// The emote's own name when the set shows it under an alias.
+    #[serde(default)]
+    pub original_name: Option<String>,
+    /// The uploader's 7TV user id, for a link to their profile.
+    #[serde(default)]
+    pub owner_ref: Option<String>,
 }
 
 struct ChannelEmotes {
@@ -149,7 +158,9 @@ fn build_set(identifier: &str) -> EmoteSet {
                     local_url: None,
                     emote_type: None,
                     owner_id: None,
-                    owner_name: None,
+                    owner_name: e.owner_name.clone(),
+                    original_name: e.original_name.clone(),
+                    owner_ref: e.owner_ref.clone(),
                     modifier_flags: None,
                     ffz_sub_only: None,
                     animated: None,
@@ -354,6 +365,17 @@ fn collect_emotes(v: &Value, pointer: &str, map: &mut HashMap<String, YouTubeEmo
                 id: id.to_string(),
                 url: format!("https://cdn.7tv.app/emote/{id}/2x.webp"),
                 zero_width: (flags & 256) == 256,
+                owner_name: e
+                    .pointer("/data/owner/display_name")
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                original_name: e
+                    .pointer("/data/name")
+                    .and_then(|x| x.as_str())
+                    .filter(|own| !own.is_empty() && *own != name)
+                    .map(str::to_string),
+                owner_ref: e.pointer("/data/owner/id").and_then(|x| x.as_str()).map(str::to_string),
             },
         );
     }

@@ -17,7 +17,7 @@ import { mentionBoxClass, mentionBoxStyle, mentionLook, mentionTextStyle } from 
 const EMOTE_TOOLTIP_DELAY_MS = 60;
 import { computePaintStyle, getBadgeImageUrl, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
 import { StyledChatName } from './chat/StyledChatName';
-import { ChatBadgeIcons } from './chat/ChatBadgeIcons';
+import { ChatBadgeIcons, type ResolvedTwitchBadge } from './chat/ChatBadgeIcons';
 import { visibleChatterBadges } from '../utils/chatterBadges';
 import { useDragModerationStore } from '../stores/dragModerationStore';
 import { usePinStore } from '../stores/pinStore';
@@ -35,6 +35,9 @@ import { useUserColor } from '../services/userColorCache';
 import { memberIdFor } from '../utils/memberIdentity';
 import { isStreamNookUser, getStreamNookUserNumber, subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion } from '../services/supabaseService';
 import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
+import { EmoteCreditLine } from './chat/EmoteCreditLine';
+import { canCredit } from '../services/emoteCredit';
+import { openEmoteCard, useEmoteCardStore } from '../stores/emoteCardStore';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
 import { getAtmosphere } from '../services/atmospheres';
@@ -627,6 +630,8 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
 // selector returns the same array identity for every non-member chatter (a
 // fresh [] each render would re-render every row on any store change).
 const EMPTY_THIRD_PARTY: ThirdPartyBadgeType[] = [];
+// A gift recipient's row shows their 7TV badge only.
+const NO_RECIPIENT_TWITCH_BADGES: ResolvedTwitchBadge[] = [];
 
 // Memoized ChatMessage component to prevent unnecessary re-renders
 // This is critical for preventing animation restarts when new messages arrive
@@ -693,16 +698,15 @@ function UsernameWithCosmetics({
     <span className="inline-flex items-center align-middle">
       {userBadge && (
         <span className="inline-flex items-center align-middle gap-1 mr-1.5">
-          <Tooltip content={userBadge.description || userBadge.name} side="top">
-            <img
-              src={getBadgeImageUrl(userBadge)}
-              alt={userBadge.description || userBadge.name}
-              className="sn-chat-badge inline-block"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
-            />
-          </Tooltip>
+          {/* The chat badge renderer: same hover card and spotlight click as
+              the badges on any chat row. */}
+          <ChatBadgeIcons
+            twitchBadges={NO_RECIPIENT_TWITCH_BADGES}
+            seventvBadge={userBadge}
+            thirdPartyBadges={EMPTY_THIRD_PARTY}
+            streamNookMemberId={null}
+            keyPrefix="recipient"
+          />
         </span>
       )}
       <Tooltip content="Click to view profile" side="top">
@@ -798,6 +802,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
     return parseMessage(message, channelId);
   }, [message]);
+
+  // The room an emote's hover card looks its credit up in: the channel's
+  // login, and the origin room for shared chat.
+  const creditRoom = useMemo(
+    () =>
+      typeof message === 'string'
+        ? null
+        : {
+            login: message.channel || null,
+            id: message.tags?.['source-room-id'] || message.tags?.['room-id'] || null,
+          },
+    [message],
+  );
 
   const isAction = parsed.isAction || false;
 
@@ -1553,11 +1570,25 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         },
         referrerPolicy: 'no-referrer',
         onClick: () => {
-          // Left-click a 7TV emote to open the quick spotlight modal, where it
-          // can be added to any channel you edit (or escalated into the full
-          // manager). Non-7TV emotes have no 7TV id, so they do nothing here.
-          if (is7TVEmote && segment.emoteId) {
+          if (!segment.emoteId) return;
+          // A 7TV emote opens the 7TV spotlight where this window has it (main:
+          // add to any channel you edit, creator chip). Everything creditable
+          // elsewhere, and every Twitch / BTTV / FFZ emote, opens the emote
+          // card with its creators. Kick and YouTube emotes have none to show.
+          if (is7TVEmote && useEmoteCardStore.getState().seventvSpotlight) {
             useAppStore.getState().openEmoteSpotlight(segment.emoteId, segment.content);
+            return;
+          }
+          const provider = is7TVEmote ? '7tv' : emoteProvider;
+          if (provider && canCredit(provider)) {
+            openEmoteCard({
+              provider,
+              id: segment.emoteId,
+              name: segment.content ?? '',
+              url: emoteUrl,
+              channelLogin: creditRoom?.login,
+              channelId: creditRoom?.id,
+            });
           }
         },
         onContextMenu: (e) => {
@@ -1614,12 +1645,6 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // still surfaces.
       const isCompactTooltip = !!chatDesign?.compact_emote_tooltips;
       // is7TVEmote was computed at the top of this branch (reused here).
-      const providerLabel =
-        is7TVEmote || emoteUrl.includes('7tv') ? '7TV'
-        : emoteUrl.includes('betterttv') ? 'BetterTTV'
-        : emoteUrl.includes('frankerfacez') ? 'FrankerFaceZ'
-        : emoteUrl.includes('jtvnw.net') ? 'Twitch'
-        : 'Emote';
       // The 4x preview is disk-cached like chat emotes (the emote prefetch
       // pulls it for followed channels; a first hover saves it), so a
       // repeat hover draws a local file instead of waiting on 7TV.
@@ -1672,7 +1697,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             />
             <div className="text-center flex flex-col items-center gap-0.5">
               <span className="font-bold text-[13px] leading-tight">{segment.content}</span>
-              <span className="text-[10px] text-white/60 leading-tight">{providerLabel}</span>
+              {/* Who made it: looked up when this card opens, never per message. */}
+              <EmoteCreditLine
+                provider={emoteProvider ?? ''}
+                id={segment.emoteId}
+                name={segment.content ?? ''}
+                channelLogin={creditRoom?.login}
+                channelId={creditRoom?.id}
+              />
               {segment.modifierFlags != null ? (
                 <span className="text-[9px] font-bold tracking-wider uppercase text-warning mt-0.5 mix-blend-screen drop-shadow-sm">
                   Modifier
@@ -1696,12 +1728,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   ))}
                 </span>
               )}
-              <span className="text-[10px] text-white/50 mt-0.5">Right-click to copy</span>
+              <span className="text-[10px] text-white/50 mt-0.5">
+                {canCredit(is7TVEmote ? '7tv' : (emoteProvider ?? '')) ? 'Click for details · Right-click to copy' : 'Right-click to copy'}
+              </span>
             </div>
           </div>
         );
       return (
-        <Tooltip key={key} content={tooltipContent} side="top" delay={EMOTE_TOOLTIP_DELAY_MS}>
+        <Tooltip key={key} content={tooltipContent} side="top" delay={EMOTE_TOOLTIP_DELAY_MS} requirePointerMove>
           {isOverlay && !inGrid ? (
             // Fallback for standalone zero-width emote (e.g., at the start of a message)
             <span className="inline-block w-0 align-middle pointer-events-none" style={gridStyle}>

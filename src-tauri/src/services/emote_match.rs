@@ -161,6 +161,7 @@ pub struct Context<'a> {
 }
 
 /// Everything a row needs besides its name.
+#[derive(Default)]
 pub struct Seed {
     pub id: String,
     pub url: String,
@@ -172,6 +173,12 @@ pub struct Seed {
     pub global: bool,
     /// Belongs to the channel being typed in.
     pub own: bool,
+    /// Who made it, where the provider says (the emote menu's hover credit).
+    pub owner_name: Option<String>,
+    /// The emote's own name when this set shows it under an alias.
+    pub original_name: Option<String>,
+    pub animated: Option<bool>,
+    pub width: Option<u32>,
 }
 
 struct Hit {
@@ -184,6 +191,9 @@ struct Hit {
     /// `LULE` over `lule`.
     case_exact: bool,
     favorite: bool,
+    /// An FFZ subscriber effect the viewer cannot use (offered only when the
+    /// caller asked for locked rows, so the menu can show it greyed out).
+    locked: bool,
     seed: Seed,
 }
 
@@ -234,7 +244,25 @@ pub struct Row {
     pub is_zero_width: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modifier_flags: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emote_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
+
+/// How many emotes matched per provider, counted before the row cap, so the
+/// emote menu's tabs can say how many each one holds.
+pub type ProviderCounts = std::collections::BTreeMap<&'static str, usize>;
 
 pub struct Collector<'a> {
     ctx: Context<'a>,
@@ -249,6 +277,8 @@ pub struct Collector<'a> {
     browse: bool,
     /// Nothing can match (an @ query, a bare colon, an empty cycle query).
     inert: bool,
+    /// Offer FFZ subscriber effects the viewer cannot use, marked locked.
+    include_locked: bool,
     hits: [Vec<Hit>; Slot::COUNT],
 }
 
@@ -284,8 +314,16 @@ impl<'a> Collector<'a> {
             needle,
             browse,
             inert,
+            include_locked: false,
             hits: Default::default(),
         }
+    }
+
+    /// The emote menu shows FFZ subscriber effects greyed out rather than
+    /// hiding them; completion never offers what cannot be sent.
+    pub fn include_locked(mut self, on: bool) -> Self {
+        self.include_locked = on;
+        self
     }
 
     /// How `name` matches, where, and whether the typed case matches too.
@@ -347,7 +385,8 @@ impl<'a> Collector<'a> {
         ffz_sub_only: bool,
         seed: impl FnOnce() -> Seed,
     ) {
-        if self.inert || (ffz_sub_only && !self.ctx.ffz_subwoofer) {
+        let locked = ffz_sub_only && !self.ctx.ffz_subwoofer;
+        if self.inert || (locked && !self.include_locked) {
             return;
         }
         // YouTube emoji names are `:shortcut:`; what people type is the inside.
@@ -368,6 +407,7 @@ impl<'a> Collector<'a> {
             at: at.map(|a| a + lead),
             case_exact,
             favorite,
+            locked,
             seed: seed(),
         });
     }
@@ -397,6 +437,10 @@ impl<'a> Collector<'a> {
                 modifier_flags: e.modifier_flags,
                 global,
                 own,
+                owner_name: e.owner_name.clone(),
+                original_name: e.original_name.clone(),
+                animated: e.animated,
+                width: e.width,
             }
         });
     }
@@ -426,6 +470,12 @@ impl<'a> Collector<'a> {
 
     /// Deduplicate, rank and cap. Returns the rows and how many matched in all.
     pub fn finish(self) -> (Vec<Row>, usize) {
+        let (rows, total, _) = self.finish_counted();
+        (rows, total)
+    }
+
+    /// `finish`, plus how many matched per provider before the cap.
+    pub fn finish_counted(self) -> (Vec<Row>, usize, ProviderCounts) {
         let match_len = (!self.needle.is_empty()).then(|| self.needle.len());
         let Collector { profile, order, limit, browse, mut hits, .. } = self;
         // In the viewer's own messages a personal emote beats the channel's
@@ -467,6 +517,10 @@ impl<'a> Collector<'a> {
             }
         }
         let total = merged.len();
+        let mut counts = ProviderCounts::new();
+        for r in &merged {
+            *counts.entry(r.hit.slot.wire()).or_default() += 1;
+        }
         let cmp = |a: &Ranked, b: &Ranked| compare(profile, browse, a, b);
         if browse {
             merged.sort_by(cmp);
@@ -517,10 +571,17 @@ impl<'a> Collector<'a> {
                     match_len: h.at.and(match_len),
                     is_zero_width: h.seed.is_zero_width,
                     modifier_flags: h.seed.modifier_flags,
+                    emote_type: h.seed.emote_type,
+                    owner_name: h.seed.owner_name,
+                    original_name: h.seed.original_name,
+                    animated: h.seed.animated,
+                    width: h.seed.width,
+                    favorite: h.favorite,
+                    locked: h.locked,
                 }
             })
             .collect();
-        (rows, total)
+        (rows, total, counts)
     }
 }
 
@@ -724,6 +785,8 @@ mod tests {
             emote_type: emote_type.map(String::from),
             owner_id: owner.map(String::from),
             owner_name: None,
+            original_name: None,
+            owner_ref: None,
             width: None,
             modifier_flags: None,
             ffz_sub_only: None,
@@ -1052,6 +1115,46 @@ mod tests {
     }
 
     #[test]
+    fn picker_mode_counts_before_the_cap_and_shows_locked_ffz() {
+        let favorites: HashSet<String> = ["fav".to_string()].into_iter().collect();
+        let globals = HashSet::new();
+        let mut c = Collector::new(
+            Spec { query: "pog", profile: Profile::Search, order: Order::Default, contains: false, limit: 2 },
+            Context { channel_id: None, favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        )
+        .include_locked(true);
+        let mut owned = emote(EmoteProvider::SevenTV, "fav", "PogU", None, None);
+        owned.owner_name = Some("Alpha".into());
+        owned.original_name = Some("PogUOriginal".into());
+        owned.width = Some(64);
+        c.offer_emote(Slot::SevenTv, &owned);
+        c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "s2", "Pogpega", None, None));
+        c.offer_emote(Slot::Bttv, &emote(EmoteProvider::BTTV, "b1", "PogChamp2", None, None));
+        let mut locked = emote(EmoteProvider::FFZ, "9", "PogSub", None, None);
+        locked.ffz_sub_only = Some(true);
+        c.offer_emote(Slot::Ffz, &locked);
+        let (rows, total, counts) = c.finish_counted();
+        assert_eq!(total, 4);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(counts.get("7tv"), Some(&2));
+        assert_eq!(counts.get("bttv"), Some(&1));
+        assert_eq!(counts.get("ffz"), Some(&1));
+        let pogu = rows.iter().find(|r| r.name == "PogU").unwrap();
+        assert!(pogu.favorite);
+        assert_eq!(pogu.owner_name.as_deref(), Some("Alpha"));
+        assert_eq!(pogu.original_name.as_deref(), Some("PogUOriginal"));
+        assert_eq!(pogu.width, Some(64));
+
+        // Completion never offers what cannot be sent.
+        let mut c = Collector::new(
+            Spec { query: "pogsub", profile: Profile::Search, order: Order::Default, contains: false, limit: 10 },
+            Context { channel_id: None, favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        );
+        c.offer_emote(Slot::Ffz, &locked);
+        assert!(c.finish().0.is_empty());
+    }
+
+    #[test]
     fn a_personal_emote_takes_the_name_from_the_channel_emote_it_hides() {
         let favorites = HashSet::new();
         let globals = HashSet::new();
@@ -1123,6 +1226,7 @@ mod tests {
             modifier_flags: None,
             global: false,
             own: true,
+            ..Default::default()
         });
         let (rows, _) = c.finish();
         assert_eq!(rows[0].name, ":face-blue-smiling:");

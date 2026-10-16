@@ -1419,7 +1419,7 @@ const ProfileSettings = () => {
           <div className="flex items-center gap-1.5 mb-4">
             <Tooltip content="Open StreamNook badges" side="top">
               <button
-                onClick={openBadgesOnStreamNookInMain}
+                onClick={() => openBadgesOnStreamNookInMain()}
                 className="cursor-pointer hover:scale-110 transition-transform"
                 aria-label="Open StreamNook badges"
               >
@@ -1520,7 +1520,7 @@ const ProfileSettings = () => {
               <span>Enjoy collecting badges or flexing status?</span>
               <button
                 type="button"
-                onClick={openBadgesOnStreamNookInMain}
+                onClick={() => openBadgesOnStreamNookInMain()}
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium text-textPrimary bg-white/[0.06] hover:bg-white/[0.10] transition-colors cursor-pointer"
               >
                 <Heart size={10} className="text-rose-400/80" aria-hidden />

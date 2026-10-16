@@ -67,6 +67,7 @@ pub mod reward_drops;
 pub mod emoji_service;
 pub mod spellcheck;
 pub mod asset_cache_queue;
+pub mod emote_credit;
 pub mod emote_match;
 pub mod emote_prefetch_service;
 pub mod emote_service;

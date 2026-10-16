@@ -1,3 +1,4 @@
+use crate::services::emote_credit::{self, CreditProvider, EmoteCredit};
 use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
@@ -102,6 +103,8 @@ pub struct EmoteMatchResult {
     pub total: usize,
     /// False when the channel's emotes are not in memory yet.
     pub ready: bool,
+    /// Matches per provider before the row cap (`twitch`, `7tv`, ...).
+    pub counts: emote_match::ProviderCounts,
 }
 
 /// Emotes matching what the user is typing, ranked, for the Tab cycle
@@ -122,6 +125,7 @@ pub async fn match_emote_tokens(
     order: Option<String>,
     tier: Option<String>,
     limit: Option<usize>,
+    picker: Option<bool>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteMatchResult, String> {
     let profile = match profile.as_deref() {
@@ -158,7 +162,9 @@ pub async fn match_emote_tokens(
             seventv_globals: &seventv_globals,
             ffz_subwoofer,
         },
-    );
+    )
+    // The emote menu shows FFZ subscriber effects locked instead of hiding them.
+    .include_locked(picker.unwrap_or(false));
 
     let ready = match provider.as_deref().unwrap_or("twitch") {
         "twitch" => {
@@ -177,6 +183,10 @@ pub async fn match_emote_tokens(
                             modifier_flags: e.modifier_flags,
                             global: true,
                             own: false,
+                            owner_name: e.owner_name.clone(),
+                            original_name: e.original_name.clone(),
+                            animated: e.animated,
+                            width: e.width,
                         });
                     }
                 });
@@ -207,6 +217,7 @@ pub async fn match_emote_tokens(
                         modifier_flags: None,
                         global,
                         own: !global,
+                        ..Default::default()
                     });
                 }
             })
@@ -231,6 +242,7 @@ pub async fn match_emote_tokens(
                         modifier_flags: None,
                         global: e.is_global,
                         own: !e.is_global,
+                        ..Default::default()
                     });
                 }
             }
@@ -240,7 +252,7 @@ pub async fn match_emote_tokens(
         _ => true,
     };
 
-    let (mut rows, total) = collector.finish();
+    let (mut rows, total, counts) = collector.finish_counted();
 
     // Disk-first images for the rows that made the cut.
     let keys: Vec<Option<String>> = rows
@@ -253,7 +265,7 @@ pub async fn match_emote_tokens(
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }
 
-    Ok(EmoteMatchResult { rows, total, ready })
+    Ok(EmoteMatchResult { rows, total, ready, counts })
 }
 
 /// A channel emote that the viewer's own 7TV personal emote of the same name
@@ -327,6 +339,10 @@ fn offer_seventv_map<E: SeventvMapEntry>(collector: &mut Collector<'_>, map: &Ha
             emote_type: None,
             is_zero_width: Some(e.zero_width()),
             modifier_flags: None,
+            owner_name: e.owner_name().map(str::to_string),
+            original_name: e.original_name().map(str::to_string),
+            animated: None,
+            width: None,
             global,
             own: !global,
         });
@@ -337,6 +353,8 @@ trait SeventvMapEntry {
     fn id(&self) -> &str;
     fn url(&self) -> &str;
     fn zero_width(&self) -> bool;
+    fn owner_name(&self) -> Option<&str>;
+    fn original_name(&self) -> Option<&str>;
 }
 
 impl SeventvMapEntry for kick_emotes::KickEmote {
@@ -348,6 +366,12 @@ impl SeventvMapEntry for kick_emotes::KickEmote {
     }
     fn zero_width(&self) -> bool {
         self.zero_width
+    }
+    fn owner_name(&self) -> Option<&str> {
+        self.owner_name.as_deref()
+    }
+    fn original_name(&self) -> Option<&str> {
+        self.original_name.as_deref()
     }
 }
 
@@ -361,13 +385,73 @@ impl SeventvMapEntry for youtube_emotes::YouTubeEmote {
     fn zero_width(&self) -> bool {
         self.zero_width
     }
+    fn owner_name(&self) -> Option<&str> {
+        self.owner_name.as_deref()
+    }
+    fn original_name(&self) -> Option<&str> {
+        self.original_name.as_deref()
+    }
 }
 
 #[tauri::command]
 pub async fn clear_emote_cache(state: State<'_, EmoteServiceState>) -> Result<(), String> {
     let service = state.0.read().await;
     service.clear_cache().await;
+    emote_credit::clear();
     Ok(())
+}
+
+/// Who made an emote, for a hover card that just opened. `provider` is
+/// `twitch`, `7tv`, `bttv` or `ffz`; `name` is the name it is shown under;
+/// `channel` / `channel_id` are the room it is shown in. The sets Rust holds
+/// answer first, then the provider's per-emote API (cached). `detail` is the
+/// click card: creator chips (picture, link) and the emote's page. None when
+/// the provider or id is not one this can look up.
+#[tauri::command]
+pub async fn emote_credit(
+    provider: String,
+    id: String,
+    name: Option<String>,
+    channel: Option<String>,
+    channel_id: Option<String>,
+    detail: Option<bool>,
+    state: State<'_, EmoteServiceState>,
+) -> Result<Option<EmoteCredit>, String> {
+    let Some(provider) = CreditProvider::parse(&provider) else {
+        return Ok(None);
+    };
+    if !provider.valid_id(&id) {
+        return Ok(None);
+    }
+    let seventv_global = provider == CreditProvider::SevenTv
+        && seventv_globals_snapshot().await.iter().any(|e| e.id == id);
+    let mut held = None;
+    if let Some(channel) = channel.as_deref().filter(|c| !c.is_empty()) {
+        held = irc_service::with_channel_emotes(channel, |set| {
+            emote_credit::find_in_set(set, provider, &id, seventv_global)
+        })
+        .await
+        .flatten();
+    }
+    if held.is_none() {
+        if let Some(cid) = channel_id.as_deref().filter(|c| !c.is_empty()) {
+            let service = state.0.read().await;
+            held = service
+                .with_cached_set(cid, |set| emote_credit::find_in_set(set, provider, &id, seventv_global))
+                .await
+                .flatten();
+        }
+    }
+    // The viewer's own 7TV personal emotes show in every channel.
+    if held.is_none() && provider == CreditProvider::SevenTv {
+        if let Some(me) = AccountStore::primary() {
+            held = irc_service::with_personal_emotes(&me.user_id, |map| {
+                map.values().find(|e| e.id == id).map(|e| emote_credit::held_from(provider, e, false))
+            })
+            .flatten();
+        }
+    }
+    Ok(emote_credit::resolve(provider, &id, name.as_deref(), held, detail.unwrap_or(false)).await)
 }
 
 #[cfg(test)]
@@ -386,6 +470,8 @@ mod tests {
             emote_type: None,
             owner_id: None,
             owner_name: None,
+            original_name: None,
+            owner_ref: None,
             width: None,
             modifier_flags: None,
             ffz_sub_only: None,

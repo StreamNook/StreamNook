@@ -126,10 +126,11 @@ interface BadgesOverlayProps {
   onBadgeClick: (badge: BadgeVersion, setId: string) => void;
   initialPaintId?: string | null;
   initialBadgeId?: string | null;
-  /** When true, open with the StreamNook tab active. Set by the AppStore
-      action `openBadgesOnStreamNook()`. Fired by the StreamNook badge in chat
-      rows + UserProfileCard. */
-  initialStreamNook?: boolean;
+  /** When set, open with the StreamNook tab active; a cosmetic slug also
+      opens that badge's card. Set by the AppStore action
+      `openBadgesOnStreamNook()`, fired by the StreamNook badge in chat rows
+      (with the slug it wears) and UserProfileCard. */
+  initialStreamNook?: boolean | string;
   /** Generic deep-link: open `tab` and filter to `query` (a badge title).
       Used for tabs without a detail modal (Twitch, BetterTTV, Chat Clients)
       clicked from the profile card. */
@@ -301,6 +302,18 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   );
   const activeCosmeticSlug = currentUser?.user_id ? getActiveCosmeticSlug(currentUser.user_id) : null;
   const [selectedCosmetic, setSelectedCosmetic] = useState<CosmeticCatalogEntry | null>(null);
+
+  // A StreamNook badge clicked in chat names the cosmetic it wears: open that
+  // badge's card once the catalog holds it. Once per slug, so closing the card
+  // does not reopen it on the next render.
+  const openedCosmeticSlugRef = useRef<string | null>(null);
+  const wantedCosmeticSlug = typeof initialStreamNook === 'string' ? initialStreamNook : null;
+  const wantedCosmetic = wantedCosmeticSlug ? cosmeticsCatalog.find((c) => c.slug === wantedCosmeticSlug) : undefined;
+  useEffect(() => {
+    if (!wantedCosmetic || openedCosmeticSlugRef.current === wantedCosmetic.slug) return;
+    openedCosmeticSlugRef.current = wantedCosmetic.slug;
+    setSelectedCosmetic(wantedCosmetic);
+  }, [wantedCosmetic]);
 
   // Handle deep link to specific paint
   useEffect(() => {

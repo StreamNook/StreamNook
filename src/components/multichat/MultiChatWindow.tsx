@@ -103,6 +103,7 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
 import SplitLayout from './SplitLayout';
+import BadgeSpotlightHost from '../BadgeSpotlightHost';
 import { registerPaneFocusController } from '../../keybindings/paneFocusController';
 import {
   columnCount,
@@ -1916,6 +1917,8 @@ export default function MultiChatWindow() {
       {/* Drag-to-moderate overlay (portals to document.body): brings the main
           app's drag mod tooling into the MultiChat command center. */}
       <ModerationDragLayer />
+      {/* Badge clicks here open their card in this window, not main. */}
+      <BadgeSpotlightHost />
       {/* This window has no full ToastManager (that one also fires live-stream
           notifications); a minimal surface paints add-channel feedback etc. */}
       <MultiChatToasts />
