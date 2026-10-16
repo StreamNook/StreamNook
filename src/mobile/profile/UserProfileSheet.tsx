@@ -1,5 +1,8 @@
-// Tap a name in chat, see who they are: every cosmetic source the app decorates
-// a profile with, in one sheet.
+// Tap a name in chat, see who they are, in the same shape as your own card:
+// their Atmosphere as a band across the top, their picture cut into its edge
+// with their StreamNook badge on it as a medal, their name in their paint below
+// the art, their sub in this room, every badge they have under its platform's
+// mark, and what they said this session. No actions.
 //
 // Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
 // badge groups merged and deduped per provider, the worn paint, the Helix
@@ -10,17 +13,21 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
-import { computePaintStyle } from '../../services/seventvService';
 import type { ProfileBadge, ProfileSheetView } from '../../types/profileView';
 import { FallbackImage } from '../../components/FallbackImage';
-import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { Logger } from '../../utils/logger';
-import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
+import { AtmosphereBand, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
+import { brandFor, identityNameSize, medalUrl } from './identity';
+
+const BAND = 92;
+const AVATAR = 76;
+/** The cutout ring at this avatar size (CutoutAvatar's own rule). */
+const RING = Math.max(3, Math.round(AVATAR * 0.05));
 
 export interface SheetUser {
   userId: string;
@@ -69,11 +76,11 @@ const BadgeGrid: React.FC<{
   onImageFailed: (b: ProfileBadge) => void;
 }> = ({ title, badges, onPick, onImageFailed }) => {
   if (!badges.length) return null;
+  // A platform's group sits under its real mark; "Chat clients" keeps its words.
+  const brand = brandFor(title);
   return (
-    <div className="mt-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted mb-1.5">
-        {title}
-      </div>
+    <div className="mt-5">
+      <SectionHeader title={brand ? 'Badges' : title} brand={brand} detail={String(badges.length)} className="mb-2" />
       <div className="flex flex-wrap gap-2">
         {badges.map((b, i) => (
           <button
@@ -246,11 +253,9 @@ const ProfileBody: React.FC<{
     };
   }, [userId, username, user.displayName, user.color, channelId, channelName]);
 
-  const paint = sheet?.paint_def;
+  const paint = sheet?.paint_def ?? null;
   const adjustNameColor = useNameColorAdjust();
   const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
-  const nameStyle = paint ? computePaintStyle(paint, shownColor, 'all') : { color: shownColor };
-  const avatar = sheet?.avatar_url ?? null;
   const groups = (sheet?.groups ?? [])
     .map((group) => ({
       ...group,
@@ -258,43 +263,52 @@ const ProfileBody: React.FC<{
     }))
     .filter((group) => group.badges.length > 0);
   const member = !!sheet?.streamnook;
+  const name = sheet?.display_name || user.displayName;
+  // Before Rust answers, the login line comes from what the row carried.
+  const login =
+    sheet?.shown_login ??
+    (!sheet && user.username.toLowerCase() !== user.displayName.toLowerCase() ? user.username : null);
+  // What they have on, in words: the Atmosphere, then the paint.
+  const wearing = [sheet?.atmosphere?.name, paint?.name ? `${paint.name} paint` : null].filter(Boolean).join(' · ');
+  const pickedBrand = brandFor(picked?.provider);
 
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8}>
       <div className="flex flex-col pb-2">
-        <div className="flex items-center gap-3">
-          {avatar ? (
-            <SevenTvAvatar
-              cosmeticsId={userId}
-              px={56}
-              motion="animate"
-              src={avatar}
-              alt=""
-              className="w-14 h-14 rounded-full object-cover shrink-0 ring-1 ring-white/10"
-              draggable={false}
-            />
-          ) : (
-            <div className="w-14 h-14 rounded-full bg-surface shrink-0" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-lg font-bold truncate" style={nameStyle}>
-                {user.displayName}
-              </span>
+        {/* Their Atmosphere as the band, else a quiet tint of their name color;
+            the picture cut into its lower edge, the name below it, never on it. */}
+        <div className="rounded-2xl overflow-hidden">
+          <AtmosphereBand swatch={sheet?.atmosphere?.swatch} tint={shownColor} height={BAND} radius={0} />
+        </div>
+        <div className="pl-2.5" style={{ marginTop: -(AVATAR / 2 + RING) }}>
+          <CutoutAvatar
+            platformUrl={sheet?.avatar_url}
+            picture={sheet?.picture}
+            size={AVATAR}
+            medal={medalUrl(sheet?.streamnook)}
+            medalLabel={sheet?.streamnook?.label}
+          />
+        </div>
+
+        <div className="pt-2 min-w-0">
+          <PaintedName
+            text={name}
+            paint={paint}
+            color={shownColor}
+            className="block font-bold leading-tight break-words"
+            style={{ fontSize: identityNameSize(name) - 2 }}
+          />
+          {(login || wearing) && (
+            <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+              {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
+              {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
+              {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
             </div>
-            {user.displayName.toLowerCase() !== user.username.toLowerCase() && (
-              <div className="text-[13px] text-textMuted truncate">@{user.username}</div>
-            )}
-            {paint?.name && (
-              <div className="text-[11.5px] text-textSecondary mt-0.5 truncate">
-                Paint: {paint.name}
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         {standing && (
-          <div className="mt-3">
+          <div className="mt-4">
             <SubStandingRow standing={standing} badgeArt={wornSubBadgeArt(wornBadges)} size="sheet" />
           </div>
         )}
@@ -302,14 +316,28 @@ const ProfileBody: React.FC<{
         {/* Tapping a badge names it here rather than in a tooltip, which does
             nothing under a thumb. */}
         {picked && (
-          <div className="mt-3 px-2.5 py-1.5 rounded-lg bg-surface/60 text-[12px] text-textPrimary">
-            <span className="font-semibold">{picked.title || picked.name}</span>
-            {picked.provider && (
-              <span className="text-textMuted"> · {picked.provider}</span>
-            )}
-            {picked.description && (
-              <div className="text-[11.5px] text-textMuted mt-0.5">{picked.description}</div>
-            )}
+          <div className="mt-3 glass-panel p-3 flex items-start gap-2.5">
+            <FallbackImage
+              src={picked.url}
+              fallbackUrls={picked.fallbacks}
+              alt=""
+              className="w-7 h-7 object-contain shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[14px] font-semibold text-textPrimary truncate">
+                  {picked.title || picked.name}
+                </span>
+                {pickedBrand ? (
+                  <BrandMark brand={pickedBrand} size={pickedBrand === 'seventv' ? 9 : 12} />
+                ) : (
+                  picked.provider && <span className="text-[12.5px] text-textMuted shrink-0">{picked.provider}</span>
+                )}
+              </div>
+              {picked.description && (
+                <div className="text-[12.5px] text-textSecondary mt-0.5">{picked.description}</div>
+              )}
+            </div>
           </div>
         )}
 
@@ -323,44 +351,28 @@ const ProfileBody: React.FC<{
           />
         ))}
 
-        {/* Last, as on the desktop card and in chat (utils/badgeOrder). Its OWN
-            group, and only for a member (Rust sends `streamnook` for members
-            alone): StreamNookBadge carries no membership guard of its own and
-            would hand every non-member a plain "StreamNook" badge. */}
-        {member && (
-          <div className="mt-3">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted mb-1.5">
-              StreamNook
-            </div>
-            <StreamNookBadge userId={user.userId} side="bottom" />
-          </div>
-        )}
-
+        {/* A member's StreamNook badge is the medal on their picture, so it has
+            no group of its own here. */}
         {sheet && groups.length === 0 && !member && (
-          <div className="mt-4 text-[12.5px] text-textMuted text-center">
-            No badges to show for this user.
-          </div>
+          <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
 
         {/* Chat order (oldest first, newest at the bottom), the way the eye
             already reads the room. Plain text: the point is what was said,
             and an emote's code says that as well as its picture. */}
-        <div className="mt-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted mb-1.5">
-            Recent messages
-            {history && history.length > 0 && (
-              <span className="ml-1.5 font-medium normal-case tracking-normal">{history.length}</span>
-            )}
-          </div>
+        <div className="mt-5">
+          <SectionHeader
+            title="Recent messages"
+            detail={history && history.length > 0 ? String(history.length) : null}
+            className="mb-2"
+          />
           {history === null ? null : history.length === 0 ? (
-            <div className="text-[12.5px] text-textMuted">
-              Nothing from them in this chat yet.
-            </div>
+            <div className="text-[12.5px] text-textMuted">Nothing from them in this chat yet.</div>
           ) : (
-            <ul className="flex flex-col gap-1">
+            <ul className="flex flex-col gap-1.5">
               {history.map((row) => (
-                <li key={row.id} className="flex gap-2 text-[13px] leading-snug">
-                  <span className="shrink-0 tabular-nums text-textMuted text-[11.5px] pt-[1px] w-[4.5ch]">
+                <li key={row.id} className="flex gap-2.5 text-[14px] leading-snug">
+                  <span className="shrink-0 tabular-nums text-textMuted text-[12px] pt-[2px] w-[4.5ch]">
                     {clock(row.at)}
                   </span>
                   <span className="min-w-0 break-words text-textPrimary">{row.content}</span>
