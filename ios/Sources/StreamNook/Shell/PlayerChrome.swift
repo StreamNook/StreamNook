@@ -95,6 +95,7 @@ struct PlayerChrome: View {
                             .foregroundStyle(.white)
                             .lineLimit(1)
                         if stream.isPartner { PartnerMark(size: 12) }
+                        AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
                     }
                     Spacer(minLength: 8)
                     HStack(spacing: 10) {
@@ -323,6 +324,34 @@ private struct ChannelAvatar: View {
                 .font(.sn(12, 700))
                 .foregroundStyle(.white)
         }
+    }
+}
+
+/// The channel's live alerts beside its name: a bell when they are on, a crossed bell when the
+/// channel is muted. Muting writes the lowercased login into the alert exclusion list.
+private struct AlertBell: View {
+    let store: SettingsStore
+    let login: String
+    let name: String
+
+    private static let path = "live_notifications.muted_live_channels"
+
+    var body: some View {
+        let key = login.lowercased()
+        let on = !store.strings(Self.path).contains(key)
+        Button {
+            Task { _ = try? await store.edit(Self.path, .toggle(key)) }
+        } label: {
+            Image(systemName: on ? "bell.fill" : "bell.slash")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(on ? 1 : 0.45))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle().inset(by: -10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? "Turn off live alerts for \(name)" : "Turn on live alerts for \(name)")
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
