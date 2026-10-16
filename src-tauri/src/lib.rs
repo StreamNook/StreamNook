@@ -388,7 +388,15 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     }
 
     let json = std::fs::read_to_string(&settings_path)?;
-    let mut settings: Settings = serde_json::from_str(&json)?;
+    let mut settings: Settings = match serde_json::from_str(&json) {
+        Ok(settings) => settings,
+        // A file that no longer loads is rebuilt from the newest daily copy
+        // rather than replaced by a fresh install's settings.
+        Err(e) => match services::settings_backups::recover(&settings_path, &e.to_string()) {
+            Some(settings) => settings,
+            None => return Err(e.into()),
+        },
+    };
     repair_protocol_relative_avatars(&mut settings);
     settings.retire_legacy_live_edge_gap();
     settings.enable_low_latency_engine_once();
@@ -1980,6 +1988,10 @@ pub fn run() {
             delete_custom_sound,
             get_theme_catalog,
             get_active_theme,
+            search_settings,
+            get_changed_settings,
+            list_settings_backups,
+            restore_settings_backup,
             get_settings_dir,
             open_settings_folder,
             export_settings,

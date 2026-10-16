@@ -11,14 +11,27 @@ import SwiftUI
 /// hairlines between them.
 struct SettingsBlock<Content: View>: View {
     let title: String
+    var logo: String?
+    /// The words shown when the logo already names the brand ("Chat" beside YouTube's mark);
+    /// `title` stays the section's name for scrolling and search.
+    var shownTitle: String?
     var detail: String?
+    /// A small action on the heading line (a "Show reference" link).
+    var accessory: AnyView?
     var bare = false
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // On the page's one left edge with the panels below (design-eye).
-            Text(title).snSectionStyle()
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let logo { BrandLogo(id: logo, size: 13) }
+                Text(shownTitle ?? title).snSectionStyle()
+                if let accessory {
+                    Spacer(minLength: 8)
+                    accessory
+                }
+            }
             if let detail {
                 Text(detail)
                     .font(.sn(12))
@@ -39,10 +52,11 @@ struct SettingsBlock<Content: View>: View {
                         }
                     }
                     .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .snPanel()
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, 16)
         }
         .accessibilityElement(children: .contain)
         .id(title)
@@ -57,11 +71,14 @@ struct SettingTitle: View {
     var hasHelp = false
     @Binding var helpOpen: Bool
     var font: Font = .sn(13, 500)
+    /// A platform or badge service the row is about: its logo leads the title.
+    var logo: String?
     /// Runs after a reset lands (a control with a side effect).
     var afterReset: (() async -> Void)?
 
     var body: some View {
         HStack(spacing: 4) {
+            if let logo { BrandLogo(id: logo, size: 15).padding(.trailing, 2) }
             Text(title).font(font).foregroundStyle(SN.textPrimary)
             if hasHelp {
                 Button {
@@ -75,6 +92,7 @@ struct SettingTitle: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, -8)
+                .padding(.leading, -6)
                 .accessibilityLabel("More about this setting")
                 .accessibilityValue(helpOpen ? "Shown" : "Hidden")
             }
@@ -93,6 +111,7 @@ struct SettingTitle: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, -10)
+                .padding(.leading, -8)
                 .accessibilityLabel("Reset to default")
                 .transition(.opacity)
             }
@@ -107,6 +126,7 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
     var detail: String?
     var help: String?
     var paths: [String] = []
+    var logo: String?
     var afterReset: (() async -> Void)?
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var below: Below
@@ -118,7 +138,7 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
             // The control lines up with the title, not the middle of a long description.
             HStack(alignment: .settingTitle, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen,
+                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, logo: logo,
                                  afterReset: afterReset)
                         .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                     if let detail {
@@ -148,18 +168,18 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
 }
 
 extension SettingRow where Below == EmptyView {
-    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [],
+    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [], logo: String? = nil,
          afterReset: (() async -> Void)? = nil,
          @ViewBuilder trailing: () -> Trailing, @ViewBuilder nested: () -> Nested) {
-        self.init(title: title, detail: detail, help: help, paths: paths, afterReset: afterReset,
+        self.init(title: title, detail: detail, help: help, paths: paths, logo: logo, afterReset: afterReset,
                   trailing: trailing, below: { EmptyView() }, nested: nested)
     }
 }
 
 extension SettingRow where Below == EmptyView, Nested == EmptyView {
-    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [],
+    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [], logo: String? = nil,
          afterReset: (() async -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
-        self.init(title: title, detail: detail, help: help, paths: paths, afterReset: afterReset,
+        self.init(title: title, detail: detail, help: help, paths: paths, logo: logo, afterReset: afterReset,
                   trailing: trailing, below: { EmptyView() }, nested: { EmptyView() })
     }
 }
@@ -215,20 +235,21 @@ struct NestedLine<Control: View>: View {
     var paths: [String] = []
     var stacked = false
     var help: String?
+    var logo: String?
     @ViewBuilder let control: Control
     @State private var helpOpen = false
 
     var body: some View {
         if stacked {
             VStack(alignment: .leading, spacing: 8) {
-                SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, font: .sn(12.5, 500))
+                SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, font: .sn(12.5, 500), logo: logo)
                 helpText
                 control
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 12) {
-                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, font: .sn(12.5, 500))
+                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, font: .sn(12.5, 500), logo: logo)
                     Spacer(minLength: 8)
                     control
                 }
@@ -296,7 +317,7 @@ struct SettingSegments: View {
     @Environment(\.snStill) private var still
 
     var body: some View {
-        HStack(spacing: 0) {
+        SegmentRow {
             ForEach(choices) { choice in
                 let on = choice.value == selected
                 Button {
@@ -306,7 +327,7 @@ struct SettingSegments: View {
                     Text(choice.label)
                         .font(.sn(13, 500))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
@@ -338,6 +359,30 @@ struct SettingSegments: View {
         .animation(still ? nil : SNMotion.run(.spring(response: 0.28, dampingFraction: 0.72)), value: selected)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibility)
+    }
+}
+
+/// Lays segments out in one row: each gets the width its label needs plus an equal share of
+/// what is left, so a long label never shrinks while short neighbors have room to spare.
+struct SegmentRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let need = sizes.reduce(0) { $0 + $1.width }
+        return CGSize(width: proposal.width ?? need, height: sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let need = ideal.reduce(0, +)
+        let widths: [CGFloat] = need <= bounds.width
+            ? ideal.map { $0 + (bounds.width - need) / CGFloat(ideal.count) }
+            : ideal.map { $0 * bounds.width / need }
+        var x = bounds.minX
+        for (index, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: x, y: bounds.minY), proposal: ProposedViewSize(width: widths[index], height: bounds.height))
+            x += widths[index]
+        }
     }
 }
 
@@ -391,12 +436,12 @@ struct SettingMenu: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(picked?.label ?? raw ?? "").font(.sn(14, 500)).foregroundStyle(SN.textPrimary).lineLimit(1)
+                Text(picked?.label ?? raw ?? "").font(.sn(13, 500)).foregroundStyle(SN.textPrimary).lineLimit(1)
                 if fullWidth { Spacer(minLength: 4) }
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(SN.textMuted)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SN.surface)
@@ -449,7 +494,16 @@ struct SettingSlider: View {
     }
 }
 
-/// A colour swatch bound to a `#rrggbb` setting; an empty setting shows `unset`.
+/// A slider's value beside its title: quiet, tabular digits.
+struct SliderReadout: View {
+    let text: String
+
+    var body: some View {
+        Text(text).font(.sn(12).monospacedDigit()).foregroundStyle(SN.textMuted)
+    }
+}
+
+/// A color swatch bound to a `#rrggbb` setting; an empty setting shows `unset`.
 struct SettingColor: View {
     @Environment(SettingsStore.self) private var store
     let path: String
@@ -467,7 +521,7 @@ struct SettingColor: View {
             }
         ), supportsOpacity: false)
         .labelsHidden()
-        .frame(width: 40, height: 28)
+        .frame(width: 40, height: 28, alignment: .trailing)
         .accessibilityLabel(label)
     }
 
@@ -488,6 +542,8 @@ struct SettingChips: View {
     let chips: [Choice]
     /// True when a stored set lists what is OFF (lit = not in the set).
     var storesOff = true
+    /// Each chip leads with its provider's logo (the chip value is the provider id).
+    var logos = false
 
     var body: some View {
         let stored = Set(store.strings(path))
@@ -497,7 +553,10 @@ struct SettingChips: View {
                 Button {
                     Task { _ = try? await store.edit(path, .toggle(chip.value)) }
                 } label: {
-                    Text(chip.label)
+                    HStack(spacing: 5) {
+                        if logos { BrandLogo(id: chip.value, size: 14).opacity(lit ? 1 : 0.45) }
+                        Text(chip.label)
+                    }
                         .font(.sn(12, 500))
                         .foregroundStyle(lit ? SN.textPrimary : SN.textMuted)
                         .padding(.horizontal, 10)
@@ -526,7 +585,8 @@ struct PanelIntro: View {
     }
 }
 
-/// A full-width action button in a settings panel.
+/// A full-width action button in a settings panel: the app's one 50 point worded button, glass
+/// unless a tint gives it a color.
 struct SettingButton: View {
     let title: String
     var symbol: String?
@@ -538,23 +598,11 @@ struct SettingButton: View {
     var body: some View {
         Button(role: role, action: action) {
             HStack(spacing: 6) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 13, weight: .semibold)) }
-                Text(title).font(.sn(13.5, 600)).lineLimit(1)
+                if let symbol { Image(systemName: symbol).font(.system(size: 14, weight: .semibold)) }
+                Text(title)
             }
-            .foregroundStyle(tint == nil ? SN.textPrimary : .white)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 40)
-            .frame(maxWidth: .infinity)
-            .background {
-                if let tint {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint)
-                }
-            }
-            .snGlassIf(tint == nil, RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(tint.map { SNButtonStyle(kind: .brand($0)) } ?? SNButtonStyle(kind: .secondary))
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
     }
 }

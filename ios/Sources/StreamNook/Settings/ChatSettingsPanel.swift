@@ -73,7 +73,10 @@ struct ChatSettingsPanel: View {
                     HStack(spacing: 16) {
                         ForEach([("Twitch", "twitch"), ("Kick", "kick"), ("YouTube", "youtube"), ("TikTok", "tiktok")], id: \.1) { label, id in
                             VStack(spacing: 4) {
-                                Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                                HStack(spacing: 4) {
+                                    BrandLogo(id: id, size: 13)
+                                    Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                                }
                                 SettingToggle(path: "chat_blend.platforms.\(id)", label: "Include \(label) in combined chat",
                                               write: { ["chat_blend.platforms.\(id)": $0 ? nil : false] },
                                               isOn: { $0.value("chat_blend.platforms.\(id)") as? Bool != false })
@@ -86,7 +89,7 @@ struct ChatSettingsPanel: View {
     }
 
     private var youtube: some View {
-        SettingsBlock(title: "YouTube Chat", detail: "Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show.") {
+        SettingsBlock(title: "YouTube Chat", logo: "youtube", shownTitle: "Chat", detail: "Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show.") {
             ChoiceRow(title: "Feed", path: "youtube_chat_view", choices: [Choice("Live chat", "live"), Choice("Top chat", "top")],
                       fallback: "live",
                       detail: "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
@@ -158,8 +161,12 @@ struct ChatSettingsPanel: View {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Self.eventKinds, id: \.0) { platform, label, kinds in
                         HStack(alignment: .top, spacing: 8) {
-                            Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary).frame(width: 64, alignment: .leading)
-                                .padding(.top, 6)
+                            HStack(spacing: 4) {
+                                BrandLogo(id: platform, size: 13)
+                                Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                            }
+                            .frame(width: 84, alignment: .leading)
+                            .padding(.top, 7)
                             SettingChips(path: "chat_events.hidden_provider_events",
                                          chips: kinds.map { Choice($0.1, "\(platform):\($0.0)") })
                         }
@@ -250,19 +257,14 @@ struct ChatSettingsPanel: View {
             ToggleRow(title: "Badges", path: "chat_design.show_badges", fallback: true,
                       detail: "The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ.",
                       help: "A channel that uploads its own moderator and VIP badges to FrankerFaceZ shows them in its chat instead of the standard ones. Who is a moderator or VIP still comes from Twitch. Turn it off to see the standard badges everywhere.") {
-                NestedToggle(title: "Custom mod & VIP badges", path: "chat_design.ffz_custom_role_badges", fallback: true)
+                NestedToggle(title: "Custom mod & VIP badges", path: "chat_design.ffz_custom_role_badges", fallback: true, logo: "ffz")
             }
-            SettingRow(title: "Badge size", detail: "How big badges draw, relative to the text.", paths: ["chat_design.badge_scale"]) {
-                BadgeScaleSlider()
-                    .frame(width: 180)
-                    .disabled(!store.bool("chat_design.show_badges", true) && !store.bool("chat_design.show_third_party_badges", true))
-                    .opacity(!store.bool("chat_design.show_badges", true) && !store.bool("chat_design.show_third_party_badges", true) ? 0.4 : 1)
-            }
+            BadgeScaleRow(enabled: store.bool("chat_design.show_badges", true) || store.bool("chat_design.show_third_party_badges", true))
             ToggleRow(title: "Add-on badges", path: "chat_design.show_third_party_badges", fallback: true,
                       detail: "Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges.",
                       help: "Services turns individual badge services off. Lit means shown.") {
                 NestedLine(title: "Services", paths: ["chat_design.hidden_badge_providers"], stacked: true) {
-                    SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices)
+                    SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
             ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
@@ -327,9 +329,9 @@ struct ChatSettingsPanel: View {
                     .labelsHidden()
                     .tint(SN.accent)
             }
-            ToggleRow(title: "7TV paint", path: "chat_design.paint_mentions_in_body", fallback: true,
+            ToggleRow(title: "Paint", path: "chat_design.paint_mentions_in_body", fallback: true,
                       detail: "Draws a mentioned name in that person's 7TV paint instead of a flat color.",
-                      help: "Off shows mentions in the chatter's plain name color.")
+                      help: "Off shows mentions in the chatter's plain name color.", logo: "7tv")
             ColorRow(title: "Thread color", path: "chat_design.reply_color", unset: "#ff6b6b",
                      detail: "The color that marks replies in a thread.")
             ChoiceRow(title: "Context", path: "chat_design.reply_style",
@@ -348,7 +350,7 @@ struct ChatSettingsPanel: View {
                       fallback: "apple", menu: true, detail: "Which set draws the emoji in messages. System uses your device's own.",
                       accessibility: "Emoji style")
             ToggleRow(title: "Personal emotes", path: "chat_design.show_personal_emotes", fallback: true,
-                      detail: "Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead.")
+                      detail: "Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead.", logo: "7tv")
             // Touch has no hover: a saved `hover` reads as Never until another choice is picked.
             ChoiceRow(title: "Animation", path: "chat_design.animate_emotes",
                       choices: [Choice("Always", "always"), Choice("Never", "never")], fallback: "always",
@@ -366,20 +368,20 @@ struct ChatSettingsPanel: View {
             SliderRow(title: { "Spacing: \($0.fixed(3))rem" }, path: "chat_design.emote_margin", range: -0.5...0.5, step: 0.025,
                       fallback: 0.125, detail: "Space on each side of an emote; go negative to let neighboring emotes overlap.",
                       integer: false, accessibility: "Emote spacing")
-            ToggleRow(title: "7TV notices", path: "chat_design.seventv_emote_notices", fallback: true,
+            ToggleRow(title: "Notices", path: "chat_design.seventv_emote_notices", fallback: true,
                       detail: "Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.",
-                      help: "The new emote is usable right away either way.")
+                      help: "The new emote is usable right away either way.", logo: "7tv")
         }
     }
 
     private var emoteEffects: some View {
         SettingsBlock(title: "Emote Effects", detail: "Emotes that change the emote beside them, and Twitch's giant power-up emotes.") {
-            ToggleRow(title: "FFZ effects", path: "chat_design.ffz_emote_effects", fallback: true,
+            ToggleRow(title: "Effects", path: "chat_design.ffz_emote_effects", fallback: true,
                       detail: "Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does.",
-                      help: "Off shows modifier emotes as plain overlay emotes.")
-            ToggleRow(title: "BetterTTV modifiers", path: "chat_design.bttv_emote_modifiers", fallback: true,
+                      help: "Off shows modifier emotes as plain overlay emotes.", logo: "ffz")
+            ToggleRow(title: "Modifiers", path: "chat_design.bttv_emote_modifiers", fallback: true,
                       detail: "Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does.",
-                      help: "Off shows the modifiers as plain emotes.")
+                      help: "Off shows the modifiers as plain emotes.", logo: "bttv")
             ToggleRow(title: "Giant emotes", path: "chat_design.giant_emotes", fallback: true,
                       detail: "Draws the last emote of a \"Gigantify an Emote\" power-up message at 4x below the message, like Twitch does.",
                       help: "Off shows the emote inline at its normal size. Position puts it under the message on the left, centered or on the right, or keeps it in the text at its normal size.") {
@@ -509,7 +511,7 @@ struct ChatSettingsPanel: View {
             }
             ToggleRow(title: "Scrollbar marks", path: "chat_design.scrollbar_marks", fallback: true,
                       detail: "Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back.",
-                      help: "A tick takes its message's highlight colour where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else.") {
+                      help: "A tick takes its message's highlight color where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else.") {
                 NestedLine(title: "Kinds", paths: ["chat_design.scrollbar_mark_kinds"], stacked: true) {
                     SettingChips(path: "chat_design.scrollbar_mark_kinds", chips: [
                         Choice("Mentions", "mention"), Choice("Highlights", "highlight"), Choice("Pinned", "pinned"),
@@ -531,13 +533,25 @@ struct ChatSettingsPanel: View {
     }
 }
 
-/// Badge size: an inline slider with its "1.00x" readout.
-private struct BadgeScaleSlider: View {
+/// Badge size: the "1.00x" readout on the title line, the slider full width below; dimmed while
+/// neither kind of badge shows.
+private struct BadgeScaleRow: View {
+    @Environment(SettingsStore.self) private var store
+    let enabled: Bool
     @State private var live: Double?
 
     var body: some View {
-        SettingSlider(path: "chat_design.badge_scale", range: 0.5...2.5, step: 0.05, fallback: 1, accessibility: "Badge size",
-                      readout: { "\($0.fixed(2))x" }, integer: false, live: $live)
+        let value = live ?? min(max(store.double("chat_design.badge_scale", 1), 0.5), 2.5)
+        SettingRow(title: "Badge size", detail: "How big badges draw, relative to the text.", paths: ["chat_design.badge_scale"],
+                   trailing: { SliderReadout(text: "\(value.fixed(2))x") },
+                   below: {
+                       SettingSlider(path: "chat_design.badge_scale", range: 0.5...2.5, step: 0.05, fallback: 1,
+                                     accessibility: "Badge size", integer: false, live: $live)
+                           .padding(.top, 10)
+                           .disabled(!enabled)
+                           .opacity(enabled ? 1 : 0.4)
+                   },
+                   nested: { EmptyView() })
     }
 }
 
@@ -706,8 +720,8 @@ private struct RemindersNote: View {
     var body: some View {
         SettingsBlock(title: "Reminders", detail: "Post a message into a streamer's chat on your behalf to nudge them about something: on a repeating timer, after a delay, at a set time, once the stream hits an uptime, or when a keyword shows up in chat. You can also fire one off instantly with /remind now <message>.", bare: true) {
             Text("Reminders are set up and posted from StreamNook on your computer.")
-                .font(.sn(12))
-                .foregroundStyle(SN.textMuted)
+                .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity).padding(16).snPanel()
         }
     }
 }

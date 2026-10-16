@@ -169,6 +169,40 @@ pub async fn delete_custom_sound(app: AppHandle, id: String, state: State<'_, Ap
     Ok(())
 }
 
+/// Settings rows that answer a search, best first: the page, section and title
+/// to show and the paths each writes.
+#[tauri::command]
+pub async fn search_settings(query: String) -> Result<Vec<crate::services::settings_catalog::CatalogRow>, String> {
+    Ok(crate::services::settings_catalog::search(&query, 40))
+}
+
+/// The settings rows whose values differ from a fresh install, in page order,
+/// for the "changed from default" review.
+#[tauri::command]
+pub async fn get_changed_settings(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::settings_catalog::CatalogRow>, String> {
+    let current = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        serde_json::to_value(&*settings).map_err(|e| e.to_string())?
+    };
+    let changed = crate::commands::settings_fields::get_settings_view_from(current).changed;
+    Ok(crate::services::settings_catalog::changed_rows(&changed))
+}
+
+/// The daily settings copies kept on this device, newest first.
+#[tauri::command]
+pub async fn list_settings_backups() -> Result<Vec<crate::services::settings_backups::BackupInfo>, String> {
+    Ok(crate::services::settings_backups::list())
+}
+
+/// Put one day's copy back (every portable setting; accounts stay signed in).
+#[tauri::command]
+pub async fn restore_settings_backup(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let backup = crate::services::settings_backups::read(&id)?;
+    crate::commands::settings::apply_imported_settings(&app, &state, &backup)
+}
+
 fn theme_inputs(state: &AppState) -> Result<(String, Vec<Value>, Option<String>), String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     let custom = settings.extra.get("custom_themes").and_then(Value::as_array).cloned().unwrap_or_default();
