@@ -18,6 +18,7 @@ struct PlayerChrome: View {
     let onMinimize: () -> Void
     let onTouch: () -> Void
     @State private var qualityShown = false
+    @State private var togetherShown = false
 
     private var watch: Watch { model.watch }
     private var stream: TwitchStream? { model.nav.playing }
@@ -73,6 +74,15 @@ struct PlayerChrome: View {
         }
         .clipped()
         .sheet(isPresented: $qualityShown) { QualitySheet(model: model) }
+        .sheet(isPresented: $togetherShown) {
+            if let stream, let group = group(stream) {
+                TogetherSheet(group: group, playing: stream.userLogin) { member in
+                    model.startWatching(TwitchStream(id: "", userLogin: member.login, userName: member.displayName, title: "",
+                                                     viewerCount: member.viewerCount ?? 0, gameName: "",
+                                                     userID: member.userID, profileImageURL: member.avatarURL))
+                }
+            }
+        }
         .onChange(of: model.nav.qualityPing) { _, _ in qualityShown = true }
     }
 
@@ -99,6 +109,10 @@ struct PlayerChrome: View {
                     }
                     Spacer(minLength: 8)
                     HStack(spacing: 10) {
+                        if let group = group(stream) {
+                            Button { togetherShown = true } label: { TogetherTag(group: group, ink: .white) }
+                                .buttonStyle(.plain)
+                        }
                         let viewers = live?.viewerCount ?? stream.viewerCount
                         HStack(spacing: 4) {
                             Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
@@ -128,6 +142,15 @@ struct PlayerChrome: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The channel's group: Shared Viewership from the core's live collab section, else what the
+    /// home lists know (a Shared Chat session included).
+    private func group(_ stream: TwitchStream) -> ChannelGroup? {
+        if let group = watch.group { return group }
+        guard let id = stream.userID, !id.isEmpty else { return nil }
+        let lists = model.home.lists
+        return lists.collaborations[id] ?? lists.sharedChats[id]
     }
 
     // MARK: Transport

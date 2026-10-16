@@ -149,6 +149,10 @@ public struct ChannelGroup: Decodable, Sendable, Equatable {
         public var displayName: String
         public var avatarURL: String?
         public var isSelf: Bool
+        /// This member's own viewers (Shared Viewership only).
+        public var viewerCount: Int?
+        /// The channel that started the group.
+        public var isLeader: Bool?
 
         enum CodingKeys: String, CodingKey {
             case userID = "user_id"
@@ -156,14 +160,19 @@ public struct ChannelGroup: Decodable, Sendable, Equatable {
             case displayName = "display_name"
             case avatarURL = "avatar_url"
             case isSelf = "is_self"
+            case viewerCount = "viewer_count"
+            case isLeader = "is_leader"
         }
 
-        public init(userID: String, login: String, displayName: String, avatarURL: String? = nil, isSelf: Bool = false) {
+        public init(userID: String, login: String, displayName: String, avatarURL: String? = nil, isSelf: Bool = false,
+                    viewerCount: Int? = nil, isLeader: Bool? = nil) {
             self.userID = userID
             self.login = login
             self.displayName = displayName
             self.avatarURL = avatarURL
             self.isSelf = isSelf
+            self.viewerCount = viewerCount
+            self.isLeader = isLeader
         }
     }
 

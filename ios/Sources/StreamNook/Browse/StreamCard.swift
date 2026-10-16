@@ -305,6 +305,8 @@ private struct ShineSweep: View {
 struct TogetherTag: View {
     let group: ChannelGroup
     var compact = false
+    /// The words' color: the theme's on cards, white over the video.
+    var ink: Color = SN.textPrimary
 
     private static let faces = 3
 
@@ -332,7 +334,7 @@ struct TogetherTag: View {
                     Text("+\(extra)")
                         .font(.sn(9, 600))
                         .monospacedDigit()
-                        .foregroundStyle(SN.textPrimary)
+                        .foregroundStyle(ink)
                         .padding(.horizontal, 4)
                         .frame(minWidth: 18, minHeight: 18)
                         .background(Capsule().fill(.white.opacity(0.15)))
@@ -341,7 +343,7 @@ struct TogetherTag: View {
             if !compact {
                 Text(group.together ? "Together" : "Shared chat")
                     .font(.sn(11, 600))
-                    .foregroundStyle(SN.textPrimary)
+                    .foregroundStyle(ink)
             }
         }
         .padding(.leading, 2)

@@ -37,6 +37,27 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
     private struct Section: Decodable { var section: String }
 }
 
+extension ChannelGroup {
+    /// A `channel-state` push's collab section for `login`: `.some(nil)` when the channel left
+    /// its group, nil when the push is another section or another channel.
+    public static func collabPush(_ json: String, login: String) -> ChannelGroup?? {
+        struct Push: Decodable {
+            var section: String
+            var login: String
+            var collab: ChannelGroup?
+        }
+        guard let push = try? JSONDecoder().decode(Push.self, from: Data(json.utf8)), push.section == "collab",
+              push.login.lowercased() == login.lowercased() else { return nil }
+        return .some(push.collab)
+    }
+
+    /// The sheet's subtitle: "1,234 viewers combined" or "One chat across 3 channels".
+    public var summary: String {
+        if let sharedViewers { return "\(sharedViewers.formatted()) viewers combined" }
+        return "One chat across \(members.count) channels"
+    }
+}
+
 /// `watch-session://redirect`: a raid the core follows, with the target's seed row.
 public struct RaidRedirect: Decodable, Sendable {
     public var reason: String

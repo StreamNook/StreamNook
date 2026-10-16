@@ -160,3 +160,23 @@ import Testing
         #expect(Dial.tenth(0.3) == 3)
     }
 }
+
+@Suite struct TogetherTests {
+    @Test func theCollabPushNamesTheGroupOrItsEnd() {
+        let json = #"{"section":"collab","login":"Caster","at":1,"collab":{"shared_viewers":1500,"label":"1,500 watching together with B","members":[{"user_id":"1","login":"caster","display_name":"Caster","viewer_count":900,"is_leader":true,"is_self":true},{"user_id":"2","login":"b","display_name":"B","viewer_count":600,"is_leader":false,"is_self":false}]}}"#
+        let group = ChannelGroup.collabPush(json, login: "caster")
+        #expect(group??.members.first?.isLeader == true)
+        #expect(group??.members.last?.viewerCount == 600)
+        #expect(group??.summary == "1,500 viewers combined")
+        let ended = ChannelGroup.collabPush(#"{"section":"collab","login":"caster","at":2,"collab":null}"#, login: "caster")
+        #expect(ended != nil && ended! == nil)
+        #expect(ChannelGroup.collabPush(#"{"section":"viewers","login":"caster","at":1}"#, login: "caster") == nil)
+        #expect(ChannelGroup.collabPush(json, login: "someone") == nil)
+    }
+
+    @Test func aSharedChatSaysHowManyChannelsShareIt() {
+        let group = ChannelGroup(members: [.init(userID: "1", login: "a", displayName: "A"),
+                                           .init(userID: "2", login: "b", displayName: "B")], label: "")
+        #expect(group.summary == "One chat across 2 channels")
+    }
+}

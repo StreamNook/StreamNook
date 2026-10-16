@@ -53,6 +53,8 @@ final class Watch {
     private(set) var restarting = false
     /// The watched channel's numbers as they move (viewers, title, category, start).
     private(set) var live: ChannelViewers?
+    /// The Shared Viewership group the channel streams in, from the core's collab section.
+    private(set) var group: ChannelGroup?
 
     /// The lock screen card and its remote commands.
     let nowPlaying = NowPlaying()
@@ -268,6 +270,10 @@ final class Watch {
         }
         for await event in pushes {
             guard !Task.isCancelled else { return }
+            if let collab = ChannelGroup.collabPush(event.payloadJSON, login: stream.userLogin) {
+                group = collab
+                continue
+            }
             guard let update = ChannelViewers.parse(event.payloadJSON),
                   update.login.lowercased() == stream.userLogin.lowercased() else { continue }
             take(update)
@@ -352,6 +358,7 @@ final class Watch {
         available = []
         restarting = false
         live = nil
+        group = nil
         pip.eligible = false
         nowPlaying.clear()
         Task.detached {
