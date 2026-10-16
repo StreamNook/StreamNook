@@ -390,6 +390,12 @@ pub struct LlOrigin {
 /// "experimental low latency" setting, so it can be tested and proven per machine before
 /// it ever becomes the default.
 static DISABLED: AtomicBool = AtomicBool::new(true);
+/// The viewer's chosen distance behind live (`video_player.ll_target_latency`), in
+/// milliseconds; 0 is Auto.
+static TARGET_GAP_MS: AtomicU64 = AtomicU64::new(0);
+/// How far behind live AVPlayer sits past the playlist's hold-back on this origin
+/// (measured: a 0.936 s hold-back plays 1.44 to 1.71 s behind).
+const APPLE_BEHIND_OVER_HOLD: f64 = 0.6;
 
 /// The origin's client, built once. `start` used to build a new one per stream
 /// start, which rebuilt the TLS configuration (and on Linux re-parsed the CA
@@ -924,6 +930,27 @@ fn extract_attr(attrs: &str, key: &str) -> Option<String> {
 
 pub fn set_disabled(disabled: bool) {
     DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+/// The viewer's target latency (None or a non-positive value is Auto). AVPlayer
+/// reads it as the hold-back of the next playlist it loads.
+pub fn set_target_gap(gap: Option<f32>) {
+    let ms = gap.filter(|g| *g > 0.0).map(|g| (g as f64 * 1000.0).round() as u64).unwrap_or(0);
+    TARGET_GAP_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Seconds to add to (or take off) the default hold-back so AVPlayer rides the
+/// viewer's target gap: never under the spec's two part targets.
+fn apple_gap_adjust(target: f64, hold_parts: u64) -> f64 {
+    gap_adjust(TARGET_GAP_MS.load(Ordering::Relaxed), target, hold_parts)
+}
+
+fn gap_adjust(ms: u64, target: f64, hold_parts: u64) -> f64 {
+    if ms == 0 {
+        return 0.0;
+    }
+    let wanted = (ms as f64 / 1000.0 - APPLE_BEHIND_OVER_HOLD).max(target * 2.0);
+    wanted - target * hold_parts as f64
 }
 
 impl LlOrigin {
@@ -2644,7 +2671,7 @@ impl LlOrigin {
             base,
             target,
             hold_parts,
-            crate::services::link_adapt::extra_cushion(),
+            crate::services::link_adapt::extra_cushion() + apple_gap_adjust(target, hold_parts),
         ))
     }
 
@@ -3774,6 +3801,14 @@ http://127.0.0.1:9/seg/50.ts\n\
             absolute_uri_attr("#EXT-X-MAP:URI=\"https://cdn/init.mp4\"", "http://127.0.0.1:9/", ""),
             "#EXT-X-MAP:URI=\"https://cdn/init.mp4\""
         );
+    }
+
+    #[test]
+    fn the_target_gap_moves_the_apple_hold_back() {
+        assert_eq!(gap_adjust(0, 0.312, 3), 0.0);
+        assert!((gap_adjust(3000, 0.312, 3) - (2.4 - 0.936)).abs() < 1e-9);
+        // Never under two part targets, however low the gap.
+        assert!((gap_adjust(500, 0.312, 3) + 0.312).abs() < 1e-9);
     }
 
     #[test]
