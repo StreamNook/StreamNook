@@ -14,6 +14,8 @@
 // free and always feel right.
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { User } from 'phosphor-react';
+import EmoteProviderLogo from '../../components/chat/EmoteProviderLogo';
 import { inlineEmoteTier, sevenTvTierUrl } from '../../services/emoteService';
 import type { EmoteTabCandidate } from '../../utils/chatInputWord';
 
@@ -126,15 +128,24 @@ export const MobileEmoteCarousel: React.FC<Props> = ({ candidates, onSelect }) =
       </div>
 
       <div className="px-3.5 py-1.5 border-t border-white/5 flex items-center justify-between gap-2">
-        <span className="text-[12px] font-semibold text-textPrimary truncate">
-          {current.name}
+        {/* Where it comes from: the provider's logo (it names the provider, so
+            only the set it is in sits beside it), or a person for a chatter. */}
+        <span className="min-w-0 flex items-center gap-1.5">
+          <span className="text-[12px] font-semibold text-textPrimary truncate">{current.name}</span>
           {current.emote && (
-            <span className="ml-1.5 text-[9px] uppercase tracking-wider text-textMuted">
-              {current.emote.provider}
+            <span className="shrink-0 flex items-center gap-1 text-[10px] leading-none text-textMuted">
+              <EmoteProviderLogo
+                provider={current.emote.provider}
+                // FrankerFaceZ's brand is white: it takes the text color so it
+                // reads in both themes.
+                tinted={current.emote.provider !== 'ffz'}
+                className="w-2.5 h-2.5"
+              />
+              {current.sourceDetail}
             </span>
           )}
           {current.chatter && (
-            <span className="ml-1.5 text-[9px] uppercase tracking-wider text-textMuted">user</span>
+            <User size={10} weight="fill" className="shrink-0 text-textMuted" aria-label="Chatter" />
           )}
         </span>
         <span className="text-[10px] text-textMuted shrink-0">Swipe, tap to use</span>
