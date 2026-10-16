@@ -459,7 +459,10 @@ private struct ChatArea: View {
     @ViewBuilder
     private var content: some View {
         if model.signedIn {
-            ChatRoomsPanel(rooms: model.chat, overlay: readOnly, onProfile: { model.cosmetics.open($0) })
+            // The drop being earned shows only over the stream's own room, never over the video.
+            ChatRoomsPanel(rooms: model.chat, overlay: readOnly,
+                           streamBanner: AnyView(WatchDropBar(model: model, visible: !readOnly && model.chat.viewingStream)),
+                           onProfile: { model.cosmetics.open($0) })
         } else {
             VStack(spacing: 14) {
                 Text("Sign in with Twitch to read and send chat.")

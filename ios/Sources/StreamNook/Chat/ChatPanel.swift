@@ -7,6 +7,8 @@ import UIKit
 struct ChatRoomsPanel: View {
     let rooms: ChatRooms
     var overlay = false
+    /// The stream's own card over the chat (the drop being earned), above the pinned banner.
+    var streamBanner: AnyView?
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
     var body: some View {
@@ -15,7 +17,7 @@ struct ChatRoomsPanel: View {
                 ChatTabStrip(rooms: rooms)
             }
             if let session = rooms.activeSession {
-                ChatPanel(session: session, overlay: overlay, rooms: rooms, onProfile: onProfile)
+                ChatPanel(session: session, overlay: overlay, rooms: rooms, streamBanner: streamBanner, onProfile: onProfile)
                     .id(ObjectIdentifier(session))
             } else {
                 Color.clear
@@ -35,6 +37,9 @@ struct ChatPanel: View {
     var overlay = false
     /// The open rooms this one belongs to (the watch page); nil on the chat stage.
     var rooms: ChatRooms?
+    /// The stream's own card, above the pins. It stays mounted in every mode (it decides itself
+    /// whether to show), so its reading never stops.
+    var streamBanner: AnyView?
     /// Opens a chatter's profile (the profile sheet belongs to the profile screens).
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
@@ -58,6 +63,7 @@ struct ChatPanel: View {
                 }
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
+                        if let streamBanner { streamBanner }
                         if let rooms, !overlay, !rooms.activePins.isEmpty {
                             PinnedBanner(pins: rooms.activePins,
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
