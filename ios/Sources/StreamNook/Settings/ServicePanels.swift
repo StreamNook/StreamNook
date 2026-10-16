@@ -381,7 +381,7 @@ struct CachePanel: View {
                       help: "1 to 30 days, 7 by default. A shorter window keeps you current at the cost of more downloads; a longer one saves bandwidth.",
                       accessibility: "Refresh after")
             WideRow(title: "Storage",
-                    detail: "View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.",
+                    detail: "View cache info shows a count of what is on disk, and Clear cache deletes every stored emote and badge so they download fresh.",
                     help: "Clearing is safe and does not touch your settings or login. Chat will feel slower for the first visit to each channel while the cache refills.") {
                 VStack(alignment: .leading, spacing: 8) {
                     VStack(spacing: 8) {
