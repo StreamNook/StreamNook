@@ -30,7 +30,7 @@ struct OwnIdentityCard: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
             if picks.sn != nil || picks.ext != nil {
-                ProfilePreviewRow(name: user.displayName, picks: picks, framed: false)
+                ProfilePreviewRow(name: user.displayName, picks: picks, fallbackPaint: identity?.paint, framed: false)
                     .padding(.horizontal, 12)
                     .padding(.top, 16)
             }

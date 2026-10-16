@@ -91,7 +91,7 @@ struct CosmeticsScreen: View {
                     CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56, local: localPicture)
                         .padding(.top, -31)
                     HStack(spacing: 6) {
-                        PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
+                        PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint ?? identity?.paint,
                                     fallback: nameColor(screen.ext?.chatColor), shadows: .all)
                             .lineLimit(1)
                             .fixedSize()
@@ -106,7 +106,8 @@ struct CosmeticsScreen: View {
                 }
                 .padding(.horizontal, 12)
                 if screen.sn != nil || screen.ext != nil {
-                    ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen, framed: false)
+                    ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen,
+                                      fallbackPaint: identity?.paint, framed: false)
                         .padding(.horizontal, 12)
                         .padding(.top, 12)
                 }

@@ -70,7 +70,7 @@ struct TwitchProfileSection: View {
                     CosmeticImage(user.profileImageURL ?? "", animate: false, fill: true)
                 }
             }
-            rowText("Twitch picture", detail: "Shown on Twitch and in Twitch chat")
+            rowText("Twitch picture", detail: "Shown on Twitch")
             Spacer(minLength: 8)
             changeButton(.picture, selection: $twitchItem)
         }
@@ -91,9 +91,7 @@ struct TwitchProfileSection: View {
                     }
                 }
             }
-            rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV"
-                                          : identity?.picture == nil ? "Shown to StreamNook and 7TV viewers in chat"
-                                                                      : "What StreamNook and 7TV viewers see in chat")
+            rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV" : "Shown in StreamNook chat")
             Spacer(minLength: 8)
             if sevenTvSignedIn {
                 changeButton(.sevenTV, selection: $sevenTvItem)
@@ -130,7 +128,7 @@ struct TwitchProfileSection: View {
     private var bannerRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                rowText("Banner", detail: "The wide image across your Twitch channel")
+                rowText("Banner", detail: "Across your channel page")
                 Spacer(minLength: 8)
                 changeButton(.banner, selection: $bannerItem)
             }

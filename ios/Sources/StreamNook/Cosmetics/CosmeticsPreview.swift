@@ -8,6 +8,8 @@ import UIKit
 struct ProfilePreviewRow: View {
     let name: String
     let picks: CosmeticsScreenModel
+    /// The paint the core says you wear, shown until the 7TV picker has answered.
+    var fallbackPaint: ChatPaint?
     /// Off inside a card that is already a panel: the row sits in a dark well instead.
     var framed = true
 
@@ -18,7 +20,7 @@ struct ProfilePreviewRow: View {
                       ext?.sevenTvBadges.first(where: \.worn)?.badge.url,
                       sn?.badges.first(where: \.worn)?.imageURL].compactMap { $0 }
         let look = (sn?.showChatToggle == true && sn?.chatAtmosphere == true) ? AtmosphereCatalog.shared.look(sn?.theme) : nil
-        CosmeticsPreviewRow(name: name, paint: ext?.paints.first(where: \.worn)?.paint, colorHex: ext?.chatColor,
+        CosmeticsPreviewRow(name: name, paint: ext?.paints.first(where: \.worn)?.paint ?? fallbackPaint, colorHex: ext?.chatColor,
                             badges: badges, look: look, framed: framed)
             .animation(.easeOut(duration: 0.2), value: sn?.theme)
     }
