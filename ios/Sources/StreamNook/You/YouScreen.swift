@@ -29,20 +29,11 @@ struct YouScreen: View {
                 label("Open the app on")
                 GlazeSegments(MobileTab.allCases.map { Segment(value: $0, label: $0.title) },
                               selection: Binding(get: { MobileTab(rawValue: startTab) },
-                                                 set: { if let tab = $0 { startTab = tab.rawValue } }),
-                              fills: true)
+                                                 set: { if let tab = $0 { startTab = tab.rawValue } }), fill: true)
                     .padding(.horizontal, 16)
 
                 label("Settings")
-                VStack(spacing: 0) {
-                    ForEach(SettingsSection.allCases) { section in
-                        NavigationLink(value: Route.settings(section)) {
-                            RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
-                        }
-                        .buttonStyle(RowPress())
-                    }
-                }
-                .padding(.horizontal, 12)
+                SettingsDirectory(model: model)
             }
             .padding(.bottom, 24)
         }

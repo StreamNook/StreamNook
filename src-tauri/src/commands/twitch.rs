@@ -1540,7 +1540,7 @@ pub async fn focus_window(app: AppHandle) -> Result<(), String> {
 pub async fn get_top_games(
     state: State<'_, AppState>,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::get_top_games(&state, limit)
         .await
         .map_err(|e| e.to_string())
@@ -1551,7 +1551,7 @@ pub async fn get_top_games_paginated(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: u32,
-) -> Result<(Vec<serde_json::Value>, Option<String>), String> {
+) -> Result<(Vec<crate::services::twitch_service::CategoryRow>, Option<String>), String> {
     TwitchService::get_top_games_paginated(&state, cursor, limit)
         .await
         .map_err(|e| e.to_string())
@@ -1614,14 +1614,29 @@ pub async fn get_user_by_login(login: String) -> Result<UserInfo, String> {
 pub async fn follow_channel(target_user_id: String) -> Result<(), String> {
     TwitchService::follow_channel(&target_user_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A followers-only room you are in now words itself for the new follow.
+    crate::services::irc_service::own_follow_changed(&target_user_id, true).await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn unfollow_channel(target_user_id: String) -> Result<(), String> {
     TwitchService::unfollow_channel(&target_user_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::irc_service::own_follow_changed(&target_user_id, false).await;
+    Ok(())
+}
+
+/// The viewer's follow and subscription state for a Twitch channel, for the
+/// follow and subscribe controls (`following` is null while unknown).
+#[tauri::command]
+pub async fn channel_relationship(
+    channel_id: String,
+    channel_login: String,
+) -> Result<crate::services::channel_relationship::Relationship, String> {
+    Ok(crate::services::channel_relationship::twitch(&channel_id, &channel_login.to_lowercase()).await)
 }
 
 #[tauri::command]
@@ -1904,13 +1919,13 @@ pub async fn refresh_whisper_history(
     Ok(out)
 }
 
-/// Search for categories by name (uses Twitch search API for fuzzy matching)
-/// Returns a list of matching categories with id, name, and box_art_url
+/// Categories matching `query`: the exact name first, then names starting with
+/// it, then the rest, each tier by live viewers (see `rank_category_results`).
 #[tauri::command]
 pub async fn search_categories(
     query: String,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::search_categories(&query, limit)
         .await
         .map_err(|e| e.to_string())

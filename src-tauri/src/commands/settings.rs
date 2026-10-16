@@ -70,7 +70,10 @@ pub fn write_settings_to_disk_sync(settings: &Settings) -> Result<(), String> {
     let settings_path = get_settings_path()?;
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))
+    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))?;
+    // Today's copy, which a settings.json that later fails to load is rebuilt from.
+    crate::services::settings_backups::snapshot_if_due(settings);
+    Ok(())
 }
 
 /// Persist settings to settings.json, debounced. Callers have already updated
@@ -523,7 +526,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
 /// the active account, the onboarding flag, and the last-seen version. Everything
 /// else (theme, chat design, keybindings, highlights, custom commands, custom
 /// themes, ...) is a portable preference and is included.
-const NON_PORTABLE_KEYS: &[&str] = &[
+pub(crate) const NON_PORTABLE_KEYS: &[&str] = &[
     "accounts",
     "current_account",
     "setup_complete",
@@ -585,20 +588,31 @@ pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result
 /// settings. On success the in-memory state and settings.json are both updated;
 /// the frontend reloads to re-apply everything.
 #[tauri::command]
-pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn import_settings(app: AppHandle, path: String, state: State<'_, AppState>) -> Result<(), String> {
     let contents =
         fs::read_to_string(&path).map_err(|e| format!("Couldn't read that file: {}", e))?;
     let incoming: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
+    apply_imported_settings(&app, &state, &incoming)
+}
+
+/// Put every portable key of a backup over the live settings (session and
+/// login keys stay), then save, refresh and tell every window.
+pub(crate) fn apply_imported_settings(
+    app: &AppHandle,
+    state: &AppState,
+    incoming: &serde_json::Value,
+) -> Result<(), String> {
     let incoming_obj = incoming
         .as_object()
         .ok_or_else(|| "That file isn't a valid StreamNook settings backup.".to_string())?;
 
     // Start from the live settings so session/login keys survive, then overlay
     // every portable key the backup provides.
-    let current = { state.settings.lock().unwrap().clone() };
+    let current = { state.settings.lock().map_err(|e| e.to_string())?.clone() };
     let mut merged = serde_json::to_value(&current)
         .map_err(|e| format!("Failed to read current settings: {}", e))?;
+    let mut keys = Vec::new();
     {
         let merged_obj = merged
             .as_object_mut()
@@ -608,6 +622,7 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
                 continue;
             }
             merged_obj.insert(key.clone(), val.clone());
+            keys.push(key.clone());
         }
     }
 
@@ -616,7 +631,7 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
 
     let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {
-        let mut state_settings = state.settings.lock().unwrap();
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         *state_settings = imported.clone();
     }
     // The same refresh set as every other write path, so imported reminders,
@@ -626,7 +641,7 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
-
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
     Ok(())
 }
 

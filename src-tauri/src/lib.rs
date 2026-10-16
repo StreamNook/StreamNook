@@ -388,7 +388,15 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     }
 
     let json = std::fs::read_to_string(&settings_path)?;
-    let mut settings: Settings = serde_json::from_str(&json)?;
+    let mut settings: Settings = match serde_json::from_str(&json) {
+        Ok(settings) => settings,
+        // A file that no longer loads is rebuilt from the newest daily copy
+        // rather than replaced by a fresh install's settings.
+        Err(e) => match services::settings_backups::recover(&settings_path, &e.to_string()) {
+            Some(settings) => settings,
+            None => return Err(e.into()),
+        },
+    };
     repair_protocol_relative_avatars(&mut settings);
     settings.retire_legacy_live_edge_gap();
     settings.enable_low_latency_engine_once();
@@ -1720,6 +1728,7 @@ pub fn run() {
             get_channel_vips,
             follow_channel,
             unfollow_channel,
+            channel_relationship,
             check_following_status,
             get_all_followed_channels,
             get_offline_last_broadcasts,
@@ -1979,6 +1988,10 @@ pub fn run() {
             delete_custom_sound,
             get_theme_catalog,
             get_active_theme,
+            search_settings,
+            get_changed_settings,
+            list_settings_backups,
+            restore_settings_backup,
             get_settings_dir,
             open_settings_folder,
             export_settings,
@@ -2214,6 +2227,7 @@ pub fn run() {
             get_emote_by_name,
             match_emote_tokens,
             personal_emote_overrides,
+            emote_picker,
             clear_emote_cache,
             get_gif_picker_status,
             search_gifs,
@@ -2313,6 +2327,23 @@ pub fn run() {
             // The phones' resume refresh (desktop windows reload on mount).
             #[cfg(mobile)]
             note_app_resumed,
+            // The phone chat pane's tabs and its Add a chat sheet.
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_get,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_sync_stream,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_add,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_remove,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_set_active,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_room_from_link,
+            #[cfg(mobile)]
+            commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
+            commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
             load_more_home_recommended,
             // Per-channel chat state + user history watches (Rust-owned polls)
@@ -2380,6 +2411,10 @@ pub fn run() {
             commands::slash_commands::slash_inject_fake_message,
             commands::slash_commands::slash_run_program,
             commands::slash_commands::slash_copy_text,
+            commands::slash_commands::run_slash_command,
+            commands::slash_commands::nuke_preview,
+            commands::slash_commands::nuke_active,
+            commands::slash_commands::nuke_stop,
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,

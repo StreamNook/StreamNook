@@ -113,6 +113,11 @@ final class ChatFanOverlay: UIView {
         chip.textColor = nameColor
         chip.sizeToFit()
         chipBox.contentView.addSubview(chip)
+        // At 0 percent glassiness (or with blur off) nothing is see-through: the chip turns solid.
+        if !Look.shared.frosted {
+            chipBox.effect = nil
+            chipBox.backgroundColor = UIColor(SN.backgroundTertiary)
+        }
         chipBox.layer.cornerRadius = 12
         chipBox.clipsToBounds = true
         let chipSize = CGSize(width: chip.bounds.width + 24, height: chip.bounds.height + 16)

@@ -24,7 +24,7 @@ import SwiftUI
 /// - `try:PATH=JSON` writes one setting for a look (the value it replaced is kept); `restore`
 ///   writes every replaced value back exactly as it was (absent stays absent); `ladd:PATH=TEXT`
 ///   and `lremove:PATH=TEXT` add or remove one entry of a settings list; `reset:PATH` is the reset
-///   arrow
+///   arrow; `ssearch:TEXT` types into the You tab's settings search (`_` for spaces)
 /// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces);
 ///   `scroll:SECTION@end` shows the section's last rows
 /// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
@@ -112,6 +112,7 @@ enum Drive {
             case "try": await trySetting(value, model: model)
             case "restore": await restoreSettings(model: model)
             case "reset": await model.settingsStore.reset([value])
+            case "ssearch": SettingsSearch.shared.query = value.replacingOccurrences(of: "_", with: " ")
             case "ladd", "lremove":
                 guard let eq = value.firstIndex(of: "=") else { continue }
                 let path = String(value[..<eq]), item = String(value[value.index(after: eq)...])

@@ -19,6 +19,8 @@ struct SettingsPage: View {
                         case .cache: CachePanel()
                         case .theme: ThemePanel()
                         case .support: SupportPanel()
+                        case .changed: ChangedPanel()
+                        case .backup: BackupPanel()
                         default: EmptyNote(text: "\(section.title) settings are built next.", hint: nil)
                         }
                     } else {

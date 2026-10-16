@@ -56,9 +56,9 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
   useEffect(() => {
     if (!isOpen || !channelLogin) return;
     let alive = true;
-    void import('../../utils/nukeEngine').then((mod) => {
-      if (alive) setActiveNukeCount(mod.getActiveNukesForChannel(channelLogin).length);
-    });
+    void invoke<number>('nuke_active', { channel: channelLogin })
+      .then((n) => alive && setActiveNukeCount(n))
+      .catch(() => {});
     if (isBroadcaster && broadcasterId) {
       void invoke<{ id: string } | null>('get_active_poll', { broadcasterId })
         .then((p) => alive && setLivePoll(p))
@@ -363,8 +363,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
               {activeNukeCount > 0 && (
                 <button
                   onClick={async () => {
-                    const { stopActiveNukes } = await import('../../utils/nukeEngine');
-                    const stopped = stopActiveNukes(channelLogin);
+                    const stopped = await invoke<number>('nuke_stop', { channel: channelLogin }).catch(() => 0);
                     setActiveNukeCount(0);
                     addToast(`Stopped ${stopped} running nuke window(s)`, 'success');
                   }}

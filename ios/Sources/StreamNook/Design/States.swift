@@ -57,12 +57,7 @@ struct SkeletonTiles: View {
                     RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
                         .fill(SN.surface)
                         .aspectRatio(3 / 4, contentMode: .fit)
-                    // The tile's chin height, taken from its name font on two lines.
-                    Text(verbatim: " ")
-                        .font(.sn(12.5, 500))
-                        .lineLimit(2, reservesSpace: true)
-                        .hidden()
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    CategoryChin.block
                         .overlay(alignment: .topLeading) {
                             VStack(alignment: .leading, spacing: 7) {
                                 Capsule().fill(SN.surface).frame(height: 10).padding(.trailing, 28)

@@ -17,16 +17,16 @@ struct GlazeSegments<Value: Hashable>: View {
     let segments: [Segment<Value>]
     @Binding var selection: Value?
     var allowsNone = false
-    /// Spreads the segments across the width it is given, as a row that spans the gutter does.
-    var fills = false
+    /// Segments share the full width instead of hugging their labels.
+    var fill = false
     @Namespace private var pill
     @Environment(\.snStill) private var still
 
-    init(_ segments: [Segment<Value>], selection: Binding<Value?>, allowsNone: Bool = false, fills: Bool = false) {
+    init(_ segments: [Segment<Value>], selection: Binding<Value?>, allowsNone: Bool = false, fill: Bool = false) {
         self.segments = segments
         _selection = selection
         self.allowsNone = allowsNone
-        self.fills = fills
+        self.fill = fill
     }
 
     var body: some View {
@@ -45,9 +45,9 @@ struct GlazeSegments<Value: Hashable>: View {
                         Text(segment.label).font(on ? .snLabelStrong : .snLabel)
                     }
                     .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
-                    .padding(.horizontal, fills ? 4 : 14)
+                    .padding(.horizontal, fill ? 4 : 14)
                     .padding(.vertical, 7)
-                    .frame(maxWidth: fills ? .infinity : nil)
+                    .frame(maxWidth: fill ? .infinity : nil)
                     .background {
                         if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) }
                     }

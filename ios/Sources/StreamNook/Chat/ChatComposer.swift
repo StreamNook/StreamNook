@@ -6,20 +6,26 @@ import SwiftUI
 /// text and the chat menu otherwise. Suggestions and the emote picker open upward over the list.
 struct ChatComposer: View {
     let session: ChatSession
+    /// Opens a chatter's profile (`/usercard`).
+    var onProfile: (ProfileTarget) -> Void = { _ in }
     @State private var model: ChatComposerModel
 
-    init(session: ChatSession) {
+    init(session: ChatSession, onProfile: @escaping (ProfileTarget) -> Void = { _ in }) {
         self.session = session
+        self.onProfile = onProfile
         _model = State(initialValue: ChatComposerModel(session: session))
     }
 
     var body: some View {
         ComposerBar(model: model, session: session)
-            .onAppear { ComposerRegistry.shared.models[ObjectIdentifier(session)] = model }
+            .onAppear {
+                model.onProfile = onProfile
+                ComposerRegistry.shared.models[ObjectIdentifier(session)] = model
+            }
     }
 }
 
-/// Composers on screen by session, for drive steps.
+/// Composers on screen by session, for drive steps and the streak banners.
 @MainActor
 final class ComposerRegistry {
     static let shared = ComposerRegistry()
@@ -44,38 +50,18 @@ private struct ComposerBar: View {
             if let reply = session.replyTo {
                 replyChip(reply)
             }
-            inputRow
-        }
-        .padding(.bottom, 10)
-        .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
-        .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                if let toast = model.toast {
-                    Text(toast)
-                        .font(.snCaption)
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .glassEffect()
-                        .transition(.opacity)
-                }
-                if model.panel == .emotes {
-                    ChatEmotePicker(model: model)
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)).combined(with: .scale(scale: 0.98, anchor: .bottom)),
-                                                removal: .opacity))
-                } else if !model.suggestions.isEmpty {
-                    SuggestionStrip(model: model) { focused = true }
-                        .transition(.opacity.combined(with: .offset(y: 4)))
-                }
+            if let failure = model.failure {
+                failureChip(failure)
             }
-            .padding(.horizontal, 10)
-            .alignmentGuide(.top) { $0[.bottom] + 8 }
-            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: model.panel)
-            .animation(.easeOut(duration: 0.12), value: model.suggestions.isEmpty)
+            inputRow(slowWait: model.slowWait)
         }
+        // The home indicator's inset plus 8.
+        .padding(.bottom, 8)
+        .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
+        .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $model.commandsOpen) {
             ChatCommandSheet(session: session) { name in
@@ -86,6 +72,44 @@ private struct ComposerBar: View {
             .presentationDetents([.fraction(0.72), .large])
         }
     }
+
+    /// What opens upward from the input row: a toast, then the picker or the suggestion strip.
+    /// The picker stays mounted while closed, so its tab, search and scroll survive.
+    private var above: some View {
+        VStack(spacing: 8) {
+            if let toast = model.toast {
+                Text(toast)
+                    .font(.snCaption)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .glassEffect()
+                    .transition(.opacity)
+            }
+            ZStack(alignment: .bottom) {
+                ChatEmotePicker(model: model)
+                    .floatingSurface()
+                    .opacity(model.panel == .emotes ? 1 : 0)
+                    .offset(y: model.panel == .emotes ? 0 : 10)
+                    .scaleEffect(model.panel == .emotes ? 1 : 0.98, anchor: .bottom)
+                    .allowsHitTesting(model.panel == .emotes)
+                    .accessibilityHidden(model.panel != .emotes)
+                if model.panel == .none, showsStrip {
+                    SuggestionStrip(model: model) {
+                        if !model.fieldDisabled { focused = true }
+                    }
+                    .floatingSurface()
+                    .transition(.opacity.combined(with: .offset(y: 4)))
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .alignmentGuide(.top) { $0[.bottom] + 8 }
+        .animation(.interpolatingSpring(stiffness: 400, damping: 30), value: model.panel)
+        .animation(.easeOut(duration: 0.12), value: showsStrip)
+    }
+
+    private var showsStrip: Bool { !model.suggestions.isEmpty && session.style.suggestionsEnabled }
 
     private func replyChip(_ reply: ChatMessage) -> some View {
         HStack(spacing: 6) {
@@ -109,13 +133,53 @@ private struct ComposerBar: View {
         .padding(.top, 6)
     }
 
-    private var inputRow: some View {
-        HStack(alignment: .bottom, spacing: 6) {
+    /// A message Twitch did not take: why, and Retry or Discard. The text stays in the field.
+    private func failureChip(_ failure: ChatComposerModel.Failure) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(ComposerInk.warning)
+                .frame(width: 36)
+            Text("Not sent: \(failure.why)")
+                .font(.sn(12.5))
+                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Retry") { Task { await model.send() } }
+                .font(.sn(12.5, 600))
+                .disabled(model.sending)
+            Button("Discard") { model.discardFailure() }
+                .font(.sn(12.5))
+                .foregroundStyle(ComposerInk.quiet)
+                .padding(.leading, 8)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 16)
+        .padding(.top, 6)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func prompt(slowWait: Int) -> Text {
+        if model.fieldDisabled {
+            // Why the viewer cannot type, in the one warning color.
+            return Text(model.placeholder).foregroundStyle(ComposerInk.warning).fontWeight(.medium)
+        }
+        if slowWait > 0 {
+            return Text("Slow mode: you can send again in \(slowWait)s").foregroundStyle(Color(ChatTheme.textMuted))
+        }
+        return Text(model.placeholder).foregroundStyle(Color(ChatTheme.textMuted))
+    }
+
+    private func inputRow(slowWait: Int) -> some View {
+        HStack(alignment: .center, spacing: 6) {
             HStack(spacing: 4) {
                 if !session.style.hideEmoteButton {
                     emoteButton
+                        // It inserts nothing that could be sent while a mode other than
+                        // emote-only blocks the room.
+                        .opacity(model.fieldDisabled && session.modes?.blocked != "emote_only" ? 0.4 : 1)
                 }
-                TextField("", text: $model.draft, prompt: Text(model.placeholder).foregroundStyle(Color(ChatTheme.textMuted)))
+                TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
                     .font(.sn(15))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
                     .padding(.vertical, 8)
@@ -123,17 +187,23 @@ private struct ComposerBar: View {
                     .submitLabel(.send)
                     .onSubmit { Task { await model.send() } }
                     .focused($focused)
+                    .disabled(model.fieldDisabled)
                     .autocorrectionDisabled(!session.style.spellcheck)
                     .textInputAutocapitalization(.sentences)
-                if let modes = session.modes, !modes.modes.isEmpty {
-                    RoomModeIndicator(modes: modes) { model.menuOpen = true }
+                if model.draft.count >= ChatComposerModel.counterFrom {
+                    counter
+                } else if let modes = model.shownModes, !model.fieldDisabled {
+                    RoomModeIndicator(modes: modes) {
+                        model.panel = .none
+                        model.menuOpen = true
+                    }
                 }
                 if !session.style.hideCommandButton {
                     Button {
                         model.commandsOpen = true
                     } label: {
                         Image(systemName: "slash.circle")
-                            .font(.system(size: 17))
+                            .font(ComposerSymbol.font)
                             .foregroundStyle(Color(ChatTheme.textSecondary))
                             .frame(width: 32, height: 36)
                     }
@@ -141,7 +211,7 @@ private struct ComposerBar: View {
                 }
             }
             .padding(.leading, 4)
-            .padding(.trailing, 8)
+            .padding(.trailing, 5)
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
 
@@ -153,19 +223,42 @@ private struct ComposerBar: View {
                     model.menuOpen = true
                 }
             } label: {
-                Image(systemName: model.canSend || model.sending ? "paperplane.fill" : "ellipsis")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(model.canSend ? Color.white : Color(ChatTheme.textSecondary))
-                    .frame(width: 40, height: 40)
-                    .contentTransition(.symbolEffect(.replace))
+                Group {
+                    if model.canSend, slowWait > 0 {
+                        // Slow mode: the seconds until the next message can go.
+                        Text("\(slowWait)")
+                            .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(Color(ChatTheme.textPrimary))
+                    } else {
+                        Image(systemName: model.canSend || model.sending ? "paperplane.fill" : "ellipsis")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(model.canSend ? Color.white : Color(ChatTheme.textSecondary))
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                }
+                // A circle reads smaller than the 40 pt field beside it; 44 matches it.
+                .frame(width: 44, height: 44)
             }
             .glassEffect(.regular.interactive(), in: .circle)
-            .disabled(model.sending)
+            .disabled(model.sending || (model.canSend && slowWait > 0))
             .opacity(model.sending ? 0.5 : 1)
-            .accessibilityLabel(model.canSend ? "Send" : "Chat options")
+            .accessibilityLabel(model.canSend ? (slowWait > 0 ? "Send again in \(slowWait) seconds" : "Send") : "Chat options")
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
+    }
+
+    /// "N/500" once a message nears Twitch's limit: quiet, orange in the last 20, red past it.
+    private var counter: some View {
+        let count = model.draft.count
+        let limit = ChatComposerModel.messageLimit
+        let ink = count > limit ? Color.red : (count >= limit - 20 ? ComposerInk.warning : ComposerInk.quiet)
+        return Text("\(count)/\(limit)")
+            .font(.system(size: 13, weight: .medium).monospacedDigit())
+            .foregroundStyle(ink)
+            .padding(.horizontal, 4)
+            .frame(height: 36)
+            .accessibilityLabel("\(count) of \(limit) characters")
     }
 
     private var emoteButton: some View {
@@ -196,6 +289,41 @@ private struct ComposerBar: View {
     }
 }
 
+/// The symbols at the field's end (room modes, commands) share one size, weight and ink, so the
+/// emoji at its start is the only color in the field.
+enum ComposerSymbol {
+    static let font = Font.system(size: 17, weight: .medium)
+}
+
+/// The composer's two inks beyond the theme: one quiet gray that stays readable on every chat
+/// background (placeholders, hints, counts), and one warning color for anything blocked or not sent.
+enum ComposerInk {
+    static let quiet = Color(red: 0x86 / 255, green: 0x98 / 255, blue: 0x9E / 255)
+    static let warning = Color(red: 1, green: 0x94 / 255, blue: 0x30 / 255)
+}
+
+extension View {
+    /// A surface that floats over the chat above the composer: an opaque apron from its bottom
+    /// edge down to the composer's hairline (so no chat shows in the gap or its rounded corners)
+    /// and a short fade above it, so the chat it covers never ends in a hard cut.
+    func floatingSurface() -> some View {
+        let ground = Color(ChatTheme.background)
+        return background(alignment: .bottom) {
+            ground
+                .frame(height: 28)
+                .offset(y: 8)
+                .padding(.horizontal, -10)
+        }
+        .background(alignment: .top) {
+            LinearGradient(colors: [ground.opacity(0), ground], startPoint: .top, endPoint: .bottom)
+                .frame(height: 12)
+                .offset(y: -12)
+                .padding(.horizontal, -10)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 /// The room's modes inside the field: the first mode's symbol, and "+N" when more are on.
 private struct RoomModeIndicator: View {
     let modes: ChatRoomModes
@@ -204,8 +332,8 @@ private struct RoomModeIndicator: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 4) {
-                Image(systemName: Self.symbol(modes.modes[0].kind))
-                    .font(.system(size: 13, weight: .semibold))
+                Image(systemName: RoomModeSymbol.name(modes.modes[0].kind))
+                    .font(ComposerSymbol.font)
                 if modes.modes.count > 1 {
                     Text("+\(modes.modes.count - 1)")
                         .font(.system(size: 10, weight: .semibold).monospacedDigit())
@@ -227,82 +355,87 @@ private struct RoomModeIndicator: View {
         guard let standing = modes.standing else { return labels }
         return "\(labels). \(standing)"
     }
-
-    static func symbol(_ kind: String) -> String {
-        switch kind {
-        case "subs_only": return "star"
-        case "emote_only": return "face.smiling"
-        case "followers_only": return "heart"
-        case "slow": return "timer"
-        default: return "touchid"
-        }
-    }
 }
 
 /// Emote and chatter suggestions for the last word, one swipe-snapped row.
 private struct SuggestionStrip: View {
     let model: ChatComposerModel
     let focus: () -> Void
-    @State private var active: ComposerSuggestion.ID?
+    @State private var active: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 6) {
-                    ForEach(model.suggestions) { suggestion in
-                        Button {
-                            model.complete(suggestion)
-                            focus()
-                        } label: {
-                            tile(suggestion)
+            ScrollViewReader { reader in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 6) {
+                        ForEach(model.suggestions, id: \.key) { suggestion in
+                            Button {
+                                model.complete(suggestion)
+                                focus()
+                            } label: {
+                                tile(suggestion)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(suggestion.name)
+                            .id(suggestion.key)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(suggestion.name)
-                        .id(suggestion.id)
                     }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .scrollTargetLayout()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $active, anchor: .leading)
+                // 52 pt tiles and 10 pt above and below: the strip never takes the picker's height.
+                .frame(height: 72)
+                // A new list starts again at its first tile.
+                .onChange(of: model.suggestions.first?.key) { _, first in
+                    active = first
+                    if let first { reader.scrollTo(first, anchor: .leading) }
+                }
             }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $active, anchor: .leading)
             HStack(spacing: 6) {
-                let current = model.suggestions.first { $0.id == active } ?? model.suggestions.first
+                let current = model.suggestions.first { $0.key == active } ?? model.suggestions.first
                 Text(current?.name ?? "")
                     .font(.sn(12, 600))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
-                Text((current?.kind ?? "").uppercased())
-                    .font(.sn(9))
-                    .tracking(0.8)
-                    .foregroundStyle(Color(ChatTheme.textMuted))
+                    .lineLimit(1)
+                // Where it comes from: the provider's logo, or a person for a chatter.
+                if let current {
+                    if current.isChatter {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color(ChatTheme.textMuted))
+                            .accessibilityLabel("Chatter")
+                    } else {
+                        ProviderLogo(provider: current.provider, size: 10, tinted: true)
+                    }
+                }
                 Spacer()
-                Text("Swipe, tap to use")
+                Text(model.suggestions.count > 1 ? "Swipe for more, tap to use" : "Tap to use")
                     .font(.sn(10))
-                    .foregroundStyle(Color(ChatTheme.textMuted))
+                    .foregroundStyle(ComposerInk.quiet)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.05)).frame(height: 1) }
         }
         .background(Color(ChatTheme.background), in: .rect(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(ChatTheme.borderSubtle)))
-        .onChange(of: model.suggestions.first?.id) { _, first in active = first }
     }
 
-    private func tile(_ suggestion: ComposerSuggestion) -> some View {
-        let isActive = suggestion.id == (active ?? model.suggestions.first?.id)
+    private func tile(_ suggestion: EmoteMatch) -> some View {
+        let isActive = suggestion.key == (active ?? model.suggestions.first?.key)
         return Group {
-            switch suggestion {
-            case .emote(let emote):
-                ChatImageView(url: ChatImageURL.thumbnail(emote.url), size: 36)
-            case .chatter(let display, _):
-                Text(display)
+            if suggestion.isChatter {
+                Text(suggestion.name)
                     .font(.sn(10, 600))
                     .foregroundStyle(Color(ChatTheme.textSecondary))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .padding(2)
+            } else {
+                ChatImageView(url: ChatImageURL.thumbnail(suggestion.url), size: 36)
             }
         }
         .frame(width: 52, height: 52)

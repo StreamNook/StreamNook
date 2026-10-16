@@ -2,11 +2,39 @@ import SNKit
 import SwiftUI
 import UIKit
 
-/// The chat column of the watch page: the list, then the composer. The overlay variant is the
-/// same list read-only, for immersive landscape over the video.
+/// The watch page's chat: the room tabs (from two rooms up), then the room on screen. Each room
+/// keeps its own list state; switching shows the other room live, never a pause left from before.
+struct ChatRoomsPanel: View {
+    let rooms: ChatRooms
+    var overlay = false
+    var onProfile: (ProfileTarget) -> Void = { _ in }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if rooms.showsStrip {
+                ChatTabStrip(rooms: rooms)
+            }
+            if let session = rooms.activeSession {
+                ChatPanel(session: session, overlay: overlay, rooms: rooms, onProfile: onProfile)
+                    .id(ObjectIdentifier(session))
+            } else {
+                Color.clear
+            }
+        }
+        .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
+            AddChatSheet(rooms: rooms)
+        }
+    }
+}
+
+/// One room's chat column: the list with its pinned messages floating over the top, the streak
+/// banners, then the composer. The overlay variant is the same list read-only, for immersive
+/// landscape over the video, without pins or banners.
 struct ChatPanel: View {
     let session: ChatSession
     var overlay = false
+    /// The open rooms this one belongs to (the watch page); nil on the chat stage.
+    var rooms: ChatRooms?
     /// Opens a chatter's profile (the profile sheet belongs to the profile screens).
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
@@ -14,20 +42,42 @@ struct ChatPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show)
+            ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show, onOutcome: show)
+                // Rows fade out under a pinned banner rather than showing a cut sliver above it.
+                .mask {
+                    if let rooms, !overlay, !rooms.activePins.isEmpty {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 30)
+                            Color.black
+                        }
+                    } else {
+                        Color.black
+                    }
+                }
                 .overlay(alignment: .top) {
-                    if let toast {
-                        Text(toast)
-                            .font(.snCaption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .glassEffect()
-                            .padding(.top, 8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                    VStack(spacing: 4) {
+                        if let rooms, !overlay, !rooms.activePins.isEmpty {
+                            PinnedBanner(pins: rooms.activePins,
+                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                        }
+                        if let toast {
+                            Text(toast)
+                                .font(.snCaption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .glassEffect()
+                                .padding(.top, 8)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
                 }
             if !overlay {
-                ChatComposer(session: session)
+                if let rooms {
+                    StreakBanners(rooms: rooms, session: session)
+                }
+                ChatComposer(session: session, onProfile: onProfile)
             }
         }
         .onAppear { session.start() }
@@ -40,6 +90,17 @@ struct ChatPanel: View {
             withAnimation(.snappy) { if toast == text { toast = nil } }
         }
     }
+
+    /// A moderator action's answer: the app's toast (a failure, or Undo after a timeout or ban);
+    /// the chat stage has no app toasts, so it shows the words over its list.
+    private func show(_ outcome: ChatModActions.Outcome) {
+        guard let toasts = rooms?.toasts else {
+            show(outcome.text)
+            return
+        }
+        toasts.show(outcome.text, outcome.success ? .success : .error, action: outcome.undo == nil ? nil : "Undo",
+                    perform: outcome.undo)
+    }
 }
 
 /// The UIKit chat list inside SwiftUI.
@@ -48,12 +109,15 @@ struct ChatListHost: UIViewRepresentable {
     var readOnly: Bool
     var onProfile: (ProfileTarget) -> Void
     var onToast: (String) -> Void
+    var onOutcome: (ChatModActions.Outcome) -> Void
 
     func makeUIView(context: Context) -> ChatListView {
         let list = ChatListView()
         list.source = session.pipeline
         list.readOnly = readOnly
         let pipeline = session.pipeline
+        // A room coming back on screen hands the new list every row it kept meanwhile.
+        pipeline.replay()
         list.onWidthChange = { [weak list] width in
             pipeline.setWidth(width, scale: list?.traitCollection.displayScale ?? 3)
         }
@@ -112,9 +176,9 @@ struct ChatListHost: UIViewRepresentable {
         list.onFanCommit = { bucket, layout, seconds in
             guard let message = session.pipeline.message(layout.id) else { return }
             Task { @MainActor in
-                if let toast = await ChatModActions.run(bucket, message: message, seconds: seconds, session: session,
-                                                         onProfile: onProfile) {
-                    onToast(toast)
+                if let outcome = await ChatModActions.run(bucket, message: message, seconds: seconds, session: session,
+                                                           onProfile: onProfile) {
+                    onOutcome(outcome)
                 }
             }
         }

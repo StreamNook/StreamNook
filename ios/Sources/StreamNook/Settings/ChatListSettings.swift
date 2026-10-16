@@ -72,7 +72,7 @@ struct EntryToggle: View {
     }
 }
 
-/// A colour over one field of a list entry.
+/// A color over one field of a list entry.
 struct EntryColor: View {
     @Environment(SettingsStore.self) private var store
     let listPath: String
@@ -250,7 +250,7 @@ struct LinkSettings: View {
         SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
             WideRow(title: "Style",
                     detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
-                    help: "In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
+                    help: "In Clean, hover the card to see where it goes. StreamNook fetches the page from your iPhone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
                     paths: ["chat_design.link_previews", "chat_design.link_preview_keep_link"]) {
                 SettingSegments(choices: [Choice("Off", "off"), Choice("Card + Link", "with_link"), Choice("Clean", "clean")],
                                 selected: style, accessibility: "Link style") { value in
@@ -484,7 +484,7 @@ enum RuleErrors {
     }
 }
 
-/// One highlight or ignored phrase: switch, pattern, options, and (for highlights) colour,
+/// One highlight or ignored phrase: switch, pattern, options, and (for highlights) color,
 /// order, sound and cooldown.
 struct PhraseCard: View {
     @Environment(SettingsStore.self) private var store
@@ -814,16 +814,23 @@ struct CustomCommandsSettings: View {
     var body: some View {
         let commands = store.list(path)
         let triggers = commands.map { ($0["trigger"] as? String ?? "").lowercased() }
-        SettingsBlock(title: "Custom Commands", bare: true) {
-            HStack(alignment: .top) {
-                Text("Define your own commands. A trigger of `lurk` with expansion `I'm lurking, BRB` means typing `/lurk` sends that message instead.")
-                    .font(.sn(12)).foregroundStyle(SN.textSecondary)
-                Spacer(minLength: 8)
-                Button(reference ? "Hide reference" : "Show reference", systemImage: "book") {
-                    withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { reference.toggle() }
+        SettingsBlock(title: "Custom Commands", accessory: AnyView(
+            Button {
+                withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { reference.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "book").font(.system(size: 11))
+                    Text(reference ? "Hide reference" : "Show reference")
                 }
-                .font(.sn(12, 600)).foregroundStyle(SN.accent).buttonStyle(.plain)
+                .font(.sn(12, 500)).foregroundStyle(SN.textSecondary)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+        ), bare: true) {
+            Text("Define your own commands. A trigger of `lurk` with expansion `I'm lurking, BRB` means typing `/lurk` sends that message instead.")
+                .font(.sn(12)).foregroundStyle(SN.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             if reference { CommandReference() }
             if commands.isEmpty {
                 EmptyListCard(text: "No custom commands yet.", button: "Add your first command") { Task { _ = await store.add(path) } }
@@ -955,7 +962,8 @@ struct NicknamesSettings: View {
         SettingsBlock(title: "Nicknames", detail: "Nicknames you've set for individual chatters. Only visible to you. Set or clear a nickname from the user's profile card in chat.", bare: true) {
             if overrides.isEmpty {
                 Text("No overrides yet. Click any user's name in chat to open their profile card, then set a nickname.")
-                    .font(.sn(12)).foregroundStyle(SN.textMuted)
+                    .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity).padding(16).snPanel()
             } else {
                 ForEach(overrides, id: \.id) { item in
                     let name = item.entry["username"] as? String ?? item.id
