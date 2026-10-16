@@ -950,7 +950,7 @@
    "paths": [],
    "nested": false,
    "logo": null,
-   "detail": "How an @mention reads in chat. Hover an option to see it in the preview.",
+   "detail": "How an @mention reads in chat.",
    "aliases": []
   },
   {
@@ -1126,7 +1126,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal.",
+   "detail": "Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can tap to reveal.",
    "aliases": [
     "gif"
    ]
@@ -1140,7 +1140,7 @@
    ],
    "nested": true,
    "logo": null,
-   "detail": "",
+   "detail": "Scales emotes in chat relative to the text, with 1.00x being the default size.",
    "aliases": []
   },
   {
@@ -1265,7 +1265,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone.",
+   "detail": "Underlines misspelled words as you type and offers corrections when you tap one. Emotes, chatters, commands and links are left alone.",
    "aliases": [
     "spelling",
     "autocorrect",
@@ -1410,7 +1410,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant.",
+   "detail": "Animates the scroll back to the bottom when you tap Resume; auto-scroll for new messages stays instant.",
    "aliases": []
   },
   {
@@ -1438,7 +1438,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away.",
+   "detail": "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one tap away.",
    "aliases": []
   },
   {
@@ -1842,7 +1842,7 @@
    "paths": [],
    "nested": false,
    "logo": null,
-   "detail": "View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.",
+   "detail": "View cache info shows a count of what is on disk, and Clear cache deletes every stored emote and badge so they download fresh.",
    "aliases": [
     "clear cache",
     "free space"

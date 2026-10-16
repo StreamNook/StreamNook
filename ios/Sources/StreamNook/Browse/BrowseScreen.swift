@@ -1,6 +1,7 @@
 import Observation
 import SNKit
 import SwiftUI
+import UIKit
 
 /// Browse: what Twitch recommends live, or the categories, with search covering both. Needs no
 /// sign-in.
@@ -282,22 +283,7 @@ struct CategoryTile: View {
         let shape = RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
         return Color.clear
             .aspectRatio(3 / 4, contentMode: .fit)
-            .background {
-                if let url = TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height),
-                   !url.absoluteString.contains("404_boxart") {
-                    AsyncImage(url: url) { phase in
-                        if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
-                    }
-                } else {
-                    // A category with no art of its own: our quiet placeholder, not Twitch's gray box.
-                    ZStack {
-                        SN.surface
-                        Image(systemName: "gamecontroller")
-                            .font(.system(size: 26, weight: .regular))
-                            .foregroundStyle(SN.textMuted)
-                    }
-                }
-            }
+            .background { BoxArt(url: TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height)) }
             .clipShape(shape)
             // A pixel-thin edge so art as dark as the page keeps its shape; on bright art it vanishes.
             .overlay { shape.strokeBorder(SN.textPrimary.opacity(0.10), lineWidth: 1 / scale) }
@@ -310,6 +296,43 @@ struct CategoryTile: View {
         case 0: return "No live streams"
         case 1: return "1 viewer"
         default: return "\(count.formatted(.number.notation(.compactName))) viewers"
+        }
+    }
+}
+
+/// A category's box art. Twitch's CDN answers a category with no art by redirecting to its shared
+/// `404_boxart` picture (a gray controller box); that answer shows our own quiet placeholder instead.
+private struct BoxArt: View {
+    let url: URL?
+    /// The picture for `url`, or nil once Twitch said it has none.
+    @State private var loaded: Loaded?
+
+    private struct Loaded {
+        let url: URL
+        let image: UIImage?
+    }
+
+    var body: some View {
+        ZStack {
+            if url == nil || (loaded?.url == url && loaded?.image == nil) {
+                SN.surface
+                Image(systemName: "gamecontroller")
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundStyle(SN.textMuted)
+            } else if let loaded, loaded.url == url, let image = loaded.image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                SN.surface
+            }
+        }
+        .task(id: url) {
+            guard let url, loaded?.url != url else { return }
+            guard let (data, response) = try? await URLSession.shared.data(from: url), !Task.isCancelled else { return }
+            if response.url?.absoluteString.contains("404_boxart") == true {
+                loaded = Loaded(url: url, image: nil)
+            } else if let image = await UIImage(data: data)?.byPreparingForDisplay(), !Task.isCancelled {
+                loaded = Loaded(url: url, image: image)
+            }
         }
     }
 }

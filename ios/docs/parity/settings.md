@@ -743,7 +743,10 @@ Not parity lines: open questions found while reading, each to be settled before 
 
 ## Beyond Android (backlog, Brandon picks)
 
-- [ ] (backlog, not parity) A settings search field over every panel and nested row, reusing the desktop search index (`.searchable` on the settings list)
+- [x] (beyond Android) A settings search field over every panel and nested row (iPhone A7: on the You tab; ranked in Rust over its own catalog of the iPhone rows with aliases, `search_settings`; a result opens its page at its section)
+- [x] (beyond Android) A "Changed settings" page: every row set differently from a fresh install, by page, each with its reset arrow and a way to its page (Rust `get_changed_settings` over the same catalog)
+- [~] (beyond Android) Self-restoring settings: Rust keeps a portable copy each day (7 kept) and rebuilds a settings.json that no longer loads from the newest copy instead of a fresh install, on every platform; the Backup page lists the copies with Restore, exports a settings file through the share sheet and imports one from Files (iPhone A7: today's copy seen listed on the phone; Restore, export, import and the automatic recovery are built and unit-tested, not yet tried on the phone)
+- [x] (beyond Android) Platform and badge-service logos beside their names in the Chat page (Combined Chat platforms, event kinds per platform, badge services, 7TV/FFZ/BTTV rows, YouTube Chat)
 - [ ] (backlog, not parity) Separate start quality on Wi-Fi and on cellular, and honouring Low Data Mode (`NWPathMonitor.isConstrained`) by capping quality
 - [ ] (backlog, not parity) Alternate app icons chosen from the Theme panel (`UIApplication.setAlternateIconName`)
 - [ ] (backlog, not parity) Follow the system appearance: pick a light theme and a dark theme and switch with the system's light/dark mode

@@ -17,6 +17,9 @@ final class ProfileSheetModel {
     var failed: Set<String> = []
     @ObservationIgnored private let core: CoreBridge
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    /// The user key whose history is being followed: the target's id, or for a login-only
+    /// target (a mention, the long-press Profile item) the id the core resolved.
+    @ObservationIgnored private var watchedKey: String?
 
     static let historyLimit = 50
 
@@ -41,6 +44,9 @@ final class ProfileSheetModel {
                 ], as: ProfileSheetData.self)
                 guard !Task.isCancelled else { return }
                 self?.sheet = fresh
+                if target.userID.isEmpty, !fresh.userID.isEmpty {
+                    await self?.followHistory(key: fresh.userID)
+                }
             } catch {
                 log.debug("profile sheet unavailable: \(String(describing: error), privacy: .public)")
             }
@@ -58,23 +64,26 @@ final class ProfileSheetModel {
                 }
             })
         }
-        tasks.append(Task { [weak self] in
-            await self?.followHistory()
-        })
+        if !target.userID.isEmpty {
+            tasks.append(Task { [weak self] in
+                await self?.followHistory(key: target.userID)
+            })
+        }
     }
 
     func stop() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
+        guard let key = watchedKey else { return }
+        watchedKey = nil
         let core = core
-        let key = target.userID
         Task { _ = try? await core.invoke("unwatch_user_history", args: ["userKey": key]) }
     }
 
     /// The session's messages from this person: the store's latest 50, then each new one pushed
     /// while the sheet is open (deduped by id, trimmed to the newest 50).
-    private func followHistory() async {
-        let key = target.userID
+    private func followHistory(key: String) async {
+        watchedKey = key
         let events = core.events.stream("user-history-message")
         _ = try? await core.invoke("watch_user_history", args: ["userKey": key])
         do {

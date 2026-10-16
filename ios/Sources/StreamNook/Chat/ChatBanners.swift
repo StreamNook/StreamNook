@@ -52,6 +52,8 @@ struct PinnedBanner: View {
             Image(systemName: "pin.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(SN.accent)
+                // On the tab strip's face column above it.
+                .padding(.leading, 2)
                 .accessibilityHidden(true)
             // The name hugs its preview; a long one gives way once the preview is down to 120 pt.
             PinnedSender(pin: first, allBadges: expanded)
