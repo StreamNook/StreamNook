@@ -109,6 +109,7 @@ private struct BadgeTileView: View {
 }
 
 /// The colors a status word and a tile's ring take.
+@MainActor
 enum BadgeWords {
     static func color(_ tile: BadgeTile) -> Color {
         if tile.owned { return SN.accent }
