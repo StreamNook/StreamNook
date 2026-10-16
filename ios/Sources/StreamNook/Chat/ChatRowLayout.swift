@@ -319,7 +319,8 @@ struct ChatRowLayoutBuilder {
 
         // Badges, name and body flow as one paragraph.
         var block = RowText(builder: self)
-        let badges = view?.badges ?? []
+        // Only badges whose image can load, so the gap before the name follows the last one shown.
+        let badges = (view?.badges ?? []).filter { !ImagePipeline.shared.hasFailed($0.url) }
         for (i, badge) in badges.enumerated() {
             block.badge(badge, gapAfter: i == badges.count - 1 ? 6 : 4)
         }

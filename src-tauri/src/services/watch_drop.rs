@@ -38,23 +38,19 @@ pub struct WatchDrop {
 /// What the watched channel is earning, from the inventory: the unclaimed
 /// drop whose minutes are all in comes first (it waits on a claim), then the
 /// one with the fewest minutes left. Campaigns count only when earnable on
-/// this channel and, with a known game, in that game; with no game known only
-/// a campaign that names this channel counts.
+/// this channel AND in the game it is streaming; with the game not known yet
+/// there is nothing to show.
 pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &str, game_name: &str) -> Option<WatchDrop> {
-    let known_game = !game_id.is_empty() || !game_name.is_empty();
+    // Twitch credits a campaign only in its own category, so with the game not
+    // known yet nothing can honestly show. (Counting a campaign that names this
+    // channel flashed another game's drop for the half second before the
+    // stream's row resolved.)
+    if game_id.is_empty() && game_name.is_empty() {
+        return None;
+    }
     let relevant: Vec<&InventoryItem> = items
         .iter()
-        .filter(|it| {
-            let c = &it.campaign;
-            if !c.earnable_on(channel_id, login) {
-                return false;
-            }
-            if known_game {
-                c.counts_in(game_id, game_name)
-            } else {
-                !c.allowed_channels.is_empty() || c.is_acl_based
-            }
-        })
+        .filter(|it| it.campaign.earnable_on(channel_id, login) && it.campaign.counts_in(game_id, game_name))
         .collect();
     let candidates: Vec<(&InventoryItem, &TimeBasedDrop, i32, i32)> = relevant
         .iter()
@@ -126,14 +122,25 @@ pub async fn get(
     game_id: &str,
     game_name: &str,
 ) -> Option<WatchDrop> {
+    let place = format!("{login} in \"{game_name}\" ({game_id})");
     if !crate::services::drops_auth_service::DropsAuthService::is_authenticated().await {
+        decided(&place, "drops not connected");
         return None;
     }
     let service = drops_service.lock().await;
-    let campaigns = service.get_all_active_campaigns_cached().await.ok()?;
-    if (!game_id.is_empty() || !game_name.is_empty())
-        && !earnable_here(&campaigns, channel_id, login, game_id, game_name)
-    {
+    let campaigns = match service.get_all_active_campaigns_cached().await {
+        Ok(c) => c,
+        Err(e) => {
+            decided(&place, &format!("campaign list unreadable: {e}"));
+            return None;
+        }
+    };
+    if game_id.is_empty() && game_name.is_empty() {
+        decided(&place, "game not known yet");
+        return None;
+    }
+    if !earnable_here(&campaigns, channel_id, login, game_id, game_name) {
+        decided(&place, &format!("nothing earnable here among {} campaigns", campaigns.len()));
         return None;
     }
     let inventory = match service.fetch_inventory().await {
@@ -143,7 +150,24 @@ pub async fn get(
             return None;
         }
     };
-    pick(&inventory.items, channel_id, login, game_id, game_name)
+    let bar = pick(&inventory.items, channel_id, login, game_id, game_name);
+    if let Some(b) = &bar {
+        decided(&place, &format!("showing {} ({})", b.name, b.trailing));
+    }
+    bar
+}
+
+/// One release-log line each time the bar's answer for a channel changes,
+/// so "the bar never showed" can be read back without a debug build.
+fn decided(place: &str, outcome: &str) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let line = format!("{place}: {outcome}");
+    if let Ok(mut last) = LAST.lock() {
+        if *last != line {
+            log::info!("[DropProgress] {line}");
+            *last = line;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -238,10 +262,10 @@ mod tests {
         let items = vec![item("1", "Rust", &["Hjune"], vec![drop("b", 120, 30, false)])];
         assert!(pick(&items, "", "shroud", "", "Rust").is_none());
         assert!(pick(&items, "", "hjune", "", "Rust").is_some());
-        // No game known: only a campaign naming this channel counts.
-        assert!(pick(&items, "", "hjune", "", "").is_some());
-        let open = vec![item("2", "Rust", &[], vec![drop("b", 120, 30, false)])];
-        assert!(pick(&open, "", "hjune", "", "").is_none());
+        // No game known: nothing, not even a campaign naming this channel.
+        assert!(pick(&items, "", "hjune", "", "").is_none());
+        let other_game = vec![item("2", "League of Legends", &["Hjune"], vec![drop("b", 120, 30, false)])];
+        assert!(pick(&other_game, "", "hjune", "", "Rust").is_none());
     }
 
     #[test]

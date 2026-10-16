@@ -11,12 +11,18 @@ struct WatchDropBar: View {
     var visible = true
     @State private var drop: WatchDrop?
     @State private var claiming = false
+    /// The first answer for a stream is logged even when it is "nothing".
+    @State private var reported: String?
     @Environment(\.scenePhase) private var phase
 
     private var stream: TwitchStream? { model.watch.stream }
 
     var body: some View {
-        Group {
+        // A ZStack, not a Group: with no drop a Group has no child for `.task` to attach to, so
+        // the read never ran and the bar could never appear. The zero-size clear base keeps the
+        // reader alive while the bar takes no room.
+        ZStack(alignment: .top) {
+            Color.clear.frame(width: 0, height: 0)
             if visible, let drop {
                 // The slot adds no padding, so an empty bar takes no room; the gutter is the card's.
                 card(drop)
@@ -45,6 +51,10 @@ struct WatchDropBar: View {
                        "gameId": stream.gameID ?? "", "gameName": stream.gameName],
                 as: WatchDrop?.self)
             guard model.watch.stream?.userLogin == stream.userLogin else { return }
+            if next != drop || reported != stream.userLogin {
+                reported = stream.userLogin
+                log.notice("drop bar \(stream.userLogin, privacy: .public) game '\(stream.gameName, privacy: .public)' (\(stream.gameID ?? "-", privacy: .public)): \(next.map { "\($0.name) \($0.trailing)" } ?? "nothing", privacy: .public), visible \(visible)")
+            }
             drop = next
         } catch {
             log.error("get_watch_drop failed: \(String(describing: error), privacy: .public)")
