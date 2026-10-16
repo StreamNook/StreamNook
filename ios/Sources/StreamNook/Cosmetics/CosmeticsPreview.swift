@@ -119,7 +119,7 @@ private struct PanelIf: ViewModifier {
 }
 
 /// A badge in the preview row; one whose art fails takes itself out rather than leave a gap.
-private struct PreviewBadge: View {
+struct PreviewBadge: View {
     let url: String
     @State private var failed = false
 

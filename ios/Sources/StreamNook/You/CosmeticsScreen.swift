@@ -97,7 +97,7 @@ struct CosmeticsScreen: View {
                             .fixedSize()
                             .layoutPriority(1)
                         ForEach(wornBadgeURLs, id: \.self) { url in
-                            CosmeticImage(url, animate: true).frame(width: 18, height: 18)
+                            PreviewBadge(url: url)
                         }
                     }
                     .padding(.bottom, 2)
