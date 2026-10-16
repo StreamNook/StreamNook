@@ -17,7 +17,7 @@ const row = (provider: ProviderId, login: string, viewers: number): TwitchStream
     provider,
     key: `${provider}:${login}`,
     watch_url: '',
-  }) as TwitchStream;
+  }) as unknown as TwitchStream;
 
 const lists = (followed_live: TwitchStream[], platforms: string[] = []): FollowingLists => ({
   favorites: [],
