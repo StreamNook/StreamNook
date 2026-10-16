@@ -188,6 +188,8 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
                     hypeTrain={activeHypeTrainChannels.get(s.user_id) ?? undefined}
                     watchStreak={watchStreaks[s.user_id]}
                     onPress={(stream) => void startStream(stream.user_login, stream)}
+                    // The screen's title already names the category.
+                    showCategory={false}
                   />
                 </SettleIn>
               ))}

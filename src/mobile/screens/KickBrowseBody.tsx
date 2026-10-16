@@ -12,7 +12,9 @@ import { useAppStore } from '../../stores/AppStore';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
 import { PullToRefresh } from '../ui/PullToRefresh';
-import { SkeletonCards } from '../ui/SkeletonCards';
+import { SkeletonCards, SkeletonTiles } from '../ui/SkeletonCards';
+import { CategoryTile } from '../ui/CategoryTile';
+import { TILE_GRID_CLASS } from '../ui/categoryTileLayout';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { Logger } from '../../utils/logger';
 import { streamKey } from '../../utils/streamProvider';
@@ -161,33 +163,21 @@ export const KickBrowseBody: React.FC<{
           )}
         </>
       ) : categories === null || (loading && shownCategories.length === 0) ? (
-        <SkeletonCards />
+        <SkeletonTiles />
       ) : shownCategories.length === 0 ? (
         <div className="flex items-center justify-center py-20 text-sm text-textMuted">
           {trimmed ? 'No categories found.' : 'No categories yet, pull to refresh.'}
         </div>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-4 sn-tabbar-clearance">
+        <div className={`${TILE_GRID_CLASS} px-4 sn-tabbar-clearance`}>
           {shownCategories.map((c, i) => (
             <SettleIn key={c.id} index={i} settled={categoriesSettled}>
-              <button
-                onClick={() => onPickCategory(c)}
-                className="glass-panel media-card p-2 text-left active:opacity-80 transition-opacity w-full"
-              >
-                {c.thumbnail ? (
-                  <img
-                    loading="lazy"
-                    decoding="async"
-                    src={c.thumbnail}
-                    alt=""
-                    className="w-full aspect-[3/4] object-cover rounded mb-1.5"
-                    draggable={false}
-                  />
-                ) : (
-                  <div className="w-full aspect-[3/4] rounded mb-1.5 bg-surface" />
-                )}
-                <div className="text-[13px] font-medium text-textPrimary line-clamp-1">{c.name}</div>
-              </button>
+              <CategoryTile
+                name={c.name}
+                art={c.thumbnail}
+                twoLineName={!!trimmed}
+                onPress={() => onPickCategory(c)}
+              />
             </SettleIn>
           ))}
         </div>

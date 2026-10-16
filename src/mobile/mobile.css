@@ -86,6 +86,24 @@
   transform: translateX(6%);
 }
 
+/* Concentric corners on the stream cards. The preview sits 8px inside the
+   card, so its corner is the card's minus 8px in the same corner shape, and
+   the two curves share a center. A 4px preview inside an 8px (or 24px
+   squircle) card read as two unrelated shapes. Round cards are 18px here, a
+   step softer than desktop's 8px; the squircle keeps desktop's 24px. */
+.sn-mobile .media-card {
+  --media-card-radius: 18px;
+}
+@supports (corner-shape: squircle) {
+  .sn-mobile .media-card {
+    --media-card-radius: 24px;
+  }
+}
+.sn-mobile .media-card .sn-card-thumb {
+  border-radius: calc(var(--media-card-radius) - 8px);
+  corner-shape: var(--media-card-corner);
+}
+
 /* One tile of the badge wall. Several hundred of these mount at once; with
    content-visibility the browser lays out and decodes only the screenful in
    view and skips the rest until they scroll near. The intrinsic size keeps the
