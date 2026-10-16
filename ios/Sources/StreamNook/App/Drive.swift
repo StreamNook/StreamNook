@@ -222,8 +222,7 @@ enum Drive {
         for path in Set(logs).sorted() {
             guard let body = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
             let name = (path as NSString).lastPathComponent
-            for line in body.split(separator: "
-").filter({ $0.contains(text) }).suffix(12) {
+            for line in body.split(separator: "\n").filter({ $0.contains(text) }).suffix(12) {
                 log.notice("corelog \(name, privacy: .public): \(String(line.suffix(400)), privacy: .public)")
             }
         }
