@@ -1,126 +1,62 @@
 import SNKit
 import SwiftUI
 
-/// Rewards: Twitch Drops and the badge wall, two segments under one title. Drops opens first every
-/// time the tab is visited.
+/// Rewards: Twitch Drops and the badge wall, two segments under one title. Each visit opens on
+/// Drops with no search and every game closed.
 struct RewardsScreen: View {
     let model: AppModel
-    @State private var segment: Part = .drops
-    @State private var dropsConnected: Bool?
-    @State private var connecting = false
 
-    enum Part: Hashable { case drops, badges }
+    private var rewards: RewardsStore { model.rewards }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                if model.signedIn {
-                    GlazeSegments([Segment(value: RewardsScreen.Part.drops, label: "Drops"),
-                                   Segment(value: RewardsScreen.Part.badges, label: "Badges")],
-                                  selection: Binding(get: { segment }, set: { if let next = $0 { segment = next } }))
-                        .padding(.top, 4)
-                    switch segment {
-                    case .drops: drops
-                    case .badges: badges
+        @Bindable var rewards = rewards
+        ScrollViewReader { scroller in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if model.signedIn {
+                        GlazeSegments([Segment(value: RewardsStore.Part.drops, label: "Drops"),
+                                       Segment(value: RewardsStore.Part.badges, label: "Badges")],
+                                      selection: Binding(get: { rewards.segment }, set: { if let next = $0 { rewards.segment = next } }))
+                            .padding(.top, 4)
+                        switch rewards.segment {
+                        case .drops: DropsSegment(model: model, scroller: scroller)
+                        case .badges: badges
+                        }
+                    } else {
+                        SignedOutRewards(model: model)
                     }
-                } else {
-                    SignedOutRewards(model: model)
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
+        .scrollDismissesKeyboard(.immediately)
         .background(SN.background)
         .navigationTitle("Rewards")
         .toolbarTitleDisplayMode(.inlineLarge)
-        .refreshable { await checkDrops() }
-        .task(id: model.signedIn) { if model.signedIn { await checkDrops() } }
-        .onAppear { segment = .drops }
-        .task { await followDropsSignIn() }
-        .onChange(of: model.host.sheet == nil) { _, closed in if closed { connecting = false } }
-    }
-
-    @ViewBuilder
-    private var drops: some View {
-        switch dropsConnected {
-        case nil:
-            EmptyView()
-        case false?:
-            ConnectDropsCard(connecting: connecting) { Task { await connectDrops() } }
-        case true?:
-            EmptyNote(text: "Your drop campaigns show here once the Drops screen is built.", hint: nil)
+        .refreshable { await refresh() }
+        .onAppear {
+            rewards.visited()
+            if model.signedIn { Task { await rewards.load(refresh: true) } }
         }
+        .onChange(of: model.signedIn) { _, signedIn in
+            if signedIn { Task { await rewards.load(refresh: true) } }
+        }
+        .task { rewards.listen(toasts: model.toasts) }
+        .onChange(of: model.host.sheet == nil) { _, closed in if closed { rewards.sheetClosed() } }
     }
 
     private var badges: some View {
         EmptyNote(text: "Your badge wall shows here once it is built.", hint: nil)
     }
 
-    private func checkDrops() async {
-        dropsConnected = (try? await model.core.invoke("is_drops_authenticated", args: [:], as: Bool.self)) ?? false
-    }
-
-    /// The core opens Twitch's Drops authorize page in the web sheet; the grant comes back
-    /// through the sheet and the core announces it.
-    private func connectDrops() async {
-        connecting = true
-        do {
-            _ = try await model.core.invoke("open_drops_sheet", "{}")
-        } catch {
-            connecting = false
-            model.toasts.show("Could not open the drops sign-in. Try again in a moment.")
-            log.error("open_drops_sheet failed: (String(describing: error), privacy: .public)")
+    private func refresh() async {
+        switch rewards.segment {
+        case .drops: await rewards.load(refresh: true)
+        case .badges: break
         }
-    }
-
-    /// Drops sign-in outcomes, from the sheet or anywhere else, and the sheet closing unfinished.
-    private func followDropsSignIn() async {
-        for await event in model.core.events.all() {
-            switch event.name {
-            case "drops-login-complete":
-                connecting = false
-                await checkDrops()
-            case "drops-login-error":
-                connecting = false
-                model.toasts.show("Drops sign-in failed. Try again.")
-            default:
-                continue
-            }
-        }
-    }
-}
-
-/// Drops not connected: the Twitch mark and "Drops", what connecting gets you, and the button.
-private struct ConnectDropsCard: View {
-    let connecting: Bool
-    let connect: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                PlatformMark(platform: .twitch, size: 15)
-                Text("Drops").font(.snRowStrong).foregroundStyle(SN.textPrimary)
-            }
-            Text("Connect drops to track campaign progress and earn while you watch.")
-                .font(.sn(13))
-                .foregroundStyle(SN.textSecondary)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
-                .padding(.bottom, 16)
-            Button(action: connect) {
-                HStack(spacing: 6) {
-                    Text(connecting ? "Connecting…" : "Connect drops")
-                    Image(systemName: Symbol.openOutside).font(.system(size: 14, weight: .semibold))
-                }
-            }
-            .buttonStyle(.snPrimary)
-            .disabled(connecting)
-        }
-        .padding(16)
-        .snPanel()
-        .padding(.top, 8)
     }
 }
 

@@ -29,6 +29,8 @@ final class AppModel {
     let cosmetics = CosmeticsStore()
     /// The open chat rooms: the watched stream's and those opened beside it.
     let chat: ChatRooms
+    /// The Rewards tab: drops, the badge wall, and the drop bar's jump target.
+    let rewards: RewardsStore
 
     private(set) var phase = Phase.booting
     private(set) var started = false
@@ -45,6 +47,7 @@ final class AppModel {
         home = HomeStore(core: core)
         settingsStore = SettingsStore(core: core)
         chat = ChatRooms(core: core)
+        rewards = RewardsStore(core: core)
         let watch = watch
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }

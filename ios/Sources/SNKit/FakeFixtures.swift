@@ -11,6 +11,8 @@ public final class FakeFixtures: Sendable {
 
     private let state: Mutex<State>
     private let cosmetics = FakeCosmetics()
+    /// Drops, the badge wall and channel points: canned, and every write only recorded.
+    public let rewards = FakeRewards()
 
     public init(signedIn: Bool) {
         state = Mutex(State(signedIn: signedIn, settings: [
@@ -85,6 +87,7 @@ public final class FakeFixtures: Sendable {
             let found = FakeCore.categories.filter { $0.name.lowercased().contains(query) }
             return try FakeCore.json(found.map(FakeCore.object))
         default:
+            if let answer = try rewards.answer(cmd, args) { return answer }
             return try cosmetics.answer(cmd, args, userID: Self.user.id)
         }
     }
