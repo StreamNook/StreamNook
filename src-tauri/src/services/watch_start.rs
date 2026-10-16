@@ -19,7 +19,7 @@ use crate::services::twitch_service::TwitchService;
 use crate::services::watch_session::{self, WatchTarget};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tauri::State;
+use tauri::{Manager, State};
 
 static TICKET: AtomicU64 = AtomicU64::new(0);
 /// The latest ticket belongs to a stop, so a relay a superseded start brought
@@ -173,30 +173,47 @@ pub async fn start(
         .filter(|q| !q.trim().is_empty())
         .unwrap_or_else(|| state.settings.lock().unwrap_or_else(|e| e.into_inner()).quality.clone());
 
-    let stream = if relay_ready {
-        None
-    } else {
-        let started = streaming::start_stream(format!("https://twitch.tv/{login}"), quality, state).await;
-        if !current(ticket) {
-            // A stop came after: this relay is nobody's. A newer start owns
-            // the relay already (one solo relay), so it is left alone.
-            if started.is_ok() && STOPPED.load(Ordering::Acquire) {
-                let _ = streaming::stop_stream().await;
-            }
-            log::debug!("[WatchStart] {login}: superseded while resolving");
-            return Ok(WatchStart::superseded());
+    // The row resolves alongside the relay, so a seed with gaps costs no time.
+    let relay = async {
+        if relay_ready {
+            None
+        } else {
+            Some(streaming::start_stream(format!("https://twitch.tv/{login}"), quality, state).await)
         }
-        Some(started?)
     };
-
-    let row = assemble_row(&login, &seed).await;
+    let (started, row) = tokio::join!(relay, assemble_row(&login, &seed));
+    let stream = match started {
+        None => None,
+        Some(started) => {
+            if !current(ticket) {
+                // A stop came after: this relay is nobody's. A newer start owns
+                // the relay already (one solo relay), so it is left alone.
+                if started.is_ok() && STOPPED.load(Ordering::Acquire) {
+                    let _ = streaming::stop_stream().await;
+                }
+                log::debug!("[WatchStart] {login}: superseded while resolving");
+                return Ok(WatchStart::superseded());
+            }
+            Some(started?)
+        }
+    };
     if !current(ticket) {
         return Ok(WatchStart::superseded());
     }
+    // Earning and the watch session follow the answer, so the first frame
+    // never waits on them.
+    let (app_bg, row_bg, login_bg) = (app.clone(), row.clone(), login.clone());
+    tauri::async_runtime::spawn(async move { follow(app_bg, ticket, login_bg, row_bg).await });
+    log::info!("[WatchStart] {login}: watching");
+    Ok(WatchStart { superseded: false, row: Some(row), stream })
+}
 
-    // Drops and channel points follow the channel on screen. With no
-    // broadcaster id the heartbeat cannot move, so it stops rather than keep
-    // crediting the channel before.
+/// Drops and channel points follow the channel on screen, then the watch
+/// session takes it, unless a newer start or a stop came meanwhile. With no
+/// broadcaster id the heartbeat cannot move, so it stops rather than keep
+/// crediting the channel before.
+async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
+    let state = app.state::<AppState>();
     if row.user_id.is_empty() {
         log::warn!("[WatchStart] no broadcaster id for {login}; drops and points monitoring off for this session");
         let _ = crate::commands::drops::stop_drops_monitoring(state).await;
@@ -205,12 +222,11 @@ pub async fn start(
         let _ = streaming::register_active_channel(row.user_id.clone(), state).await;
     }
     if !current(ticket) {
-        return Ok(WatchStart::superseded());
+        return;
     }
-
     let authenticated = state.twitch_auth.get_token().await.is_ok();
     watch_session::start(
-        app,
+        app.clone(),
         WatchTarget {
             provider: "twitch".to_string(),
             login: login.clone(),
@@ -225,8 +241,7 @@ pub async fn start(
         },
     )
     .await;
-    log::info!("[WatchStart] {login}: watching");
-    Ok(WatchStart { superseded: false, row: Some(row), stream })
+    log::info!("[WatchStart] {login}: drops, points and the watch session follow it");
 }
 
 /// Stop watching: the relay goes down, the watch session ends, and unless
