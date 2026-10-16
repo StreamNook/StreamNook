@@ -90,7 +90,12 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             <Lock size={17} className="text-textSecondary shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <div className="text-[13.5px] text-textSecondary">This chat is in</div>
-              <div className="text-[14px] text-textPrimary">{gatingLabels.join(' · ')}</div>
+              {/* One mode per line: joined, two long labels wrapped mid-mode. */}
+              {gatingLabels.map((label) => (
+                <div key={label} className="text-[14px] leading-snug text-textPrimary">
+                  {label}
+                </div>
+              ))}
             </div>
           </div>
         )}
