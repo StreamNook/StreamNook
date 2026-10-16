@@ -25,6 +25,14 @@ import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
 
+/** `watch_open_room`: the room, or the live row for a stale card. */
+type RoomOpenResult = {
+  superseded: boolean;
+  room?: OfflineRoom;
+  live?: TwitchStream;
+  row?: TwitchStream;
+};
+
 /** `watch_start`: a superseded start carries nothing else. */
 type WatchStartResult = {
   superseded: boolean;
@@ -2724,41 +2732,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       .then((m) => m.stopVodReplay())
       .catch(() => {});
     try {
-      // Everything the room shows, in one Rust answer (cached, public, works
-      // signed out). A failed lookup still opens the room with what we have.
-      let room: OfflineRoom | null = null;
-      try {
-        room = await invoke<OfflineRoom>('open_offline_room', { login });
-      } catch (e) {
-        Logger.warn(`[Offline room] Could not load ${login}:`, e);
-      }
-      if (superseded()) return;
+      // One Rust call (services/watch_start.rs `open_room`): the room's facts
+      // (cached, public, works signed out; a failed lookup still opens the room
+      // with what we have), whatever played stops, and the watch session waits
+      // for the channel to go live (not for chatOnly: the channel is live and
+      // its playback is what failed). A stale card for a live channel answers
+      // with the live row instead.
+      ensureWatchSessionListeners(set, get);
+      const opened = await invoke<RoomOpenResult>('watch_open_room', {
+        login,
+        seed: providedStreamInfo ?? null,
+        chatOnly: !!opts?.chatOnly,
+      });
+      if (opened.superseded || superseded()) return;
+      const room = opened.room ?? null;
 
-      // The card that opened the room was stale and the channel is live: watch
-      // it. Not when its playback just failed (chatOnly), or this would loop.
-      if (room?.live && !opts?.chatOnly) {
-        await get().startStream(login, { ...room.live, profile_image_url: room.live.profile_image_url || room.avatar_url || undefined });
+      if (opened.live) {
+        await get().startStream(login, opened.live);
         return;
       }
 
-      // Whatever the main view was playing (an ended stream, another VOD) stops.
-      if (get().streamUrl && get().streamUrl !== 'offline') {
-        await invoke('stop_stream').catch((e) => Logger.warn('[Offline room] Error stopping playback:', e));
-      }
-
-      const info: TwitchStream = {
-        id: '',
-        user_id: room?.user_id || providedStreamInfo?.user_id || '',
-        user_name: room?.display_name || providedStreamInfo?.user_name || login,
-        user_login: login,
-        title: room?.last_title || providedStreamInfo?.title || '',
-        viewer_count: 0,
-        game_name: room?.last_category || providedStreamInfo?.game_name || '',
-        thumbnail_url: '',
-        started_at: '',
-        profile_image_url: room?.avatar_url || providedStreamInfo?.profile_image_url || '',
-        is_live: false,
-      };
+      const info: TwitchStream = { ...(opened.row as TwitchStream), user_login: login, is_live: false };
       set({
         streamUrl: 'offline',
         activeQuality: null,
@@ -2789,16 +2783,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
       if (superseded()) return;
-
-      // The session waits for the channel to go live (Rust: EventSub when
-      // signed in, the batched viewer poll always). Not for chatOnly: the
-      // channel is live already and its playback is what failed.
-      if (!opts?.chatOnly) {
-        ensureWatchSessionListeners(set, get);
-        await invoke('watch_session_start', {
-          target: { ...watchTargetOf(info, 'twitch', login, get().isAuthenticated), offline: true },
-        }).catch((e) => Logger.warn('[Offline room] Could not start the watch session:', e));
-      }
 
       if (opts?.playVod && !superseded()) {
         await get().playOfflineRoomVod();

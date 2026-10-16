@@ -17,6 +17,8 @@ import SwiftUI
 /// - `open:watch:INDEX` (or `play:INDEX`) opens the watch layer on the Browse list's stream at INDEX;
 ///   `login:NAME` opens it on a bare login, the way a notification tap or a raid seed does
 /// - `nowplaying` logs the lock screen card (title, channel, artwork, live, rate, seek)
+/// - `room:LOGIN` opens LOGIN's offline room (or its stream when it is live); `roomvod` plays the
+///   room's latest broadcast, `roomback` returns to the room; `roomstate` logs what the room holds
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
@@ -107,6 +109,21 @@ enum Drive {
                 let login = model.streams[index].userLogin
                 model.startWatching(TwitchStream(id: "", userLogin: login, userName: login, title: "", viewerCount: 0, gameName: ""))
             case "clip": await openTopClip(model)
+            case "room":
+                // An offline card for LOGIN (a live channel starts its stream instead).
+                model.startWatching(TwitchStream(id: "", userLogin: value, userName: value, title: "", viewerCount: 0,
+                                                 gameName: "", isLive: false))
+            case "roomof":
+                // A live Browse channel opened as a stale offline card: the core starts its stream.
+                guard await waitForStreams(model), let index = Int(value), model.streams.indices.contains(index) else { continue }
+                let login = model.streams[index].userLogin
+                model.startWatching(TwitchStream(id: "", userLogin: login, userName: login, title: "", viewerCount: 0,
+                                                 gameName: "", isLive: false))
+            case "roomvod": model.watch.playRoomVod()
+            case "roomback": model.watch.leaveRoomVod()
+            case "roomstate":
+                let room = model.watch.room
+                log.notice("drive room \(room?.login ?? "-", privacy: .public) last \(room?.lastLiveAt ?? "-", privacy: .public) title \(room?.lastTitle ?? "-", privacy: .public) vod \(room?.latestVod?.id ?? "-", privacy: .public) next \(room?.nextStream?.startAt ?? "-", privacy: .public) waiting \(room?.chatters ?? -1) vodPlaying \(model.watch.roomVod) playing \(model.watch.stream?.userLogin ?? "-", privacy: .public)")
             case "nowplaying":
                 let info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
                 let rate = info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? -1
