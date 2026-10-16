@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import SNKit
+import UIKit
 
 /// How the player reaches the relay. The core's low-latency origin runs on every route, so the
 /// relay measures each one against the same live edge.
@@ -77,6 +78,7 @@ final class Watch {
     var holdParts: Int?
 
     private var tasks: [Task<Void, Never>] = []
+    private var core: CoreBridge?
     private var opened: ContinuousClock.Instant?
     private var observers: [NSObjectProtocol] = []
     private var stalls = 0
@@ -95,8 +97,8 @@ final class Watch {
         // KVO reports on whichever thread changed the value, so these are not main-actor code.
         watchers = [
             player.observe(\.timeControlStatus, options: [.initial, .new]) { @Sendable [weak self] player, _ in
-                let paused = player.timeControlStatus == .paused
-                Task { @MainActor in self?.playerPaused(paused) }
+                let status = player.timeControlStatus
+                Task { @MainActor in self?.playerState(status) }
             },
             player.observe(\.isMuted, options: [.initial, .new]) { @Sendable [weak self] player, _ in
                 let muted = player.isMuted
@@ -117,6 +119,14 @@ final class Watch {
                     self.player.play()
                 }
             },
+            // Leaving the app flushes a pause still waiting out its grace (the earning gate).
+            NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                                   queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.stream != nil else { return }
+                    self.reportState("hidden")
+                }
+            },
         ]
     }
 
@@ -129,6 +139,7 @@ final class Watch {
     func open(_ stream: TwitchStream, core: CoreBridge) {
         guard self.stream?.userLogin.lowercased() != stream.userLogin.lowercased() else { return }
         close(core: core, stopping: false)
+        self.core = core
         self.stream = stream
         opened = .now
         status = "Resolving"
@@ -214,9 +225,29 @@ final class Watch {
         status = "Buffering"
     }
 
-    private func playerPaused(_ paused: Bool) {
+    /// The player's own state drives the center button, the lock screen card, the earning gate
+    /// (a rebuffer is not a pause) and keeping the screen awake while a stream plays.
+    private func playerState(_ status: AVPlayer.TimeControlStatus) {
+        let paused = status == .paused
         self.paused = paused
-        if stream != nil { nowPlaying.playing(!paused) }
+        guard stream != nil else {
+            UIApplication.shared.isIdleTimerDisabled = false
+            return
+        }
+        nowPlaying.playing(!paused)
+        UIApplication.shared.isIdleTimerDisabled = !paused
+        switch status {
+        case .playing: reportState("playing")
+        case .paused: reportState("paused")
+        default: break
+        }
+    }
+
+    /// What the video does, for the core's earning gate (drops, channel points, watch time). The
+    /// core waits out a pause's grace, so a reload's brief pause costs nothing.
+    private func reportState(_ state: String) {
+        guard let core else { return }
+        Task.detached { _ = try? await core.invoke("report_player_state", args: ["state": state]) }
     }
 
     /// Publishes the lock screen card with what is known of the stream now.
@@ -243,9 +274,10 @@ final class Watch {
         }
     }
 
-    private func take(_ update: ChannelViewers) {
+    /// Takes a push for the watched channel, never blanking a field it did not carry.
+    func take(_ update: ChannelViewers) {
         let old = live
-        live = ChannelViewers(login: update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
+        live = ChannelViewers(login: update.login.isEmpty ? old?.login ?? "" : update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
                               startedAt: update.startedAt ?? old?.startedAt, title: update.title ?? old?.title,
                               gameName: update.gameName ?? old?.gameName)
         if live?.title != old?.title { showCard() }
@@ -294,6 +326,11 @@ final class Watch {
     /// another stream (`stopping` false) leaves the stop to the next start, which supersedes it.
     func close(core: CoreBridge, stopping: Bool = true) {
         guard let login = stream?.userLogin else { return }
+        // A pause still waiting out its grace must not gate the next stream off.
+        reportState("teardown")
+        UIApplication.shared.isIdleTimerDisabled = false
+        // A brightness the landscape dial borrowed goes back with the stream.
+        ScreenBrightness.restore()
         lastStart = nil
         tasks.forEach { $0.cancel() }
         tasks = []

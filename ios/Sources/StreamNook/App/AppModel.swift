@@ -94,6 +94,8 @@ final class AppModel {
             return
         }
         let settings = await loadSettings()
+        // The watch layer reads its landscape chat and player rows from the settings view.
+        Task { await settingsStore.refresh() }
         capVideoHeight()
         await signIn.boot(core: core)
         host.start(core: core, cookies: signIn.cookies)
@@ -295,6 +297,14 @@ final class AppModel {
                         ChatLab.session?.reconnect(port: port)
                         #endif
                     }
+                case "watch-session://redirect":
+                    let json = event.payloadJSON
+                    Task { await self.followRaid(json) }
+                case "watch-session://offline":
+                    // The confirmation polls Helix for up to 40 s; other events keep flowing.
+                    Task { await self.streamWentOffline() }
+                case "watch-session://stream-update":
+                    if let update = ChannelViewers.streamUpdate(event.payloadJSON) { self.watch.take(update) }
                 case "ad-pivot":
                     let payload = Self.object(event.payloadJSON)
                     if let url = payload["url"] as? String {
@@ -304,6 +314,52 @@ final class AppModel {
                     break
                 }
             }
+        }
+    }
+
+    /// A raid the core follows: a notice, a beat to read it, then the target starts from the
+    /// raid's seed (ids, names); the start fills in the rest.
+    private func followRaid(_ json: String) async {
+        guard watch.stream != nil,
+              let payload = try? JSONDecoder().decode(RaidRedirect.self, from: Data(json.utf8)) else { return }
+        let target = payload.target
+        log.notice("raid: joining \(target.userLogin, privacy: .public)")
+        toasts.show("Raid starting! Joining \(target.userLogin)...", .info)
+        try? await Task.sleep(for: .milliseconds(1500))
+        guard watch.stream != nil else { return }
+        startWatching(target)
+    }
+
+    /// The watched stream looks offline: the core confirms it and says what to do.
+    private func streamWentOffline() async {
+        guard let ended = watch.stream else { return }
+        guard let decision = try? await core.invoke("watch_session_resolve_offline", args: [:], as: OfflineDecision.self)
+        else {
+            toasts.show("Auto-switch failed. Please select a new stream manually.")
+            return
+        }
+        guard watch.stream?.userLogin == ended.userLogin else { return }
+        log.notice("offline decision \(decision.action, privacy: .public) \(decision.why ?? "", privacy: .public)")
+        let notice = { (n: OfflineDecision.Notice?) in
+            if let n { self.toasts.show(n.message, n.error ? .error : .info) }
+        }
+        switch decision.action {
+        case "notify":
+            notice(decision.notice)
+        case "offline_chat":
+            // The video stops; chat stays. The phone has no offline room screen yet.
+            _ = try? await core.invoke("stop_stream", args: [:])
+            watch.showOffline()
+        case "stop":
+            notice(decision.notice)
+            stopWatching()
+        case "switch_to":
+            guard let next = decision.stream else { return }
+            notice(decision.notice)
+            try? await Task.sleep(for: .milliseconds(500))
+            startWatching(next)
+        default:
+            break
         }
     }
 

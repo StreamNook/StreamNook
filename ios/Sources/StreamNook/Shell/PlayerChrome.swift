@@ -10,8 +10,10 @@ struct PlayerChrome: View {
     let model: AppModel
     let landscape: Bool
     let insets: EdgeInsets
-    /// Room the landscape chat column takes on the trailing side, so no control sits under it.
+    /// Room the landscape chat column takes over the picture, so no control sits under it.
     let chatWidth: CGFloat
+    /// The column is on the leading side.
+    var chatLeading = false
     let shown: Bool
     let onMinimize: () -> Void
     let onTouch: () -> Void
@@ -22,15 +24,21 @@ struct PlayerChrome: View {
 
     var body: some View {
         ZStack {
+            // The loading mark, sized from the band (18 percent of its height, 22 to 60 points),
+            // fades out with the first frame and is back at once when loading returns.
+            GeometryReader { band in
+                if watch.error == nil, watch.firstPlayMS == nil {
+                    PenroseMark(width: min(max(band.size.height * 0.18, 22), 60))
+                        .frame(width: band.size.width, height: band.size.height)
+                        .transition(.asymmetric(insertion: .identity, removal: .opacity))
+                }
+            }
+            .animation(SNMotion.run(.easeOut(duration: 0.3)), value: watch.firstPlayMS == nil)
+            .allowsHitTesting(false)
             if let error = watch.error {
-                Text(error)
-                    .font(.snCaption)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .padding(24)
-                    .allowsHitTesting(false)
-            } else if watch.firstPlayMS == nil {
-                PenroseMark(width: 30).allowsHitTesting(false)
+                ErrorState(text: error) {
+                    Task { await model.restartStream() }
+                }
             }
             if shown {
                 Scrim().transition(.opacity)
@@ -41,12 +49,12 @@ struct PlayerChrome: View {
                 }
                 .padding(.top, landscape ? insets.top + 8 : 8)
                 .padding(.bottom, landscape ? max(insets.bottom, 8) : 4)
-                .padding(.leading, (landscape ? insets.leading : 0) + 12)
-                .padding(.trailing, (landscape ? insets.trailing : 0) + 12 + chatWidth)
+                .padding(.leading, (landscape ? insets.leading : 0) + 12 + (chatLeading ? chatWidth : 0))
+                .padding(.trailing, (landscape ? insets.trailing : 0) + 12 + (chatLeading ? 0 : chatWidth))
                 .transition(.opacity)
                 if watch.error == nil {
                     playPause
-                        .padding(.trailing, chatWidth)
+                        .padding(chatLeading ? .leading : .trailing, chatWidth)
                         .transition(.opacity)
                 }
             }
@@ -315,6 +323,37 @@ private struct ChannelAvatar: View {
                 .font(.sn(12, 700))
                 .foregroundStyle(.white)
         }
+    }
+}
+
+/// Playback failed: a dark scrim, what happened, and Retry (a restart). Both take their own taps,
+/// so they never toggle the controls.
+private struct ErrorState: View {
+    let text: String
+    let retry: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.7)
+            VStack(spacing: 14) {
+                Text(text)
+                    .font(.sn(14))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                Button(action: retry) {
+                    Text("Retry")
+                        .font(.sn(14, 600))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .snGlass(Capsule(), interactive: true)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 }
 

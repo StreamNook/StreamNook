@@ -117,3 +117,46 @@ import Testing
         #expect(start.stream?.url == FakeCore.testStreamURL)
     }
 }
+
+@Suite struct LandscapeChatTests {
+    @Test func theSideAndModeComeFromTheSettings() {
+        let auto = LandscapeChatLayout(layout: "overlay", side: "auto", width: 340, opacity: 55)
+        #expect(!auto.beside && !auto.leading)
+        let left = LandscapeChatLayout(layout: "beside", side: "left", width: 340, opacity: 55)
+        #expect(left.beside && left.leading)
+    }
+
+    @Test func theWidthStaysBetween240AndHalfTheScreen() {
+        let chat = LandscapeChatLayout(layout: "overlay", side: "auto", width: 600, opacity: 55)
+        #expect(chat.width(screenWidth: 932) == 466)
+        #expect(chat.width(screenWidth: 932, live: 100) == 240)
+        #expect(chat.width(screenWidth: 932, live: 301.4) == 301)
+    }
+
+    @Test func pullingTowardThePictureWidensTheColumn() {
+        let right = LandscapeChatLayout(layout: "overlay", side: "right", width: 340, opacity: 55)
+        #expect(right.dragged(from: 340, by: -40, screenWidth: 932) == 380)
+        let left = LandscapeChatLayout(layout: "overlay", side: "left", width: 340, opacity: 55)
+        #expect(left.dragged(from: 340, by: -40, screenWidth: 932) == 300)
+    }
+
+    @Test func theBackgroundIsClampedToAPercent() {
+        #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 140).opacity == 100)
+        #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 0).opacity == 0)
+    }
+}
+
+@Suite struct DialTests {
+    @Test func upRaisesOverEightyPercentOfThePicture() {
+        #expect(Dial.level(start: 0.5, dy: -200, height: 400) > 0.99)
+        #expect(Dial.level(start: 0.5, dy: 160, height: 400) == 0)
+        // A short picture still needs 140 points for the full range.
+        #expect(abs(Dial.level(start: 0, dy: -70, height: 100) - 0.5) < 0.0001)
+    }
+
+    @Test func hundredthsAndTenthsAreWhereTheyChange() {
+        #expect(Dial.hundredth(0.504) == 50)
+        #expect(Dial.tenth(0.29) == 2)
+        #expect(Dial.tenth(0.3) == 3)
+    }
+}

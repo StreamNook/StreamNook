@@ -2,44 +2,76 @@ import SNKit
 import SwiftUI
 
 /// The watch layer over the tabs: full (portrait: the player under the status bar with chat below
-/// it; landscape: the video edge to edge, immersive, chat floating over it when asked for) or
+/// it; landscape: the video edge to edge, immersive, chat over it or beside it when asked for) or
 /// the mini box floating over the tabs while browsing. In portrait a downward drag on the player
-/// shrinks the whole layer toward the mini box under the finger. One player view serves every
-/// mode, so rotating, shrinking and expanding never rebuild it.
+/// shrinks the whole layer toward the mini box under the finger; in landscape a vertical swipe
+/// turns brightness (left half of the picture) or volume (right half). One player view serves
+/// every mode, so rotating, shrinking and expanding never rebuild it.
 struct WatchLayer: View {
     let model: AppModel
     /// The screen's safe area, read where it is respected (the layer itself draws past it).
     let insets: EdgeInsets
     @State private var shrink: CGFloat = 0
     @State private var dragging = false
+    @GestureState private var shrinkHeld = false
     @State private var miniDrag: CGSize = .zero
+    @GestureState private var miniHeld = false
     @State private var controlsShown = true
     @State private var controlsTouch = 0
+    /// The landscape column's width and background while a drag or the slider leads the saved
+    /// setting; nil once the setting has caught up.
+    @State private var liveWidth: Double?
+    @State private var liveOpacity: Double?
+    @State private var stripOpen = false
+    @State private var stripTouch = 0
+    @State private var dial: DialAxis?
+    @State private var dialLevel: Double = 0
+    @State private var dialStart: Double?
+    @State private var dialShown = false
+    @State private var dialRelease = 0
+    @GestureState private var dialHeld = false
     @Environment(\.snStill) private var still
 
     private var nav: Navigator { model.nav }
     private var watch: Watch { model.watch }
+    private var store: SettingsStore { model.settingsStore }
 
     static let miniSize = CGSize(width: 200, height: 112.5)
     /// How far the portrait chat reaches into the bottom safe area. With the composer's own 10 pt
     /// below it, the field ends 20 pt above the screen edge, just clear of the home indicator.
     static let indicatorOverlap: CGFloat = 24
 
+    private var chat: LandscapeChatLayout {
+        LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "overlay"),
+                            side: store.string("fullscreen_chat.side", "auto"),
+                            width: store.double("fullscreen_chat.width", 340),
+                            opacity: liveOpacity ?? store.double("fullscreen_chat.opacity", 55))
+    }
+
     var body: some View {
         GeometryReader { box in
             let screen = box.size
             let landscape = screen.width > screen.height
             let mini = nav.playerMode == .mini
+            let full = !mini
             let miniRect = Self.miniRect(screen: screen, insets: insets, origin: nav.miniOrigin, drag: miniDrag)
             let progress: CGFloat = mini ? 1 : (landscape ? 0 : shrink)
             let layer = Self.lerp(CGRect(origin: .zero, size: screen), miniRect, progress)
-            let band = Self.band(layer: layer, topInset: landscape ? 0 : insets.top, progress: progress,
-                                 landscape: landscape && !mini)
-            let showChatBelow = !landscape && !mini
-            let overlayWidth = min(max(340, 240), screen.width / 2)
+            let chat = chat
+            let sideChat = landscape && full && nav.landscapeChat
+            // The landscape column: the chat's width plus the safe inset on its outer edge (the
+            // Dynamic Island side), so its text never sits under the cutout.
+            let outer = chat.leading ? insets.leading : insets.trailing
+            let columnWidth = CGFloat(chat.width(screenWidth: screen.width, live: liveWidth)) + outer
+            let beside = sideChat && chat.beside
+            let band = beside
+                ? CGRect(x: chat.leading ? columnWidth : 0, y: 0, width: screen.width - columnWidth, height: screen.height)
+                : Self.band(layer: layer, topInset: landscape ? 0 : insets.top, progress: progress,
+                            landscape: landscape && full)
+            let columnX = chat.leading ? 0 : screen.width - columnWidth
 
             ZStack(alignment: .topLeading) {
-                (landscape && !mini ? Color.black : SN.background)
+                (landscape && full ? Color.black : SN.background)
                     .frame(width: layer.width, height: layer.height)
                     .offset(x: layer.minX, y: layer.minY)
 
@@ -47,41 +79,69 @@ struct WatchLayer: View {
                     .frame(width: band.width, height: band.height)
                     .contentShape(Rectangle())
                     .onTapGesture { mini ? expand() : toggleControls() }
-                    .gesture(mini ? nil : shrinkGesture(screen: screen, landscape: landscape))
+                    .gesture(mini ? nil : (landscape ? nil : shrinkGesture(screen: screen)))
+                    .simultaneousGesture(landscape && full ? dialGesture(band: band) : nil)
                     .overlay {
-                        if !mini {
-                            PlayerChrome(model: model, landscape: landscape, insets: landscape ? insets : EdgeInsets(),
-                                         chatWidth: nav.landscapeChat ? overlayWidth + insets.trailing : 0,
+                        if full {
+                            PlayerChrome(model: model, landscape: landscape,
+                                         insets: landscape ? chromeInsets(beside: beside, leading: chat.leading) : EdgeInsets(),
+                                         chatWidth: sideChat && !beside ? columnWidth : 0, chatLeading: chat.leading,
                                          shown: controlsShown && !dragging, onMinimize: minimize, onTouch: touchedControls)
+                        }
+                    }
+                    .overlay {
+                        if let dial, dialShown {
+                            DialReadout(axis: dial, level: dialLevel)
+                                .id(dial)
+                                .transition(.opacity.combined(with: .scale(scale: 0.94)))
                         }
                     }
                     .offset(x: band.minX, y: band.minY)
 
-                if !mini {
-                    if !landscape {
-                        BandRim()
-                            .frame(width: band.width)
-                            .offset(x: band.minX, y: band.maxY)
-                    }
+                if full, !landscape {
+                    BandRim()
+                        .frame(width: band.width)
+                        .offset(x: band.minX, y: band.maxY)
                 }
 
                 // One chat for every mode, so rotating moves the same list instead of building a
-                // second one: below the player in portrait, over the video's trailing side in
-                // landscape (read-only, when asked for), hidden but still reading while mini.
-                // Portrait chat runs down into the home-indicator inset, keeping only the strip
-                // the indicator needs: stopping at the safe-area line left a black band under the
-                // composer.
-                let overlayChat = landscape && !mini
-                let chatShown = showChatBelow || (overlayChat && nav.landscapeChat)
+                // second one: below the player in portrait, over or beside the video in landscape
+                // when asked for, hidden but still reading while mini. Portrait chat runs down
+                // into the home-indicator inset, keeping only the strip the indicator needs:
+                // stopping at the safe-area line left a black band under the composer.
+                let landscapeChat = landscape && full
+                let chatShown = (full && !landscape) || sideChat
                 let bottomKeep = max(0, insets.bottom - Self.indicatorOverlap)
-                ChatArea(model: model, overlay: overlayChat, outerInset: overlayChat ? insets.trailing : 0)
-                    .frame(width: overlayChat ? overlayWidth + insets.trailing : layer.width,
-                           height: overlayChat ? screen.height : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
-                    .offset(x: overlayChat ? screen.width - overlayWidth - insets.trailing : layer.minX,
-                            y: overlayChat ? 0 : band.maxY)
+                ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
+                         backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
+                         outerInset: landscapeChat ? outer : 0, leading: chat.leading)
+                    .frame(width: landscapeChat ? columnWidth : layer.width,
+                           height: landscapeChat ? screen.height : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
+                    .offset(x: landscapeChat ? columnX : layer.minX, y: landscapeChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)
                     .animation(SNMotion.run(.easeOut(duration: 0.2)), value: nav.landscapeChat)
                     .allowsHitTesting(chatShown && !dragging)
+
+                if sideChat {
+                    let edge = chat.leading ? columnX + columnWidth : columnX
+                    ChatWidthHandle(chat: chat, width: Double(columnWidth - outer), screenWidth: screen.width,
+                                    onDrag: { liveWidth = $0 },
+                                    onCommit: commitWidth,
+                                    onTap: {
+                                        guard !chat.beside else { return }
+                                        withAnimation(SNMotion.run(.easeOut(duration: 0.16))) { stripOpen.toggle() }
+                                        stripTouch += 1
+                                    })
+                        .offset(x: edge - 14, y: screen.height / 2 - 40)
+                    if !chat.beside, stripOpen {
+                        ChatBackgroundStrip(opacity: chat.opacity, onChange: { liveOpacity = $0 },
+                                            onHide: hideLandscapeChat, onTouch: { stripTouch += 1 })
+                            .frame(width: columnWidth - outer - 24)
+                            .offset(x: columnX + (chat.leading ? outer : 0) + 12,
+                                    y: screen.height - max(insets.bottom, 12) - 44 - 8)
+                            .transition(.opacity.combined(with: .offset(y: 8)))
+                    }
+                }
 
                 if mini {
                     MiniClose { model.stopWatching() }
@@ -108,6 +168,29 @@ struct WatchLayer: View {
             .gesture(mini ? miniGesture(screen: screen, insets: insets, rect: miniRect) : nil)
             .onChange(of: nav.playing?.userLogin) { _, _ in touchedControls() }
             .onChange(of: nav.controlsPing) { _, _ in touchedControls() }
+            // The strip is open whenever the overlay appears, so the slider is found.
+            .onChange(of: sideChat, initial: true) { _, on in
+                stripOpen = on && !chat.beside
+                if on { stripTouch += 1 }
+            }
+            // An OS-stolen gesture (an edge swipe, the notification shade, a call) unwinds with no
+            // decision: no tap, no commit.
+            .onChange(of: shrinkHeld) { _, held in
+                guard !held, dragging else { return }
+                dragging = false
+                withAnimation(SNMotion.run(SNMotion.settleBack)) { shrink = 0 }
+            }
+            .onChange(of: miniHeld) { _, held in
+                guard !held, miniDrag != .zero else { return }
+                withAnimation(SNMotion.run(SNMotion.settleBack)) { miniDrag = .zero }
+            }
+            .onChange(of: dialHeld) { _, held in if !held, dialStart != nil { endDial() } }
+            .onChange(of: store.double("fullscreen_chat.width", 340)) { _, saved in
+                if let live = liveWidth, abs(live - saved) < 0.5 { liveWidth = nil }
+            }
+            .onChange(of: store.double("fullscreen_chat.opacity", 55)) { _, saved in
+                if let live = liveOpacity, abs(live - saved) < 0.5 { liveOpacity = nil }
+            }
         }
         .ignoresSafeArea()
         .task(id: controlsTouch) {
@@ -119,6 +202,36 @@ struct WatchLayer: View {
             #endif
             withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { controlsShown = false }
         }
+        // The strip closes itself 4 s after the last touch.
+        .task(id: stripTouch) {
+            guard stripOpen else { return }
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(SNMotion.run(.easeOut(duration: 0.16))) { stripOpen = false }
+        }
+        // The background is saved 350 ms after the slider stops.
+        .task(id: liveOpacity) {
+            guard let value = liveOpacity else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await store.set("fullscreen_chat.opacity", value)
+        }
+        // The readout lingers 650 ms after the finger lifts.
+        .task(id: dialRelease) {
+            guard dialRelease > 0 else { return }
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled, dialStart == nil else { return }
+            withAnimation(SNMotion.run(.easeOut(duration: 0.16))) { dialShown = false }
+        }
+    }
+
+    /// The controls' insets in landscape: the safe area, except on the side a beside column
+    /// already covers.
+    private func chromeInsets(beside: Bool, leading: Bool) -> EdgeInsets {
+        guard beside else { return insets }
+        var adjusted = insets
+        if leading { adjusted.leading = 0 } else { adjusted.trailing = 0 }
+        return adjusted
     }
 
     // MARK: Modes
@@ -145,15 +258,24 @@ struct WatchLayer: View {
         controlsTouch += 1
     }
 
+    private func hideLandscapeChat() {
+        withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { nav.landscapeChat = false }
+    }
+
+    private func commitWidth(_ width: Double) {
+        liveWidth = width
+        Task { await store.set("fullscreen_chat.width", width) }
+    }
+
     // MARK: Gestures
 
     /// Down and mostly vertical, past 8 points: the layer shrinks toward the mini box with the
     /// finger. Let go past 45 percent, or flicked, it becomes the mini box; otherwise it springs
     /// back.
-    private func shrinkGesture(screen: CGSize, landscape: Bool) -> some Gesture {
+    private func shrinkGesture(screen: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .updating($shrinkHeld) { _, held, _ in held = true }
             .onChanged { value in
-                guard !landscape else { return }
                 let dy = value.translation.height
                 let dx = value.translation.width
                 let travel = min(max(screen.height * 0.28, 120), 280)
@@ -161,7 +283,6 @@ struct WatchLayer: View {
                 shrink = dy > 0 && dy > abs(dx) * 1.2 ? min(1, dy / travel) : 0
             }
             .onEnded { value in
-                guard !landscape else { return }
                 dragging = false
                 if shrink >= 0.45 || value.velocity.height >= 600 {
                     minimize()
@@ -174,6 +295,7 @@ struct WatchLayer: View {
     /// The mini box follows the finger, then snaps to the nearer side, keeping its height.
     private func miniGesture(screen: CGSize, insets: EdgeInsets, rect: CGRect) -> some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .updating($miniHeld) { _, held, _ in held = true }
             .onChanged { value in miniDrag = value.translation }
             .onEnded { _ in
                 let left = rect.midX < screen.width / 2
@@ -183,6 +305,42 @@ struct WatchLayer: View {
                     miniDrag = .zero
                 }
             }
+    }
+
+    /// Landscape only: a vertical swipe over the left half of the picture turns the screen's
+    /// brightness, over the right half the stream's volume. The swing is relative to the level
+    /// when the finger landed; a tenth crossed gives one light step.
+    private func dialGesture(band: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .updating($dialHeld) { _, held, _ in held = true }
+            .onChanged { value in
+                if dialStart == nil {
+                    // Mostly vertical, or it is not a dial.
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    let axis: DialAxis = value.startLocation.x < band.width / 2 ? .brightness : .volume
+                    dial = axis
+                    dialStart = axis == .brightness ? ScreenBrightness.level : Double(watch.player.volume)
+                    dialLevel = dialStart ?? 0
+                    withAnimation(SNMotion.run(.spring(response: 0.25, dampingFraction: 0.8))) { dialShown = true }
+                }
+                guard let start = dialStart, let dial else { return }
+                let next = Dial.level(start: start, dy: value.translation.height, height: band.height)
+                guard Dial.hundredth(next) != Dial.hundredth(dialLevel) else { return }
+                if Dial.tenth(next) != Dial.tenth(dialLevel) { Haptics.step() }
+                dialLevel = next
+                switch dial {
+                case .brightness: ScreenBrightness.set(next)
+                case .volume: watch.player.volume = Float(next)
+                }
+            }
+            .onEnded { _ in endDial() }
+    }
+
+    private func endDial() {
+        guard dialStart != nil else { return }
+        dialStart = nil
+        if let dial { AccessibilityNotification.Announcement("\(dial.label) \(Dial.hundredth(dialLevel))%").post() }
+        dialRelease += 1
     }
 
     // MARK: Geometry
@@ -247,31 +405,49 @@ private struct MiniClose: View {
     }
 }
 
-/// Landscape chat's backdrop over the video: the theme background at 55 percent, a faint sheen at
-/// the top and a hairline on the video edge. No blur: video moves under it.
+/// What sits behind landscape chat: a tint of the theme background over the video (no blur:
+/// video moves under it), or the plain background beside it.
+enum ChatBackdrop: Equatable {
+    case tint(Double)
+    case solid
+}
+
+/// Landscape chat's backdrop over the video: the theme background at the chosen percent, a faint
+/// sheen at the top and a hairline on the video edge.
 private struct LandscapeBackdrop: View {
+    let opacity: Double
+    let leading: Bool
+
     var body: some View {
         ZStack {
-            SN.background.opacity(0.55)
+            SN.background.opacity(opacity)
             LinearGradient(stops: [.init(color: .white.opacity(0.035), location: 0), .init(color: .clear, location: 0.25)],
                            startPoint: .top, endPoint: .bottom)
         }
-        .overlay(alignment: .leading) { Color.white.opacity(0.1).frame(width: 1) }
+        .overlay(alignment: leading ? .trailing : .leading) { Color.white.opacity(0.1).frame(width: 1) }
         .shadow(color: .black.opacity(0.6), radius: 20)
     }
 }
 
-/// Chat in the watch layer: the room's chat panel when signed in (the overlay variant in
-/// landscape: read-only, over the video); signed out, what signing in gets you.
+/// Chat in the watch layer: the room's chat panel when signed in (read-only over the video in
+/// landscape); signed out, what signing in gets you.
 private struct ChatArea: View {
     let model: AppModel
-    let overlay: Bool
+    let readOnly: Bool
+    let backdrop: ChatBackdrop?
     let outerInset: CGFloat
+    let leading: Bool
 
     var body: some View {
         content
-            .padding(.trailing, outerInset)
-            .background { if overlay { LandscapeBackdrop() } }
+            .padding(leading ? .leading : .trailing, outerInset)
+            .background {
+                switch backdrop {
+                case .tint(let opacity): LandscapeBackdrop(opacity: opacity, leading: leading)
+                case .solid: SN.background
+                case nil: EmptyView()
+                }
+            }
             // Signing in while watching opens the stream's room.
             .task(id: model.signedIn) {
                 if model.signedIn, let stream = model.watch.stream { model.chat.syncStream(stream) }
@@ -281,9 +457,8 @@ private struct ChatArea: View {
     @ViewBuilder
     private var content: some View {
         if model.signedIn {
-            ChatRoomsPanel(rooms: model.chat, overlay: overlay, onProfile: { model.cosmetics.open($0) })
+            ChatRoomsPanel(rooms: model.chat, overlay: readOnly, onProfile: { model.cosmetics.open($0) })
         } else {
-            let readOnly = overlay
             VStack(spacing: 14) {
                 Text("Sign in with Twitch to read and send chat.")
                     .font(.snBody)
