@@ -56,6 +56,9 @@ uuid = { version = "1.19.0", features = ["v4"] }
 urlencoding = "2.1.3"
 chrono = { version = "0.4.42", features = ["serde"] }
 flate2 = "1.0"
+# Finishes glyph badges (a colour square behind FFZ art) as PNGs on every
+# target; already in the lock via `image`.
+png = "0.18"
 scraper = "0.27.0"
 # Allowlist HTML sanitizer for streamer-authored panel descriptions, which are
 # rendered with dangerouslySetInnerHTML and would otherwise execute in a webview

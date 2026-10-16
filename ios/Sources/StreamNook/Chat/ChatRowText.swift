@@ -98,7 +98,9 @@ struct RowText {
         builder.font(size, .regular).xHeight / 2
     }
 
+    /// A badge whose image could not load takes no room at all.
     mutating func badge(_ badge: ChatViewBadge, gapAfter: CGFloat) {
+        guard !ImagePipeline.shared.hasFailed(badge.url) else { return }
         let size = builder.badgeSize
         inline(.image(.badge, url: badge.url, pixelHeight: Int(size * builder.scale), overlays: [], effects: 0, animate: false),
                width: size, height: size, centerAboveBaseline: 0.38 * fontSize, marginRight: gapAfter)
