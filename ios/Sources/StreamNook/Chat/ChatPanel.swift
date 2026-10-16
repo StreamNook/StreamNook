@@ -44,10 +44,12 @@ struct ChatPanel: View {
         VStack(spacing: 0) {
             ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show, onOutcome: show)
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
+                // Under the tab strip, a short fade instead of a hard cut too.
                 .mask {
-                    if let rooms, !overlay, !rooms.activePins.isEmpty {
+                    if let rooms, !overlay, !rooms.activePins.isEmpty || rooms.showsStrip {
                         VStack(spacing: 0) {
-                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 30)
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                                .frame(height: rooms.activePins.isEmpty ? 12 : 30)
                             Color.black
                         }
                     } else {

@@ -3,9 +3,10 @@ import SwiftUI
 
 /// The open rooms over the chat, shown from two rooms up so single-room chat keeps every point
 /// of height. A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill.
-/// The capsule hugs its rooms; when they outgrow the bar it fills the bar (the same inset at both
-/// ends) and the widest names truncate first, so the row compresses in place and never scrolls,
-/// clips or wraps. It reads only the tabs, never the rows, so arriving messages never rebuild it.
+/// The capsule hugs its rooms. When they outgrow the bar the row compresses in place and never
+/// scrolls, clips or wraps: rooms behind the one on screen fold to their faces one at a time, the
+/// longest name first, until the row fits; with every other room folded, the name on screen
+/// truncates. It reads only the tabs, never the rows, so arriving messages never rebuild it.
 struct ChatTabStrip: View {
     let rooms: ChatRooms
 
@@ -13,11 +14,10 @@ struct ChatTabStrip: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Full tabs while they fit; then the rooms behind the one on screen fold to their faces
-            // (it keeps its name and close button); past that its name truncates.
             ViewThatFits(in: .horizontal) {
-                row(compact: false)
-                row(compact: true)
+                ForEach(0..<max(1, rooms.tabs.count), id: \.self) { folds in
+                    row(folding: folds)
+                }
             }
             .padding(4)
             .snGlass(Capsule())
@@ -26,15 +26,20 @@ struct ChatTabStrip: View {
         .padding(.horizontal, 10)
         .frame(height: Self.height)
         .overlay(alignment: .bottom) {
-            SN.borderSubtle.frame(height: 1).accessibilityHidden(true)
+            // Quiet: the capsule's own rim already sits just above it.
+            SN.borderSubtle.opacity(0.6).frame(height: 1).accessibilityHidden(true)
         }
     }
 
-    private func row(compact: Bool) -> some View {
-        TabRow(spacing: 4) {
+    /// The row with `folds` rooms folded: those not on screen, longest name first.
+    private func row(folding folds: Int) -> some View {
+        let active = rooms.state.activeChannel
+        let order = rooms.tabs.filter { $0.channel != active }.sorted { $0.label.count > $1.label.count }
+        let folded = Set(order.prefix(folds).map(\.channel))
+        return TabRow(spacing: 4) {
             ForEach(rooms.tabs) { tab in
-                let active = tab.channel == rooms.state.activeChannel
-                TabPill(tab: tab, active: active, folded: compact && !active,
+                TabPill(tab: tab, active: tab.channel == active, folded: folded.contains(tab.channel),
+                        crowded: folds > 0,
                         mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
                         select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
             }
@@ -43,8 +48,7 @@ struct ChatTabStrip: View {
 }
 
 /// Tabs side by side at their natural widths while they fit. Past the width it is offered, the
-/// widest tabs give up width first (each down to a shared cap), so short names keep their room and
-/// every tab stays inside the row.
+/// widest tabs give up width first (each down to a shared cap), so every tab stays inside the row.
 struct TabRow: Layout {
     var spacing: CGFloat
 
@@ -64,12 +68,17 @@ struct TabRow: Layout {
         }
     }
 
-    /// Natural widths, or, when they overflow, each capped at the level where they just fit.
+    /// Natural widths, or, when they overflow, each capped at the level where they just fit and
+    /// then measured again, so a truncated tab keeps no empty room after its "…".
     static func widths(_ subviews: Subviews, available: CGFloat?, spacing: CGFloat) -> [CGFloat] {
         let natural = subviews.map { $0.sizeThatFits(.unspecified).width }
         guard let available else { return natural }
         let room = available - spacing * CGFloat(max(0, subviews.count - 1))
-        return capped(natural, toFit: room)
+        let capped = capped(natural, toFit: room)
+        guard capped != natural else { return natural }
+        return zip(subviews, capped).map { subview, width in
+            min(width, subview.sizeThatFits(ProposedViewSize(width: width, height: 32)).width)
+        }
     }
 
     /// The widths after capping the widest at one shared level so the total fits `room`.
@@ -87,6 +96,23 @@ struct TabRow: Layout {
     }
 }
 
+/// A name as wide as it needs, at most `limit`: offered less, it truncates and takes only the
+/// width of what it shows, so no gap opens between a cut name and its close button.
+private struct HuggingName: Layout {
+    var limit: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let text = subviews.first else { return .zero }
+        let width = min(proposal.width ?? .infinity, limit)
+        return text.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
 /// One room: its face, a broadcast mark on the stream's own tab, its name, and a close button on
 /// every room but the stream's. Folded (a crowded row), a room not on screen shows its face and
 /// marks only. Offered less than its natural width, only the name gives way.
@@ -94,6 +120,8 @@ private struct TabPill: View {
     let tab: ChatTabInfo
     let active: Bool
     var folded = false
+    /// Other rooms are folded: the room on screen may use the width they gave up.
+    var crowded = false
     let mark: Bool
     let select: () -> Void
     let close: () -> Void
@@ -113,15 +141,15 @@ private struct TabPill: View {
                         PlatformMark(platform: tab.provider == "kick" ? .kick : .twitch, size: 11)
                     }
                     if !folded {
-                        // At most 96 pt, so the content stays within the 136 pt a tab may take.
-                        Text(tab.label)
-                            .font(.sn(13, active ? 600 : 400))
-                            .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 96, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .layoutPriority(-1)
+                        // At most 96 pt (the content's 136 pt), unless the others folded for it.
+                        HuggingName(limit: crowded && active ? .infinity : 96) {
+                            Text(tab.label)
+                                .font(.sn(13, active ? 600 : 400))
+                                .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .layoutPriority(-1)
                     }
                 }
                 .padding(.trailing, folded ? 0 : 4)
@@ -137,20 +165,22 @@ private struct TabPill: View {
             } else {
                 Button(action: close) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(SN.textMuted)
-                        .frame(width: 24, height: 24)
+                        // The full pill height keeps the target about as large as a 24 pt square.
+                        .frame(width: 20, height: 32)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close \(tab.label) chat")
             }
         }
-        // A folded pill is a circle-ish chip: the face 6 pt from each end.
+        // A folded pill is a chip: the face 6 pt from each end.
         .padding(.leading, folded ? 6 : 10)
         .padding(.trailing, folded ? 6 : 4)
         .frame(height: 32)
         .background { if active { GlazeSelected() } }
+        .animation(SNMotion.run(.easeOut(duration: 0.2)), value: folded)
     }
 }
 
