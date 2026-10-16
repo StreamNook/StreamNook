@@ -315,8 +315,17 @@ pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, c
             return RoomOpen { superseded: false, room, live: Some(live), row: None };
         }
     }
-    // Whatever the main view played (an ended stream, a recording) stops.
+    // Whatever the main view played (an ended stream, a recording) stops, and a
+    // room earns nothing: drops and points let go of the channel before.
+    let previous = watch_session::twitch_channel_id();
     let _ = streaming::stop_stream().await;
+    {
+        let state = app.state::<AppState>();
+        let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
+        if let Some(id) = previous {
+            let _ = streaming::unregister_active_channel(id, state.clone()).await;
+        }
+    }
     let row = room_row(&login, room.as_ref(), &seed);
     if !current(ticket) {
         return RoomOpen { superseded: true, room: None, live: None, row: None };
