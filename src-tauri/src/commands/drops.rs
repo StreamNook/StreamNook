@@ -71,6 +71,18 @@ pub async fn get_drops_overview(
     Ok(overview)
 }
 
+/// The phones' Drops segment (services/rewards_drops.rs): in progress,
+/// available now and recently earned, grouped by game, every line worked out.
+/// `refresh` reads Twitch again; otherwise the last read is re-filtered.
+#[tauri::command]
+pub async fn get_rewards_drops(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    refresh: bool,
+) -> Result<crate::services::rewards_drops::RewardsDrops, String> {
+    Ok(crate::services::rewards_drops::get(&state.drops_service, query.as_deref().unwrap_or(""), refresh).await)
+}
+
 #[tauri::command]
 pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSettings, String> {
     let drops_service = state.drops_service.lock().await;

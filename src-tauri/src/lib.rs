@@ -2206,6 +2206,8 @@ pub fn run() {
             get_client_config,
             // Drops page model
             get_drops_overview,
+            // The phones' Rewards tab, Drops segment
+            get_rewards_drops,
             // 7TV cosmetics, resolved once for every window
             seventv_user_cosmetics,
             seventv_user_inventory,

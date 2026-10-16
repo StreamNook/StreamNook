@@ -528,6 +528,7 @@ allow = [
   "external_cosmetics_state",
   "get_client_config",
   "get_drops_overview",
+  "get_rewards_drops",
   "seventv_user_cosmetics",
   "seventv_user_inventory",
   "seventv_profile_pictures",
