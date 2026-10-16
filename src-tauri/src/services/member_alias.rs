@@ -132,9 +132,6 @@ pub struct ResolveOutcome {
     pub unresolved: Vec<String>,
 }
 
-/// Resolve a batch of chat keys to the members behind them.
-///
-/// Answers from cache where it can and asks about the rest in one request.
 /// What the cache already knows about one chat key, with no request: the
 /// member behind it (`Some(Some(id))`), nobody (`Some(None)`), or not asked
 /// yet / gone stale (`None`).
@@ -150,6 +147,9 @@ pub fn peek(key: &str) -> Option<Option<String>> {
     }
 }
 
+/// Resolve a batch of chat keys to the members behind them.
+///
+/// Answers from cache where it can and asks about the rest in one request.
 pub async fn resolve(keys: Vec<String>) -> ResolveOutcome {
     let mut out = ResolveOutcome::default();
     let mut unknown: Vec<String> = Vec::new();
