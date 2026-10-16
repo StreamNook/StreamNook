@@ -2209,6 +2209,8 @@ pub fn run() {
             get_drops_overview,
             // The phones' Rewards tab, Drops segment
             get_rewards_drops,
+            // The phones' in-player drop bar
+            get_watch_drop,
             // 7TV cosmetics, resolved once for every window
             seventv_user_cosmetics,
             seventv_user_inventory,

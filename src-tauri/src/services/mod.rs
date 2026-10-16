@@ -71,6 +71,7 @@ pub mod game_suggest;
 pub mod watched_chest;
 pub mod reward_drops;
 pub mod rewards_drops;
+pub mod watch_drop;
 pub mod emoji_service;
 pub mod spellcheck;
 pub mod asset_cache_queue;

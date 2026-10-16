@@ -37,6 +37,15 @@ public final class FakeRewards: Sendable {
             return try FakeCore.json(Self.drops(query: (args["query"] as? String ?? "").trimmingCharacters(in: .whitespaces)))
         case "get_badge_wall":
             return try FakeCore.json(Self.wall(sort: args["sort"] as? String ?? "newest"))
+        case "get_watch_drop":
+            guard connected else { return "null" }
+            let ready = claims.isEmpty
+            return try FakeCore.json([
+                "campaign_id": "c1", "drop_id": ready ? "d2" : "d3", "instance_id": "inst", "name": ready ? "Hoodie" : "Pants",
+                "image": "", "trailing": ready ? "Ready to claim" : "108m left", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
+                "percent": ready ? 100.0 : 40.0, "complete": ready, "claim_label": "Claim",
+                "spoken": ready ? "Hoodie, ready to claim" : "Pants, 108 minutes left",
+            ] as [String: Any])
         case "claim_drop":
             state.withLock { $0.claims.append(args["dropId"] as? String ?? "") }
             return "null"

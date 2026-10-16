@@ -153,11 +153,9 @@ export const RewardsScreen: React.FC = () => {
 
   // A read on mount and on pull-to-refresh asks Twitch again; a new search
   // re-filters Rust's last read.
-  const queryRef = useRef(dropsQuery);
-  queryRef.current = dropsQuery;
-  const load = useCallback(async (refresh = true) => {
+  const load = useCallback(async (query: string, refresh: boolean) => {
     try {
-      setDrops(await getRewardsDrops(queryRef.current, refresh));
+      setDrops(await getRewardsDrops(query, refresh));
     } catch (err) {
       Logger.warn('[Rewards] load failed:', err);
       setDrops({ connected: false, query: '', in_progress: [], available: [], earned: [], in_progress_empty: '' });
@@ -165,12 +163,12 @@ export const RewardsScreen: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void load(true);
+    void load('', true);
   }, [load]);
 
   useEffect(() => {
     if (!drops?.connected) return;
-    const timer = setTimeout(() => void load(false), 200);
+    const timer = setTimeout(() => void load(dropsQuery, false), 200);
     return () => clearTimeout(timer);
     // Re-filters on a new search only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -179,24 +177,24 @@ export const RewardsScreen: React.FC = () => {
   // A jump from the drop bar opens the campaign's group, then scrolls to it
   // once the card has rendered.
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const focusGroup = focusDropCampaignId
+    ? [...(drops?.in_progress ?? []), ...(drops?.available ?? [])].find((g) =>
+        g.campaigns.some((c) => c.id === focusDropCampaignId),
+      )?.key ?? null
+    : null;
   useEffect(() => {
     if (!focusDropCampaignId) return;
     if (tab !== 'drops') setTab('drops');
-    const group = [...(drops?.in_progress ?? []), ...(drops?.available ?? [])].find((g) =>
-      g.campaigns.some((c) => c.id === focusDropCampaignId),
-    );
-    if (group && !openGroups.has(group.key)) {
-      setOpenGroups((prev) => new Set(prev).add(group.key));
-      return;
-    }
     const el = campaignRefs.current[focusDropCampaignId];
     if (!el) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setFlashedCampaign(focusDropCampaignId);
+    // The group stays open once the jump is used up.
+    if (focusGroup) setOpenGroups((prev) => new Set(prev).add(focusGroup));
     clearDropFocus();
     const t = setTimeout(() => setFlashedCampaign(null), 1800);
     return () => clearTimeout(t);
-  }, [focusDropCampaignId, drops, tab, clearDropFocus, openGroups]);
+  }, [focusDropCampaignId, focusGroup, drops, tab, clearDropFocus]);
 
   // The account is the signed-in main one, which Rust resolves itself; the id
   // only re-runs the load when the account changes.
@@ -251,7 +249,7 @@ export const RewardsScreen: React.FC = () => {
       }
       await invoke('finish_mobile_drops_login');
       addToast('Drops connected!', 'success');
-      await load(true);
+      await load(dropsQuery, true);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       Logger.error('[Rewards] drops connect failed:', err);
@@ -277,7 +275,7 @@ export const RewardsScreen: React.FC = () => {
       return next;
     });
   // A search opens everything it matched.
-  const isGroupOpen = (key: string) => !!q || openGroups.has(key);
+  const isGroupOpen = (key: string) => !!q || openGroups.has(key) || key === focusGroup;
 
   const inProgressGroups = drops?.in_progress ?? [];
   const availableGroups = drops?.available ?? [];
@@ -308,7 +306,7 @@ export const RewardsScreen: React.FC = () => {
           ))}
         </div>
       </div>
-      <PullToRefresh onRefresh={tab === 'drops' ? () => load(true) : () => loadBadgeGallery(badgeSort, true)}>
+      <PullToRefresh onRefresh={tab === 'drops' ? () => load(dropsQuery, true) :() => loadBadgeGallery(badgeSort, true)}>
         <div className={`px-4 sn-tabbar-clearance ${tab === 'badges' ? '' : 'hidden'}`}>
           {tiles.length === 0 ? (
             <div className="py-10 text-center text-sm text-textMuted">

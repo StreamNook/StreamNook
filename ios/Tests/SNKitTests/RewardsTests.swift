@@ -48,6 +48,17 @@ import Testing
         #expect(rewards.claims == ["d2"])
     }
 
+    @Test func theWatchDropDecodesAndClearsAfterAClaim() throws {
+        let rewards = FakeRewards()
+        let first = try JSONDecoder().decode(WatchDrop?.self, from: Data(try #require(try rewards.answer("get_watch_drop", [:])).utf8))
+        #expect(first?.complete == true)
+        _ = try rewards.answer("claim_drop", ["dropId": first?.dropID ?? ""])
+        let next = try JSONDecoder().decode(WatchDrop?.self, from: Data(try #require(try rewards.answer("get_watch_drop", [:])).utf8))
+        #expect(next?.complete == false)
+        rewards.connected = false
+        #expect(try rewards.answer("get_watch_drop", [:]) == "null")
+    }
+
     @Test func theFakeWallDecodes() throws {
         let json = try #require(try FakeRewards().answer("get_badge_wall", ["sort": "available"]))
         let wall = try JSONDecoder().decode(BadgeWall.self, from: Data(json.utf8))

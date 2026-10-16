@@ -83,6 +83,27 @@ pub async fn get_rewards_drops(
     Ok(crate::services::rewards_drops::get(&state.drops_service, query.as_deref().unwrap_or(""), refresh).await)
 }
 
+/// The drop being earned on the watched stream, for the phones' bar in the
+/// player (services/watch_drop.rs). None when there is nothing to show; the
+/// inventory is only read when a campaign counts on this channel.
+#[tauri::command]
+pub async fn get_watch_drop(
+    state: State<'_, AppState>,
+    channel_id: Option<String>,
+    login: String,
+    game_id: Option<String>,
+    game_name: Option<String>,
+) -> Result<Option<crate::services::watch_drop::WatchDrop>, String> {
+    Ok(crate::services::watch_drop::get(
+        &state.drops_service,
+        channel_id.as_deref().unwrap_or(""),
+        &login,
+        game_id.as_deref().unwrap_or(""),
+        game_name.as_deref().unwrap_or(""),
+    )
+    .await)
+}
+
 #[tauri::command]
 pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSettings, String> {
     let drops_service = state.drops_service.lock().await;
