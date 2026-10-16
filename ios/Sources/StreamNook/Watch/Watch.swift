@@ -96,6 +96,9 @@ final class Watch {
     /// The relay URL `start_stream` answered, kept for a fallback to the whole-segment route.
     private var startURL: String?
     private var fellBack = false
+    /// Reloads tried since the last first frame; a failure past `maxRecoveries` shows the error.
+    private var recoveries = 0
+    private static let maxRecoveries = 2
     private var watchers: [NSKeyValueObservation] = []
     private var sessionObservers: [NSObjectProtocol] = []
     /// What the core's link governor hears from this player (stalls, and downloads on the
@@ -127,6 +130,18 @@ final class Watch {
                 MainActor.assumeIsolated {
                     guard let self, self.stream != nil, type == .ended, options.contains(.shouldResume) else { return }
                     self.player.play()
+                }
+            },
+            // iOS restarted its media services: every player item is dead. The stream comes back on
+            // a fresh item from the same relay, with the audio session set up again.
+            NotificationCenter.default.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil,
+                                                   queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.stream != nil, let url = self.startURL, let route = self.playing else { return }
+                    log.notice("media services reset; reloading the stream")
+                    try? self.activateAudio()
+                    self.reloading()
+                    self.load(url, route: route)
                 }
             },
             // Leaving the app flushes a pause still waiting out its grace (the earning gate).
@@ -439,6 +454,7 @@ final class Watch {
         startURL = nil
         playing = nil
         fellBack = false
+        recoveries = 0
         available = []
         restarting = false
         live = nil
@@ -611,6 +627,7 @@ final class Watch {
                 firstPlayMS = Int((ContinuousClock.now - opened) / .milliseconds(1))
                 status = "Playing"
                 restarting = false
+                recoveries = 0
                 log.notice("first play \(self.firstPlayMS ?? 0) ms")
             }
             if firstPlayMS != nil {
@@ -632,6 +649,17 @@ final class Watch {
                 }
                 if fallBack(from: reason) {
                     try? await Task.sleep(for: .milliseconds(250))
+                    continue
+                }
+                // A failed item is reloaded from the same relay, twice at most, before the error
+                // shows. Never in Picture in Picture: replacing the item closes the window.
+                if recoveries < Self.maxRecoveries, !pip.active, let startURL, let route = playing {
+                    recoveries += 1
+                    log.notice("item failed (\(reason, privacy: .public)); reload \(self.recoveries) of \(Self.maxRecoveries)")
+                    try? await Task.sleep(for: .seconds(Double(recoveries)))
+                    guard !Task.isCancelled, self.stream != nil else { return }
+                    reloading()
+                    load(startURL, route: route)
                     continue
                 }
                 error = "Playback failed. Try again in a moment."
