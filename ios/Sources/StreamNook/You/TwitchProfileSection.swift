@@ -91,7 +91,7 @@ struct TwitchProfileSection: View {
                     }
                 }
             }
-            rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV" : "Shown in StreamNook chat")
+            rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV" : "Shown in chat")
             Spacer(minLength: 8)
             if sevenTvSignedIn {
                 changeButton(.sevenTV, selection: $sevenTvItem)
