@@ -36,6 +36,7 @@ final class ChatPipeline: @unchecked Sendable {
     private let counters = Mutex<(frames: Int, rows: Int, layoutNanos: UInt64)>((0, 0, 0))
 
     @MainActor weak var list: ChatListView?
+    private var failureObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
          onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -44,6 +45,15 @@ final class ChatPipeline: @unchecked Sendable {
         self.onModes = onModes
         self.onRowCount = onRowCount
         buffer = ChatRoomBuffer(cap: style.bufferCap)
+        failureObserver = NotificationCenter.default.addObserver(forName: ImagePipeline.failedNotification,
+                                                                 object: nil, queue: nil) { [weak self] note in
+            guard let url = note.userInfo?["url"] as? String else { return }
+            self?.dropBadge(url)
+        }
+    }
+
+    deinit {
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
     }
 
     // MARK: Input
@@ -204,6 +214,21 @@ final class ChatPipeline: @unchecked Sendable {
             $0.layoutNanos += spent
         }
         return built
+    }
+
+    /// A badge image that could not load: the rows wearing it are laid out again without it, so
+    /// it leaves no empty slot. Rows of a room not on screen just forget their layout.
+    private func dropBadge(_ url: String) {
+        queue.async { [self] in
+            let wearing = buffer.rows.filter { $0.message.metadata.view?.badges.contains { $0.url == url } == true }
+            guard !wearing.isEmpty else { return }
+            guard width > 0, visible else {
+                for row in wearing { layouts[row.id] = nil }
+                return
+            }
+            let batch = Batch(updated: wearing.map { layout($0, bitmap: true) })
+            ready.withLock { $0.append(batch) }
+        }
     }
 
     private func relayoutAll() {
