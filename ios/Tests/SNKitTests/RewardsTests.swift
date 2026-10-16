@@ -59,6 +59,15 @@ import Testing
         #expect(try rewards.answer("get_watch_drop", [:]) == "null")
     }
 
+    @Test func theWalletFacesDecodeTheDesktopShape() throws {
+        let json = #"{"enabled":true,"balance":12850,"name":"Nooks","icon_url":"i","available_claim_id":null,"last_gain":{"seq":7,"amount":50,"reason":"from the bonus chest","chest":true}}"#
+        let points = try JSONDecoder().decode(ChannelPoints.self, from: Data(json.utf8))
+        #expect(points.lastGain?.chest == true)
+        #expect(points.label == "Nooks")
+        let bits = try JSONDecoder().decode(ChannelBitsFace.self, from: Data(#"{"enabled":true,"pick_min":1,"balance":null,"gem_url":null,"last_gain":null}"#.utf8))
+        #expect(bits.balance == nil)
+    }
+
     @Test func theFakeWallDecodes() throws {
         let json = try #require(try FakeRewards().answer("get_badge_wall", ["sort": "available"]))
         let wall = try JSONDecoder().decode(BadgeWall.self, from: Data(json.utf8))

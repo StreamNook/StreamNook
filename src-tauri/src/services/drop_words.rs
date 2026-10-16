@@ -51,6 +51,18 @@ pub fn requirement_text(drop: &TimeBasedDrop) -> Option<String> {
     None
 }
 
+/// Watch time still needed: "36m to watch", "8h 36m to watch", "2h to watch".
+pub fn to_watch(minutes: i32) -> String {
+    let m = minutes.max(0);
+    if m < 60 {
+        return format!("{m}m to watch");
+    }
+    match m % 60 {
+        0 => format!("{}h to watch", m / 60),
+        rest => format!("{}h {rest}m to watch", m / 60),
+    }
+}
+
 /// "in 23h", "in 40m", "soon"; empty with no time.
 pub fn resets_in(at_ms: Option<i64>, now_ms: i64) -> String {
     let Some(at) = at_ms else { return String::new() };
@@ -174,6 +186,13 @@ mod tests {
         assert_eq!(requirement_text(&drop(0, 3, 0)).unwrap(), "3 subs or gift subs");
         assert_eq!(requirement_text(&drop(60, 0, 3)).unwrap(), "20 min a day · 3 days");
         assert_eq!(requirement_text(&drop(360, 0, 3)).unwrap(), "2 hr a day · 3 days");
+    }
+
+    #[test]
+    fn watch_time_words() {
+        assert_eq!(to_watch(36), "36m to watch");
+        assert_eq!(to_watch(516), "8h 36m to watch");
+        assert_eq!(to_watch(120), "2h to watch");
     }
 
     #[test]

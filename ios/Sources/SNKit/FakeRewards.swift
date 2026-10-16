@@ -42,7 +42,7 @@ public final class FakeRewards: Sendable {
             let ready = claims.isEmpty
             return try FakeCore.json([
                 "campaign_id": "c1", "drop_id": ready ? "d2" : "d3", "instance_id": "inst", "name": ready ? "Hoodie" : "Pants",
-                "image": "", "trailing": ready ? "Ready to claim" : "108m left", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
+                "image": "", "trailing": ready ? "Ready to claim" : "1h 48m to watch", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
                 "percent": ready ? 100.0 : 40.0, "complete": ready, "claim_label": "Claim",
                 "spoken": ready ? "Hoodie, ready to claim" : "Pants, 108 minutes left",
             ] as [String: Any])
@@ -59,7 +59,7 @@ public final class FakeRewards: Sendable {
     private static func drop(_ id: String, _ name: String, need: Int, have: Int, claimed: Bool = false,
                              detail: String? = nil) -> [String: Any] {
         let done = claimed || (need > 0 && have >= need)
-        let status = claimed ? "Claimed" : done ? "Ready" : need > 0 ? "\(need - min(have, need))m left" : ""
+        let status = claimed ? "Claimed" : done ? "Ready" : need > 0 ? "\(need - min(have, need))m to watch" : ""
         return ["id": id, "name": name, "image": "", "claimed": claimed, "done": done, "status": status,
                 "detail": claimed ? NSNull() : (detail.map { $0 as Any } ?? NSNull()),
                 "bar": need > 0 ? (claimed ? 100.0 : min(100.0, Double(have) / Double(need) * 100)) as Any : NSNull()]
@@ -72,7 +72,7 @@ public final class FakeRewards: Sendable {
             "id": id, "name": name, "game_id": gameID, "game_name": game, "art": "",
             "claimed_label": claimed, "percent": percent, "detail": detail, "needs_link": link,
             "link_url": link ? "https://example.com/link" : NSNull(),
-            "meta_label": claimed.isEmpty ? "\(drops.count) rewards" : "\(claimed) claimed",
+            "meta_label": claimed.isEmpty ? "\(drops.count) rewards" : claimed,
             "channels": channels.enumerated().map { ["id": "\(9000 + $0.offset)", "name": $0.element] },
             "channels_label": channels.isEmpty ? "" : "Earn on \(channels.count) channel\(channels.count == 1 ? "" : "s")",
             "find_stream": ["id": gameID, "name": game, "box_art_url": boxArt] as [String: Any],
@@ -137,7 +137,7 @@ public final class FakeRewards: Sendable {
                      "random_note": NSNull(), "time_left": "3d left"],
                     ["key": "mouse/1", "title": "Mouse Pad", "image": badgeCDN + "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a/3",
                      "chips": [chip("subscribe", "Sub", "Subscribe or gift a subscription"), chip("watch", "30 min", "Watch 30 min")],
-                     "icons_only": false, "random_note": "1 of 3 at random", "time_left": "5h left"],
+                     "icons_only": false, "random_note": "1 of 3 at random", "time_left": "5h left", "urgent": true],
                 ],
             ] as [String: Any],
         ]
@@ -150,20 +150,20 @@ public final class FakeRewards: Sendable {
         var progress = [
             group("progress", "Rust", art: rustArt, [
                 card("c1", "Rust Twitch Drops Round 41", game: "Rust", gameID: "263490", boxArt: rustArt,
-                     claimed: "1/4", percent: 42, detail: "4 rewards · 3d left",
+                     claimed: "1 of 4 claimed", percent: 42, detail: "4 rewards · 3d left",
                      channels: ["Shroud", "Hjune", "Willjum"],
                      drops: [drop("d1", "Garage Door", need: 60, have: 60, claimed: true),
                              drop("d2", "Hoodie", need: 120, have: 72),
                              drop("d3", "Pants", need: 180, have: 72),
                              drop("d4", "Rock Skin", need: 240, have: 72)]),
                 card("c2", "Rust Streamer Drops", game: "Rust", gameID: "263490", boxArt: rustArt,
-                     claimed: "0/2", percent: 15, detail: "2 rewards · 20h left",
+                     claimed: "0 of 2 claimed", percent: 15, detail: "2 rewards · 20h left",
                      drops: [drop("d5", "Sleeping Bag", need: 120, have: 18),
                              drop("d6", "Door", need: 0, have: 0, detail: "Subscribe or gift a sub")]),
             ]),
             group("progress", "VALORANT", art: valArt, [
                 card("c3", "Champions Watch Party", game: "VALORANT", gameID: "516575", boxArt: valArt,
-                     claimed: "0/3", percent: 66, detail: "3 rewards · 5d left", link: true,
+                     claimed: "0 of 3 claimed", percent: 66, detail: "3 rewards · 5d left", link: true,
                      drops: [drop("d7", "Gun Buddy", need: 30, have: 30),
                              drop("d8", "Spray", need: 60, have: 40, detail: "Day 2 of 3 · 5/20 min today · resets in 23h"),
                              drop("d9", "Player Card", need: 90, have: 40)]),
@@ -192,12 +192,17 @@ public final class FakeRewards: Sendable {
             progress = progress.compactMap(keep)
             available = available.compactMap(keep)
         }
+        let earned: [[String: Any]] = [
+            ["id": "e1", "name": "Garage Door", "image": "", "game": "Rust"],
+            ["id": "e2", "name": "Twitch Glory Badge", "image": "", "game": NSNull()],
+        ].filter { row in
+            query.isEmpty || [row["name"], row["game"]].contains { ($0 as? String ?? "").lowercased().contains(query.lowercased()) }
+        }
         return [
             "connected": true, "query": query, "in_progress": progress, "available": available,
-            "earned": [
-                ["id": "e1", "name": "Garage Door", "image": "", "game": "Rust"],
-                ["id": "e2", "name": "Twitch Glory Badge", "image": "", "game": NSNull()],
-            ],
+            "earned": earned,
+            "no_match": !query.isEmpty && progress.isEmpty && available.isEmpty && earned.isEmpty
+                ? "Nothing matches \"\(query)\"." : "",
             "in_progress_empty": query.isEmpty
                 ? "No drop campaigns in progress. Watch a drops-enabled stream to start earning."
                 : "No drops in progress match that search.",

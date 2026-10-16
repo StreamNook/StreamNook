@@ -9,11 +9,14 @@ public struct RewardsDrops: Decodable, Sendable, Equatable {
     public var available: [DropsGroup]
     public var earned: [EarnedDrop]
     public var inProgressEmpty: String
+    /// `Nothing matches "rust".` when a search left every list empty; empty or nil otherwise.
+    public var noMatch: String?
 
     enum CodingKeys: String, CodingKey {
         case connected, query, available, earned
         case inProgress = "in_progress"
         case inProgressEmpty = "in_progress_empty"
+        case noMatch = "no_match"
     }
 
     public init(connected: Bool, query: String = "", inProgress: [DropsGroup] = [], available: [DropsGroup] = [],

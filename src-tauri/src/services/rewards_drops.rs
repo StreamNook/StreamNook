@@ -31,6 +31,9 @@ pub struct RewardsDrops {
     /// "No drops in progress match that search." or the plain empty line,
     /// for when `in_progress` is empty.
     pub in_progress_empty: String,
+    /// `Nothing matches "rust".` when a search left all three lists empty
+    /// (the sections are not drawn then); empty otherwise.
+    pub no_match: String,
 }
 
 /// One game's campaigns under a section.
@@ -57,7 +60,7 @@ pub struct CampaignCard {
     /// The row picture for a campaign not started: the first tier's reward
     /// art, else the game's box art, else empty.
     pub art: String,
-    /// In progress: "2/5". Empty for a campaign not started.
+    /// In progress: "2 of 5 claimed". Empty for a campaign not started.
     pub claimed_label: String,
     /// In progress: 0 to 100.
     pub percent: f32,
@@ -129,6 +132,7 @@ fn disconnected(query: &str) -> RewardsDrops {
         available: Vec::new(),
         earned: Vec::new(),
         in_progress_empty: String::new(),
+        no_match: String::new(),
     }
 }
 
@@ -251,7 +255,7 @@ fn drop_row(drop: &TimeBasedDrop, now_ms: i64) -> DropRow {
     } else if done {
         "Ready".to_string()
     } else if need > 0 {
-        format!("{}m left", need - have)
+        drop_words::to_watch(need - have)
     } else {
         String::new()
     };
@@ -312,13 +316,13 @@ fn card(campaign: &DropCampaign, item: Option<&InventoryItem>, now_ms: i64) -> C
         game_id: campaign.game_id.clone(),
         game_name: campaign.game_name.clone(),
         art,
-        claimed_label: item.map(|i| format!("{}/{}", i.claimed_drops, i.total_drops)).unwrap_or_default(),
+        claimed_label: item.map(|i| format!("{} of {} claimed", i.claimed_drops, i.total_drops)).unwrap_or_default(),
         percent: item.map(|i| i.progress_percentage.clamp(0.0, 100.0)).unwrap_or(0.0),
         detail,
         needs_link: !campaign.is_account_connected,
         link_url: campaign.account_link.clone().filter(|u| !u.is_empty()),
         meta_label: match item {
-            Some(i) => format!("{}/{} claimed", i.claimed_drops, i.total_drops),
+            Some(i) => format!("{} of {} claimed", i.claimed_drops, i.total_drops),
             None => rewards_label,
         },
         channels: campaign.allowed_channels.clone(),
@@ -358,21 +362,28 @@ pub fn build(
         .map(|c| (game_label(c), c.image_url.clone(), card(c, None, now_ms)))
         .collect();
     let completed: &[CompletedDrop] = inventory.map(|i| i.completed_drops.as_slice()).unwrap_or_default();
+    // A search narrows what was earned too, so nothing unrelated reads as a match.
+    let earned: Vec<EarnedDrop> = completed
+        .iter()
+        .filter(|d| matches(query, d.game_name.as_deref().unwrap_or(""), &d.name))
+        .take(EARNED_SHOWN)
+        .map(|d| EarnedDrop {
+            id: d.id.clone(),
+            name: d.name.clone(),
+            image: d.image_url.clone(),
+            game: d.game_name.clone().filter(|g| !g.is_empty()),
+        })
+        .collect();
+    let in_progress = group("progress", progress_rows);
+    let available = group("available", available_rows);
+    let nothing = in_progress.is_empty() && available.is_empty() && earned.is_empty();
     RewardsDrops {
         connected: true,
         query: query.to_string(),
-        in_progress: group("progress", progress_rows),
-        available: group("available", available_rows),
-        earned: completed
-            .iter()
-            .take(EARNED_SHOWN)
-            .map(|d| EarnedDrop {
-                id: d.id.clone(),
-                name: d.name.clone(),
-                image: d.image_url.clone(),
-                game: d.game_name.clone().filter(|g| !g.is_empty()),
-            })
-            .collect(),
+        no_match: if !query.is_empty() && nothing { format!("Nothing matches \"{query}\".") } else { String::new() },
+        in_progress,
+        available,
+        earned,
         in_progress_empty: if query.is_empty() {
             "No drop campaigns in progress. Watch a drops-enabled stream to start earning.".to_string()
         } else {
@@ -495,7 +506,7 @@ mod tests {
         let view = build(Some(&inventory), &campaigns, "", now());
         assert_eq!(view.in_progress.len(), 1);
         assert_eq!(view.in_progress[0].key, "progress:Rust");
-        assert_eq!(view.in_progress[0].campaigns[0].claimed_label, "1/1");
+        assert_eq!(view.in_progress[0].campaigns[0].claimed_label, "1 of 1 claimed");
         // Started campaign 1 is not listed again; Valorant has two so it leads,
         // then Apex and Other alphabetically.
         let games: Vec<&str> = view.available.iter().map(|g| g.game.as_str()).collect();
@@ -517,6 +528,8 @@ mod tests {
         let view = build(None, &campaigns, "campaign 2", now());
         assert_eq!(view.available[0].game, "Apex");
         assert_eq!(view.in_progress_empty, "No drops in progress match that search.");
+        assert_eq!(view.no_match, "");
+        assert_eq!(build(None, &campaigns, "zzz", now()).no_match, "Nothing matches \"zzz\".");
     }
 
     #[test]
@@ -550,7 +563,7 @@ mod tests {
         assert_eq!(ids, ["event", "got", "first", "late"]);
         assert_eq!((card.drops[0].status.as_str(), card.drops[0].bar), ("", None));
         assert_eq!((card.drops[1].status.as_str(), card.drops[1].bar, card.drops[1].detail.clone()), ("Claimed", Some(100.0), None));
-        assert_eq!(card.drops[2].status, "40m left");
+        assert_eq!(card.drops[2].status, "40m to watch");
         assert_eq!(card.drops[3].status, "Ready");
         assert_eq!(card.drops[3].bar, Some(100.0));
         assert_eq!(card.drops[2].name, "reward first");

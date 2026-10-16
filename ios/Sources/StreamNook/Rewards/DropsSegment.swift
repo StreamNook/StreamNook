@@ -55,15 +55,30 @@ struct DropsSegment: View {
             DropsSearchField(text: Binding(get: { rewards.query }, set: { rewards.query = $0 }))
                 .padding(.vertical, 4)
 
-            SectionLabel(text: "In progress").padding(.top, 8).padding(.bottom, 6)
+            if let noMatch = drops.noMatch, !noMatch.isEmpty {
+                // A search that found nothing anywhere says so once, with no empty sections.
+                note(noMatch).padding(.top, 16)
+            } else {
+                lists(drops, settling: settling)
+            }
+        }
+        .settles(latch, key: key, ready: ready)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.sn(12.5))
+            .foregroundStyle(SN.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func lists(_ drops: RewardsDrops, settling: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionLabel(text: "In progress").padding(.top, 12).padding(.bottom, 4)
             if drops.inProgress.isEmpty {
-                Text(drops.inProgressEmpty)
-                    .font(.sn(13))
-                    .foregroundStyle(SN.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .snPanel()
+                note(drops.inProgressEmpty).padding(.top, 10)
             } else {
                 ForEach(Array(drops.inProgress.enumerated()), id: \.element.key) { index, group in
                     GameGroupSection(group: group, open: rewards.isOpen(group.key)) {
@@ -82,7 +97,7 @@ struct DropsSegment: View {
             }
 
             if !drops.available.isEmpty {
-                SectionLabel(text: "Available now").padding(.top, 16).padding(.bottom, 6)
+                SectionLabel(text: "Available now").padding(.top, 20).padding(.bottom, 4)
                 ForEach(Array(drops.available.enumerated()), id: \.element.key) { index, group in
                     GameGroupSection(group: group, open: rewards.isOpen(group.key)) {
                         withAnimation(SNMotion.run(SNMotion.settle)) { rewards.toggle(group.key) }
@@ -98,13 +113,12 @@ struct DropsSegment: View {
             }
 
             if !drops.earned.isEmpty {
-                SectionLabel(text: "Recently earned").padding(.top, 16).padding(.bottom, 6)
+                SectionLabel(text: "Recently earned").padding(.top, 20).padding(.bottom, 12)
                 VStack(spacing: 8) {
                     ForEach(drops.earned) { EarnedRow(drop: $0) }
                 }
             }
         }
-        .settles(latch, key: key, ready: ready)
     }
 }
 
@@ -190,8 +204,7 @@ private struct GameGroupSection<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(RowPress())
-            .padding(.top, 12)
-            .padding(.bottom, 6)
+            .padding(.vertical, 8)
             .accessibilityElement(children: .combine)
             .accessibilityValue(open ? "Expanded" : "Collapsed")
             .accessibilityHint(open ? "Collapses the game" : "Shows the game's campaigns")
@@ -226,7 +239,7 @@ private struct ProgressCard: View {
             }
             ProgressTrack(percent: card.percent, height: 6, color: SN.accent)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .snPanel()
         .overlay {
@@ -236,7 +249,7 @@ private struct ProgressCard: View {
                 .animation(SNMotion.run(.easeOut(duration: 0.5)), value: flashed)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(card.name), \(card.claimedLabel) claimed")
+        .accessibilityLabel("\(card.name), \(card.claimedLabel)")
     }
 }
 

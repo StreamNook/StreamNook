@@ -45,22 +45,29 @@ struct BadgesSegment: View {
         let key = "badges:\(rewards.badgeSort.rawValue)"
         let settling = latch.playing(key) && !(warmOnAppear && rewards.badgeSort == .newest)
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(wall.countLabel).font(.snCaption).foregroundStyle(SN.textMuted)
-                Spacer(minLength: 8)
-                if wall.syncLeft > 0 {
-                    Text("\(wall.syncLeft) to sync").font(.sn(11.5)).monospacedDigit().foregroundStyle(SN.textMuted)
-                }
-            }
-            .padding(.top, 4)
-            .padding(.bottom, 8)
-
             MissingStrip(missing: wall.missing, expanded: rewards.missingExpanded,
                          toggle: { withAnimation(SNMotion.run(SNMotion.settle)) { rewards.missingExpanded.toggle() } },
                          open: rewards.openMissing)
+                .padding(.top, 8)
 
-            SortRow(selection: Binding(get: { rewards.badgeSort }, set: { rewards.badgeSort = $0 }))
-                .padding(.bottom, 8)
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    SectionLabel(text: "All badges")
+                    HStack(spacing: 6) {
+                        Text(wall.countLabel)
+                        if wall.syncLeft > 0 {
+                            // The metadata backfill, in the strip's own "checking" language.
+                            Circle().fill(SN.success).frame(width: 5, height: 5).modifier(Pulse())
+                            Text("Updating badges")
+                        }
+                    }
+                    .font(.snCaption)
+                    .foregroundStyle(SN.textMuted)
+                }
+                Spacer(minLength: 8)
+                SortMenu(selection: Binding(get: { rewards.badgeSort }, set: { rewards.badgeSort = $0 }))
+            }
+            .padding(.bottom, 12)
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(Array(wall.tiles.enumerated()), id: \.element.key) { index, tile in
@@ -87,7 +94,7 @@ private struct BadgeTileView: View {
                 .font(.sn(10.5))
                 .foregroundStyle(tile.lit ? SN.textPrimary : SN.textMuted)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
                 .lineSpacing(-1)
                 .frame(maxWidth: .infinity)
             Text(tile.word.isEmpty ? " " : tile.word)
@@ -127,39 +134,28 @@ enum BadgeWords {
     }
 }
 
-/// The five sorts in a glass capsule; the options scroll inside it and its rim stays put.
-private struct SortRow: View {
+/// The wall's five sorts as a system menu behind a pill naming the current one.
+private struct SortMenu: View {
     @Binding var selection: BadgeSort
-    @Namespace private var pill
-    @Environment(\.snStill) private var still
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(BadgeSort.allCases, id: \.self) { sort in
-                    let on = selection == sort
-                    Button {
-                        withAnimation(still ? SNMotion.run(.easeOut(duration: 0.15)) : SNMotion.run(SNMotion.glide)) { selection = sort }
-                    } label: {
-                        Text(sort.label)
-                            .font(.sn(12.5, on ? 600 : 500))
-                            .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background { if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) } }
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
+        Menu {
+            Picker("Sort", selection: $selection) {
+                ForEach(BadgeSort.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            .padding(4)
+        } label: {
+            HStack(spacing: 5) {
+                Text(selection.label)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+            }
+            .font(.sn(12.5, 600))
+            .foregroundStyle(SN.textSecondary)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .snGlass(Capsule())
+            .contentShape(Capsule())
         }
-        .scrollIndicators(.hidden)
-        .scrollClipDisabled(false)
-        .clipShape(Capsule())
-        .snGlass(Capsule())
-        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityLabel("Sort badges, \(selection.label)")
     }
 }
 
@@ -188,7 +184,7 @@ private struct MissingStrip: View {
                     list
                 }
             }
-            .padding(.bottom, 14)
+            .padding(.bottom, 24)
         }
     }
 
@@ -242,8 +238,8 @@ private struct MissingStrip: View {
                     Text(expanded ? "Show fewer" : "Show all \(missing.rows.count)")
                         .font(.sn(12, 500))
                         .foregroundStyle(SN.accent)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 4)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -260,9 +256,9 @@ private struct CatchUpPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
                 Text(view.label.uppercased())
-                    .font(.sn(9.5, 600))
-                    .tracking(0.7)
-                    .foregroundStyle(SN.textMuted)
+                    .font(.sn(10.5, 600))
+                    .tracking(0.5)
+                    .foregroundStyle(SN.textSecondary)
                 Spacer(minLength: 4)
                 Button { notesShown = true } label: {
                     Image(systemName: "info.circle")
@@ -287,7 +283,7 @@ private struct CatchUpPanel: View {
                 ForEach(view.stats, id: \.self) { stat in
                     VStack(spacing: 1) {
                         Text(stat.value).font(.sn(16, 600)).monospacedDigit().foregroundStyle(SN.textPrimary)
-                        Text(stat.label).font(.sn(10.5)).foregroundStyle(SN.textMuted)
+                        Text(stat.label).font(.sn(10.5)).foregroundStyle(SN.textSecondary)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -314,8 +310,6 @@ private struct MissingRowView: View {
                         .font(.sn(13, 500))
                         .foregroundStyle(SN.textPrimary)
                         .lineLimit(1)
-                        .frame(minWidth: 56, alignment: .leading)
-                        .layoutPriority(1)
                     EarnPill(chips: row.chips, iconsOnly: row.iconsOnly)
                 }
                 if let random = row.randomNote {
@@ -325,9 +319,11 @@ private struct MissingRowView: View {
                         .labelStyle(TightLabel())
                 }
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             if !row.timeLeft.isEmpty {
-                Text(row.timeLeft).font(.sn(11, 600)).foregroundStyle(SN.success)
+                Text(row.timeLeft)
+                    .font(.sn(11, 500))
+                    .foregroundStyle(row.urgent == true ? SN.warning : SN.textSecondary)
             }
         }
         .padding(.horizontal, 12)
@@ -358,7 +354,7 @@ struct EarnPill: View {
                 }
             }
             .font(.sn(11, 500))
-            .foregroundStyle(SN.textPrimary)
+            .foregroundStyle(SN.textSecondary)
             .lineLimit(1)
             .padding(.horizontal, 8)
             .frame(height: 22)

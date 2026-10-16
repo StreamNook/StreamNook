@@ -2,54 +2,48 @@ import SNKit
 import SwiftUI
 
 /// Every reward in one campaign, in the order they are earned, with where it can be earned and
-/// a way to go and watch it.
+/// a way to go and watch it. Sized to its content; "Find a stream" stays at the bottom.
 struct CampaignSheet: View {
     let model: AppModel
     let card: CampaignCard
     let close: () -> Void
     @State private var channelsOpen = false
 
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        if !card.gameName.isEmpty {
-                            Text(card.gameName).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        Text(card.metaLabel).monospacedDigit()
-                    }
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.textMuted)
+    /// The pinned button's 50 points and its insets, which the fitted height must include.
+    private var pinned: CGFloat { card.findStream == nil ? 0 : 66 }
 
-                    if card.needsLink { linkRow }
-                    if !card.channels.isEmpty { channelsRow }
-                    if let category = card.findStream {
-                        Button { findStream(category) } label: { Text("Find a stream") }
-                            .buttonStyle(.snSecondary)
-                            .padding(.vertical, 2)
-                    }
-                    VStack(spacing: 6) {
-                        ForEach(card.drops) { DropRewardRow(drop: $0) }
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 4) {
+                SheetTitle(text: card.name)
+                    .padding(.bottom, -8)
+                Text([card.gameName, card.metaLabel].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.sn(12.5))
+                    .monospacedDigit()
+                    .foregroundStyle(SN.textMuted)
             }
-            .scrollIndicators(.hidden)
-            .navigationTitle(card.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: close) { Image(systemName: Symbol.close) }
-                        .accessibilityLabel("Close")
-                }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 8)
+
+            if card.needsLink { linkRow }
+            if !card.channels.isEmpty { channelsRow }
+            VStack(spacing: 6) {
+                ForEach(card.drops) { DropRewardRow(drop: $0) }
+            }
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16 + pinned)
+        .fittedSheet(maxFraction: 0.8)
+        .safeAreaInset(edge: .bottom) {
+            if let category = card.findStream {
+                Button { findStream(category) } label: { Text("Find a stream") }
+                    .buttonStyle(.snSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
             }
         }
-        .presentationDetents([.fraction(0.8), .large])
-        .presentationDragIndicator(.visible)
     }
 
     /// Watching earns nothing until the game account is linked; the row opens the link page.
@@ -62,27 +56,8 @@ struct CampaignSheet: View {
                 }
             }
         } label: {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: Symbol.warning)
-                    .font(.system(size: 14))
-                    .foregroundStyle(SN.warning)
-                    .padding(.top, 1)
-                Text("Your game account is not linked, so this campaign will not earn yet.")
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.textSecondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
-                if card.linkURL != nil {
-                    Image(systemName: Symbol.openOutside)
-                        .font(.system(size: 13))
-                        .foregroundStyle(SN.textMuted)
-                        .padding(.top, 1)
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .snPanel()
+            WarningRow(text: "Your game account is not linked, so this campaign will not earn yet.",
+                       trailing: card.linkURL == nil ? nil : Symbol.openOutside)
         }
         .buttonStyle(CardPress())
         .disabled(card.linkURL == nil)
@@ -159,6 +134,38 @@ struct CampaignSheet: View {
             if stream.userID?.isEmpty ?? true { stream.userID = channel.id }
             model.startWatching(stream)
         }
+    }
+}
+
+/// A caution inside a sheet: the warning glyph and a sentence, with an optional trailing symbol
+/// when the row opens something.
+struct WarningRow: View {
+    let text: String
+    var trailing: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: Symbol.warning)
+                .font(.system(size: 14))
+                .foregroundStyle(SN.warning)
+                .padding(.top, 1)
+            Text(text)
+                .font(.sn(12.5))
+                .foregroundStyle(SN.textSecondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            if let trailing {
+                Image(systemName: trailing)
+                    .font(.system(size: 13))
+                    .foregroundStyle(SN.textMuted)
+                    .padding(.top, 1)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .snPanel()
+        .accessibilityElement(children: .combine)
     }
 }
 

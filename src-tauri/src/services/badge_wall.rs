@@ -138,6 +138,8 @@ pub struct MissingRow {
     pub random_note: Option<String>,
     /// "3d left", "5h left", "ends soon", "ending", or empty.
     pub time_left: String,
+    /// It closes within a day: the time left is drawn as a warning.
+    pub urgent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -342,6 +344,7 @@ fn missing_row(badge: &MissingBadge, icons: &HashMap<String, String>, now: i64) 
         icons_only: steps.len() >= 3,
         random_note: random_of.filter(|n| *n > 1).map(|n| format!("1 of {n} at random")),
         time_left: time_left(badge.ends_ms, now),
+        urgent: badge.ends_ms.is_some_and(|end| end - now < 24 * 3_600_000),
     }
 }
 

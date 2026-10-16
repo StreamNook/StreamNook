@@ -21,7 +21,7 @@ pub struct WatchDrop {
     /// The reward's name, else the drop's, else "Drop".
     pub name: String,
     pub image: String,
-    /// "12m left", or "Ready to claim" once the minutes are in.
+    /// "12m to watch", or "Ready to claim" once the minutes are in.
     pub trailing: String,
     /// "Campaign name · 2 of 5" (the tier part only with more than one tier).
     pub line: String,
@@ -102,7 +102,7 @@ pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &st
         campaign_id: item.campaign.id.clone(),
         drop_id: drop.id.clone(),
         instance_id: drop.progress.as_ref().and_then(|p| p.drop_instance_id.clone()),
-        trailing: if complete { "Ready to claim".into() } else { format!("{left}m left") },
+        trailing: if complete { "Ready to claim".into() } else { drop_words::to_watch(left) },
         spoken: if complete {
             format!("{name}, ready to claim")
         } else {
@@ -218,7 +218,7 @@ mod tests {
         ];
         let bar = pick(&items, "", "shroud", "", "rust").unwrap();
         assert_eq!(bar.drop_id, "b");
-        assert_eq!(bar.trailing, "30m left");
+        assert_eq!(bar.trailing, "30m to watch");
         assert_eq!(bar.line, "Campaign 1 · 2 of 3");
         assert_eq!(bar.instance_id.as_deref(), Some("inst-b"));
         assert!(!bar.complete);
