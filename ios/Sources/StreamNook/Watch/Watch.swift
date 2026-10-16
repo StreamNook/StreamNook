@@ -56,6 +56,10 @@ final class Watch {
     /// The lock screen card and its remote commands.
     let nowPlaying = NowPlaying()
     let pip = PictureInPicture()
+    /// The core completed the row (Following's own, or the seed with its gaps filled).
+    var onRow: ((TwitchStream) -> Void)?
+    /// A message for the toast line.
+    var onToast: ((String) -> Void)?
 
     /// Set by drive steps before a stream opens; wins over every saved choice.
     var route = PlayRoute.auto
@@ -120,15 +124,16 @@ final class Watch {
     /// the saved one, else `best` (capped to the screen by the core).
     private var askedQuality: String { requestedQuality ?? pickedQuality ?? savedQuality ?? "best" }
 
+    /// Starts `stream`, replacing whatever played. The same channel already open stays as it is.
+    /// The player is never rebuilt: only its item changes.
     func open(_ stream: TwitchStream, core: CoreBridge) {
-        guard self.stream?.id != stream.id else { return }
-        close(core: core)
+        guard self.stream?.userLogin.lowercased() != stream.userLogin.lowercased() else { return }
+        close(core: core, stopping: false)
         self.stream = stream
         opened = .now
         status = "Resolving"
         showCard()
         tasks.append(Task { await self.play(stream, core: core) })
-        tasks.append(Task { await self.follow(stream, core: core) })
         tasks.append(Task { await self.followLink(core: core) })
     }
 
@@ -285,7 +290,9 @@ final class Watch {
         log.notice("drive pause")
     }
 
-    func close(core: CoreBridge) {
+    /// Ends the stream: the player lets go of its item before the core stops the relay. A switch to
+    /// another stream (`stopping` false) leaves the stop to the next start, which supersedes it.
+    func close(core: CoreBridge, stopping: Bool = true) {
         guard let login = stream?.userLogin else { return }
         lastStart = nil
         tasks.forEach { $0.cancel() }
@@ -311,7 +318,8 @@ final class Watch {
         pip.eligible = false
         nowPlaying.clear()
         Task.detached {
-            _ = try? await core.invoke("stop_stream", "{}")
+            // The relay, the watch session, drops and channel points (services/watch_start.rs).
+            if stopping { _ = try? await core.invoke("watch_stop", args: [:]) }
             _ = try? await core.invoke("unwatch_channel_state", args: ["login": login])
         }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -319,16 +327,23 @@ final class Watch {
 
     // MARK: Playback
 
+    /// One core call starts the stream: the relay, the completed row, drops and channel points
+    /// aimed at the channel, and the watch session. A newer start or a stop supersedes it, and a
+    /// superseded start touches nothing.
     private func play(_ stream: TwitchStream, core: CoreBridge) async {
         do {
-            let start = try await core.invoke(
-                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
-                as: StreamStart.self
+            let started = try await core.invoke(
+                "watch_start", args: ["login": stream.userLogin, "seed": stream.seed, "quality": askedQuality],
+                as: WatchStart.self
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !started.superseded, let start = started.stream else {
+                log.notice("watch_start \(stream.userLogin, privacy: .public) superseded")
+                return
+            }
+            if let row = started.row { adopt(row, core: core) }
             apply(start)
             let chosen = await Self.route(for: start, asked: route, core: core)
-            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
+            log.notice("watch_start \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .moviePlayback)
             try session.setActive(true)
@@ -336,10 +351,35 @@ final class Watch {
             await measure(core: core)
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = "\(error)"
-            status = "Failed"
-            log.error("start_stream failed: \(String(describing: error), privacy: .public)")
+            log.error("watch_start failed: \(String(describing: error), privacy: .public)")
+            await failed(stream, core: core)
         }
+    }
+
+    /// The row the core completed replaces the card's: the header, the lock screen card and the
+    /// viewer count follow it. The channel's numbers can be followed once its id is known.
+    private func adopt(_ row: TwitchStream, core: CoreBridge) {
+        guard stream?.userLogin.lowercased() == row.userLogin.lowercased() else { return }
+        stream = row
+        onRow?(row)
+        showCard()
+        tasks.append(Task { await self.follow(row, core: core) })
+    }
+
+    /// Playback could not start, but chat runs on: an offline channel says so; a live one keeps
+    /// the band's failure line and a toast saying chat still works.
+    private func failed(_ stream: TwitchStream, core: CoreBridge) async {
+        let online = try? await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
+                                            as: TwitchStream?.self)
+        guard !Task.isCancelled, self.stream?.userLogin == stream.userLogin else { return }
+        if case .some(.none) = online {
+            showOffline()
+            return
+        }
+        error = "Playback unavailable. Chat keeps running."
+        status = "Failed"
+        pip.eligible = false
+        onToast?("Playback unavailable - showing chat only")
     }
 
     /// Puts a new item for `url` on `route` in the player and plays it.

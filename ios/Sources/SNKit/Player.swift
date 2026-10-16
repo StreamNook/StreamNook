@@ -37,6 +37,29 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
     private struct Section: Decodable { var section: String }
 }
 
+/// `watch_start`'s answer: the relay to play and the row Rust completed (Following's row, or the
+/// seed with its gaps filled). A superseded start (a newer start or a stop won) carries nothing.
+public struct WatchStart: Decodable, Sendable, Equatable {
+    public var superseded: Bool
+    public var row: TwitchStream?
+    public var stream: StreamStart?
+
+    public init(superseded: Bool, row: TwitchStream? = nil, stream: StreamStart? = nil) {
+        self.superseded = superseded
+        self.row = row
+        self.stream = stream
+    }
+}
+
+extension TwitchStream {
+    /// The row as `watch_start`'s seed: what the card already knows, in the core's field names.
+    public var seed: [String: Any] {
+        guard let data = try? JSONEncoder().encode(self),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return object
+    }
+}
+
 /// The player's saved preferences, read from `load_settings`: the quality picked last (the
 /// intent, not what was served) and what leaving the app does to a playing stream.
 public struct PlayerPrefs: Decodable, Sendable, Equatable {

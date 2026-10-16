@@ -106,7 +106,7 @@ struct WatchLayer: View {
                 }
             }
             .gesture(mini ? miniGesture(screen: screen, insets: insets, rect: miniRect) : nil)
-            .onChange(of: nav.playing?.id) { _, _ in touchedControls() }
+            .onChange(of: nav.playing?.userLogin) { _, _ in touchedControls() }
             .onChange(of: nav.controlsPing) { _, _ in touchedControls() }
         }
         .ignoresSafeArea()

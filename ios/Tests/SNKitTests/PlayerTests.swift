@@ -83,3 +83,37 @@ import Testing
         #expect(bare.floatsVideo)
     }
 }
+
+@Suite struct WatchStartTests {
+    @Test func aStartCarriesTheCompletedRowAndTheRelay() throws {
+        let json = #"{"superseded":false,"row":{"id":"1","user_login":"caster","user_name":"Caster","title":"Live","viewer_count":9,"game_name":"Game","thumbnail_url":"","user_id":"42","started_at":"","profile_image_url":"pic"},"stream":{"url":"http://127.0.0.1:1/stream.m3u8","quality":"best","available":["best"],"entitled":false}}"#
+        let start = try JSONDecoder().decode(WatchStart.self, from: Data(json.utf8))
+        #expect(!start.superseded)
+        #expect(start.row?.userID == "42" && start.row?.profileImageURL == "pic")
+        #expect(start.stream?.quality == "best")
+    }
+
+    @Test func aSupersededStartCarriesNothing() throws {
+        let start = try JSONDecoder().decode(WatchStart.self, from: Data(#"{"superseded":true}"#.utf8))
+        #expect(start.superseded && start.row == nil && start.stream == nil)
+    }
+
+    @Test func theSeedUsesTheCoreFieldNames() {
+        let row = TwitchStream(id: "1", userLogin: "caster", userName: "Caster", title: "t", viewerCount: 3,
+                               gameName: "g", userID: "42", startedAt: "2026-10-16T10:00:00Z")
+        let seed = row.seed
+        #expect(seed["user_id"] as? String == "42")
+        #expect(seed["started_at"] as? String == "2026-10-16T10:00:00Z")
+        #expect(seed["viewer_count"] as? Int == 3)
+    }
+
+    @Test func theFakeCoreAnswersAStart() async throws {
+        let core = FakeCore()
+        try core.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "t",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        let start = try await core.invoke("watch_start", args: ["login": "Caster", "seed": ["user_id": "42"]],
+                                          as: WatchStart.self)
+        #expect(start.row?.userLogin == "caster" && start.row?.userID == "42")
+        #expect(start.stream?.url == FakeCore.testStreamURL)
+    }
+}

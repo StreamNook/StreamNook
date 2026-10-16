@@ -13,7 +13,10 @@ import SwiftUI
 /// - `tab:NAME` picks a tab: `following`, `browse`, `rewards`, `you`
 /// - `browse` loads the Browse list again and waits for it; `browse:categories`, `browse:live`
 ///   switch its mode; `search:TEXT` searches it
-/// - `open:watch:INDEX` (or `play:INDEX`) opens the watch layer on the Browse list's stream at INDEX
+/// - `open:watch:INDEX` (or `play:INDEX`) opens the watch layer on the Browse list's stream at INDEX;
+///   `login:NAME` opens it on a bare login, the way a notification tap or a raid seed does
+/// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
+///   the app log, where a drive run reads them
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
 /// - `open:settings:NAME` pushes a settings section (`theme`, `support`, ...); `open:cosmetics`
 /// - `mini`, `full` shrink or expand the watch layer; `back` or `close` closes it
@@ -91,6 +94,10 @@ enum Drive {
             case "search": model.browseState.query = value
             case "open": await open(value, model: model)
             case "play": await open("watch:\(value)", model: model)
+            case "login":
+                model.startWatching(TwitchStream(id: "", userLogin: value, userName: value, title: "", viewerCount: 0,
+                                                 gameName: ""))
+            case "corelog": coreLog(value.replacingOccurrences(of: "_", with: " "))
             case "mini": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .mini }
             case "full": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .full }
             case "back", "close": model.stopWatching()
@@ -101,6 +108,9 @@ enum Drive {
             case "restart": await model.restartStream()
             case "toggle": model.watch.togglePlay()
             case "mute": model.watch.toggleMute()
+            case "row":
+                let row = model.nav.playing
+                log.notice("drive row \(row?.userLogin ?? "-", privacy: .public) id \(row?.userID ?? "-", privacy: .public) name \(row?.userName ?? "-", privacy: .public) title \(row?.title ?? "-", privacy: .public) game \(row?.gameName ?? "-", privacy: .public) started \(row?.startedAt ?? "-", privacy: .public) avatar \(row?.profileImageURL != nil) mode \(model.nav.playerMode == .mini ? "mini" : "full", privacy: .public)")
             case "state": log.notice("drive state paused \(model.watch.paused) muted \(model.watch.muted) quality \(model.watch.quality ?? "-", privacy: .public) available \(model.watch.available.joined(separator: ","), privacy: .public) viewers \(model.watch.live?.viewerCount ?? -1) pip \(model.watch.pip.active)")
             case "chat": model.nav.landscapeChat = value != "off"
             case "menu":
@@ -166,6 +176,18 @@ enum Drive {
             try? await Task.sleep(for: .milliseconds(400))
         }
         log.notice("drive done")
+    }
+
+    /// The core log's last lines holding `text`, copied into the app log.
+    private static func coreLog(_ text: String) {
+        guard let dir = try? CoreHost.dirs().logs else { return }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        for name in files.sorted() {
+            guard let body = try? String(contentsOfFile: dir + "/" + name, encoding: .utf8) else { continue }
+            for line in body.split(separator: "\n").filter({ $0.contains(text) }).suffix(12) {
+                log.notice("corelog \(name, privacy: .public): \(String(line.suffix(400)), privacy: .public)")
+            }
+        }
     }
 
     /// Values `try` replaced, by path, as the raw settings file held them (nil = absent).

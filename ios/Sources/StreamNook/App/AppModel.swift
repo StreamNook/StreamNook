@@ -54,6 +54,14 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
+        watch.onRow = { [weak self] row in
+            guard let self else { return }
+            self.nav.refresh(row)
+            // The stream's room learns the id, name and avatar a bare login lacked.
+            if self.signedIn { self.chat.syncStream(row) }
+        }
+        let toasts = toasts
+        watch.onToast = { toasts.show($0) }
         chat.toasts = toasts
         let home = home
         chat.followedLive = { home.lists.followedLive }
@@ -171,12 +179,13 @@ final class AppModel {
         await home.loadRecommended()
     }
 
-    /// Opens the watch layer on `stream`; another stream already open switches in place.
+    /// Opens the watch layer on `stream`; another stream already open switches in place. Chat
+    /// opens first, so a playback failure never leaves the viewer with nothing.
     func startWatching(_ stream: TwitchStream) {
-        nav.open(stream)
-        watch.open(stream, core: core)
         // Chat needs the account; signing in later points the stream tab then (see `ChatArea`).
         if signedIn { chat.syncStream(stream) }
+        nav.open(stream)
+        watch.open(stream, core: core)
     }
 
     /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
