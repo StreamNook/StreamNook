@@ -145,7 +145,7 @@ struct ChatListHost: UIViewRepresentable {
                                             roomLogin: session.channel))
                 }
             case .link(let url):
-                UIApplication.shared.open(url)
+                LinkRouter.open(url)
             case .replyParent(let id):
                 if list?.jump(to: id) != true {
                     list?.pauseForJump()

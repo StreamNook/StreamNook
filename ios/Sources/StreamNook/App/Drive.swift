@@ -15,6 +15,7 @@ import SwiftUI
 ///   switch its mode; `search:TEXT` searches it
 /// - `open:watch:INDEX` (or `play:INDEX`) opens the watch layer on the Browse list's stream at INDEX;
 ///   `login:NAME` opens it on a bare login, the way a notification tap or a raid seed does
+/// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
@@ -98,6 +99,7 @@ enum Drive {
                 model.startWatching(TwitchStream(id: "", userLogin: value, userName: value, title: "", viewerCount: 0,
                                                  gameName: ""))
             case "corelog": coreLog(value.replacingOccurrences(of: "_", with: " "))
+            case "clip": await openTopClip(model)
             case "mini": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .mini }
             case "full": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .full }
             case "back", "close": model.stopWatching()
@@ -176,6 +178,22 @@ enum Drive {
             try? await Task.sleep(for: .milliseconds(400))
         }
         log.notice("drive done")
+    }
+
+    /// The watched channel's most viewed clip, opened as a tapped chat link.
+    private static func openTopClip(_ model: AppModel) async {
+        struct Clip: Decodable { let url: String }
+        guard let id = model.watch.stream?.userID,
+              let json = try? await model.core.invoke("get_clips_by_broadcaster",
+                                                      args: ["broadcasterId": id, "limit": 1, "cursor": nil, "period": "all"]),
+              let page = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [Any],
+              let first = (page.first as? [[String: Any]])?.first, let raw = first["url"] as? String,
+              let url = URL(string: raw) else {
+            log.error("drive clip: no clip for the watched channel")
+            return
+        }
+        log.notice("drive clip \(raw, privacy: .public)")
+        LinkRouter.open(url)
     }
 
     /// The core log's last lines holding `text`, copied into the app log.

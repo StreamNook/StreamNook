@@ -6,6 +6,12 @@ import SwiftUI
 
 let log = Logger(subsystem: "app.streamnook", category: "spike")
 
+/// A clip link shown in the clip sheet; each tap is a fresh sheet.
+struct ClipLink: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// The app's state: the core, where boot stands, the look, navigation, the Twitch account, the
 /// home snapshot and the stream being watched.
 @Observable @MainActor
@@ -31,6 +37,8 @@ final class AppModel {
     let chat: ChatRooms
 
     private(set) var phase = Phase.booting
+    /// A clip link from chat, open in the clip sheet.
+    var clip: ClipLink?
     private(set) var started = false
     private(set) var startError: String?
     private(set) var startMS: Int?
@@ -62,6 +70,11 @@ final class AppModel {
         }
         let toasts = toasts
         watch.onToast = { toasts.show($0) }
+        LinkRouter.clip = { [weak self] url in
+            guard let self, LinkRouter.isClip(url) else { return false }
+            self.clip = ClipLink(url: url)
+            return true
+        }
         chat.toasts = toasts
         let home = home
         chat.followedLive = { home.lists.followedLive }
