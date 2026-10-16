@@ -12,6 +12,8 @@ struct StreamGrid: View {
     let latch: SettleLatch
     /// Off where the screen already names the category.
     var showsCategory = true
+    /// Kick rows wear Kick's mark only where the list mixes platforms.
+    private var mixed: Bool { Set(streams.map(\.platform)).count > 1 }
     @State private var width: CGFloat = 402
 
     private var home: HomeStore { model.home }
@@ -22,10 +24,11 @@ struct StreamGrid: View {
         let gap: CGFloat = view == .list ? 8 : 12
         let playing = latch.playing(settleKey)
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap, alignment: .top), count: count), spacing: gap) {
-            ForEach(Array(streams.enumerated()), id: \.element.id) { index, stream in
-                StreamCard(stream: stream, variant: view, showsCategory: showsCategory,
-                           hypeTrain: home.lists.hypeTrain(for: stream.userID),
-                           streak: home.lists.streak(for: stream.userID), group: home.lists.group(for: stream.userID),
+            ForEach(Array(streams.enumerated()), id: \.element.rowKey) { index, stream in
+                // Hype trains, streaks and groups are filed under Twitch ids only.
+                StreamCard(stream: stream, variant: view, showsCategory: showsCategory, showsPlatform: mixed,
+                           hypeTrain: home.lists.hypeTrain(for: stream.twitchID),
+                           streak: home.lists.streak(for: stream.twitchID), group: home.lists.group(for: stream.twitchID),
                            stamp: home.previewStamp,
                            open: { model.startWatching(stream) },
                            openCategory: category(of: stream).map { category in { model.nav.push(.category(category)) } })
@@ -39,7 +42,8 @@ struct StreamGrid: View {
     }
 
     private func category(of stream: TwitchStream) -> TwitchCategory? {
-        guard let id = stream.gameID, !id.isEmpty, !stream.gameName.isEmpty else { return nil }
+        // A Kick category id names nothing on Twitch.
+        guard stream.isTwitch, let id = stream.gameID, !id.isEmpty, !stream.gameName.isEmpty else { return nil }
         return TwitchCategory(id: id, name: stream.gameName)
     }
 }

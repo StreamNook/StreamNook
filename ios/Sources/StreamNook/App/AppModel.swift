@@ -37,6 +37,8 @@ final class AppModel {
     let chat: ChatRooms
     /// The Rewards tab: drops, the badge wall, and the drop bar's jump target.
     let rewards: RewardsStore
+    /// Your Kick account: its sign-in and your Kick follows.
+    let kick = KickAccount()
 
     private(set) var phase = Phase.booting
     /// A clip link from chat, open in the clip sheet.
@@ -80,8 +82,9 @@ final class AppModel {
             return true
         }
         chat.toasts = toasts
+        chat.kick = kick
         let home = home
-        chat.followedLive = { home.lists.followedLive }
+        chat.followedLive = { home.lists.followingLive }
     }
 
     var signedIn: Bool { signIn.signedIn }
@@ -118,6 +121,7 @@ final class AppModel {
         host.start(core: core, cookies: signIn.cookies)
         home.start()
         cosmetics.start(core: core)
+        kick.start(core: core, toasts: toasts)
         chat.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
