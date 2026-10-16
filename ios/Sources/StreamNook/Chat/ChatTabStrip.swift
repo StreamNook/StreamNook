@@ -13,12 +13,11 @@ struct ChatTabStrip: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            TabRow(spacing: 4) {
-                ForEach(rooms.tabs) { tab in
-                    TabPill(tab: tab, active: tab.channel == rooms.state.activeChannel,
-                            mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
-                            select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
-                }
+            // Full tabs while they fit; then the rooms behind the one on screen fold to their faces
+            // (it keeps its name and close button); past that its name truncates.
+            ViewThatFits(in: .horizontal) {
+                row(compact: false)
+                row(compact: true)
             }
             .padding(4)
             .snGlass(Capsule())
@@ -28,6 +27,17 @@ struct ChatTabStrip: View {
         .frame(height: Self.height)
         .overlay(alignment: .bottom) {
             SN.borderSubtle.frame(height: 1).accessibilityHidden(true)
+        }
+    }
+
+    private func row(compact: Bool) -> some View {
+        TabRow(spacing: 4) {
+            ForEach(rooms.tabs) { tab in
+                let active = tab.channel == rooms.state.activeChannel
+                TabPill(tab: tab, active: active, folded: compact && !active,
+                        mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
+                        select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
+            }
         }
     }
 }
@@ -78,10 +88,12 @@ struct TabRow: Layout {
 }
 
 /// One room: its face, a broadcast mark on the stream's own tab, its name, and a close button on
-/// every room but the stream's. Offered less than its natural width, only the name gives way.
+/// every room but the stream's. Folded (a crowded row), a room not on screen shows its face and
+/// marks only. Offered less than its natural width, only the name gives way.
 private struct TabPill: View {
     let tab: ChatTabInfo
     let active: Bool
+    var folded = false
     let mark: Bool
     let select: () -> Void
     let close: () -> Void
@@ -100,23 +112,27 @@ private struct TabPill: View {
                     if mark {
                         PlatformMark(platform: tab.provider == "kick" ? .kick : .twitch, size: 11)
                     }
-                    // At most 96 pt, so the content stays within the 136 pt a tab may take.
-                    Text(tab.label)
-                        .font(.sn(13, active ? 600 : 400))
-                        .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: 96, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .layoutPriority(-1)
+                    if !folded {
+                        // At most 96 pt, so the content stays within the 136 pt a tab may take.
+                        Text(tab.label)
+                            .font(.sn(13, active ? 600 : 400))
+                            .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 96, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(-1)
+                    }
                 }
-                .padding(.trailing, 4)
+                .padding(.trailing, folded ? 0 : 4)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(tab.label)
             .accessibilityAddTraits(active ? .isSelected : [])
-            if tab.pinnedToStream {
+            if folded {
+                EmptyView()
+            } else if tab.pinnedToStream {
                 Color.clear.frame(width: 2, height: 1)
             } else {
                 Button(action: close) {
@@ -130,8 +146,9 @@ private struct TabPill: View {
                 .accessibilityLabel("Close \(tab.label) chat")
             }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
+        // A folded pill is a circle-ish chip: the face 6 pt from each end.
+        .padding(.leading, folded ? 6 : 10)
+        .padding(.trailing, folded ? 6 : 4)
         .frame(height: 32)
         .background { if active { GlazeSelected() } }
     }
