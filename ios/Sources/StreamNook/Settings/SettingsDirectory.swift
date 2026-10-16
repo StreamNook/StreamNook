@@ -117,7 +117,7 @@ struct CatalogRowLabel: View {
                 .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    if let logo = row.logo { ProviderLogo(id: logo, size: 14) }
+                    if let logo = row.logo { BrandLogo(id: logo, size: 14) }
                     Text(row.title).font(.snRowTitle).foregroundStyle(SN.textPrimary).lineLimit(1)
                 }
                 .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
@@ -161,7 +161,7 @@ struct ChangedPanel: View {
                                 Button { openSettingsRow(row, model: model) } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 5) {
-                                            if let logo = row.logo { ProviderLogo(id: logo, size: 13) }
+                                            if let logo = row.logo { BrandLogo(id: logo, size: 13) }
                                             Text(row.title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
                                         }
                                         .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }

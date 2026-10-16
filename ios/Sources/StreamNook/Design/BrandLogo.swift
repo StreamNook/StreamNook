@@ -1,17 +1,18 @@
 import SwiftUI
 import UIKit
 
-/// A platform's or badge service's own logo beside its name, from the desktop's art: Twitch and
-/// Kick as vector marks, the rest as the bundled images in `Logos/` (YouTube, TikTok, 7TV, BTTV,
-/// FFZ, Chatterino, Homies, Moltorino, Chatsen, Chatty, DankChat, StreamNook).
-struct ProviderLogo: View {
+/// A platform's or badge service's own logo beside its name, from the desktop's art: the vector
+/// marks `ProviderLogo` draws (Twitch, Kick, 7TV, BTTV, FFZ) in their brand color, the rest as the
+/// bundled images in `Logos/` (YouTube, TikTok, Chatterino, Homies, Moltorino, Chatsen, Chatty,
+/// DankChat, StreamNook).
+struct BrandLogo: View {
     let id: String
     var size: CGFloat = 16
 
     var body: some View {
         switch id {
-        case "twitch": PlatformMark(platform: .twitch, size: size)
-        case "kick": PlatformMark(platform: .kick, size: size)
+        case "twitch", "kick", "7tv", "seventv", "bttv", "ffz":
+            ProviderLogo(provider: id == "seventv" ? "7tv" : id, size: size, tinted: true)
         default:
             if let image = Self.image(id) {
                 Image(uiImage: image).resizable().interpolation(.high).scaledToFit()

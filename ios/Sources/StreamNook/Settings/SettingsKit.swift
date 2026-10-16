@@ -25,7 +25,7 @@ struct SettingsBlock<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             // On the page's one left edge with the panels below (design-eye).
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if let logo { ProviderLogo(id: logo, size: 13) }
+                if let logo { BrandLogo(id: logo, size: 13) }
                 Text(shownTitle ?? title).snSectionStyle()
                 if let accessory {
                     Spacer(minLength: 8)
@@ -78,7 +78,7 @@ struct SettingTitle: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if let logo { ProviderLogo(id: logo, size: 15).padding(.trailing, 2) }
+            if let logo { BrandLogo(id: logo, size: 15).padding(.trailing, 2) }
             Text(title).font(font).foregroundStyle(SN.textPrimary)
             if hasHelp {
                 Button {
@@ -554,7 +554,7 @@ struct SettingChips: View {
                     Task { _ = try? await store.edit(path, .toggle(chip.value)) }
                 } label: {
                     HStack(spacing: 5) {
-                        if logos { ProviderLogo(id: chip.value, size: 14).opacity(lit ? 1 : 0.45) }
+                        if logos { BrandLogo(id: chip.value, size: 14).opacity(lit ? 1 : 0.45) }
                         Text(chip.label)
                     }
                         .font(.sn(12, 500))

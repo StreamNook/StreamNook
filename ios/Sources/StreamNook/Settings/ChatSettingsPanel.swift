@@ -74,7 +74,7 @@ struct ChatSettingsPanel: View {
                         ForEach([("Twitch", "twitch"), ("Kick", "kick"), ("YouTube", "youtube"), ("TikTok", "tiktok")], id: \.1) { label, id in
                             VStack(spacing: 4) {
                                 HStack(spacing: 4) {
-                                    ProviderLogo(id: id, size: 13)
+                                    BrandLogo(id: id, size: 13)
                                     Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
                                 }
                                 SettingToggle(path: "chat_blend.platforms.\(id)", label: "Include \(label) in combined chat",
@@ -162,7 +162,7 @@ struct ChatSettingsPanel: View {
                     ForEach(Self.eventKinds, id: \.0) { platform, label, kinds in
                         HStack(alignment: .top, spacing: 8) {
                             HStack(spacing: 4) {
-                                ProviderLogo(id: platform, size: 13)
+                                BrandLogo(id: platform, size: 13)
                                 Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
                             }
                             .frame(width: 84, alignment: .leading)
