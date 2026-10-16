@@ -196,7 +196,10 @@ struct PlayerChrome: View {
                 onTouch()
             }
             if let stream {
-                ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!) {
+                let title = watch.live?.title ?? stream.title
+                ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
+                          subject: Text(title.isEmpty ? stream.userName : title),
+                          message: Text("\(stream.userName) is live")) {
                     Image(systemName: Symbol.share)
                         .font(.system(size: Self.barIcon, weight: .medium))
                         .foregroundStyle(.white)
