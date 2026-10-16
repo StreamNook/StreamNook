@@ -1,22 +1,29 @@
-//! Starting and stopping a Twitch stream in the main watch view, as one call.
+//! Starting and stopping a stream in the main watch view, as one call.
 //!
-//! A start resolves the stream (the relay), completes the row (Following's row,
-//! else the caller's seed with the gaps filled by one lookup, never a made-up
-//! start time), aims drops and channel points at the channel, and hands it to
-//! the watch session. A newer start, a stop, or any other session start (an
-//! offline room, a provider stream) supersedes a start still resolving: the
-//! superseded one touches nothing and says so.
+//! A Twitch start resolves the stream (the relay), completes the row
+//! (Following's row, else the caller's seed with the gaps filled by one lookup,
+//! never a made-up start time), aims drops and channel points at the channel,
+//! and hands it to the watch session. A start on another platform (Kick,
+//! YouTube, TikTok) resolves its watch URL and completes the row from the
+//! platform's channel facts instead, lets drops and points go of any Twitch
+//! channel before, and starts the session's provider live check. A newer
+//! start, a stop, or any other session start (an offline room) supersedes a
+//! start still resolving: the superseded one touches nothing and says so.
 //!
 //! Chat stays the caller's: the desktop and Android webview warm the channel
 //! with `start_chat` for its window before calling here, and the iPhone opens
 //! the stream's room in its chat tabs first.
 
 use crate::commands::streaming::{self, StartError, StreamStartResult};
+use crate::models::provider_stream::ProviderStream;
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
 use crate::services::offline_room::OfflineRoom;
+use crate::services::providers::key::{make_key, normalize_channel};
+use crate::services::providers::watch_urls::watch_url;
 use crate::rt::AppHandle;
 use crate::services::twitch_service::TwitchService;
+use crate::services::unified_discover::DiscoverRow;
 use crate::services::watch_session::{self, WatchTarget};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -68,8 +75,9 @@ pub struct WatchSeed {
 #[derive(Debug, Clone, Serialize)]
 pub struct WatchStart {
     pub superseded: bool,
+    /// A Twitch row, or another platform's (`provider`, `key`, `watch_url`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub row: Option<TwitchStream>,
+    pub row: Option<DiscoverRow>,
     /// The relay's answer; absent when the caller said the relay already serves
     /// the stream (a MultiNook tile promoted to the main view).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,16 +162,23 @@ async fn assemble_row(login: &str, seed: &WatchSeed) -> TwitchStream {
     merge_row(login, seed, resolved.as_ref())
 }
 
-/// Start watching a live Twitch channel. `quality` defaults to the saved one;
-/// `relay_ready` skips the relay (it already serves this channel).
+/// Start watching a live channel. `provider` names its platform (Twitch when
+/// absent); `login` is the Twitch login or the platform's channel (a Kick slug).
+/// `quality` defaults to the saved one; `relay_ready` skips the relay (it
+/// already serves this channel).
 pub async fn start(
     app: AppHandle,
     state: State<'_, AppState>,
+    provider: Option<String>,
     login: String,
     seed: Option<WatchSeed>,
     quality: Option<String>,
     relay_ready: bool,
 ) -> Result<WatchStart, StartError> {
+    let provider = provider.map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty() && p != "twitch");
+    if let Some(provider) = provider {
+        return start_provider(app, state, provider, login, seed, quality, relay_ready).await;
+    }
     let login = login.trim().trim_start_matches('#').to_lowercase();
     if login.is_empty() {
         return Err(StartError::Message("No channel to watch".to_string()));
@@ -206,7 +221,144 @@ pub async fn start(
     let (app_bg, row_bg, login_bg) = (app.clone(), row.clone(), login.clone());
     tauri::async_runtime::spawn(async move { follow(app_bg, ticket, login_bg, row_bg).await });
     log::info!("[WatchStart] {login}: watching");
-    Ok(WatchStart { superseded: false, row: Some(row), stream })
+    Ok(WatchStart { superseded: false, row: Some(DiscoverRow::Twitch(row)), stream })
+}
+
+/// The row a stream on another platform shows: the platform's channel facts
+/// where it has them, the caller's seed where it does not. Never a made-up
+/// start time; the viewer count is the platform's live one.
+pub fn provider_row(provider: &str, channel: &str, seed: &WatchSeed, meta: Option<&ProviderStream>) -> ProviderStream {
+    let pick = |theirs: Option<&str>, mine: &Option<String>| -> String {
+        theirs
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .or_else(|| filled(mine).map(str::to_string))
+            .unwrap_or_default()
+    };
+    let m = meta;
+    let name = pick(m.map(|m| m.user_name.as_str()), &seed.user_name);
+    ProviderStream {
+        provider: provider.to_string(),
+        key: make_key(provider, channel),
+        id: pick(m.map(|m| m.id.as_str()), &seed.id),
+        user_id: pick(m.map(|m| m.user_id.as_str()), &seed.user_id),
+        user_login: channel.to_string(),
+        user_name: if name.is_empty() { channel.to_string() } else { name },
+        title: pick(m.map(|m| m.title.as_str()), &seed.title),
+        viewer_count: m.map(|m| m.viewer_count).filter(|v| *v > 0).or(seed.viewer_count).unwrap_or(0),
+        game_id: pick(m.map(|m| m.game_id.as_str()), &seed.game_id),
+        game_name: pick(m.map(|m| m.game_name.as_str()), &seed.game_name),
+        category_thumbnail: m.and_then(|m| m.category_thumbnail.clone()),
+        thumbnail_url: pick(m.map(|m| m.thumbnail_url.as_str()), &seed.thumbnail_url),
+        started_at: pick(m.map(|m| m.started_at.as_str()), &seed.started_at),
+        profile_image_url: m
+            .and_then(|m| m.profile_image_url.clone())
+            .filter(|v| !v.is_empty())
+            .or_else(|| filled(&seed.profile_image_url).map(str::to_string)),
+        // The relay resolved it, so it is live whatever a stale seed said.
+        is_live: true,
+        watch_url: watch_url(provider, channel),
+        tags: m.and_then(|m| m.tags.clone()).or_else(|| seed.tags.clone()),
+    }
+}
+
+/// Start watching a channel on another platform: the relay on its watch URL
+/// and the row from the platform's channel facts, side by side. Drops and
+/// channel points are Twitch's, so they let go of any Twitch channel before;
+/// the watch session then runs its provider live check. Chat stays the
+/// caller's, as on Twitch.
+async fn start_provider(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider: String,
+    channel: String,
+    seed: Option<WatchSeed>,
+    quality: Option<String>,
+    relay_ready: bool,
+) -> Result<WatchStart, StartError> {
+    let channel = normalize_channel(&provider, channel.trim().trim_start_matches('@'));
+    if channel.is_empty() {
+        return Err(StartError::Message("No channel to watch".to_string()));
+    }
+    let ticket = take_ticket();
+    let seed = seed.unwrap_or_default();
+    let quality = quality
+        .filter(|q| !q.trim().is_empty())
+        .unwrap_or_else(|| state.settings.lock().unwrap_or_else(|e| e.into_inner()).quality.clone());
+    let url = watch_url(&provider, &channel);
+    let relay = async {
+        if relay_ready {
+            None
+        } else {
+            Some(streaming::start_stream(url.clone(), quality, state.clone()).await)
+        }
+    };
+    let meta = async {
+        match crate::commands::provider_browse::provider_channel_meta(provider.clone(), channel.clone()).await {
+            Ok(meta) => Some(meta),
+            Err(e) => {
+                // Best effort: a resolved stream never fails to play over it.
+                log::warn!("[WatchStart] {provider}:{channel}: no channel facts: {e}");
+                None
+            }
+        }
+    };
+    let (started, meta) = tokio::join!(relay, meta);
+    let stream = match started {
+        None => None,
+        Some(started) => {
+            if !current(ticket) {
+                if started.is_ok() && STOPPED.load(Ordering::Acquire) {
+                    let _ = streaming::stop_stream().await;
+                }
+                log::debug!("[WatchStart] {provider}:{channel}: superseded while resolving");
+                return Ok(WatchStart::superseded());
+            }
+            Some(started?)
+        }
+    };
+    if !current(ticket) {
+        return Ok(WatchStart::superseded());
+    }
+    let row = provider_row(&provider, &channel, &seed, meta.as_ref());
+    let (app_bg, row_bg) = (app.clone(), row.clone());
+    tauri::async_runtime::spawn(async move { follow_provider(app_bg, ticket, row_bg).await });
+    log::info!("[WatchStart] {provider}:{channel}: watching");
+    Ok(WatchStart { superseded: false, row: Some(DiscoverRow::Provider(row)), stream })
+}
+
+/// Drops and points let go of the Twitch channel before (a Kick stream earns
+/// neither), then the watch session takes the stream, unless a newer start or
+/// a stop came meanwhile.
+async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
+    let state = app.state::<AppState>();
+    let previous = watch_session::twitch_channel_id();
+    let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
+    if let Some(id) = previous {
+        let _ = streaming::unregister_active_channel(id, state.clone()).await;
+    }
+    if !current(ticket) {
+        return;
+    }
+    watch_session::start(
+        app.clone(),
+        WatchTarget {
+            provider: row.provider.clone(),
+            login: row.user_login.clone(),
+            user_id: row.user_id.clone(),
+            user_name: row.user_name.clone(),
+            title: row.title.clone(),
+            game_id: (!row.game_id.is_empty()).then(|| row.game_id.clone()),
+            game_name: row.game_name.clone(),
+            started_at: row.started_at.clone(),
+            // EventSub is Twitch's; a provider session never subscribes.
+            authenticated: false,
+            offline: false,
+        },
+    )
+    .await;
+    log::info!("[WatchStart] {}: the watch session follows it", row.key);
 }
 
 /// Drops and channel points follow the channel on screen, then the watch
@@ -442,6 +594,62 @@ mod tests {
         assert_eq!(row.user_name, "caster");
         assert_eq!(row.is_live, Some(false));
         assert_eq!(row.started_at, "", "an offline row never has a start");
+    }
+
+    fn kick_meta() -> ProviderStream {
+        ProviderStream {
+            provider: "kick".into(),
+            key: "kick:xqc".into(),
+            id: "99".into(),
+            user_id: "676".into(),
+            user_login: "xqc".into(),
+            user_name: "xQc".into(),
+            title: "Kick title".into(),
+            viewer_count: 4200,
+            game_id: "15".into(),
+            game_name: "Just Chatting".into(),
+            category_thumbnail: None,
+            thumbnail_url: "https://images.kick.com/thumb.webp".into(),
+            started_at: "2026-10-16T10:00:00Z".into(),
+            profile_image_url: Some("https://files.kick.com/pic.webp".into()),
+            is_live: true,
+            watch_url: "https://kick.com/xqc".into(),
+            tags: None,
+        }
+    }
+
+    #[test]
+    fn a_kick_row_takes_the_platforms_facts_and_keeps_its_own_key_space() {
+        let seed = WatchSeed { title: Some("card title".into()), viewer_count: Some(10), ..Default::default() };
+        let row = provider_row("kick", "xqc", &seed, Some(&kick_meta()));
+        assert_eq!(row.provider, "kick");
+        assert_eq!(row.key, "kick:xqc");
+        assert_eq!(row.watch_url, "https://kick.com/xqc");
+        assert_eq!(row.title, "Kick title", "the platform's live title beats the card's");
+        assert_eq!(row.viewer_count, 4200);
+        assert_eq!(row.user_id, "676");
+        assert!(row.is_live);
+        let json = serde_json::to_value(DiscoverRow::Provider(row)).unwrap();
+        assert_eq!(json["provider"], "kick", "the shells read the platform off the row");
+    }
+
+    #[test]
+    fn a_kick_row_without_facts_falls_back_to_the_seed_and_never_invents_a_start() {
+        let seed = WatchSeed { user_name: Some("xQc".into()), viewer_count: Some(10), ..Default::default() };
+        let row = provider_row("kick", "xqc", &seed, None);
+        assert_eq!(row.user_name, "xQc");
+        assert_eq!(row.viewer_count, 10);
+        assert_eq!(row.started_at, "");
+        assert_eq!(row.title, "");
+        let bare = provider_row("kick", "xqc", &WatchSeed::default(), None);
+        assert_eq!(bare.user_name, "xqc");
+    }
+
+    #[test]
+    fn a_twitch_row_serializes_as_it_did() {
+        let json = serde_json::to_value(DiscoverRow::Twitch(resolved())).unwrap();
+        assert!(json.get("provider").is_none());
+        assert_eq!(json["user_login"], "caster");
     }
 
     #[test]
