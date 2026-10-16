@@ -44,7 +44,7 @@ final class Watch {
     private(set) var available: [String] = []
     /// The quality picked in the sheet this session; nil until one is picked.
     private(set) var pickedQuality: String?
-    /// The player is not playing (paused here, from the lock screen, or by a call). The centre
+    /// The player is not playing (paused here, from the lock screen, or by a call). The center
     /// button follows the player, never only its own taps.
     private(set) var paused = false
     private(set) var muted = false

@@ -1,257 +1,19 @@
 import Observation
 import SNKit
 import SwiftUI
+import UIKit
 
-/// The Cosmetics screen's state: the core's two halves (StreamNook's own badge and Atmosphere; 7TV
-/// and Twitch), with each change shown at once and put back if the core refuses it.
-@Observable @MainActor
-final class CosmeticsScreenModel {
-    private(set) var sn: StreamNookPickerState?
-    private(set) var ext: ExternalPickerState?
-    var signingIn = false
-    var showSevenTvSignIn = false
-    /// The account's Twitch bio; nil until read.
-    private(set) var bio: String?
-    var editingBio = false
-    @ObservationIgnored private var afterSignIn: ((String) async -> Void)?
-    @ObservationIgnored let app: AppModel
-
-    init(app: AppModel) {
-        self.app = app
-    }
-
-    private var core: CoreBridge { app.core }
-    private var user: TwitchUser? { app.signIn.user }
-
-    /// Every open re-reads everything; each half lands on its own, with no spinners.
-    func load() async {
-        guard let user else { return }
-        async let snRead: StreamNookPickerState? = try? core.invoke("cosmetics_picker_state", args: ["userId": user.id],
-                                                                     as: StreamNookPickerState.self)
-        async let extRead: ExternalPickerState? = try? core.invoke("external_cosmetics_state",
-                                                                    args: ["userId": user.id, "login": user.login],
-                                                                    as: ExternalPickerState.self)
-        async let bioRead: String? = try? core.invoke("get_twitch_bio", args: ["userId": user.id], as: String.self)
-        if let value = await snRead { sn = value }
-        if let value = await extRead { ext = value }
-        if let value = await bioRead { bio = value }
-    }
-
-    /// Saves the Twitch bio; answers whether Twitch took it.
-    func saveBio(_ text: String) async -> Bool {
-        do {
-            bio = try await core.invoke("update_twitch_bio", args: ["description": text], as: String.self)
-            return true
-        } catch {
-            let reason = (error as? CoreFailure)?.description ?? ""
-            app.toasts.show(reason.isEmpty ? "Could not save your bio." : reason)
-            return false
-        }
-    }
-
-    // MARK: StreamNook
-
-    /// Wears a badge; tapping the one worn takes it off (back to the plain mark).
-    func equipBadge(_ badge: PickerBadge) async {
-        guard let user, var state = sn else { return }
-        let next: String? = badge.worn ? nil : badge.slug
-        let before = state
-        for i in state.badges.indices { state.badges[i].worn = state.badges[i].slug == next }
-        sn = state
-        do {
-            _ = try await core.invoke("equip_streamnook_badge", args: ["userId": user.id, "slug": next])
-        } catch {
-            sn = before
-            let text = (error as? CoreFailure)?.description ?? ""
-            app.toasts.show(text.isEmpty ? "Could not equip that badge." : text)
-        }
-    }
-
-    func equipTheme(_ atmosphere: PickerAtmosphere) async {
-        guard let user, var state = sn, atmosphere.allowed else { return }
-        let before = state
-        state.theme = atmosphere.id
-        for i in state.atmospheres.indices { state.atmospheres[i].worn = state.atmospheres[i].id == atmosphere.id }
-        state.showChatToggle = atmosphere.id != "tier" && atmosphere.id != "paint"
-        sn = state
-        do {
-            _ = try await core.invoke("set_profile_theme", args: ["userId": user.id, "theme": atmosphere.id])
-        } catch {
-            sn = before
-            app.toasts.show("Could not apply that atmosphere.")
-        }
-    }
-
-    func setChatAtmosphere(_ show: Bool) async {
-        guard let user, var state = sn else { return }
-        state.chatAtmosphere = show
-        sn = state
-        let saved = (try? await core.invoke("set_chat_atmosphere", args: ["userId": user.id, "show": show],
-                                            as: Bool.self)) ?? false
-        if !saved {
-            state.chatAtmosphere = !show
-            sn = state
-            app.toasts.show("Could not save that. Try again in a moment.")
-        }
-    }
-
-    // MARK: 7TV
-
-    func signInToSevenTv() {
-        guard !signingIn else { return }
-        afterSignIn = nil
-        signingIn = true
-        showSevenTvSignIn = true
-    }
-
-    func signOutOfSevenTv() async {
-        do {
-            _ = try await core.invoke("logout_seventv", args: [:])
-            ext?.sevenTvSignedIn = false
-        } catch {
-            app.toasts.show("Could not sign out of 7TV.")
-        }
-    }
-
-    /// The sign-in sheet closed: stored or not, then read the status back.
-    func sevenTvSignInFinished(_ stored: Bool) async {
-        defer { signingIn = false }
-        let next = afterSignIn
-        afterSignIn = nil
-        guard stored else { return }
-        guard let status = try? await core.invoke("get_seventv_auth_status", args: [:], as: SevenTvStatus.self) else {
-            app.toasts.show("Could not sign in to 7TV.")
-            return
-        }
-        ext?.sevenTvSignedIn = status.isAuthenticated
-        if let id = status.userID { ext?.sevenTvUserID = id }
-        guard status.isAuthenticated else {
-            app.toasts.show("7TV did not finish signing you in. Try again.")
-            return
-        }
-        guard let id = status.userID ?? ext?.sevenTvUserID else {
-            app.toasts.show("7TV did not identify your account.")
-            return
-        }
-        await next?(id)
-    }
-
-    /// Runs `apply` with the 7TV account id, signing in first when needed; a tap while signing in
-    /// is ignored.
-    private func withSevenTv(_ apply: @escaping (String) async -> Void) async {
-        guard let ext else { return }
-        if !ext.sevenTvSignedIn {
-            guard !signingIn else { return }
-            afterSignIn = apply
-            signingIn = true
-            showSevenTvSignIn = true
-            return
-        }
-        guard let id = ext.sevenTvUserID else {
-            app.toasts.show("7TV did not identify your account.")
-            return
-        }
-        await apply(id)
-    }
-
-    func equipPaint(_ paint: PickerPaint) async {
-        await withSevenTv { [weak self] sevenTvID in
-            guard let self, var state = self.ext else { return }
-            let current = state.paints.first(where: \.worn)?.id
-            let next: String? = current == paint.id ? nil : paint.id
-            let before = state
-            for i in state.paints.indices { state.paints[i].worn = state.paints[i].id == next }
-            self.ext = state
-            do {
-                let result = try await self.core.invoke("set_seventv_paint", args: ["userId": sevenTvID, "paintId": next],
-                                                        as: SevenTvWrite.self)
-                if !result.success { throw CoreFailure.command(json: "\"rejected\"") }
-            } catch {
-                self.ext = before
-                self.sevenTvWriteFailed(error, what: "paint")
-            }
-        }
-    }
-
-    func equipSevenTvBadge(_ badge: PickerSevenTvBadge) async {
-        await withSevenTv { [weak self] sevenTvID in
-            guard let self, var state = self.ext else { return }
-            let current = state.sevenTvBadges.first(where: \.worn)?.id
-            let next: String? = current == badge.id ? nil : badge.id
-            let before = state
-            for i in state.sevenTvBadges.indices { state.sevenTvBadges[i].worn = state.sevenTvBadges[i].id == next }
-            self.ext = state
-            do {
-                let result = try await self.core.invoke("set_seventv_badge", args: ["userId": sevenTvID, "badgeId": next],
-                                                        as: SevenTvWrite.self)
-                if !result.success { throw CoreFailure.command(json: "\"rejected\"") }
-            } catch {
-                self.ext = before
-                self.sevenTvWriteFailed(error, what: "badge")
-            }
-        }
-    }
-
-    private func sevenTvWriteFailed(_ error: Error, what: String) {
-        if "\(error)".contains("SESSION_EXPIRED") {
-            ext?.sevenTvSignedIn = false
-            app.toasts.show("Your 7TV sign-in expired. Tap again to sign back in.")
-        } else {
-            app.toasts.show("Could not equip that \(what).")
-        }
-    }
-
-    // MARK: Name colour
-
-    /// Sets the account's Twitch name colour to one of Twitch's named colours.
-    func setChatColor(_ color: NamedChatColor) async {
-        guard let user, var state = ext, state.chatColor != color.hex else { return }
-        let before = state
-        state.chatColor = color.hex
-        ext = state
-        do {
-            _ = try await core.invoke("update_user_chat_color", args: ["targetUserId": user.id, "color": color.value])
-        } catch {
-            ext = before
-            app.toasts.show("Could not change your name color.")
-        }
-    }
-
-    // MARK: Twitch
-
-    /// Wears a Twitch global badge. There is no taking one off: Twitch only swaps which is worn.
-    func equipTwitchBadge(_ badge: TwitchIdentityBadge) async {
-        guard !badge.isSelected, var state = ext else { return }
-        let before = state
-        for i in state.twitchSelectable.indices {
-            state.twitchSelectable[i].isSelected = state.twitchSelectable[i].setID == badge.setID
-        }
-        ext = state
-        do {
-            _ = try await core.invoke("update_chat_identity_gql", args: ["badgeId": badge.setID, "badgeVersion": badge.version])
-        } catch {
-            ext = before
-            app.toasts.show("\(error)".contains("NEEDS_DROPS_AUTH") ? "Sign in to Drops to change your Twitch badge."
-                                                                     : "Could not equip that badge.")
-        }
-    }
-
-    private struct SevenTvStatus: Decodable {
-        var isAuthenticated: Bool
-        var userID: String?
-        enum CodingKeys: String, CodingKey { case isAuthenticated = "is_authenticated", userID = "user_id" }
-    }
-
-    private struct SevenTvWrite: Decodable {
-        var success: Bool
-    }
-}
-
-/// Cosmetics: your StreamNook badge, your Atmosphere (and whether it shows in chat), your 7TV paint
-/// and badge, and your Twitch global badge. Pushed from the You tab, the tab bar hidden.
+/// Edit profile: how you look, pinned at the top and redrawn with every pick (your Atmosphere as
+/// the band, your picture, your painted name and badges, and a line of your chat), then every
+/// choice laid open: Atmosphere, your StreamNook badge, your 7TV paint and badge, your Twitch
+/// badge, your name color, and your bio. Pushed from the You tab, the tab bar hidden.
 struct CosmeticsScreen: View {
     let model: AppModel
     @State private var screen: CosmeticsScreenModel
+    @State private var identity: OwnIdentityData?
+    /// A picture just picked and the name as typed, shown in the pinned preview before Twitch has them.
+    @State private var localPicture: UIImage?
+    @State private var draftName = ""
 
     init(model: AppModel) {
         self.model = model
@@ -259,22 +21,24 @@ struct CosmeticsScreen: View {
     }
 
     private var store: CosmeticsStore { model.cosmetics }
+    private var user: TwitchUser? { model.signIn.user }
+
+    /// Paints and badges past this many wait behind "Show all".
+    private static let shortList = 8
 
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    preview.padding(.bottom, 16)
-                    badgeSection.id("badge")
+                    profileSection.id("profile")
                     atmosphereSection.id("atmosphere")
+                    badgeSection.id("badge")
                     sevenTvSection.id("seventv")
                     twitchSection.id("twitch")
                     colorSection.id("color")
-                    bioSection.id("bio")
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
+                .padding(.bottom, 32)
             }
             .onChange(of: store.scrollTarget) { _, target in
                 guard let target else { return }
@@ -283,13 +47,27 @@ struct CosmeticsScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .top, spacing: 0) { pinned }
         .background(SN.background)
-        .navigationTitle("Cosmetics")
+        .navigationTitle("Edit profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .task {
             store.activeScreen = screen
+            if let user, identity == nil {
+                identity = try? await model.core.invoke("own_identity_header_cached", args: ["userId": user.id],
+                                                        as: OwnIdentityData?.self)
+            }
             await screen.load()
+            // Fresh after the cache: the 7TV picture and the banner as they are now.
+            if let user, let fresh = try? await model.core.invoke("own_identity_header", args: [
+                "userId": user.id, "login": user.login, "displayName": user.displayName,
+            ], as: OwnIdentityData.self) {
+                identity = fresh
+            }
+        }
+        .sheet(isPresented: $screen.editingBio) {
+            BioEditor(initial: screen.bio ?? "") { text in await screen.saveBio(text) }
         }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
             SevenTvSignInSheet(core: model.core) { stored in
@@ -298,145 +76,131 @@ struct CosmeticsScreen: View {
         }
     }
 
-    private func caption(_ text: String) -> some View {
-        Text(text)
-            .font(.sn(12, 600))
-            .textCase(.uppercase)
-            .tracking(0.6)
-            .foregroundStyle(SN.textMuted)
-            .padding(.bottom, 6)
-    }
+    // MARK: Pinned preview
 
-    // MARK: Preview
-
-    /// Your chat row as everyone will see it, redrawn with every pick.
+    /// You as others see you, held at the top while the choices scroll under it.
     @ViewBuilder
-    private var preview: some View {
-        if let user = model.signIn.user, screen.sn != nil || screen.ext != nil {
-            let sn = screen.sn
-            let ext = screen.ext
-            let badges = [ext?.sevenTvBadges.first(where: \.worn)?.badge.url,
-                          sn?.badges.first(where: \.worn)?.imageURL].compactMap { $0 }
-            let look = (sn?.showChatToggle == true && sn?.chatAtmosphere == true)
-                ? AtmosphereCatalog.shared.look(sn?.theme) : nil
-            CosmeticsPreviewRow(name: user.displayName, paint: ext?.paints.first(where: \.worn)?.paint,
-                                colorHex: ext?.chatColor, badges: badges, look: look)
-                .animation(.easeOut(duration: 0.2), value: sn?.theme)
-        }
-    }
-
-    // MARK: Name colour
-
-    @ViewBuilder
-    private var colorSection: some View {
-        if let ext = screen.ext, !ext.namedColors.isEmpty {
-            Collapsible(title: "Name color", count: ext.namedColors.count, key: "color", store: store) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-                    ForEach(ext.namedColors) { color in
-                        let on = ext.chatColor?.lowercased() == color.hex.lowercased()
-                        Button { Task { await screen.setChatColor(color) } } label: {
-                            Circle()
-                                .fill(Color(cgColor: FillPainter.color(color.hex) ?? CGColor(gray: 0.5, alpha: 1)))
-                                .frame(width: 36, height: 36)
-                                .overlay { if on { Circle().strokeBorder(SN.accent, lineWidth: 2.5).padding(-4) } }
-                                .frame(maxWidth: .infinity, minHeight: 44)
+    private var pinned: some View {
+        if let user {
+            let look = (screen.sn?.theme).flatMap { $0 == "tier" ? nil : AtmosphereCatalog.shared.look($0) }
+            VStack(alignment: .leading, spacing: 0) {
+                AtmosphereBand(look: look, tint: nameColor(screen.ext?.chatColor))
+                    .frame(height: 60)
+                    .animation(.easeOut(duration: 0.25), value: screen.sn?.theme)
+                HStack(alignment: .bottom, spacing: 10) {
+                    CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56, local: localPicture)
+                        .padding(.top, -31)
+                    HStack(spacing: 6) {
+                        PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
+                                    fallback: nameColor(screen.ext?.chatColor), shadows: .all)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .layoutPriority(1)
+                        ForEach(wornBadgeURLs, id: \.self) { url in
+                            CosmeticImage(url, animate: true).frame(width: 18, height: 18)
                         }
-                        .buttonStyle(BadgePress())
-                        .accessibilityLabel(color.label)
-                        .accessibilityAddTraits(on ? .isSelected : [])
                     }
+                    .padding(.bottom, 2)
+                    .padding(.top, 3)
+                    Spacer(minLength: 0)
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 12)
+                if screen.sn != nil || screen.ext != nil {
+                    ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen, framed: false)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                }
+            }
+            .padding(.bottom, 12)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .snPanel(radius: 18)
+            // Pinned over moving content, so it is solid at any Glassiness: choices pass behind it,
+            // never through it.
+            .background { RoundedRectangle(cornerRadius: 18, style: .continuous).fill(SN.background) }
+            .shadow(color: .black.opacity(0.55), radius: 12, y: 8)
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+            .background {
+                // The page fades in under the card, so choices scrolling up pass behind it.
+                LinearGradient(stops: [.init(color: SN.background, location: 0.7), .init(color: SN.background.opacity(0), location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea(edges: .top)
             }
         }
     }
 
-    // MARK: Bio
-
-    @ViewBuilder
-    private var bioSection: some View {
-        if let bio = screen.bio {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Bio").font(.sn(12, 600)).textCase(.uppercase).tracking(0.6).foregroundStyle(SN.textMuted)
-                Spacer()
-                Button("Edit") { screen.editingBio = true }
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.accent)
-            }
-            .padding(.top, 20)
-            .padding(.bottom, 6)
-            Text(bio.isEmpty ? "No bio yet. It shows on your Twitch channel and profile cards." : bio)
-                .font(.sn(13.5))
-                .foregroundStyle(bio.isEmpty ? SN.textSecondary : SN.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .snPanel()
-                .sheet(isPresented: $screen.editingBio) {
-                    BioEditor(initial: bio) { text in await screen.saveBio(text) }
-                }
-        }
+    /// The badges you wear, in chat's order: Twitch, 7TV, StreamNook.
+    private var wornBadgeURLs: [String] {
+        [screen.ext?.twitchSelectable.first(where: \.isSelected)?.imageURL,
+         screen.ext?.sevenTvBadges.first(where: \.worn)?.badge.url,
+         screen.sn?.badges.first(where: \.worn)?.imageURL].compactMap { $0 }
     }
 
-    // MARK: Badge
-
-    @ViewBuilder
-    private var badgeSection: some View {
-        caption("Badge")
-        if let badges = screen.sn?.badges {
-            if badges.isEmpty {
-                Text("No badges owned yet. Earned and event badges land here.")
-                    .font(.sn(13))
-                    .foregroundStyle(SN.textMuted)
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .snPanel()
-                    .padding(.bottom, 16)
-            } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                    ForEach(badges) { badge in
-                        Button { Task { await screen.equipBadge(badge) } } label: {
-                            BadgeTile(url: badge.imageURL, name: badge.name, worn: badge.worn)
-                        }
-                        .buttonStyle(BadgePress())
-                    }
-                }
-                .padding(.bottom, 16)
-            }
-        }
+    private func header(_ title: String, platform: PlatformMark.Platform? = nil, streamNook: Bool = false,
+                        detail: String? = nil) -> some View {
+        ProfileSectionHeader(title, platform: platform, streamNook: streamNook, detail: detail)
+            .padding(.top, 26)
+            .padding(.bottom, 12)
     }
 
     // MARK: Atmosphere
 
     @ViewBuilder
     private var atmosphereSection: some View {
-        caption("Atmosphere")
+        header("Atmosphere", streamNook: true)
         if let state = screen.sn {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(state.atmospheres) { atmosphere in
-                    Button { Task { await screen.equipTheme(atmosphere) } } label: {
-                        AtmosphereTile(atmosphere: atmosphere)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(state.atmospheres) { atmosphere in
+                        Button { Task { await screen.equipTheme(atmosphere) } } label: {
+                            AtmosphereTile(atmosphere: atmosphere,
+                                           chosen: atmosphere.worn || (atmosphere.id == "tier" && !state.atmospheres.contains(where: \.worn)))
+                        }
+                        .buttonStyle(BadgePress())
+                        .disabled(!atmosphere.allowed)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
+            .scrollIndicators(.hidden)
+            .padding(.horizontal, -16)
+            .padding(.vertical, -6)
+            // Always here, so picking None never moves what is below; off and dimmed while nothing
+            // can show in chat.
+            Toggle(isOn: Binding(get: { state.showChatToggle && state.chatAtmosphere },
+                                 set: { show in Task { await screen.setChatAtmosphere(show) } })) {
+                Text("Show in my chat messages").font(.snRowTitle).foregroundStyle(SN.textPrimary)
+            }
+            .tint(SN.accent)
+            .disabled(!state.showChatToggle)
+            .opacity(state.showChatToggle ? 1 : 0.4)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 50)
+            .snPanel()
+            .padding(.top, 12)
+        }
+    }
+
+    // MARK: StreamNook badge
+
+    @ViewBuilder
+    private var badgeSection: some View {
+        let badges = screen.sn?.badges ?? []
+        header("Badge", streamNook: true, detail: badges.first(where: \.worn)?.name)
+        if screen.sn != nil {
+            if badges.isEmpty {
+                note("No badges yet. Earned and event badges land here.")
+            } else {
+                tileGrid(badges, key: "snBadges", worn: \.worn) { badge in
+                    Button { Task { await screen.equipBadge(badge) } } label: {
+                        BadgeTile(url: badge.imageURL, worn: badge.worn)
                     }
                     .buttonStyle(BadgePress())
-                    .disabled(!atmosphere.allowed)
+                    .accessibilityLabel(badge.name)
+                    .accessibilityAddTraits(badge.worn ? .isSelected : [])
                 }
-            }
-            if state.showChatToggle {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Show in my chat messages").font(.sn(13.5)).foregroundStyle(SN.textPrimary)
-                        Text("Off keeps it on your profile only.").font(.sn(12)).foregroundStyle(SN.textMuted)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: Binding(get: { state.chatAtmosphere },
-                                             set: { show in Task { await screen.setChatAtmosphere(show) } }))
-                        .labelsHidden()
-                        .tint(SN.accent)
-                        .accessibilityLabel(state.chatAtmosphere ? "Hide your atmosphere in chat" : "Show your atmosphere in chat")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .snPanel()
-                .padding(.top, 8)
             }
         }
     }
@@ -445,54 +209,65 @@ struct CosmeticsScreen: View {
 
     @ViewBuilder
     private var sevenTvSection: some View {
-        if let ext = screen.ext, !ext.paints.isEmpty || !ext.sevenTvBadges.isEmpty {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("7TV").font(.sn(12, 600)).textCase(.uppercase).tracking(0.6).foregroundStyle(SN.textMuted)
-                Text(ext.sevenTvSignedIn ? "Signed in" : "Not signed in").font(.sn(12)).foregroundStyle(SN.textMuted)
-                Spacer()
-                Button(screen.signingIn ? "Signing in…" : ext.sevenTvSignedIn ? "Sign out" : "Sign in") {
-                    if ext.sevenTvSignedIn { Task { await screen.signOutOfSevenTv() } } else { screen.signInToSevenTv() }
-                }
-                .font(.sn(12.5))
-                .foregroundStyle(SN.accent)
-                .disabled(screen.signingIn)
-                .opacity(screen.signingIn ? 0.5 : 1)
+        if let ext = screen.ext, !ext.paints.isEmpty || !ext.sevenTvBadges.isEmpty || !ext.sevenTvSignedIn {
+            header("Paint", platform: .sevenTV, detail: ext.paints.first(where: \.worn)?.name)
+            if !ext.sevenTvSignedIn {
+                connectSevenTv(paints: ext.paints.count)
+                    .padding(.bottom, ext.paints.isEmpty ? 0 : 10)
             }
-            .padding(.top, 20)
             if !ext.paints.isEmpty {
-                Collapsible(title: "7TV paints", count: ext.paints.count, key: "paints", store: store) {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                        ForEach(ext.paints) { paint in
-                            Button { Task { await screen.equipPaint(paint) } } label: {
-                                HStack(spacing: 6) {
-                                    PaintedText(text: paint.name, font: .sn(14, 700), paint: paint.paint,
-                                                fallback: Color(red: 0x91 / 255, green: 0x46 / 255, blue: 1))
-                                    Spacer(minLength: 0)
-                                    if paint.worn { WornCheck() }
-                                }
-                                .padding(10)
-                                .snPanel()
-                                .overlay { if paint.worn { WornRing() } }
-                            }
-                            .buttonStyle(BadgePress())
+                let all = store.openSections.contains("paints")
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(all ? ext.paints : Self.short(ext.paints, worn: \.worn)) { paint in
+                        Button { Task { await screen.equipPaint(paint) } } label: {
+                            PaintTile(paint: paint)
                         }
+                        .buttonStyle(BadgePress())
+                        .accessibilityAddTraits(paint.worn ? .isSelected : [])
                     }
                 }
+                showAll(count: ext.paints.count, key: "paints")
             }
             if !ext.sevenTvBadges.isEmpty {
-                Collapsible(title: "7TV badges", count: ext.sevenTvBadges.count, key: "seventvBadges", store: store) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                        ForEach(ext.sevenTvBadges) { entry in
-                            Button { Task { await screen.equipSevenTvBadge(entry) } } label: {
-                                BadgeTile(url: entry.badge.url, fallbacks: entry.badge.fallbacks,
-                                          name: entry.badge.name ?? entry.badge.title, worn: entry.worn)
-                            }
-                            .buttonStyle(BadgePress())
-                        }
+                header("Badge", platform: .sevenTV, detail: ext.sevenTvBadges.first(where: \.worn)?.badge.title)
+                tileGrid(ext.sevenTvBadges, key: "seventvBadges", worn: \.worn) { entry in
+                    Button { Task { await screen.equipSevenTvBadge(entry) } } label: {
+                        BadgeTile(url: entry.badge.url, fallbacks: entry.badge.fallbacks, worn: entry.worn)
                     }
+                    .buttonStyle(BadgePress())
+                    .accessibilityLabel(entry.badge.name ?? entry.badge.title)
+                    .accessibilityAddTraits(entry.worn ? .isSelected : [])
                 }
             }
         }
+    }
+
+    /// Signed out of 7TV: what connecting does, and the connect, in 7TV's own blue.
+    private func connectSevenTv(paints: Int) -> some View {
+        HStack(spacing: 12) {
+            BrandTile(platform: .sevenTV, size: 40)
+            Text(paints > 0 ? "Connect 7TV to switch paints. You own \(paints)."
+                            : "Connect 7TV to wear your paints and badges.")
+                .font(.sn(13.5))
+                .foregroundStyle(SN.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { screen.signInToSevenTv() } label: {
+                Text(screen.signingIn ? "Connecting" : "Connect")
+                    .font(.sn(13, 700))
+                    .foregroundStyle(Color(red: 0.02, green: 0.13, blue: 0.18))
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(Capsule().fill(FixedColor.sevenTV.color))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(screen.signingIn)
+            .opacity(screen.signingIn ? 0.6 : 1)
+        }
+        .padding(12)
+        .snPanel()
     }
 
     // MARK: Twitch
@@ -501,117 +276,164 @@ struct CosmeticsScreen: View {
     private var twitchSection: some View {
         if let ext = screen.ext {
             if !ext.twitchSelectable.isEmpty {
-                Collapsible(title: "Twitch badges", count: ext.twitchSelectable.count, key: "twitch", store: store) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                        ForEach(ext.twitchSelectable) { badge in
-                            Button { Task { await screen.equipTwitchBadge(badge) } } label: {
-                                BadgeTile(url: badge.imageURL, name: badge.title, worn: badge.isSelected)
-                            }
-                            .buttonStyle(BadgePress())
-                        }
+                header("Badge", platform: .twitch, detail: ext.twitchSelectable.first(where: \.isSelected)?.title)
+                tileGrid(ext.twitchSelectable, key: "twitch", worn: \.isSelected) { badge in
+                    Button { Task { await screen.equipTwitchBadge(badge) } } label: {
+                        BadgeTile(url: badge.imageURL, worn: badge.isSelected)
                     }
+                    .buttonStyle(BadgePress())
+                    .accessibilityLabel(badge.title)
+                    .accessibilityAddTraits(badge.isSelected ? .isSelected : [])
                 }
             } else if !ext.twitchEarned.isEmpty {
-                Collapsible(title: "Twitch badges", count: ext.twitchEarned.count, key: "twitch", store: store) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        FlowLayout(spacing: 10) {
-                            ForEach(ext.twitchEarned) { badge in
-                                CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true)
-                                    .frame(width: 32, height: 32)
-                                    .accessibilityLabel(badge.label)
-                            }
-                        }
-                        if !ext.dropsSignedIn {
-                            Text("Sign in to Drops to choose which badge you wear.")
-                                .font(.sn(11.5))
-                                .foregroundStyle(SN.textMuted)
+                header("Badges", platform: .twitch)
+                VStack(alignment: .leading, spacing: 10) {
+                    FlowLayout(spacing: 10) {
+                        ForEach(ext.twitchEarned) { badge in
+                            CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true)
+                                .frame(width: 28, height: 28)
+                                .accessibilityLabel(badge.label)
                         }
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .snPanel()
+                    if !ext.dropsSignedIn {
+                        Text("Sign in to Drops to choose which badge you wear.")
+                            .font(.snCaption)
+                            .foregroundStyle(SN.textMuted)
+                    }
                 }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .snPanel()
             }
         }
     }
-}
 
-/// A named section with its count that opens on tap; collapsed on first open and kept as left for
-/// the session. Not shown at all when empty (the caller decides).
-private struct Collapsible<Content: View>: View {
-    let title: String
-    let count: Int
-    let key: String
-    let store: CosmeticsStore
-    @ViewBuilder let content: () -> Content
+    // MARK: Name color
 
-    private var open: Bool { store.openSections.contains(key) }
+    @ViewBuilder
+    private var colorSection: some View {
+        if let ext = screen.ext, !ext.namedColors.isEmpty {
+            header("Name color", platform: .twitch,
+                   detail: ext.namedColors.first(where: { $0.hex.lowercased() == ext.chatColor?.lowercased() })?.label)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 12) {
+                ForEach(ext.namedColors) { color in
+                    let on = ext.chatColor?.lowercased() == color.hex.lowercased()
+                    Button { Task { await screen.setChatColor(color) } } label: {
+                        Circle()
+                            .fill(nameColor(color.hex))
+                            .frame(width: 30, height: 30)
+                            .overlay { if on { Circle().strokeBorder(SN.background, lineWidth: 2.5) } }
+                            .overlay { if on { Circle().strokeBorder(SN.accent, lineWidth: 2).padding(-3) } }
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(BadgePress())
+                    .accessibilityLabel(color.label)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            .padding(12)
+            .snPanel()
+        }
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    // MARK: Twitch profile
+
+    @ViewBuilder
+    private var profileSection: some View {
+        if let user {
+            header("Profile", platform: .twitch)
+            TwitchProfileSection(model: model, screen: screen, user: user, identity: identity,
+                                 picture: $localPicture, draftName: $draftName)
+        }
+    }
+
+    // MARK: Pieces
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.sn(13.5))
+            .foregroundStyle(SN.textSecondary)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .snPanel()
+    }
+
+    /// Badge tiles five across, the first eight and then "Show all".
+    @ViewBuilder
+    private func tileGrid<Item: Identifiable, Tile: View>(_ items: [Item], key: String, worn: @escaping (Item) -> Bool,
+                                                         @ViewBuilder tile: @escaping (Item) -> Tile) -> some View {
+        let all = store.openSections.contains(key)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+            ForEach(all || items.count <= Self.shortList + 2 ? items : Self.short(items, worn: worn)) { item in
+                tile(item)
+            }
+        }
+        if items.count > Self.shortList + 2 { showAll(count: items.count, key: key) }
+    }
+
+    /// The first eight, with the one you wear swapped into the last place when it sits further down,
+    /// so what you have on is always in view.
+    private static func short<Item>(_ items: [Item], worn: (Item) -> Bool) -> [Item] {
+        var shown = Array(items.prefix(shortList))
+        if !shown.contains(where: worn), let wearing = items.first(where: worn), !shown.isEmpty {
+            shown[shown.count - 1] = wearing
+        }
+        return shown
+    }
+
+    @ViewBuilder
+    private func showAll(count: Int, key: String) -> some View {
+        if count > Self.shortList + 2 {
+            let open = store.openSections.contains(key)
             Button {
                 withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.26)) {
                     if open { store.openSections.remove(key) } else { store.openSections.insert(key) }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Text(title).font(.sn(12, 600)).textCase(.uppercase).tracking(0.6).foregroundStyle(SN.textMuted)
-                    Text("\(count)").font(.sn(12)).foregroundStyle(SN.textMuted)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(SN.textMuted)
-                        .rotationEffect(.degrees(open ? 90 : 0))
-                }
-                .contentShape(Rectangle())
+                Text(open ? "Show fewer" : "Show all \(count)")
+                    .font(.sn(14, 600))
+                    .foregroundStyle(SN.accent)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(open ? "Expanded" : "Collapsed")
-            .padding(.top, 16)
-            .padding(.bottom, 6)
-            if open {
-                content()
-                    .padding(.bottom, 4)
-                    .transition(.opacity)
-            }
+            .padding(.top, 2)
+            .padding(.bottom, -12)
         }
     }
 }
 
-/// A badge tile: glass, its 36 pt art (or a placeholder square), its name under it in two lines at
-/// most, and the worn ring with a check.
+/// A badge tile: the art at 36 points on a panel, the worn one ringed and checked. The name is the
+/// section header's detail and VoiceOver's label, so the tile carries no words.
 private struct BadgeTile: View {
     let url: String?
     var fallbacks: [String] = []
-    let name: String
     let worn: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
+        Group {
             if let url {
                 CosmeticImage(url, fallbacks: fallbacks, animate: true).frame(width: 36, height: 36)
             } else {
-                RoundedRectangle(cornerRadius: 4).fill(SN.surface).frame(width: 36, height: 36)
+                RoundedRectangle(cornerRadius: 6).fill(SN.surface).frame(width: 36, height: 36)
             }
-            Text(name)
-                .font(.sn(10.5))
-                .foregroundStyle(SN.textSecondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity)
         }
-        .padding(8)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .snPanel()
-        .overlay { if worn { WornRing() } }
-        .overlay(alignment: .topTrailing) { if worn { WornCheck().padding(4) } }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(1, contentMode: .fit)
+        // A tile you can see on the page, so the grid's edge is the tiles', not the icons'.
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(SN.backgroundTertiary))
+        .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(SN.borderSubtle, lineWidth: 0.5) }
+        .wornMarks(worn, radius: 12)
     }
 }
 
-/// An Atmosphere tile: its swatch drawn from the core's layers (the plain surface for Default),
-/// its name, and the worn check or the lock.
+/// An Atmosphere tile: its swatch with nothing on it, its name in a chin under it, the worn ring
+/// and check, or the lock beside the name.
 private struct AtmosphereTile: View {
     let atmosphere: PickerAtmosphere
+    /// Worn, or None while nothing is.
+    let chosen: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -622,34 +444,38 @@ private struct AtmosphereTile: View {
                     FillView(fill: atmosphere.swatch)
                 }
             }
-            .frame(height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .frame(width: 116, height: 66)
+            .clipShape(RoundedRectangle(cornerRadius: SNRadius.thumb, style: .continuous))
+            .wornMarks(chosen, radius: SNRadius.thumb)
             HStack(spacing: 4) {
-                Text(atmosphere.name).font(.sn(12.5)).foregroundStyle(SN.textPrimary).lineLimit(1)
-                Spacer(minLength: 0)
-                if atmosphere.worn {
-                    WornCheck()
-                } else if !atmosphere.allowed {
-                    Image(systemName: "lock.fill").font(.system(size: 12)).foregroundStyle(SN.textMuted)
+                if !atmosphere.allowed {
+                    Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(SN.textMuted)
                 }
+                Text(atmosphere.id == "tier" ? "None" : atmosphere.name)
+                    .font(.sn(12.5, chosen ? 600 : 500))
+                    .foregroundStyle(chosen ? SN.textPrimary : SN.textSecondary)
+                    .lineLimit(1)
             }
+            .frame(width: 116, alignment: .leading)
         }
-        .padding(10)
-        .snPanel()
-        .overlay { if atmosphere.worn { WornRing() } }
         .opacity(atmosphere.allowed ? 1 : 0.45)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
-private struct WornRing: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: SNRadius.panel, style: .continuous).strokeBorder(SN.accent, lineWidth: 2)
-    }
-}
+/// A 7TV paint as its own name drawn in it, on a panel; the worn one ringed and checked.
+private struct PaintTile: View {
+    let paint: PickerPaint
 
-private struct WornCheck: View {
     var body: some View {
-        Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(SN.accent)
+        PaintedText(text: paint.name, font: .sn(15, 700), paint: paint.paint, fallback: SN.textPrimary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .frame(height: 46)
+            .snPanel()
+            .wornMarks(paint.worn)
     }
 }
 

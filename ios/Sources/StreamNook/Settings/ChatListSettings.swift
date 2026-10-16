@@ -250,7 +250,7 @@ struct LinkSettings: View {
         SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
             WideRow(title: "Style",
                     detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
-                    help: "In Clean, hover the card to see where it goes. StreamNook fetches the page from your iPhone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
+                    help: "In Clean, press and hold the card to see where it goes. StreamNook fetches the page from your iPhone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
                     paths: ["chat_design.link_previews", "chat_design.link_preview_keep_link"]) {
                 SettingSegments(choices: [Choice("Off", "off"), Choice("Card + Link", "with_link"), Choice("Clean", "clean")],
                                 selected: style, accessibility: "Link style") { value in
@@ -274,7 +274,7 @@ struct LinkSettings: View {
             }
             ToggleRow(title: "Short links", path: "chat_design.shorten_links", fallback: true,
                       detail: "Shows each link as a compact label, the site plus a short path, instead of the full raw URL.",
-                      help: "The full link still opens on click and shows on hover.")
+                      help: "The full link still opens on tap and shows when you press and hold.")
             ColorRow(title: "Color", path: "chat_design.link_color", unset: "#8ab4ff",
                      detail: "The color of links in chat. Leave it on the default to follow the theme.")
             ToggleRow(title: "Underline", path: "chat_design.link_underline", fallback: true,
@@ -961,7 +961,7 @@ struct NicknamesSettings: View {
             .sorted { (($0.entry["username"] as? String) ?? $0.id).lowercased() < (($1.entry["username"] as? String) ?? $1.id).lowercased() }
         SettingsBlock(title: "Nicknames", detail: "Nicknames you've set for individual chatters. Only visible to you. Set or clear a nickname from the user's profile card in chat.", bare: true) {
             if overrides.isEmpty {
-                Text("No overrides yet. Click any user's name in chat to open their profile card, then set a nickname.")
+                Text("No overrides yet. Tap any user's name in chat to open their profile card, then set a nickname.")
                     .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity).padding(16).snPanel()
             } else {

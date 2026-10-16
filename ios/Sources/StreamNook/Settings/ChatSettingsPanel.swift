@@ -189,7 +189,7 @@ struct ChatSettingsPanel: View {
         SettingsBlock(title: "Pinned Messages", detail: "How a pinned message shows at the top of chat.") {
             ToggleRow(title: "Collapsed", path: "chat_design.pinned_start_collapsed", fallback: true,
                       detail: "Shows the pinned message as a compact one-line bar when you enter a channel.",
-                      help: "Click the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely.",
+                      help: "Tap the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely.",
                       showsNestedWhenOff: true) {
                 NestedChoice(title: "Style", path: "chat_design.pinned_collapsed_style",
                              choices: [Choice("Bar", "bar"), Choice("Hidden", "hidden")], fallback: "bar")
@@ -273,8 +273,8 @@ struct ChatSettingsPanel: View {
                       help: "Twitch shows each platform's own picture (Kick and YouTube included) and never asks 7TV for one; paints and badges stay. Animation has its own choice below and does not follow your Motion setting.") {
                 if store.string("cosmetics.profile_picture_source", "seventv") == "seventv" {
                     NestedChoice(title: "Animation", path: "cosmetics.profile_picture_animation",
-                                 choices: [Choice("Always", "always"), Choice("On hover", "hover"), Choice("Never", "never")],
-                                 fallback: "always")
+                                 choices: [Choice("Always", "always"), Choice("Never", "never")],
+                                 fallback: "always", shown: { $0 == "hover" ? "never" : $0 })
                 }
             }
             ToggleRow(title: "Pictures in chat", path: "chat_design.show_avatars", fallback: true,
@@ -304,7 +304,7 @@ struct ChatSettingsPanel: View {
                     NestedToggle(title: "Replies to you", path: "chat_design.mention_sound_replies", fallback: true)
                 }
             }
-            SettingRow(title: "@name style", detail: "How an @mention reads in chat. Hover an option to see it in the preview.",
+            SettingRow(title: "@name style", detail: "How an @mention reads in chat.",
                        help: "A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright.") {
                 EmptyView()
             } nested: {
@@ -343,7 +343,7 @@ struct ChatSettingsPanel: View {
     // MARK: Emotes, input, completion, points, behavior
 
     private var emotes: some View {
-        SettingsBlock(title: "Emotes", detail: "How big emotes are, how they animate, and how much they grow when you hover one.") {
+        SettingsBlock(title: "Emotes", detail: "How big emotes are, how they animate, and how much they grow when you press and hold one.") {
             ChoiceRow(title: "Emoji style", path: "chat_design.emoji_style",
                       choices: [Choice("Apple", "apple"), Choice("Google", "google"), Choice("Twitter", "twitter"),
                                 Choice("Facebook", "facebook"), Choice("System", "system")],
@@ -357,7 +357,7 @@ struct ChatSettingsPanel: View {
                       detail: "Play animated emotes, or show only their first frame. Never is the lightest on the GPU in a fast chat.",
                       shown: { $0 == "hover" ? "never" : $0 })
             ToggleRow(title: "GIFs", path: "chat_design.show_chat_gifs", fallback: true,
-                      detail: "Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal.",
+                      detail: "Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can tap to reveal.",
                       help: "GIFs also follow Animation: Never shows the chip instead.", showsNestedWhenOff: true) {
                 NestedSlider(title: "Size", path: "chat_design.gif_scale", range: 0.5...2, step: 0.05, fallback: 1,
                              readout: { "\($0.fixed(2))x" }, integer: false)
@@ -398,18 +398,18 @@ struct ChatSettingsPanel: View {
                       detail: "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
                       help: "Twitch normally blocks identical messages sent back to back. Handy for repeating an emote.")
             ToggleRow(title: "Spellcheck", path: "chat_input.spellcheck_enabled", fallback: true,
-                      detail: "Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone.",
+                      detail: "Underlines misspelled words as you type and offers corrections when you tap one. Emotes, chatters, commands and links are left alone.",
                       help: "Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click.") {
                 DictionaryEditor()
             }
             ToggleRow(title: "Chat modes", path: "chat_input.show_room_modes", fallback: true,
                       detail: "Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type.",
-                      help: "Hover the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
+                      help: "Tap the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
             ToggleRow(title: "Hide placeholder", path: "chat_input.hide_placeholder",
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide command button", path: "chat_input.hide_command_button",
                       detail: "Removes the slash button from inside the message box. Typing / still opens the quick command list.",
-                      help: "The command button opens a browsable menu of every command you can run here, with what each one does and examples you can click into the box. It also has a larger view for reading comfortably.")
+                      help: "The command button opens a browsable menu of every command you can run here, with what each one does and examples you can tap into the box. It also has a larger view for reading comfortably.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
                       detail: "Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion.")
             PointsBalanceRow()
@@ -448,7 +448,7 @@ struct ChatSettingsPanel: View {
             ToggleRow(title: "Hide shared chat", path: "chat_design.hide_shared_chat",
                       detail: "Hides messages that came from the other channel in a Twitch Shared Chat, so you only see this channel's own chatters.")
             ToggleRow(title: "Smooth resume", path: "chat_render.smooth_scroll_on_resume", fallback: true,
-                      detail: "Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant.")
+                      detail: "Animates the scroll back to the bottom when you tap Resume; auto-scroll for new messages stays instant.")
             SliderRow(title: { "Scrollback: \(Int($0)) messages" }, path: "chat_render.message_buffer_cap", range: 50...300, step: 10,
                       fallback: 100,
                       detail: "How many messages each chat keeps to scroll back through. Phones stop at 300: more than that costs memory and smoothness with nothing extra to see.",
@@ -460,7 +460,7 @@ struct ChatSettingsPanel: View {
         SettingsBlock(title: "Docked Chats", detail: "Chats you keep open beside the stream, and how you switch between them.") {
             ChoiceRow(title: "Menu style", path: "chat_design.chat_dock_switcher",
                       choices: [Choice("List", "menu"), Choice("Tabs", "tabs")], fallback: "menu",
-                      detail: "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away.")
+                      detail: "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one tap away.")
         }
     }
 
@@ -610,7 +610,7 @@ private struct PointsBalanceRow: View {
         WideRow(title: "Points balance",
                 detail: "Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.",
                 paths: paths) {
-            SettingSegments(choices: [Choice("Always", "always"), Choice("On hover", "hover"), Choice("Hidden", "hidden")],
+            SettingSegments(choices: [Choice("Always", "always"), Choice("On tap", "hover"), Choice("Hidden", "hidden")],
                             selected: mode, accessibility: "Points balance") { value in
                 Task {
                     await store.set([paths[0]: value == "hidden", paths[1]: value == "always"])
