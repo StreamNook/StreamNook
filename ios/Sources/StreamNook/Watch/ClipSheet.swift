@@ -38,7 +38,7 @@ struct ClipSheet: View {
             ZStack {
                 Color.black
                 if let player {
-                    VideoPlayer(player: player)
+                    ClipPlayer(player: player)
                 } else {
                     PenroseMark(width: 40)
                 }
@@ -73,8 +73,24 @@ struct ClipSheet: View {
             player.play()
         } catch {
             log.notice("clip did not resolve, opening outside: \(String(describing: error), privacy: .public)")
-            UIApplication.shared.open(url)
+            await UIApplication.shared.open(url)
             dismiss()
         }
+    }
+}
+
+/// The system player with its own controls (scrubbing), inline in the sheet.
+private struct ClipPlayer: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.allowsPictureInPicturePlayback = false
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        controller.player = player
     }
 }
