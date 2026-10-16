@@ -148,3 +148,73 @@ public enum KickWords {
 
     public static let refreshFailed = "Could not load your Kick follows. Try again in a moment."
 }
+
+/// A page of another platform's streams (`provider_directory`, `provider_search`).
+public struct StreamPage: Decodable, Sendable {
+    public var streams: [TwitchStream]
+    public var cursor: String?
+
+    public init(streams: [TwitchStream], cursor: String? = nil) {
+        self.streams = streams
+        self.cursor = cursor
+    }
+}
+
+/// A category on another platform (Rust `ProviderCategory`).
+public struct ProviderCategory: Decodable, Sendable, Hashable, Identifiable {
+    public var provider: String
+    public var id: String
+    public var name: String
+    public var thumbnail: String
+    public var viewerCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case provider, id, name, thumbnail
+        case viewerCount = "viewer_count"
+    }
+
+    public init(provider: String = "kick", id: String, name: String, thumbnail: String = "", viewerCount: Int = 0) {
+        self.provider = provider
+        self.id = id
+        self.name = name
+        self.thumbnail = thumbnail
+        self.viewerCount = viewerCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        provider = (try? c.decodeIfPresent(String.self, forKey: .provider)) ?? "kick"
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        thumbnail = (try? c.decodeIfPresent(String.self, forKey: .thumbnail)) ?? ""
+        viewerCount = (try? c.decodeIfPresent(Int.self, forKey: .viewerCount)) ?? 0
+    }
+
+    /// The same tile Twitch's categories use: the thumbnail as the art (none: a quiet block).
+    public var tile: TwitchCategory {
+        TwitchCategory(id: id, name: name, boxArtURL: thumbnail.isEmpty ? nil : thumbnail, viewerCount: viewerCount)
+    }
+
+    /// Kick has no category search: the loaded list filtered by name.
+    public static func filter(_ list: [ProviderCategory], _ query: String) -> [ProviderCategory] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return list }
+        return list.filter { $0.name.lowercased().contains(q) }
+    }
+}
+
+/// `provider_categories`' answer.
+public struct CategoryPage: Decodable, Sendable {
+    public var categories: [ProviderCategory]
+}
+
+extension TwitchStream {
+    /// A row from a Kick list, stamped Kick even when the answer left it unstamped.
+    public var asKick: TwitchStream {
+        var row = self
+        if row.provider == nil || row.provider?.isEmpty == true { row.provider = "kick" }
+        if row.key == nil { row.key = "kick:\(row.userLogin.lowercased())" }
+        if row.watchURL == nil { row.watchURL = "https://kick.com/\(row.userLogin)" }
+        return row
+    }
+}

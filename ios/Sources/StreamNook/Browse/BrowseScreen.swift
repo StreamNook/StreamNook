@@ -3,26 +3,34 @@ import SNKit
 import SwiftUI
 import UIKit
 
-/// Browse: what Twitch recommends live, or the categories, with search covering both. Needs no
-/// sign-in.
+/// Browse: what Twitch recommends live, or the categories, with search covering both; or the
+/// same on Kick. Needs no sign-in.
 struct BrowseScreen: View {
     let model: AppModel
     @AppStorage(StreamView.key) private var view = StreamView.cards
+    /// `twitch` or `kick`; anything else reads as Twitch.
+    @AppStorage("sn-browse-platform") private var platform = "twitch"
     @State private var liveLatch = SettleLatch()
     @State private var categoryLatch = SettleLatch()
 
     private var home: HomeStore { model.home }
     private var browse: BrowseModel { model.browseState }
+    private var onKick: Bool { platform == "kick" }
 
     var body: some View {
         @Bindable var browse = model.browseState
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                GlazeSegments([Segment(value: BrowseModel.Mode.live, label: "Live"),
-                               Segment(value: BrowseModel.Mode.categories, label: "Categories")],
-                              selection: modeBinding)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
+                // The modes and the platform share one row, so nothing below moves.
+                HStack(spacing: 8) {
+                    GlazeSegments([Segment(value: BrowseModel.Mode.live, label: "Live"),
+                                   Segment(value: BrowseModel.Mode.categories, label: "Categories")],
+                                  selection: modeBinding)
+                    Spacer(minLength: 0)
+                    PlatformSwitch(platform: platformBinding)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
                 content
             }
         }
@@ -33,7 +41,7 @@ struct BrowseScreen: View {
         .navigationTitle("Browse")
         .toolbarTitleDisplayMode(.inlineLarge)
         .searchable(text: $browse.query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: browse.mode == .live ? "Search channels" : "Search categories")
+                    prompt: browse.mode == .categories ? "Search categories" : onKick ? "Search Kick channels" : "Search channels")
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .submitLabel(.search)
@@ -44,19 +52,57 @@ struct BrowseScreen: View {
         }
         .refreshable { await refresh() }
         .task { if !home.recommendedLoaded { await home.loadRecommended() } }
-        .reportsChannels(browse.streamResults ?? home.recommended, to: model.core)
+        // Twitch ids only: hype trains and Shared Viewership never look at Kick rows.
+        .reportsChannels(onKick ? [] : browse.streamResults ?? home.recommended, to: model.core)
         // The core answers these signed out too (the public GQL), so Browse never waits on a sign-in.
-        .task(id: "\(browse.mode)|\(browse.query)|\(model.signedIn)") { await browse.search(model.core) }
-        .task(id: "\(browse.mode)|\(model.signedIn)") {
-            if browse.mode == .categories { await browse.loadCategories(model.core) }
+        .task(id: "\(platform)|\(browse.mode)|\(browse.query)|\(model.signedIn)") {
+            if onKick {
+                if browse.mode == .live { await browse.kick.search(browse.query, core: model.core) }
+            } else {
+                await browse.search(model.core)
+            }
         }
+        .task(id: "\(platform)|\(browse.mode)|\(model.signedIn)|\(browse.kick.category?.id ?? "")") {
+            if onKick {
+                if browse.mode == .categories {
+                    await browse.kick.loadCategories(model.core)
+                } else {
+                    await browse.kick.loadDirectory(model.core)
+                }
+            } else if browse.mode == .categories {
+                await browse.loadCategories(model.core)
+            }
+        }
+    }
+
+    /// Switching platform clears the search and any chosen Kick category.
+    private var platformBinding: Binding<String> {
+        Binding(get: { onKick ? "kick" : "twitch" }, set: { next in
+            guard next != (onKick ? "kick" : "twitch") else { return }
+            platform = next
+            browse.query = ""
+            browse.kick.reset()
+        })
     }
 
     private var modeBinding: Binding<BrowseModel.Mode?> {
         Binding(get: { browse.mode }, set: { if let mode = $0 { browse.mode = mode } })
     }
 
-    private var content: some View { results }
+    @ViewBuilder
+    private var content: some View {
+        if onKick {
+            KickBrowseBody(model: model, kick: browse.kick, mode: browse.mode, query: browse.query, view: view,
+                           liveLatch: liveLatch, categoryLatch: categoryLatch) { category in
+                // A Kick category filters the directory in place instead of opening a screen.
+                browse.query = ""
+                browse.kick.category = category
+                browse.mode = .live
+            }
+        } else {
+            results
+        }
+    }
 
     @ViewBuilder
     private var results: some View {
@@ -95,6 +141,17 @@ struct BrowseScreen: View {
     }
 
     private func refresh() async {
+        if onKick {
+            home.renewPreviews()
+            if browse.mode == .categories {
+                await browse.kick.loadCategories(model.core, force: true)
+            } else if !browse.trimmed.isEmpty {
+                await browse.kick.search(browse.query, core: model.core, immediate: true)
+            } else {
+                await browse.kick.loadDirectory(model.core)
+            }
+            return
+        }
         if !browse.trimmed.isEmpty {
             home.renewPreviews()
             await browse.search(model.core, immediate: true)
@@ -113,6 +170,8 @@ final class BrowseModel {
 
     var mode = Mode.live
     var query = ""
+    /// Browse switched to Kick.
+    let kick = KickBrowseModel()
     private(set) var streamResults: [TwitchStream]?
     private(set) var categoryResults: [TwitchCategory]?
     private(set) var searching = false
@@ -132,6 +191,7 @@ final class BrowseModel {
         streamResults = nil
         categoryResults = nil
         searching = false
+        kick.reset()
     }
 
     /// Searches 350 ms after the last keystroke, in the mode showing; a canceled search writes
