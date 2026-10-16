@@ -1193,6 +1193,13 @@ pub async fn stamp_drops(streams: &mut [TwitchStream]) {
     stamp_drops_with(&inner.snap.read().await.drops_campaigns, streams);
 }
 
+/// The followed live row for `login`, as Following last listed it.
+pub async fn followed_live_row(login: &str) -> Option<TwitchStream> {
+    let inner = SERVICE.get()?;
+    let snap = inner.snap.read().await;
+    snap.followed_live.iter().find(|s| s.user_login.eq_ignore_ascii_case(login)).cloned()
+}
+
 /// The whole snapshot, for a mounting Home.
 ///
 /// The unified Discover list is built here rather than read back: a window

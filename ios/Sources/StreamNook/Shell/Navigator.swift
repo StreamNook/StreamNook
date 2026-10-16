@@ -100,7 +100,7 @@ final class Navigator {
     var shellCovered: Bool { playing != nil && playerMode == .full }
 
     func open(_ stream: TwitchStream) {
-        if playing?.id != stream.id { landscapeChat = false }
+        if playing?.userLogin.lowercased() != stream.userLogin.lowercased() { landscapeChat = false }
         playing = stream
         playerMode = .full
     }
@@ -108,6 +108,12 @@ final class Navigator {
     func close() {
         playing = nil
         playerMode = .full
+    }
+
+    /// The core completed the playing row; the layer keeps its mode.
+    func refresh(_ row: TwitchStream) {
+        guard playing?.userLogin.lowercased() == row.userLogin.lowercased() else { return }
+        playing = row
     }
 
     func push(_ route: Route) {

@@ -847,6 +847,7 @@ pub fn run() {
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
     // The low-latency engine follows the saved switch from the first stream on.
     services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
+    services::ll_origin::set_target_gap(settings.video_player.ll_target_latency);
 
     // Initialize drops service with persisted settings (including priority_games for favorites)
     let drops_service = Arc::new(TokioMutex::new(DropsService::new_with_settings(
@@ -1055,6 +1056,7 @@ pub fn run() {
             if let Ok(loaded) = load_settings_from_file() {
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
+                services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -2116,7 +2118,7 @@ pub fn run() {
             start_drops_monitoring,
             stop_drops_monitoring,
             update_monitoring_channel,
-            report_player_playing,
+            report_player_state,
             // Automation commands
             // Drops Authentication commands
             start_drops_login,
@@ -2218,6 +2220,8 @@ pub fn run() {
             seventv_invalidate_cosmetics,
             seventv_clear_cosmetics,
             // Main-window watch session
+            watch_start,
+            watch_stop,
             watch_session_start,
             watch_session_stop,
             watch_session_resolve_offline,

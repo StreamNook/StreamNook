@@ -6,6 +6,12 @@ import SwiftUI
 
 let log = Logger(subsystem: "app.streamnook", category: "spike")
 
+/// A clip link shown in the clip sheet; each tap is a fresh sheet.
+struct ClipLink: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// The app's state: the core, where boot stands, the look, navigation, the Twitch account, the
 /// home snapshot and the stream being watched.
 @Observable @MainActor
@@ -33,6 +39,8 @@ final class AppModel {
     let rewards: RewardsStore
 
     private(set) var phase = Phase.booting
+    /// A clip link from chat, open in the clip sheet.
+    var clip: ClipLink?
     private(set) var started = false
     private(set) var startError: String?
     private(set) var startMS: Int?
@@ -57,6 +65,19 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
+        watch.onRow = { [weak self] row in
+            guard let self else { return }
+            self.nav.refresh(row)
+            // The stream's room learns the id, name and avatar a bare login lacked.
+            if self.signedIn { self.chat.syncStream(row) }
+        }
+        let toasts = toasts
+        watch.onToast = { toasts.show($0) }
+        LinkRouter.clip = { [weak self] url in
+            guard let self, LinkRouter.isClip(url) else { return false }
+            self.clip = ClipLink(url: url)
+            return true
+        }
         chat.toasts = toasts
         let home = home
         chat.followedLive = { home.lists.followedLive }
@@ -89,6 +110,8 @@ final class AppModel {
             return
         }
         let settings = await loadSettings()
+        // The watch layer reads its landscape chat and player rows from the settings view.
+        Task { await settingsStore.refresh() }
         capVideoHeight()
         await signIn.boot(core: core)
         host.start(core: core, cookies: signIn.cookies)
@@ -174,12 +197,13 @@ final class AppModel {
         await home.loadRecommended()
     }
 
-    /// Opens the watch layer on `stream`; another stream already open switches in place.
+    /// Opens the watch layer on `stream`; another stream already open switches in place. Chat
+    /// opens first, so a playback failure never leaves the viewer with nothing.
     func startWatching(_ stream: TwitchStream) {
-        nav.open(stream)
-        watch.open(stream, core: core)
         // Chat needs the account; signing in later points the stream tab then (see `ChatArea`).
         if signedIn { chat.syncStream(stream) }
+        nav.open(stream)
+        watch.open(stream, core: core)
     }
 
     /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
@@ -207,7 +231,7 @@ final class AppModel {
     /// The manual unstick: the relay and player cycle for the same stream. If it cannot come back,
     /// an offline channel shows as offline; otherwise the stream starts afresh.
     func restartStream() async {
-        guard let stream = watch.stream else { return }
+        guard let stream = watch.stream, !watch.resolvingOffline else { return }
         guard let failure = await watch.restart(core: core) else {
             toasts.show("Stream restarted with new settings", .success)
             return
@@ -289,6 +313,17 @@ final class AppModel {
                         ChatLab.session?.reconnect(port: port)
                         #endif
                     }
+                case "watch-session://redirect":
+                    let json = event.payloadJSON
+                    Task { await self.followRaid(json) }
+                case "watch-session://offline":
+                    // The confirmation polls Helix for up to 40 s; other events keep flowing.
+                    Task { await self.streamWentOffline() }
+                case "watch-session://resolving":
+                    // The core is confirming an offline stream; a restart now would fight it.
+                    self.watch.resolvingOffline = event.payloadJSON.trimmingCharacters(in: .whitespaces) == "true"
+                case "watch-session://stream-update":
+                    if let update = ChannelViewers.streamUpdate(event.payloadJSON) { self.watch.take(update) }
                 case "ad-pivot":
                     let payload = Self.object(event.payloadJSON)
                     if let url = payload["url"] as? String {
@@ -298,6 +333,52 @@ final class AppModel {
                     break
                 }
             }
+        }
+    }
+
+    /// A raid the core follows: a notice, a beat to read it, then the target starts from the
+    /// raid's seed (ids, names); the start fills in the rest.
+    private func followRaid(_ json: String) async {
+        guard watch.stream != nil,
+              let payload = try? JSONDecoder().decode(RaidRedirect.self, from: Data(json.utf8)) else { return }
+        let target = payload.target
+        log.notice("raid: joining \(target.userLogin, privacy: .public)")
+        toasts.show("Raid starting! Joining \(target.userLogin)...", .info)
+        try? await Task.sleep(for: .milliseconds(1500))
+        guard watch.stream != nil else { return }
+        startWatching(target)
+    }
+
+    /// The watched stream looks offline: the core confirms it and says what to do.
+    private func streamWentOffline() async {
+        guard let ended = watch.stream else { return }
+        guard let decision = try? await core.invoke("watch_session_resolve_offline", args: [:], as: OfflineDecision.self)
+        else {
+            toasts.show("Auto-switch failed. Please select a new stream manually.")
+            return
+        }
+        guard watch.stream?.userLogin == ended.userLogin else { return }
+        log.notice("offline decision \(decision.action, privacy: .public) \(decision.why ?? "", privacy: .public)")
+        let notice = { (n: OfflineDecision.Notice?) in
+            if let n { self.toasts.show(n.message, n.error ? .error : .info) }
+        }
+        switch decision.action {
+        case "notify":
+            notice(decision.notice)
+        case "offline_chat":
+            // The video stops; chat stays. The phone has no offline room screen yet.
+            _ = try? await core.invoke("stop_stream", args: [:])
+            watch.showOffline()
+        case "stop":
+            notice(decision.notice)
+            stopWatching()
+        case "switch_to":
+            guard let next = decision.stream else { return }
+            notice(decision.notice)
+            try? await Task.sleep(for: .milliseconds(500))
+            startWatching(next)
+        default:
+            break
         }
     }
 

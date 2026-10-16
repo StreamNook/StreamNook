@@ -25,6 +25,13 @@ import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
 
+/** `watch_start`: a superseded start carries nothing else. */
+type WatchStartResult = {
+  superseded: boolean;
+  row?: TwitchStream;
+  stream?: StreamStartResult;
+};
+
 export type StreamStartResult = {
   url: string;
   quality: string;
@@ -871,15 +878,12 @@ async function applyOfflineDecision(
     case 'switch_to':
       set({ isAutoSwitching: true });
       try {
-        await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
+        // The relay, the watch session, drops and channel points (services/watch_start.rs).
+        await invoke('watch_stop', { preserveBackend: false }).catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
         await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
-        await invoke('stop_drops_monitoring').catch((e) => Logger.warn('[AutoSwitch] Error stopping drops monitoring:', e));
         set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
         say(decision.notice);
-        if (decision.action === 'stop') {
-          await invoke('watch_session_stop', { preserveBackend: false }).catch(() => {});
-          return;
-        }
+        if (decision.action === 'stop') return;
         // A beat between the old stream closing and the new one opening.
         await new Promise((resolve) => setTimeout(resolve, 500));
         await get().startStream(decision.stream.user_login, decision.stream);
@@ -2182,14 +2186,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       // relay teardown below can't race a still-live provider session.
       await teardownProviderSession();
 
-      await invoke('stop_stream');
-
       // preserveBackend: handing the channel off to MultiNook, which keeps
       // watching it. Leave the chat bridge, EventSub, drops monitoring and
       // active-channel registration running so MultiNook inherits them intact.
       // Tearing the chat bridge down here would race MultiNook's re-acquire of
       // the same channel and leave chat stuck "connecting" (the IRC connection
       // would already be gone — hence the "IRC connection not established" PART).
+      // The relay, then the watch session (its polls always, its EventSub
+      // subscription and presence unless MultiNook is taking the channel
+      // over), then drops and channel points unless MultiNook keeps them: one
+      // Rust call (services/watch_start.rs).
+      await invoke('watch_stop', { preserveBackend }).catch((e) =>
+        Logger.warn('Could not stop watching:', e),
+      );
+
       // Handing a rewound session to MultiNook: the rewind cleared the watch
       // heartbeat target (a recording is not the live broadcast) and the grid
       // inherits drops monitoring as-is, so re-arm it for the live channel.
@@ -2200,28 +2210,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Ends the watch session: its polls always, its EventSub subscription and
-      // presence unless MultiNook is taking the channel over.
-      await invoke('watch_session_stop', { preserveBackend }).catch((e) =>
-        Logger.warn('Could not stop the watch session:', e),
-      );
-
       if (!preserveBackend) {
         await invoke('stop_chat');
-
-        // Stop drops monitoring
-        try {
-          await invoke('stop_drops_monitoring');
-          Logger.debug('Stopped drops monitoring');
-        } catch (e) {
-          Logger.warn('Could not stop drops monitoring:', e);
-        }
-
-        const currentStream = get().currentStream;
-        if (currentStream?.user_id) {
-           invoke('unregister_active_channel', { channelId: currentStream.user_id }).catch(() => {});
-        }
-
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
@@ -2658,72 +2648,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       // An audio-only swap still resolving would otherwise land AFTER this
       // start and re-point the relay at the channel we just left.
       await settleTransientSwap();
-      const result = preResolved
-        ?? await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
+      // The watch session's events must be heard before Rust starts it.
+      ensureWatchSessionListeners(set, get);
+      // One Rust call resolves the relay, completes the row (Following's own
+      // row, else this seed with its gaps filled by one lookup, never a
+      // made-up start time), aims drops and channel points at the channel and
+      // starts the watch session (services/watch_start.rs). A promoted tile's
+      // relay already serves the channel, so only the rest runs for it.
+      const seed = providedStreamInfo;
+      const started = await invoke<WatchStartResult>('watch_start', {
+        login: channel,
+        seed: seed ?? null,
+        quality: requestedQuality,
+        relayReady: !!preResolved,
+      });
+      // A newer start (or a stop) won while this one resolved: Rust touched
+      // nothing, and neither does the store.
+      if (started.superseded || superseded() || !started.row) return;
+      const result = preResolved ?? started.stream;
+      if (!result) throw new Error('No stream to play');
       if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+      // The row is Rust's; only the unified lists' provider marks ride along.
+      const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
 
-      // Use the provided stream info, or find it from followed streams, or fetch it
-      let info: TwitchStream;
-      
-      // First try to find it in followed streams as it has the most complete, live data
-      const followedStreamInfo = get().followedStreams.find(s => s.user_login.toLowerCase() === channel.toLowerCase());
-      
-      if (followedStreamInfo) {
-        info = followedStreamInfo;
-      } else {
-        // Anything that is not a full row from a list: a raid seed (ids and
-        // the raiding party's size), a notification tap or a deep link (a bare
-        // login), a search hit (no viewer count), a favourite. One Rust lookup
-        // returns the row the way Following would have handed it over, so the
-        // overlay, the lock-screen card and the chat tab show the same avatar,
-        // partner mark, title, category, viewers and start time however the
-        // stream was opened. Each field is taken from the seed first and the
-        // lookup second, so a complete seed is never overwritten and a failed
-        // lookup leaves exactly what the caller knew.
-        const seed = providedStreamInfo;
-        const seededGaps =
-          !seed ||
-          !seed.user_id ||
-          !seed.title?.trim() ||
-          !seed.game_name?.trim() ||
-          !seed.profile_image_url?.trim() ||
-          !seed.started_at?.trim();
-        const resolved = seededGaps
-          ? await invoke<TwitchStream>('resolve_stream_for_login', { login: channel }).catch((e) => {
-              Logger.warn(`Could not resolve stream row for ${channel}:`, e);
-              return undefined;
-            })
-          : undefined;
-        const keep = (mine?: string, theirs?: string) => (mine?.trim() ? mine : (theirs || ''));
-        info = {
-          id: seed?.id || resolved?.id || '',
-          user_id: seed?.user_id || resolved?.user_id || '',
-          user_name: seed?.user_name || resolved?.user_name || channel,
-          user_login: channel.toLowerCase(),
-          title: keep(seed?.title, resolved?.title) || `Watching ${channel}`,
-          // A seed's count is the raiding party or a search placeholder; the
-          // live row's is the channel's own audience.
-          viewer_count: resolved?.viewer_count ?? seed?.viewer_count ?? 0,
-          game_id: seed?.game_id || resolved?.game_id,
-          game_name: keep(seed?.game_name, resolved?.game_name),
-          thumbnail_url: keep(seed?.thumbnail_url, resolved?.thumbnail_url),
-          // Never fabricated as "now": a made-up start makes uptime count from
-          // zero on a stream that has been live for hours. Empty renders as
-          // no uptime, which is the honest reading.
-          started_at: resolved?.started_at || seed?.started_at || '',
-          profile_image_url: keep(seed?.profile_image_url, resolved?.profile_image_url),
-          broadcaster_type: seed?.broadcaster_type ?? resolved?.broadcaster_type,
-          is_live: resolved?.is_live ?? seed?.is_live,
-          tags: seed?.tags ?? resolved?.tags,
-          language: seed?.language ?? resolved?.language,
-          provider: seed?.provider,
-          watch_url: seed?.watch_url,
-        };
-      }
-
-      // Same guard on the success path: a slow start that finally resolves
-      // must not replace the stream the user has since switched to.
-      if (superseded()) return;
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
       // Can this broadcast be rewound? One cached Rust lookup per live start;
@@ -2734,41 +2681,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null });
         })
         .catch(() => {});
-
-      // Start drops and channel points monitoring
-      try {
-        const channelId = info.user_id || '';
-        const channelName = info.user_login || channel;
-
-        if (channelId && channelName) {
-          await invoke('start_drops_monitoring', {
-            channelId,
-            channelName
-          });
-          Logger.debug('Started drops monitoring for', channelName);
-
-          invoke('register_active_channel', { channelId }).catch(() => {});
-        } else {
-          // No broadcaster id, so the watch heartbeat cannot be retargeted.
-          // Silently skipping leaves it aimed at the PREVIOUS channel, which
-          // then keeps collecting watch minutes for a stream nobody is on.
-          // Stopping is the honest outcome: this session earns nothing, which
-          // it was going to regardless, but no other channel is credited for
-          // it either. Reachable when the get_channel_info fallback throws.
-          Logger.warn(`[Stream] No broadcaster id for ${channelName}; drops and points monitoring off for this session`);
-          await invoke('stop_drops_monitoring').catch(() => {});
-        }
-      } catch (e) {
-        Logger.warn('Could not start drops monitoring:', e);
-        // Non-critical, stream can still work
-      }
-
-      // EventSub for this channel, the hype-train poll, Discord presence, raid
-      // redirects and the offline decision are the watch session's (Rust).
-      ensureWatchSessionListeners(set, get);
-      await invoke('watch_session_start', {
-        target: watchTargetOf(info, 'twitch', channel, get().isAuthenticated),
-      }).catch((e) => Logger.warn('[WatchSession] Could not start:', e));
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : String(e);
       Logger.error('Failed to start stream:', errorMessage);

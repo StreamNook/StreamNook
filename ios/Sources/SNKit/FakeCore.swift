@@ -72,7 +72,17 @@ public final class FakeCore: CoreBridge {
         case "start_chat":
             // No socket: the app reads `chatTicker` when the core is fake.
             return "0"
-        case "stop_stream", "stop_chat":
+        case "watch_start":
+            guard let login = args["login"] as? String else { throw CoreFailure.command(json: #""missing login""#) }
+            var row = (args["seed"] as? [String: Any]) ?? [:]
+            row["user_login"] = login.lowercased()
+            for (key, value) in ["id": "", "user_name": login, "title": "Watching \(login)", "viewer_count": 0,
+                                 "game_name": "", "thumbnail_url": ""] as [String: Any] where row[key] == nil {
+                row[key] = value
+            }
+            return try Self.json(["superseded": false, "row": row,
+                                  "stream": ["url": Self.testStreamURL, "quality": "best", "entitled": false]] as [String: Any])
+        case "stop_stream", "stop_chat", "watch_stop":
             return "null"
         case "get_settings":
             let design = chatFixture.flatMap { try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) } ?? [String: Any]()

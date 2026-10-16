@@ -50,6 +50,9 @@ struct MainShell: View {
         .sheet(item: $cosmetics.profile) { target in
             ProfileSheet(model: ProfileSheetModel(target: target, core: model.core))
         }
+        .sheet(item: $model.clip) { link in
+            ClipSheet(url: link.url, model: model)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)

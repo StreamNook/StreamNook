@@ -37,35 +37,14 @@ import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
 import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
 
-// The earning gate.
-//
-// The Rust watch heartbeat credits a minute-watched (drops progress + channel
-// points) only while the player says it is playing, and it samples that flag
-// INSTANTANEOUSLY once every 60 seconds. A two-second window where the flag
-// reads false can therefore cost a whole minute, which is why this mirrors the
-// desktop VideoPlayer's handlers rather than reporting every state the media
-// element passes through.
-//
-// Desktop rules, ported from VideoPlayer.tsx:
-//   - `playing` reports true at once and cancels any pending paused report.
-//   - `pause` does NOT report false. It arms a grace timer, and only a pause
-//     that outlives the timer reports false.
-//   - There is no `waiting` handler. A buffer underrun is not a pause. Phones
-//     underrun constantly, and reporting false on each one is the whole reason
-//     earning was spotty here while the desktop was flawless.
-//   - Teardown cancels the pending report and reports nothing. Desktop does
-//     exactly this in an unmount effect, for the reason its comment gives: a
-//     report that lands after the player is gone gates the NEXT stream off.
-//
-// Module scope rather than refs because there is exactly one player: one
-// useMobileHlsEngine call site, in one MobilePlayer, in one WatchScreen. If a
-// second player surface is ever added, this state has to move into the hook.
-const PAUSE_REPORT_GRACE_MS = 6000;
-
-// A wedged link must not block every later report for the life of the process,
-// which would recreate the exact "video plays, nothing earns" failure this
-// whole gate exists to prevent.
-const REPORT_TIMEOUT_MS = 2000;
+// The earning gate (drops progress, channel points, watch time) is Rust's
+// (services/earning_gate.rs): the player only says what its video does. A
+// rebuffer is not a pause, so `waiting` is never reported.
+function reportState(state: 'playing' | 'paused' | 'paused_now' | 'hidden' | 'teardown'): void {
+  invoke('report_player_state', { state }).catch((err) => {
+    Logger.warn('[MobilePlayer] report_player_state failed:', err);
+  });
+}
 
 // How long a pause must last before we stop pulling segments.
 //
@@ -81,46 +60,6 @@ const REPORT_TIMEOUT_MS = 2000;
 // audio focus, does not tear the buffer down for nothing. Anything longer is a
 // real pause and worth stopping for.
 const STOP_LOAD_AFTER_PAUSE_MS = 2000;
-
-let pausedReportTimer: number | null = null;
-
-// `report_player_playing` is an async command, so Tauri spawns each call as its
-// own task and two calls have no ordering relationship. Chaining makes the last
-// call made the last call applied. Insurance, not a fix for a known trigger.
-let reportChain: Promise<unknown> = Promise.resolve();
-
-function sendPlaying(playing: boolean): void {
-  Logger.debug(`[MobilePlayer] earning gate -> ${playing ? 'playing' : 'paused'}`);
-  reportChain = reportChain.then(() =>
-    Promise.race([
-      invoke('report_player_playing', { playing }).catch((err) => {
-        Logger.warn('[MobilePlayer] report_player_playing failed:', err);
-      }),
-      new Promise((resolve) => window.setTimeout(resolve, REPORT_TIMEOUT_MS)),
-    ]),
-  );
-}
-
-function cancelPausedReport(): void {
-  if (pausedReportTimer !== null) {
-    window.clearTimeout(pausedReportTimer);
-    pausedReportTimer = null;
-  }
-}
-
-function reportPlaying(): void {
-  cancelPausedReport();
-  sendPlaying(true);
-}
-
-function reportPausedSoon(reason: string): void {
-  cancelPausedReport();
-  pausedReportTimer = window.setTimeout(() => {
-    pausedReportTimer = null;
-    Logger.debug(`[MobilePlayer] pause outlived the grace window (${reason})`);
-    sendPlaying(false);
-  }, PAUSE_REPORT_GRACE_MS);
-}
 
 export type MobilePlayerState = 'idle' | 'loading' | 'playing' | 'stalled' | 'error';
 
@@ -394,12 +333,12 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         resumeLoad('playing');
         stalls.end();
         setState('playing');
-        reportPlaying();
+        reportState('playing');
       };
       const onWaiting = () => {
         if (seq !== seqRef.current) return;
-        // Spinner only. The earning gate is deliberately untouched here; see
-        // the note above the gate helpers.
+        // Spinner only. The earning gate is deliberately untouched here: a
+        // rebuffer is not a pause.
         Logger.debug('[MobilePlayer] buffer stall (earning gate unchanged)');
         // A seek or the first load is not the link's doing.
         if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
@@ -408,12 +347,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       const onPauseOrEnd = () => {
         if (seq !== seqRef.current) return;
         stalls.cancel();
-        // A pause that arrives while the page is already hidden cannot be
-        // deferred: Android pauses the WebView along with the activity, so the
-        // timer would never fire. In picture-in-picture the native layer
-        // resumes the WebView on purpose so playback continues, which means a
-        // pause there is a real pause and reporting at once is still right. No
-        // PiP signal is needed, and no race with it exists.
         // Stop pulling segments once the pause outlives the grace window. See
         // STOP_LOAD_AFTER_PAUSE_MS: without this a paused stream downloads at
         // full bitrate forever and discards the lot every ~55 seconds.
@@ -436,22 +369,16 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           }, STOP_LOAD_AFTER_PAUSE_MS);
         }
 
-        if (document.visibilityState === 'hidden') {
-          cancelPausedReport();
-          sendPlaying(false);
-          return;
-        }
-        reportPausedSoon('pause/ended');
+        // A pause that arrives while the page is already hidden is a real pause
+        // (backgrounding leaves the audio alone, and in picture-in-picture the
+        // native layer resumes the WebView on purpose), so it counts at once.
+        reportState(document.visibilityState === 'hidden' ? 'paused_now' : 'paused');
       };
       const onVisibilityChange = () => {
         if (seq !== seqRef.current) return;
-        // The other ordering: pause landed first and armed the timer, then the
-        // app went to the background. Flush it while the DOM still runs.
-        if (document.visibilityState === 'hidden' && pausedReportTimer !== null) {
-          cancelPausedReport();
-          Logger.debug('[MobilePlayer] flushing pending paused report on hide');
-          sendPlaying(false);
-        }
+        // The other ordering: pause landed first, then the app went to the
+        // background. Rust counts a pending pause at once on hide.
+        if (document.visibilityState === 'hidden') reportState('hidden');
       };
       video.addEventListener('play', onPlayIntent);
       video.addEventListener('playing', onPlaying);
@@ -506,16 +433,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     return () => {
       cancelled = true;
       detachVideo?.();
-      // Cancel, do not report. This is a port of the desktop unmount effect in
-      // VideoPlayer.tsx, whose comment gives the reason: a paused report that
-      // lands after the player is gone wrongly gates the NEXT stream's earning
-      // off. It also removes the dead window that a restart, a quality switch
-      // and an ad pivot used to pay, since all three swap streamUrl while
+      // Cancel a pending pause, report nothing: a paused report that lands
+      // after the player is gone wrongly gates the NEXT stream's earning off,
+      // and a restart, a quality switch and an ad pivot swap streamUrl while
       // deliberately leaving drops monitoring armed on the same channel. Real
-      // teardown needs no help here: stopStream and exitStream both reach
-      // stop_drops_monitoring, whose clear_target drops the flag and the target
-      // together.
-      cancelPausedReport();
+      // teardown needs no help here: the stop clears the heartbeat with drops
+      // monitoring.
+      reportState('teardown');
       if (seq === seqRef.current) setActiveVideo(null);
       destroy();
     };

@@ -501,6 +501,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
     // The low-latency engine's switch, so no shell has to call it after a save.
     crate::services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
+    crate::services::ll_origin::set_target_gap(settings.video_player.ll_target_latency);
     // Recompile chat rules if their groups changed (hash-gated, cheap).
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);

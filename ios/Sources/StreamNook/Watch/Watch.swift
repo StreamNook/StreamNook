@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import SNKit
+import UIKit
 
 /// How the player reaches the relay. The core's low-latency origin runs on every route, so the
 /// relay measures each one against the same live edge.
@@ -52,10 +53,18 @@ final class Watch {
     private(set) var restarting = false
     /// The watched channel's numbers as they move (viewers, title, category, start).
     private(set) var live: ChannelViewers?
+    /// The Shared Viewership group the channel streams in, from the core's collab section.
+    private(set) var group: ChannelGroup?
+    /// The core is confirming the stream went offline (restart waits for its answer).
+    var resolvingOffline = false
 
     /// The lock screen card and its remote commands.
     let nowPlaying = NowPlaying()
     let pip = PictureInPicture()
+    /// The core completed the row (Following's own, or the seed with its gaps filled).
+    var onRow: ((TwitchStream) -> Void)?
+    /// A message for the toast line.
+    var onToast: ((String) -> Void)?
 
     /// Set by drive steps before a stream opens; wins over every saved choice.
     var route = PlayRoute.auto
@@ -73,6 +82,7 @@ final class Watch {
     var holdParts: Int?
 
     private var tasks: [Task<Void, Never>] = []
+    private var core: CoreBridge?
     private var opened: ContinuousClock.Instant?
     private var observers: [NSObjectProtocol] = []
     private var stalls = 0
@@ -91,8 +101,8 @@ final class Watch {
         // KVO reports on whichever thread changed the value, so these are not main-actor code.
         watchers = [
             player.observe(\.timeControlStatus, options: [.initial, .new]) { @Sendable [weak self] player, _ in
-                let paused = player.timeControlStatus == .paused
-                Task { @MainActor in self?.playerPaused(paused) }
+                let status = player.timeControlStatus
+                Task { @MainActor in self?.playerState(status) }
             },
             player.observe(\.isMuted, options: [.initial, .new]) { @Sendable [weak self] player, _ in
                 let muted = player.isMuted
@@ -113,6 +123,14 @@ final class Watch {
                     self.player.play()
                 }
             },
+            // Leaving the app flushes a pause still waiting out its grace (the earning gate).
+            NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                                   queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.stream != nil else { return }
+                    self.reportState("hidden")
+                }
+            },
         ]
     }
 
@@ -120,15 +138,17 @@ final class Watch {
     /// the saved one, else `best` (capped to the screen by the core).
     private var askedQuality: String { requestedQuality ?? pickedQuality ?? savedQuality ?? "best" }
 
+    /// Starts `stream`, replacing whatever played. The same channel already open stays as it is.
+    /// The player is never rebuilt: only its item changes.
     func open(_ stream: TwitchStream, core: CoreBridge) {
-        guard self.stream?.id != stream.id else { return }
-        close(core: core)
+        guard self.stream?.userLogin.lowercased() != stream.userLogin.lowercased() else { return }
+        close(core: core, stopping: false)
+        self.core = core
         self.stream = stream
         opened = .now
         status = "Resolving"
         showCard()
         tasks.append(Task { await self.play(stream, core: core) })
-        tasks.append(Task { await self.follow(stream, core: core) })
         tasks.append(Task { await self.followLink(core: core) })
     }
 
@@ -209,9 +229,30 @@ final class Watch {
         status = "Buffering"
     }
 
-    private func playerPaused(_ paused: Bool) {
+    /// The player's own state drives the center button, the lock screen card, the earning gate
+    /// (a rebuffer is not a pause) and keeping the screen awake while a stream plays.
+    private func playerState(_ status: AVPlayer.TimeControlStatus) {
+        // With no item yet (a start resolving) nothing is paused: the button keeps saying Pause.
+        let paused = status == .paused && player.currentItem != nil
         self.paused = paused
-        if stream != nil { nowPlaying.playing(!paused) }
+        guard stream != nil else {
+            UIApplication.shared.isIdleTimerDisabled = false
+            return
+        }
+        nowPlaying.playing(!paused)
+        UIApplication.shared.isIdleTimerDisabled = !paused
+        switch status {
+        case .playing: reportState("playing")
+        case .paused: reportState("paused")
+        default: break
+        }
+    }
+
+    /// What the video does, for the core's earning gate (drops, channel points, watch time). The
+    /// core waits out a pause's grace, so a reload's brief pause costs nothing.
+    private func reportState(_ state: String) {
+        guard let core else { return }
+        Task.detached { _ = try? await core.invoke("report_player_state", args: ["state": state]) }
     }
 
     /// Publishes the lock screen card with what is known of the stream now.
@@ -232,15 +273,20 @@ final class Watch {
         }
         for await event in pushes {
             guard !Task.isCancelled else { return }
+            if let collab = ChannelGroup.collabPush(event.payloadJSON, login: stream.userLogin) {
+                group = collab
+                continue
+            }
             guard let update = ChannelViewers.parse(event.payloadJSON),
                   update.login.lowercased() == stream.userLogin.lowercased() else { continue }
             take(update)
         }
     }
 
-    private func take(_ update: ChannelViewers) {
+    /// Takes a push for the watched channel, never blanking a field it did not carry.
+    func take(_ update: ChannelViewers) {
         let old = live
-        live = ChannelViewers(login: update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
+        live = ChannelViewers(login: update.login.isEmpty ? old?.login ?? "" : update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
                               startedAt: update.startedAt ?? old?.startedAt, title: update.title ?? old?.title,
                               gameName: update.gameName ?? old?.gameName)
         if live?.title != old?.title { showCard() }
@@ -285,8 +331,15 @@ final class Watch {
         log.notice("drive pause")
     }
 
-    func close(core: CoreBridge) {
+    /// Ends the stream: the player lets go of its item before the core stops the relay. A switch to
+    /// another stream (`stopping` false) leaves the stop to the next start, which supersedes it.
+    func close(core: CoreBridge, stopping: Bool = true) {
         guard let login = stream?.userLogin else { return }
+        // A pause still waiting out its grace must not gate the next stream off.
+        reportState("teardown")
+        UIApplication.shared.isIdleTimerDisabled = false
+        // A brightness the landscape dial borrowed goes back with the stream.
+        ScreenBrightness.restore()
         lastStart = nil
         tasks.forEach { $0.cancel() }
         tasks = []
@@ -308,10 +361,13 @@ final class Watch {
         available = []
         restarting = false
         live = nil
+        group = nil
+        resolvingOffline = false
         pip.eligible = false
         nowPlaying.clear()
         Task.detached {
-            _ = try? await core.invoke("stop_stream", "{}")
+            // The relay, the watch session, drops and channel points (services/watch_start.rs).
+            if stopping { _ = try? await core.invoke("watch_stop", args: [:]) }
             _ = try? await core.invoke("unwatch_channel_state", args: ["login": login])
         }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -319,16 +375,23 @@ final class Watch {
 
     // MARK: Playback
 
+    /// One core call starts the stream: the relay, the completed row, drops and channel points
+    /// aimed at the channel, and the watch session. A newer start or a stop supersedes it, and a
+    /// superseded start touches nothing.
     private func play(_ stream: TwitchStream, core: CoreBridge) async {
         do {
-            let start = try await core.invoke(
-                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
-                as: StreamStart.self
+            let started = try await core.invoke(
+                "watch_start", args: ["login": stream.userLogin, "seed": stream.seed, "quality": askedQuality],
+                as: WatchStart.self
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !started.superseded, let start = started.stream else {
+                log.notice("watch_start \(stream.userLogin, privacy: .public) superseded")
+                return
+            }
+            if let row = started.row { adopt(row, core: core) }
             apply(start)
             let chosen = await Self.route(for: start, asked: route, core: core)
-            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
+            log.notice("watch_start \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .moviePlayback)
             try session.setActive(true)
@@ -336,10 +399,41 @@ final class Watch {
             await measure(core: core)
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = "\(error)"
-            status = "Failed"
-            log.error("start_stream failed: \(String(describing: error), privacy: .public)")
+            log.error("watch_start failed: \(String(describing: error), privacy: .public)")
+            await failed(stream, core: core)
         }
+    }
+
+    /// The row the core completed replaces the card's: the header, the lock screen card and the
+    /// viewer count follow it. The channel's numbers can be followed once its id is known.
+    private func adopt(_ row: TwitchStream, core: CoreBridge) {
+        guard stream?.userLogin.lowercased() == row.userLogin.lowercased() else { return }
+        stream = row
+        onRow?(row)
+        showCard()
+        tasks.append(Task { await self.follow(row, core: core) })
+    }
+
+    /// Playback could not start, but chat runs on: an offline channel says so; a live one keeps
+    /// the band's failure line and a toast saying chat still works.
+    private func failed(_ stream: TwitchStream, core: CoreBridge) async {
+        // An unanswerable check counts as live: the honest message is then about playback.
+        var offline = false
+        do {
+            offline = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
+                                            as: TwitchStream?.self) == nil
+        } catch {
+            log.error("check_stream_online failed: \(String(describing: error), privacy: .public)")
+        }
+        guard !Task.isCancelled, self.stream?.userLogin == stream.userLogin else { return }
+        if offline {
+            showOffline()
+            return
+        }
+        error = "Playback unavailable. Chat keeps running."
+        status = "Failed"
+        pip.eligible = false
+        onToast?("Playback unavailable - showing chat only")
     }
 
     /// Puts a new item for `url` on `route` in the player and plays it.

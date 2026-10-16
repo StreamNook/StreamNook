@@ -741,32 +741,14 @@ pub async fn update_monitoring_channel(
     Ok(())
 }
 
-/// Player playback state for the parity heartbeat: minute-watched events
-/// only send while the video is actually playing.
-///
-/// `slot` names a MultiNook tile's player instead of the main one. A tile
-/// counts toward StreamNook watch time only; the Twitch heartbeat follows the
-/// main player alone.
+/// What a player's video is doing, for the earning gate
+/// (services/earning_gate.rs): `playing`, `paused`, `paused_now`, `hidden` or
+/// `teardown`. `slot` names a MultiNook tile's player instead of the main one.
 #[tauri::command]
-pub async fn report_player_playing(
-    playing: bool,
-    slot: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    if let Some(slot) = slot {
-        crate::services::watch_minutes::set_playing(
-            &crate::services::watch_minutes::tile_key(&slot),
-            playing,
-        );
-        // MultiNook (and its tiles) exists on desktop only.
-        #[cfg(desktop)]
-        if playing {
-            crate::commands::multi_nook::refresh_tile_watch(&state, &slot);
-        }
-        return Ok(());
-    }
-    state.watch_heartbeat.set_playing(playing);
-    crate::services::watch_minutes::set_playing(crate::services::watch_minutes::MAIN, playing);
+pub async fn report_player_state(app: AppHandle, state: String, slot: Option<String>) -> Result<(), String> {
+    let parsed = crate::services::earning_gate::PlayerState::parse(&state)
+        .ok_or_else(|| format!("Unknown player state: {state}"))?;
+    crate::services::earning_gate::report(&app, slot, parsed);
     Ok(())
 }
 

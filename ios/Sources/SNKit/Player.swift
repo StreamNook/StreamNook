@@ -37,6 +37,83 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
     private struct Section: Decodable { var section: String }
 }
 
+extension ChannelGroup {
+    /// A `channel-state` push's collab section for `login`: `.some(nil)` when the channel left
+    /// its group, nil when the push is another section or another channel.
+    public static func collabPush(_ json: String, login: String) -> ChannelGroup?? {
+        struct Push: Decodable {
+            var section: String
+            var login: String
+            var collab: ChannelGroup?
+        }
+        guard let push = try? JSONDecoder().decode(Push.self, from: Data(json.utf8)), push.section == "collab",
+              push.login.lowercased() == login.lowercased() else { return nil }
+        return .some(push.collab)
+    }
+
+    /// The sheet's subtitle: "1,234 viewers combined" or "One chat across 3 channels".
+    public var summary: String {
+        if let sharedViewers { return "\(sharedViewers.formatted()) viewers combined" }
+        return "One chat across \(members.count) channels"
+    }
+}
+
+/// `watch-session://redirect`: a raid the core follows, with the target's seed row.
+public struct RaidRedirect: Decodable, Sendable {
+    public var reason: String
+    public var target: TwitchStream
+}
+
+/// `watch_session_resolve_offline`'s answer: what to do about a stream that looked offline.
+/// `action` is `nothing`, `still_live`, `offline_chat`, `notify`, `stop` or `switch_to`.
+public struct OfflineDecision: Decodable, Sendable {
+    public struct Notice: Decodable, Sendable, Equatable {
+        public var message: String
+        public var error: Bool
+    }
+
+    public var action: String
+    public var why: String?
+    public var notice: Notice?
+    public var stream: TwitchStream?
+}
+
+extension ChannelViewers {
+    /// `watch-session://stream-update` for the watched stream: a fresh title and category (Twitch
+    /// channel.update), never blanking what it did not carry.
+    public static func streamUpdate(_ json: String) -> ChannelViewers? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return nil }
+        let title = object["title"] as? String
+        let game = object["game_name"] as? String
+        let viewers = object["viewer_count"] as? Int
+        guard title != nil || game != nil || viewers != nil else { return nil }
+        return ChannelViewers(login: "", viewerCount: viewers, title: title, gameName: game)
+    }
+}
+
+/// `watch_start`'s answer: the relay to play and the row Rust completed (Following's row, or the
+/// seed with its gaps filled). A superseded start (a newer start or a stop won) carries nothing.
+public struct WatchStart: Decodable, Sendable, Equatable {
+    public var superseded: Bool
+    public var row: TwitchStream?
+    public var stream: StreamStart?
+
+    public init(superseded: Bool, row: TwitchStream? = nil, stream: StreamStart? = nil) {
+        self.superseded = superseded
+        self.row = row
+        self.stream = stream
+    }
+}
+
+extension TwitchStream {
+    /// The row as `watch_start`'s seed: what the card already knows, in the core's field names.
+    public var seed: [String: Any] {
+        guard let data = try? JSONEncoder().encode(self),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return object
+    }
+}
+
 /// The player's saved preferences, read from `load_settings`: the quality picked last (the
 /// intent, not what was served) and what leaving the app does to a playing stream.
 public struct PlayerPrefs: Decodable, Sendable, Equatable {
