@@ -515,6 +515,37 @@ impl SevenTVCosmeticsService {
         }
     }
 
+    /// The largest profile picture 7TV takes (its upload route's body limit).
+    pub const PROFILE_PICTURE_MAX_BYTES: usize = 7 * 1024 * 1024;
+
+    /// Uploads a new 7TV profile picture for the primary account (`user_id` is
+    /// the 7TV user id). 7TV processes it before it shows, and refuses a second
+    /// upload while one is pending. Answers the pending picture's id.
+    pub async fn upload_profile_picture(user_id: &str, bytes: Vec<u8>, mime: &str) -> Result<String> {
+        let token = SevenTVAuthService::get_token().await?;
+        let response = crate::services::http::client()
+            .post(format!("https://7tv.io/v4/users/{}/profile-picture", urlencoding::encode(user_id)))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", mime)
+            .body(bytes)
+            .send()
+            .await?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            Self::clear_token(None).await;
+            return Err(anyhow::anyhow!(
+                "SESSION_EXPIRED: 7TV session has expired. Please reconnect your 7TV account."
+            ));
+        }
+        if !status.is_success() {
+            log::warn!("[7TV] profile picture upload refused: {} {}", status, text);
+            return Err(anyhow::anyhow!("{}", profile_picture_refusal(status.as_u16())));
+        }
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        Ok(json["pending_profile_picture"].as_str().unwrap_or_default().to_string())
+    }
+
     const PAINT_MUTATION: &'static str = r#"
         mutation SetActivePaint($id: Id!, $paintId: Id) {
             users { user(id: $id) { activePaint(paintId: $paintId) { id style { activePaintId } } } }
@@ -585,5 +616,56 @@ impl SevenTVCosmeticsService {
             "SetActiveBadge",
         )
         .await
+    }
+}
+
+/// The sentence a viewer reads when 7TV refuses a profile picture upload.
+pub fn profile_picture_refusal(status: u16) -> &'static str {
+    match status {
+        400 => "7TV could not read that image.",
+        403 => "Custom 7TV profile pictures come with a 7TV subscription.",
+        409 => "Your last 7TV picture is still being processed. Try again once it shows.",
+        413 => "That image is larger than 7 MB.",
+        429 => "Too many uploads. Try again later.",
+        _ => "7TV did not take that picture. Try again in a moment.",
+    }
+}
+
+/// The MIME type 7TV gets for these bytes, read from the file itself.
+pub fn profile_picture_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis") {
+        Some("image/avif")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod profile_picture_tests {
+    use super::*;
+
+    #[test]
+    fn refusals_read_as_sentences() {
+        assert_eq!(profile_picture_refusal(409), "Your last 7TV picture is still being processed. Try again once it shows.");
+        assert_eq!(profile_picture_refusal(403), "Custom 7TV profile pictures come with a 7TV subscription.");
+        assert_eq!(profile_picture_refusal(500), "7TV did not take that picture. Try again in a moment.");
+    }
+
+    #[test]
+    fn the_mime_comes_from_the_bytes() {
+        assert_eq!(profile_picture_mime(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a]), Some("image/png"));
+        assert_eq!(profile_picture_mime(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
+        assert_eq!(profile_picture_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(profile_picture_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(profile_picture_mime(b"\0\0\0\x1cftypavif"), Some("image/avif"));
+        assert_eq!(profile_picture_mime(b"<svg"), None);
     }
 }

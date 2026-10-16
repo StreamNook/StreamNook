@@ -155,11 +155,18 @@ Done in this lane, for reference: `r:services/chat_row_view.rs` stamps `metadata
 
 ### Composer
 
-- [ ] **One send command.** rust-moves.md lists `composer_send { room_key, text, reply_to }` [P1]: slash dispatch (s:utils/commandHandler.ts:L77-L1200, s:utils/extendedCommands.ts), the own row (s:stores/chatConnectionStore.ts:L3619-L3672) and the outcome. Meanwhile the iPhone sends with `send_chat_message` (slash text goes to Twitch as typed, so app-run commands like `/timer` do nothing), builds the own row with `get_user_info` plus `build_own_chat_message`, and appends the invisible duplicate tag itself when `chat_input.bypass_duplicate` is on (d:components/ChatWidget.tsx:L3504-L3521).
-- [ ] **Chatters in the suggestion answer.** Recent chatters are matched on the page (s:utils/chatInputWord.ts:L95-L130, s:stores/chatUserStore.ts:L945-L973). The iPhone matches the room buffer's recent authors. `match_emote_tokens` should return them.
-- [ ] **Chat gating.** m:chat/chatGating.ts:L1-L87 and m:chat/useFollowStatus.ts decide who may type. The iPhone composer never blocks; Twitch's refusal arrives as the send's drop reason.
-- [ ] **Picker rows.** Twitch groups by owner and third-party groups by width are built on the page (s:components/chat/EmotePickerPanel.tsx:L575-L647). The iPhone groups by the `group` field `match_emote_tokens` sends when browsing; rows carry no zero-width or modifier flag for the cell rings, and no favorite flag.
-- [ ] **Desktop and Android on the command catalog.** `command_catalog` mirrors `COMMAND_DEFINITIONS` (s:utils/chatCommands.ts:L22-L198) with a drift test; the desktop CommandMenu and the phone command sheet still read the TypeScript table and should switch.
+- [x] **One send command.** Done as `run_slash_command { channel, broadcasterId, text, depth?, platform }` (lane `ios/composer`, services/slash_dispatch.rs) rather than a send that also sends: it answers `{handled, send, reply_to?, pin_after_send?, clear_draft, toasts[], notices[], ui}`, and the caller sends `send` through its own path (`send_chat_message`), which keeps the own row where it is. Plain text goes through it too, for custom commands that need no slash. Desktop, Android and the iPhone all call it; the TypeScript dispatcher is gone. The own row still comes from `get_user_info` plus `build_own_chat_message` on the iPhone.
+- [x] **Chatters in the suggestion answer.** `match_emote_tokens` cycle answers end with up to five recent chatters (`provider: "user"`, `login`, the login as `insert_text` when the display name is localized), from the chat history ring, reading the include-chatters setting and nicknames itself.
+- [x] **Chat gating.** `RoomModeView` carries `blocked` and `reason`; the followers-only follow is looked up once per channel and reworded on follow and unfollow.
+- [x] **Picker rows.** `emote_picker` answers tabs with counts, sections (owner names resolved), and cells with `favorite`, `locked`, `replaced_by`, zero-width and modifier flags; Favorites leads with Recently used.
+- [~] **Desktop and Android on the command catalog.** The phone command sheet reads `command_catalog`; the desktop menu and autocomplete still read the TypeScript table (kept matched by the drift test).
+
+#### Still open from the composer lane
+
+- [ ] **YouTube emoji in the Rust set.** The shared picker panel still groups YouTube emoji itself; `emote_picker` serves Twitch, BetterTTV, 7TV, FrankerFaceZ, Kick and Favorites.
+- [ ] **A visual clear of the room list.** `/clearmessages` answers `ui: clear_local_chat`; the iPhone list has no call to hide what it shows, so the composer says the command is not on iPhone yet.
+- [ ] **GIF sending.** The GIF tab waits on the twitch.tv web session send (Brain memory `twitch-chat-gifs`).
+- [ ] **Channel points in the composer.** The points button and its menu belong to the rewards lane.
 
 ## Answers from the following lane (branch `ios/following`)
 

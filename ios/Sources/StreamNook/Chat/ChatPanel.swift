@@ -27,7 +27,7 @@ struct ChatPanel: View {
                     }
                 }
             if !overlay {
-                ChatComposer(session: session)
+                ChatComposer(session: session, onProfile: onProfile)
             }
         }
         .onAppear { session.start() }

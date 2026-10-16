@@ -55,6 +55,15 @@ pub fn merge(ivr_followed_at: Option<&str>, helix: FollowAnswer) -> FollowAnswer
     }
 }
 
+/// The signed-in account's own follow of `channel_id`. Helix answers this one
+/// for every channel, so an empty page means not following.
+pub async fn own_follow(channel_id: &str) -> FollowAnswer {
+    let Ok((my_id, _)) = me().await else {
+        return FollowAnswer::Unknown;
+    };
+    helix_follow(&my_id, channel_id, ViewerRole::Unknown).await
+}
+
 /// The Helix half of the answer for `user_id` following `channel_id`.
 pub async fn helix_follow(user_id: &str, channel_id: &str, role: ViewerRole) -> FollowAnswer {
     if user_id.is_empty() || channel_id.is_empty() {

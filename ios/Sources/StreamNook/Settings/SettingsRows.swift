@@ -2,7 +2,7 @@ import SNKit
 import SwiftUI
 
 // Whole rows over one setting each, built from the kit: a switch, a segmented or menu choice,
-// a slider whose title carries its value, a colour. Nested content shows only while it means
+// a slider whose title carries its value, a color. Nested content shows only while it means
 // something (by default, while a switch is on).
 
 /// A row with a switch on the right; `nested` shows while it is on.
@@ -19,11 +19,12 @@ struct ToggleRow<Nested: View>: View {
     var isOn: ((SettingsStore) -> Bool)?
     var onChange: ((Bool) async -> Void)?
     var showsNestedWhenOff = false
+    var logo: String?
     @ViewBuilder var nested: Nested
 
     var body: some View {
         let on = isOn?(store) ?? store.bool(path, fallback)
-        SettingRow(title: title, detail: detailFor?(on) ?? detail, help: help, paths: [path],
+        SettingRow(title: title, detail: detailFor?(on) ?? detail, help: help, paths: [path], logo: logo,
                    afterReset: onChange.map { change in { await change(store.bool(path, fallback)) } }) {
             SettingToggle(path: path, fallback: fallback, label: title, write: write, isOn: isOn, onChange: onChange)
         } nested: {
@@ -37,9 +38,9 @@ struct ToggleRow<Nested: View>: View {
 extension ToggleRow where Nested == EmptyView {
     init(title: String, path: String, fallback: Bool = false, detail: String? = nil, help: String? = nil,
          detailFor: ((Bool) -> String)? = nil, write: ((Bool) -> [String: Any?])? = nil,
-         isOn: ((SettingsStore) -> Bool)? = nil, onChange: ((Bool) async -> Void)? = nil) {
+         isOn: ((SettingsStore) -> Bool)? = nil, onChange: ((Bool) async -> Void)? = nil, logo: String? = nil) {
         self.init(title: title, path: path, fallback: fallback, detail: detail, help: help, detailFor: detailFor,
-                  write: write, isOn: isOn, onChange: onChange, nested: { EmptyView() })
+                  write: write, isOn: isOn, onChange: onChange, logo: logo, nested: { EmptyView() })
     }
 }
 
@@ -123,9 +124,10 @@ struct NestedToggle: View {
     let path: String
     var fallback = false
     var help: String?
+    var logo: String?
 
     var body: some View {
-        NestedLine(title: title, paths: [path], help: help) {
+        NestedLine(title: title, paths: [path], help: help, logo: logo) {
             SettingToggle(path: path, fallback: fallback, label: title)
         }
     }
@@ -163,15 +165,21 @@ struct NestedSlider: View {
     var integer = true
     @State private var live: Double?
 
+    @Environment(SettingsStore.self) private var store
+
     var body: some View {
-        NestedLine(title: title, paths: [path], stacked: true) {
+        let stored = min(max(store.double(path, fallback), range.lowerBound), range.upperBound)
+        VStack(alignment: .leading, spacing: 8) {
+            NestedLine(title: title, paths: [path]) {
+                SliderReadout(text: readout(live ?? stored))
+            }
             SettingSlider(path: path, range: range, step: step, fallback: fallback, accessibility: title,
-                          readout: readout, integer: integer, live: $live)
+                          integer: integer, live: $live)
         }
     }
 }
 
-/// A nested colour.
+/// A nested color.
 struct NestedColor: View {
     let title: String
     let path: String
@@ -184,7 +192,7 @@ struct NestedColor: View {
     }
 }
 
-/// A row with a colour swatch on the right.
+/// A row with a color swatch on the right.
 struct ColorRow<Nested: View>: View {
     let title: String
     let path: String

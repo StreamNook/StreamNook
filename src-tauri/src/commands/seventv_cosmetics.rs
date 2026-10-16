@@ -387,6 +387,23 @@ pub async fn set_seventv_paint(
     }
 }
 
+/// Uploads a new 7TV profile picture for the primary account (`user_id` is the
+/// 7TV user id; the image as base64: PNG, JPG, GIF, WebP or AVIF up to 7 MB).
+/// 7TV processes it before it shows; answers the pending picture's id.
+#[tauri::command]
+pub async fn upload_seventv_profile_picture(user_id: String, data_base64: String) -> Result<String, String> {
+    use base64::Engine;
+    use crate::services::seventv_auth_service::{profile_picture_mime, SevenTVCosmeticsService};
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|_| "That image could not be read.".to_string())?;
+    if bytes.len() > SevenTVCosmeticsService::PROFILE_PICTURE_MAX_BYTES {
+        return Err("That image is larger than 7 MB.".to_string());
+    }
+    let mime = profile_picture_mime(&bytes).ok_or_else(|| "Use a PNG, JPG, GIF, WebP or AVIF image.".to_string())?;
+    SevenTVCosmeticsService::upload_profile_picture(&user_id, bytes, mime).await.map_err(|e| e.to_string())
+}
+
 /// Set the user's active 7TV badge
 #[tauri::command]
 pub async fn set_seventv_badge(

@@ -251,6 +251,11 @@ pub async fn get_settings_view(state: State<'_, AppState>) -> Result<SettingsVie
     Ok(settings_view(current))
 }
 
+/// The view of a serialized settings object (values filled, changed paths).
+pub fn get_settings_view_from(current: Value) -> SettingsView {
+    settings_view(current)
+}
+
 fn settings_view(mut current: Value) -> SettingsView {
     // An absent frontend-owned key reads as its default, so it is filled
     // before comparing: only a value someone chose shows as changed.

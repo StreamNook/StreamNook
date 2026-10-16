@@ -1,38 +1,53 @@
-// The chat command browser, phone shape. Same command table, same locks and
-// same search as the desktop menu; the desktop shell is a three-column
-// popover built for a chat widget and does not fold into a phone sheet.
-import React, { useMemo, useState } from 'react';
+// The chat command browser, phone shape. Rust builds the list
+// (`command_catalog`): the built-in table without the desktop-only commands,
+// then your own commands from Settings, each row locked for your role in this
+// room and filtered by the search. This sheet only draws it.
+import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Lock } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
-import { RAIL, lockFor, matches } from '../../components/chat/CommandMenu';
-import {
-  COMMAND_DEFINITIONS,
-  buildUserCommandDefinitions,
-  type CommandDefinition,
-} from '../../utils/chatCommands';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
+
+/** One row of `command_catalog` (services/command_catalog.rs). */
+interface CatalogRow {
+  name: string;
+  usage: string;
+  description: string;
+  category: string;
+  /** The section header the row sits under. */
+  label: string;
+  /** What the row needs when your role here does not allow it. */
+  lock?: string;
+}
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  isModerator: boolean;
-  isBroadcaster: boolean;
+  /** The room's bare Twitch login. */
+  channel: string;
   /** Insert `/name ` into the composer. */
-  onPick: (cmd: CommandDefinition) => void;
+  onPick: (cmd: { name: string }) => void;
 }
 
-export const MobileCommandSheet: React.FC<Props> = ({ open, onClose, isModerator, isBroadcaster, onPick }) => {
+export const MobileCommandSheet: React.FC<Props> = ({ open, onClose, channel, onPick }) => {
+  // Rust reads your own commands from settings; a change re-asks.
   const userCommands = useAppStore((s) => s.settings.chat_commands?.user_commands);
-  const commands = useMemo(
-    // Commands that need a desktop window or file are left out on the phone.
-    () => [...COMMAND_DEFINITIONS.filter((c) => !c.desktopOnly), ...buildUserCommandDefinitions(userCommands)],
-    [userCommands],
-  );
   const [q, setQ] = useState('');
-  const visible = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return commands.filter((c) => matches(c, needle));
-  }, [commands, q]);
+  const [visible, setVisible] = useState<CatalogRow[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    invoke<CatalogRow[]>('command_catalog', { channel, platform: 'phone', query: q.trim() })
+      .then((rows) => {
+        if (live) setVisible(rows);
+      })
+      .catch((err) => Logger.warn('[MobileCommandSheet] command_catalog failed:', err));
+    return () => {
+      live = false;
+    };
+  }, [open, channel, q, userCommands]);
 
   return (
     <MobileSheet open={open} onClose={onClose} title="Chat commands">
@@ -55,12 +70,12 @@ export const MobileCommandSheet: React.FC<Props> = ({ open, onClose, isModerator
         )}
         {visible.map((cmd, i) => {
           const first = i === 0 || visible[i - 1].category !== cmd.category;
-          const lock = lockFor(cmd, isModerator, isBroadcaster);
+          const lock = cmd.lock;
           return (
             <React.Fragment key={`${cmd.category}:${cmd.name}`}>
               {first && (
                 <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-textMuted">
-                  {RAIL.find((r) => r.key === cmd.category)?.label ?? cmd.category}
+                  {cmd.label}
                 </div>
               )}
               <button
@@ -77,7 +92,7 @@ export const MobileCommandSheet: React.FC<Props> = ({ open, onClose, isModerator
                 <div className="min-w-0 flex-1">
                   <div className="text-[14px] font-medium text-textPrimary">/{cmd.name}</div>
                   <div className="text-[12.5px] text-textSecondary leading-snug">{cmd.description}</div>
-                  {lock && <div className="text-[11.5px] text-textMuted mt-0.5">{lock.line}</div>}
+                  {lock && <div className="text-[11.5px] text-textMuted mt-0.5">{lock}</div>}
                 </div>
                 {lock && <Lock size={14} className="shrink-0 mt-1 text-textMuted" />}
               </button>

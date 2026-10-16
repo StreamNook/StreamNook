@@ -28,6 +28,9 @@ export interface EmoteMatchRow {
   matchLen?: number;
   /** Section heading while browsing with nothing typed. */
   group?: string;
+  /** Set on a chatter row (Rust's provider `user`), which follows the emotes
+   *  in a cycle answer: the chatter's login. */
+  chatterLogin?: string;
   isZeroWidth?: boolean;
   modifierFlags?: number;
 }
@@ -53,7 +56,7 @@ interface WireRow {
   insert_text?: string;
   url: string;
   local_path?: string;
-  provider: EmoteMatchRow['provider'];
+  provider: EmoteMatchRow['provider'] | 'user';
   source_label: string;
   source_detail: string;
   match_at?: number;
@@ -61,6 +64,7 @@ interface WireRow {
   group?: string;
   is_zero_width?: boolean;
   modifier_flags?: number;
+  login?: string;
 }
 
 const EMPTY: EmoteMatchResult = { rows: [], total: 0, ready: false };
@@ -92,7 +96,7 @@ export async function matchEmotes(
         insertText: r.insert_text,
         url: r.url,
         localUrl: r.local_path ? convertFileSrc(r.local_path) : undefined,
-        provider: r.provider,
+        provider: r.provider === 'user' ? 'twitch' : r.provider,
         sourceLabel: r.source_label,
         sourceDetail: r.source_detail,
         matchAt: r.match_at,
@@ -100,6 +104,7 @@ export async function matchEmotes(
         group: r.group,
         isZeroWidth: r.is_zero_width,
         modifierFlags: r.modifier_flags,
+        chatterLogin: r.provider === 'user' ? (r.login ?? r.name.replace(/^@/, '')) : undefined,
       })),
     };
   } catch {
@@ -133,24 +138,36 @@ export async function personalEmoteOverrides(
   }
 }
 
-/** Rows as Tab-cycle candidates, in the order Rust ranked them. */
+/** Rows as Tab-cycle candidates, in the order Rust ranked them. Chatter rows
+ *  (provider `user`, after the emotes) insert what Rust chose: the login when
+ *  a display name is localized. */
 export function rowsToTabCandidates(rows: EmoteMatchRow[]): EmoteTabCandidate[] {
-  return rows.map((r, i) => ({
-    name: r.name,
-    insertText: r.insertText,
-    priority: i,
-    emote: {
-      id: r.id,
+  return rows.map((r, i): EmoteTabCandidate => {
+    if (r.chatterLogin !== undefined) {
+      return {
+        name: r.name,
+        insertText: r.insertText,
+        priority: i,
+        chatter: { username: r.chatterLogin, displayName: r.name.replace(/^@/, '') },
+      };
+    }
+    return {
       name: r.name,
-      url: r.url,
-      localUrl: r.localUrl,
-      provider: r.provider,
-      isZeroWidth: r.isZeroWidth,
-      modifierFlags: r.modifierFlags,
-    },
-    sourceLabel: r.sourceLabel,
-    sourceDetail: r.sourceDetail,
-  }));
+      insertText: r.insertText,
+      priority: i,
+      emote: {
+        id: r.id,
+        name: r.name,
+        url: r.url,
+        localUrl: r.localUrl,
+        provider: r.provider,
+        isZeroWidth: r.isZeroWidth,
+        modifierFlags: r.modifierFlags,
+      },
+      sourceLabel: r.sourceLabel,
+      sourceDetail: r.sourceDetail,
+    };
+  });
 }
 
 /**
