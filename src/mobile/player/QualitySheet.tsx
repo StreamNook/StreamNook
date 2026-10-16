@@ -6,6 +6,30 @@ import { Check } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { MobileSheet } from '../ui/MobileSheet';
 
+// Row names, the same words the iPhone sheet uses. Labelled here rather than
+// with CSS `capitalize`, which read the raw keys back as "Audio_only" and
+// "Worst". A named tier keeps its own spelling past the first letter, so
+// "1080p60 (source)" is not turned into "1080p60 (Source)".
+const qualityLabel = (q: string): string => {
+  switch (q) {
+    case 'best':
+      return 'Auto';
+    case 'audio_only':
+      return 'Audio only';
+    case 'worst':
+      return 'Lowest';
+    default:
+      return q.charAt(0).toUpperCase() + q.slice(1);
+  }
+};
+
+// Auto first (the way back to the screen cap), then the core's tiers in the
+// order Rust gave them.
+const qualityRows = (available: string[]): string[] => [
+  ...available.filter((q) => q === 'best'),
+  ...available.filter((q) => q !== 'best'),
+];
+
 export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
   onClose,
@@ -34,7 +58,7 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
         </div>
       ) : (
         <div className="flex flex-col">
-          {availableQualities.map((q) => {
+          {qualityRows(availableQualities).map((q) => {
             // "best" is shown as Auto on a phone, because it no longer means
             // "the highest tier that exists" - it means the highest tier this
             // SCREEN can show. Calling that "best" would read as a downgrade to
@@ -52,12 +76,14 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
                 className="sn-touch flex items-center justify-between px-2 text-[15px] text-textPrimary active:opacity-70"
               >
                 <span className="flex flex-col items-start leading-tight">
-                  <span className="capitalize">{isAuto ? 'Auto' : q}</span>
+                  <span>{qualityLabel(q)}</span>
                   {isAuto && (
                     <span className="text-[11px] text-textMuted">Matches your screen</span>
                   )}
                 </span>
-                {current === q && <Check size={18} className="text-accent" />}
+                {/* The tick matches the label's size, never bigger than the
+                    words it marks. */}
+                {current === q && <Check size={15} className="text-accent shrink-0" />}
               </button>
             );
           })}

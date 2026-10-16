@@ -6,7 +6,7 @@
 // picture and StreamNook membership, cached per person and room. The same
 // answer draws the iPhone's native sheet, so the two cannot drift; this lays it
 // out.
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
@@ -55,11 +55,19 @@ const toMillis = (ts: string | undefined): number | null => {
 const clock = (at: number | null): string =>
   at === null ? '' : new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+/** Identifies one badge image for the failed-image set. The url is part of it
+ *  because the cached sheet and the fresh one can name the same badge with
+ *  different art. */
+const badgeImageKey = (b: ProfileBadge): string => `${b.id}|${b.url}`;
+
 const BadgeGrid: React.FC<{
   title: string;
+  /** Only the badges whose art has not failed; the caller drops a group once
+   *  this is empty, so a heading never sits alone over nothing. */
   badges: ProfileBadge[];
   onPick: (b: ProfileBadge) => void;
-}> = ({ title, badges, onPick }) => {
+  onImageFailed: (b: ProfileBadge) => void;
+}> = ({ title, badges, onPick, onImageFailed }) => {
   if (!badges.length) return null;
   return (
     <div className="mt-3">
@@ -79,6 +87,7 @@ const BadgeGrid: React.FC<{
               fallbackUrls={b.fallbacks}
               alt={b.title || ''}
               className="w-7 h-7 object-contain"
+              onAllFailed={() => onImageFailed(b)}
             />
           </button>
         ))}
@@ -94,15 +103,22 @@ export const UserProfileSheet: React.FC<{
   channelName?: string | null;
   onClose: () => void;
 }> = ({ user, channelId, channelName, onClose }) => {
-  if (!user) return null;
+  // Retained so the sheet still has someone to show while it slides OUT.
+  // `user` is already null by then, and returning nothing on null unmounted
+  // the sheet outright, so it vanished instead of animating away.
+  // Adjust-state-during-render, the same idiom SettingsScreen uses.
+  const [lastUser, setLastUser] = useState(user);
+  if (user && user !== lastUser) setLastUser(user);
+  if (!lastUser) return null;
   // Keyed on the user, so opening a different profile MOUNTS a fresh one with
   // that user's cached cosmetics already seeded. Clearing state in an effect
   // instead would paint the previous person's badges under the new name for a
   // frame, and react-hooks rightly treats it as an error.
   return (
     <ProfileBody
-      key={user.userId}
-      user={user}
+      key={lastUser.userId}
+      user={lastUser}
+      open={!!user}
       channelId={channelId}
       channelName={channelName}
       onClose={onClose}
@@ -112,10 +128,11 @@ export const UserProfileSheet: React.FC<{
 
 const ProfileBody: React.FC<{
   user: SheetUser;
+  open: boolean;
   channelId?: string | null;
   channelName?: string | null;
   onClose: () => void;
-}> = ({ user, channelId, channelName, onClose }) => {
+}> = ({ user, open, channelId, channelName, onClose }) => {
   // Rust's answer: its cached copy first (a reopen paints at once), then fresh.
   const [sheet, setSheet] = useState<ProfileSheetView | null>(null);
   const [picked, setPicked] = useState<ProfileBadge | null>(null);
@@ -123,6 +140,13 @@ const ProfileBody: React.FC<{
   // over a list that is still on its way.
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
   const [standing, setStanding] = useState<SubStanding | null>(null);
+  // Badge art that failed every url it had. Those tiles are dropped, and a
+  // group left with none is dropped with its heading.
+  const [failedImages, setFailedImages] = useState<ReadonlySet<string>>(() => new Set());
+  const markImageFailed = useCallback((b: ProfileBadge) => {
+    const key = badgeImageKey(b);
+    setFailedImages((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+  }, []);
 
   const userId = user.userId;
   const username = user.username;
@@ -131,8 +155,11 @@ const ProfileBody: React.FC<{
   // desktop profile card reads: the same rows a moderator looks at before
   // deciding, now reachable from a thumb. Seeded once, then kept live by the
   // store's push for as long as the sheet is open. The phone's chat tabs are
-  // Twitch rooms, so the key is the bare id.
+  // Twitch rooms, so the key is the bare id. The body outlives the sheet's
+  // close (it stays up for the slide out), so the watch ends on close rather
+  // than on unmount, and a reopen of the same person starts it again.
   useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     const key = historyKey(userId, 'twitch');
     void invoke<{ id: string; content: string; timestamp?: string }[]>(
@@ -170,7 +197,7 @@ const ProfileBody: React.FC<{
       unlisten.then((fn) => fn());
       void invoke('unwatch_user_history', { userKey: key }).catch(() => {});
     };
-  }, [userId]);
+  }, [userId, open]);
 
   // Their sub in this room, with Rust's words for it. The sheet is keyed on the
   // user, so the badges it was opened with are fixed for its life.
@@ -224,11 +251,16 @@ const ProfileBody: React.FC<{
   const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
   const nameStyle = paint ? computePaintStyle(paint, shownColor, 'all') : { color: shownColor };
   const avatar = sheet?.avatar_url ?? null;
-  const groups = sheet?.groups ?? [];
+  const groups = (sheet?.groups ?? [])
+    .map((group) => ({
+      ...group,
+      badges: group.badges.filter((b) => !failedImages.has(badgeImageKey(b))),
+    }))
+    .filter((group) => group.badges.length > 0);
   const member = !!sheet?.streamnook;
 
   return (
-    <MobileSheet open={!!user} onClose={onClose} maxHeightFraction={0.8}>
+    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8}>
       <div className="flex flex-col pb-2">
         <div className="flex items-center gap-3">
           {avatar ? (
@@ -282,7 +314,13 @@ const ProfileBody: React.FC<{
         )}
 
         {groups.map((group) => (
-          <BadgeGrid key={group.title} title={group.title} badges={group.badges} onPick={setPicked} />
+          <BadgeGrid
+            key={group.title}
+            title={group.title}
+            badges={group.badges}
+            onPick={setPicked}
+            onImageFailed={markImageFailed}
+          />
         ))}
 
         {/* Last, as on the desktop card and in chat (utils/badgeOrder). Its OWN

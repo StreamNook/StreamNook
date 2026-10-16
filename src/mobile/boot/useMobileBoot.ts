@@ -21,8 +21,8 @@ import {
   type CosmeticUpdatePayload,
   type EmoteSetUpdatePayload,
 } from '../../services/seventvEventApi';
+import { useWatchedChestStat } from '../../hooks/useWatchedChestStat';
 import {
-  incrementStat,
   isSupabaseConfigured,
   refreshEntitlementRegistries,
   subscribeToAtmospheresRegistry,
@@ -48,6 +48,15 @@ import { Logger } from '../../utils/logger';
 import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
 
 export function useMobileBoot(): void {
+  // Lifetime points stat: the same hook desktop mounts in App.tsx, counting
+  // `watched-chest-claimed`. Every chest, automatic or a tap on the composer's
+  // button, goes through Rust's watched_chest::claim, which emits that event
+  // once per chest. The phone used to count `channel-points-earned` instead,
+  // which other sources also emit (the points socket, the balance poll), so
+  // the two shells scored different things. Mounted once, here, because the
+  // phone has a single window.
+  useWatchedChestStat();
+
   useEffect(() => {
     let isMounted = true;
     const cleanupFunctions: (() => void)[] = [];
@@ -72,11 +81,37 @@ export function useMobileBoot(): void {
       else fn();
     };
 
+    // False until a settings read has actually succeeded. A failed read must
+    // not stop the boot (every listener below would go missing with it), but
+    // it must not be mistaken for the user's choices either: the store then
+    // holds an EMPTY settings object, never defaults, and the steps below that
+    // act on a preference (the background-check schedule, the push register)
+    // wait for a real read rather than treating "absent" as "on". Nothing here
+    // saves settings, and the store's saves send Rust only the top-level keys
+    // a change touched, so an empty store never writes a whole defaults file.
+    let settingsLoaded = false;
+
     const initialize = async () => {
       const store = useAppStore.getState();
       try {
-        await store.loadSettings();
+        try {
+          await store.loadSettings();
+          settingsLoaded = true;
+        } catch (err) {
+          // One retry: the store's own comment says an early read can race
+          // Rust's state management, and that race clears in moments.
+          Logger.warn('[MobileBoot] settings load failed, retrying:', err);
+          await new Promise((r) => setTimeout(r, 750));
+          try {
+            await useAppStore.getState().loadSettings();
+            settingsLoaded = true;
+          } catch (retryErr) {
+            Logger.error('[MobileBoot] settings load failed; booting without them:', retryErr);
+          }
+        }
         await store.checkAuthStatus();
+      } catch (err) {
+        Logger.error('[MobileBoot] auth check failed during boot:', err);
       } finally {
         // Auth resolved (logged in or confirmed logged out) or a boot step
         // failed; either way drop the boot overlay.
@@ -186,37 +221,6 @@ export function useMobileBoot(): void {
         void handleSeventvCosmeticUpdate(event.payload);
       });
 
-      // Lifetime points stat, fed by collecting a bonus chest.
-      //
-      // The event is `channel-points-earned`, carrying `points`. This listener
-      // used to wait on `channel-points-claimed`, a name nothing in the Rust
-      // source has ever emitted, so it never fired once.
-      //
-      // On this platform the only thing that emits it is the composer's own
-      // chest claim. The PubSub watcher points at an endpoint Twitch retired,
-      // and the background claim path belongs to the automation plugin, which
-      // does not run here. So expect this roughly every quarter hour while
-      // watching, not every minute; passive per-minute earning is credited by
-      // Twitch but announced nowhere, which is why the composer watches the
-      // balance itself for the floating amount.
-      //
-      // The claim deliberately leaves the counting to this listener so a chest
-      // is never scored twice. No toast: the points icon pulses instead.
-      await addListener<{ points?: number }>('channel-points-earned', (event) => {
-        const earned = event.payload?.points ?? 0;
-        if (earned <= 0) return;
-        if (isSupabaseConfigured()) {
-          const { currentUser: user, isAuthenticated: authed } = useAppStore.getState();
-          if (authed && user?.user_id) {
-            void incrementStat(user.user_id, 'channel_points_collected', earned);
-          }
-        }
-        // No notification here. Points are announced from useChannelPoints,
-        // which is the one place that sees BOTH sources: this event (a bonus
-        // chest) and the balance delta that passive earning only ever shows up
-        // as. Notifying from both would double-report every chest.
-      });
-
       // Ad auto-pivot: backend re-resolved a clean player URL; applying it
       // changes streamUrl, which the mobile hls engine reloads from.
       await addListener<{ url: string; region?: string; channel?: string }>('ad-pivot', (event) => {
@@ -297,13 +301,16 @@ export function useMobileBoot(): void {
 
       // Keep the background poll in step with the settings on every launch, so
       // scheduled work can never outlive the preference that asked for it.
-      syncBackgroundChecks(notifyPrefs());
+      // Skipped when settings never loaded: an empty store reads as "on", and
+      // the schedule from the last good launch is the honest one to keep.
+      if (settingsLoaded) syncBackgroundChecks(notifyPrefs());
 
       // Instant push: upload the FCM token + follow list to the notify server.
       // Fire and forget; "no token yet" and network failures are both normal
       // (the poll lane delivers regardless), and re-running every launch is
-      // what keeps the server's follow list current.
-      {
+      // what keeps the server's follow list current. Same guard as above: a
+      // user who turned push off must not be registered by a failed read.
+      if (settingsLoaded) {
         const prefs = notifyPrefs();
         if (prefs?.enabled !== false && prefs?.push_notifications !== false) {
           void invoke<string>('push_register')

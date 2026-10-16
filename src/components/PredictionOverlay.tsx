@@ -357,7 +357,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                 addToast(`Prediction ended! Winner: ${winningOutcome?.title || 'Unknown'}`, 'success');
               }
             } else {
-              // No winner ID - prediction was cancelled/refunded
+              // No winner ID: the prediction was canceled or refunded
               Logger.debug('[Prediction] No winning_outcome_id - prediction was refunded');
               setResolutionState('refund');
               addToast(`Prediction refunded`, 'info');
@@ -374,7 +374,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
           } else if (prediction.status === 'CANCELED') {
             Logger.debug('[Prediction] Prediction CANCELED');
             setResolutionState('refund');
-            addToast(`Prediction cancelled - points refunded`, 'info');
+            addToast(`Prediction canceled, points refunded`, 'info');
             
             setTimeout(() => {
               setActivePrediction(null);
@@ -766,7 +766,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
               <RefreshCw className="w-8 h-8 text-info" />
             </div>
             <span className="text-info text-lg font-bold">Points Refunded</span>
-            <p className="text-info/80 text-sm mt-1">Prediction was cancelled</p>
+            <p className="text-info/80 text-sm mt-1">Prediction was canceled</p>
           </div>
         </div>
       )}

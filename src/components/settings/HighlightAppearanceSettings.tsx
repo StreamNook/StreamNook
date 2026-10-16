@@ -142,7 +142,7 @@ const HighlightAppearanceSettings = () => {
         title="Scrollbar marks"
         onReset={resetFor('chat_design.scrollbar_marks')}
         description="Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back."
-        help="A tick takes its message's highlight colour where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else."
+        help="A tick takes its message's highlight color where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else."
         control={
           <Toggle
             enabled={marksOn}
