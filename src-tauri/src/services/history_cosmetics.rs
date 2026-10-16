@@ -8,6 +8,9 @@
 //! itself: a short wait before the answer covers most of them, and the rest are
 //! re-stamped and patched in (`HISTORY_SEGMENTS` carrying the new view) once
 //! their lookups finish, then once more when their personal emote sets land.
+//! The channel's own moderator and VIP art (its FFZ room) is the same kind of
+//! late answer, so a backlog answered before the room was read is patched again
+//! once it has been.
 //! Only native shells draw from the stamped view; the web renderers resolve a
 //! row's cosmetics on the page.
 
@@ -20,7 +23,7 @@ use tokio::task::JoinHandle;
 use crate::models::chat_layout::ChatMessage;
 use crate::services::cosmetics_registry as registry;
 use crate::services::irc_service::IrcService;
-use crate::services::{chat_row_view, member_theme, seventv_cosmetics_resolver as resolver};
+use crate::services::{chat_row_view, ffz_room_badges, member_theme, seventv_cosmetics_resolver as resolver};
 
 /// The longest the history answer waits for its authors' lookups. Short on
 /// purpose: an empty chat is worse than a name gaining its paint a moment later
@@ -32,6 +35,8 @@ const FOLLOW_WAIT: Duration = Duration::from_secs(20);
 const PERSONAL_WAIT: Duration = Duration::from_secs(6);
 /// Lets the shell put the answer's rows on screen before a patch names them.
 const PATCH_DELAY: Duration = Duration::from_millis(500);
+/// How long the follow-up waits for the channel's FFZ room to be read.
+const ROOM_ART_WAIT: Duration = Duration::from_secs(10);
 /// How long the registry may take to load before members are looked up.
 const REGISTRY_WAIT: Duration = Duration::from_secs(5);
 
@@ -144,10 +149,18 @@ pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> 
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    // A room not read yet draws Twitch's own moderator and VIP badges until it is.
+    let room_art = rows
+        .iter()
+        .find_map(|m| m.tags.get("room-id").cloned())
+        .filter(|room| ffz_room_badges::enabled() && !ffz_room_badges::has_entry(room));
     // Members are only known once the registry has loaded; before that, the
     // lookup task waits for it and the members arrive by patch.
     if registry::ready(Duration::ZERO).await && needed_now(&authors).is_empty() {
         log::info!("[ChatHistory] {channel}: every author's cosmetics known, answered at once");
+        if room_art.is_some() {
+            spawn_follow(channel, raw, &rows, None, Vec::new(), room_art);
+        }
         return rows;
     }
     let mut lookups: JoinHandle<Option<Vec<(String, String)>>> = tokio::spawn(async move {
@@ -159,18 +172,23 @@ pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> 
         Some(look_up(need).await)
     });
     let rows = match tokio::time::timeout(ANSWER_WAIT, &mut lookups).await {
-        Ok(Ok(None)) | Ok(Err(_)) => rows,
+        Ok(Ok(None)) | Ok(Err(_)) => {
+            if room_art.is_some() {
+                spawn_follow(channel, raw, &rows, None, Vec::new(), room_art);
+            }
+            rows
+        }
         Ok(Ok(Some(sets))) => {
             let rows = IrcService::parse_historical_messages(raw.to_vec()).await;
-            if !sets.is_empty() {
-                spawn_follow(channel, raw, &rows, None, sets);
+            if !sets.is_empty() || room_art.is_some() {
+                spawn_follow(channel, raw, &rows, None, sets, room_art);
             }
             rows
         }
         Err(_) => {
             // Some lookups are slow: answer with what is known now, patch the rest.
             let rows = IrcService::parse_historical_messages(raw.to_vec()).await;
-            spawn_follow(channel, raw, &rows, Some(lookups), Vec::new());
+            spawn_follow(channel, raw, &rows, Some(lookups), Vec::new(), room_art);
             rows
         }
     };
@@ -184,6 +202,7 @@ fn spawn_follow(
     shown: &[ChatMessage],
     pending: Option<JoinHandle<Option<Vec<(String, String)>>>>,
     sets: Vec<(String, String)>,
+    room_art: Option<String>,
 ) {
     let channel = channel.to_string();
     let raw = raw.to_vec();
@@ -197,25 +216,41 @@ fn spawn_follow(
             tokio::time::sleep(PATCH_DELAY).await;
             patch(&channel, &raw, &mut before).await;
         }
-        if sets.is_empty() {
-            return;
-        }
-        let deadline = Instant::now() + PERSONAL_WAIT;
-        loop {
-            let mut all = true;
-            for (twitch_id, set_id) in &sets {
-                if !IrcService::has_personal_set(twitch_id, set_id).await {
-                    all = false;
+        if !sets.is_empty() {
+            let deadline = Instant::now() + PERSONAL_WAIT;
+            loop {
+                let mut all = true;
+                for (twitch_id, set_id) in &sets {
+                    if !IrcService::has_personal_set(twitch_id, set_id).await {
+                        all = false;
+                        break;
+                    }
+                }
+                if all || Instant::now() >= deadline {
                     break;
                 }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            if all || Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::time::sleep(PATCH_DELAY).await;
+            patch(&channel, &raw, &mut before).await;
         }
-        tokio::time::sleep(PATCH_DELAY).await;
-        patch(&channel, &raw, &mut before).await;
+        if let Some(room) = room_art {
+            if !ffz_room_badges::has_entry(&room) {
+                match ffz_room_badges::refresh(&room) {
+                    Some(read) => {
+                        let _ = tokio::time::timeout(ROOM_ART_WAIT, read).await;
+                    }
+                    None => {
+                        let deadline = Instant::now() + ROOM_ART_WAIT;
+                        while !ffz_room_badges::has_entry(&room) && Instant::now() < deadline {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(PATCH_DELAY).await;
+            patch(&channel, &raw, &mut before).await;
+        }
     });
 }
 
