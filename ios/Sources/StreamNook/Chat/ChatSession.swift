@@ -191,7 +191,8 @@ final class ChatSession {
 
     /// The join backfill: recent history above the live rows, then the room's badge art.
     private func loadHistory() async {
-        _ = try? await core.invoke("get_cached_global_badges", "{}")
+        // Cached when fresh, else fetched: moderator, VIP, partner and event badges come from here.
+        _ = try? await core.invoke("fetch_global_badges", "{}")
         if let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
            let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
             pipeline.prepend(rows)
