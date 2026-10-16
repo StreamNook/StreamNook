@@ -1404,8 +1404,15 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
 
     // Replies carry a sibling `metadata` with the original sender + message. The
     // original sender exposes only id + cased username (no slug/color/badges).
+    // Live frames carry `metadata` as an object; the history API sends the same
+    // object as a JSON string, which read as an object gave every reply an
+    // empty parent (a lone reply arrow on the phone).
+    let reply_meta = data.get("metadata").and_then(|m| match m {
+        Value::String(s) => serde_json::from_str::<Value>(s).ok(),
+        other => Some(other.clone()),
+    });
     let reply_info = if data.get("type").and_then(|t| t.as_str()) == Some("reply") {
-        data.get("metadata").map(|m| {
+        reply_meta.as_ref().map(|m| {
             let parent_name = m
                 .pointer("/original_sender/username")
                 .and_then(|u| u.as_str())
@@ -1445,7 +1452,9 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
         })
     } else {
         None
-    };
+    }
+    // A reply that names no parent at all has nothing to show above the row.
+    .filter(|r: &ReplyInfo| !r.parent_display_name.is_empty() || !r.parent_msg_body.is_empty());
     let has_reply = reply_info.is_some();
 
     // The renderer reads the display name from the `display-name` tag (a Twitch
@@ -2457,6 +2466,36 @@ mod roomstate_tests {
 
     fn parse(frame: &str) -> Value {
         serde_json::from_str(frame).unwrap()
+    }
+
+    #[test]
+    fn a_history_reply_reads_its_parent_from_string_metadata() {
+        // The history API's shape: `metadata` is a JSON string.
+        let row = json!({
+            "id": "m2", "chatroom_id": 1, "content": "agreed", "type": "reply",
+            "created_at": "2026-10-16T20:00:00Z",
+            "sender": { "id": 7, "username": "Replier", "slug": "replier", "identity": { "color": "#fff", "badges": [] } },
+            "metadata": "{\"original_sender\":{\"id\":9,\"username\":\"Parent\"},\"original_message\":{\"id\":\"m1\",\"content\":\"hello there\"}}"
+        });
+        let framed = json!({ "data": serde_json::to_string(&row).unwrap() });
+        let msg = parse_chat_message(&framed, "kick:somebody").expect("a row");
+        let reply = msg.metadata.reply_info.expect("a reply");
+        assert_eq!(reply.parent_display_name, "Parent");
+        assert_eq!(reply.parent_msg_body, "hello there");
+        assert_eq!(reply.parent_msg_id, "m1");
+    }
+
+    #[test]
+    fn a_reply_with_no_parent_is_a_plain_row() {
+        let row = json!({
+            "id": "m3", "chatroom_id": 1, "content": "hm", "type": "reply",
+            "created_at": "2026-10-16T20:00:00Z",
+            "sender": { "id": 7, "username": "Replier", "slug": "replier", "identity": { "color": "#fff", "badges": [] } },
+            "metadata": "{}"
+        });
+        let framed = json!({ "data": serde_json::to_string(&row).unwrap() });
+        let msg = parse_chat_message(&framed, "kick:somebody").expect("a row");
+        assert!(msg.metadata.reply_info.is_none());
     }
 
     #[test]
