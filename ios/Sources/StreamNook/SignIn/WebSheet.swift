@@ -4,7 +4,7 @@ import WebKit
 
 /// The in-app web sheet the core opens with `open_sheet` (Kick's sign-in and consent, a
 /// checkout): the page on the persistent default store, the same browser the Twitch sign-in
-/// uses. A load whose URL starts with one of the request's `stop_at` prefixes is cancelled and
+/// uses. A load whose URL starts with one of the request's `stop_at` prefixes is canceled and
 /// handed to the core; the sheet stays up until the core closes it or the person does.
 struct WebSheet: View {
     let host: HostRequests

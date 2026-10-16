@@ -11,8 +11,10 @@ let chatLog = Logger(subsystem: "app.streamnook", category: "chat")
 @Observable @MainActor
 final class ChatSession {
     enum Source {
-        /// The core's chat socket for a channel.
+        /// The core's chat socket for a channel, read by this room alone (the chat stage).
         case core
+        /// One of the open rooms: `ChatRooms` joins it and feeds it from the shared socket.
+        case room
         /// Recorded frames replayed at a rate (frames a second), for building without a sign-in.
         case fixture(ChatFixture, rate: Double)
     }
@@ -34,11 +36,15 @@ final class ChatSession {
     var roomID: String?
     /// Moderator tools are on wherever the viewer moderates, unless turned off for the room.
     var moderatorTools = false
+    /// The viewer moderates here (their moderator or broadcaster badge in this room).
+    private(set) var isModerator = false
+    /// The open rooms this one belongs to, for the chat menu's tab actions.
+    @ObservationIgnored weak var rooms: ChatRooms?
 
     @ObservationIgnored private var reader: Task<Void, Never>?
     @ObservationIgnored private var settingsTask: Task<Void, Never>?
 
-    init(channel: String, core: CoreBridge, source: Source) {
+    init(channel: String, core: CoreBridge, source: Source, roomID: String? = nil) {
         self.channel = channel.lowercased()
         self.core = core
         self.source = source
@@ -49,6 +55,7 @@ final class ChatSession {
             Task { @MainActor in box.value?.rowCount = count }
         })
         box.value = self
+        self.roomID = roomID.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     func start() {
@@ -56,6 +63,9 @@ final class ChatSession {
         loadSettings()
         loadRole()
         switch source {
+        case .room:
+            connected = true
+            reader = Task { [weak self] in await self?.loadHistory() }
         case .fixture(let fixture, let rate):
             roomID = fixture.roomID
             let pipeline = pipeline
@@ -151,8 +161,31 @@ final class ChatSession {
         Task { [weak self] in
             guard let json = try? await core.invoke("chat_send_budget", args: ["channel": channel]),
                   let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-                  let role = budget["role"] as? String else { return }
-            self?.moderatorTools = role == "moderator" || role == "broadcaster"
+                  let role = budget["role"] as? String, let self else { return }
+            self.isModerator = role == "moderator" || role == "broadcaster"
+            // On by default; turned off for this room earlier this session, it stays off.
+            self.moderatorTools = self.isModerator && !(self.rooms?.modToolsOff.contains(self.channel) ?? false)
+        }
+    }
+
+    /// The composer menu's switch: remembered for this room until the app closes.
+    func setModeratorTools(_ on: Bool) {
+        moderatorTools = on && isModerator
+        rooms?.noteModeratorTools(on, for: channel)
+    }
+
+    /// After the connection was down or rebuilt: the rows missed meanwhile (within the window the
+    /// core names, else the recent history), in time order among the rows held.
+    func backfillGap(afterMs: Int64? = nil, beforeMs: Int64? = nil) {
+        let core = core
+        let channel = channel
+        let pipeline = pipeline
+        Task {
+            guard let json = try? await core.invoke("load_channel_history", args: [
+                "channel": channel, "afterMs": afterMs, "beforeMs": beforeMs,
+            ]),
+                  let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
+            pipeline.backfill(rows)
         }
     }
 

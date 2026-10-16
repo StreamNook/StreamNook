@@ -38,7 +38,21 @@ struct SettingsDirectory: View {
     @State private var results: [CatalogRow] = []
     @FocusState private var focused: Bool
 
+    /// The field sits low on the You page; on focus it rises to the top so the results show above
+    /// the keyboard instead of under it.
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                .onChange(of: focused) { _, isFocused in
+                    guard isFocused else { return }
+                    withAnimation(.snappy) { proxy.scrollTo(Self.fieldID, anchor: .top) }
+                }
+        }
+    }
+
+    private static let fieldID = "settings-search-field"
+
+    private var content: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: Symbol.search).font(.system(size: 15)).foregroundStyle(SN.textMuted)
@@ -61,6 +75,7 @@ struct SettingsDirectory: View {
             .frame(height: 44)
             .snGlass(Capsule())
             .padding(.horizontal, 16)
+            .id(Self.fieldID)
 
             if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
                 VStack(spacing: 0) {

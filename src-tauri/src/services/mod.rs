@@ -167,6 +167,12 @@ pub mod channel_points_summary;
 pub mod channel_relationship;
 pub mod channel_rewards;
 pub mod channel_state;
+// The phone chat pane's open rooms (both phone shells).
+pub mod chat_tabs;
+// Rebuilds a dead Twitch chat connection with its rooms (the phones' reload and watchdog).
+pub mod chat_recovery;
+// A native shell's outage row and gap backfill for Twitch chat.
+pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
 pub mod slash_commands;

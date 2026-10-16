@@ -45,7 +45,7 @@ struct GlazeSegments<Value: Hashable>: View {
                         Text(segment.label).font(on ? .snLabelStrong : .snLabel)
                     }
                     .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, fill ? 4 : 14)
                     .padding(.vertical, 7)
                     .frame(maxWidth: fill ? .infinity : nil)
                     .background {

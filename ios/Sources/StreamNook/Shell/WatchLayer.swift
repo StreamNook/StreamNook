@@ -272,15 +272,16 @@ private struct ChatArea: View {
         content
             .padding(.trailing, outerInset)
             .background { if overlay { LandscapeBackdrop() } }
+            // Signing in while watching opens the stream's room.
+            .task(id: model.signedIn) {
+                if model.signedIn, let stream = model.watch.stream { model.chat.syncStream(stream) }
+            }
     }
 
     @ViewBuilder
     private var content: some View {
-        if model.signedIn, let session = model.watch.chat {
-            ChatPanel(session: session, overlay: overlay, onProfile: { model.cosmetics.open($0) })
-                .id(ObjectIdentifier(session))
-        } else if model.signedIn {
-            Color.clear
+        if model.signedIn {
+            ChatRoomsPanel(rooms: model.chat, overlay: overlay, onProfile: { model.cosmetics.open($0) })
         } else {
             let readOnly = overlay
             VStack(spacing: 14) {

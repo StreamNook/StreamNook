@@ -2801,6 +2801,10 @@ impl TwitchService {
             })
         }).collect();
         newest_pin_first(&mut pinned_messages);
+        // A native shell draws the sender as its chat rows do, with art Rust resolved.
+        if crate::services::chat_row_view::enabled() {
+            crate::services::chat_row_view::stamp_pins(&mut pinned_messages, channel_id);
+        }
 
         debug!(
             "[get_pinned_chat] Found {} pinned messages for channel {}",

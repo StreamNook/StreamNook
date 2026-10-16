@@ -128,7 +128,7 @@ struct SetupWizard: View {
                 VStack(spacing: 0) {
                     summary("Drops sign-in", done: false)
                     Divider().overlay(SN.borderSubtle)
-                    summary("Twitch sign-in", done: signedIn)
+                    summary("Sign-in", mark: .twitch, done: signedIn)
                     Divider().overlay(SN.borderSubtle)
                     summary("Other platforms", done: false)
                 }
@@ -138,8 +138,9 @@ struct SetupWizard: View {
         }
     }
 
-    private func summary(_ title: String, done: Bool) -> some View {
-        HStack {
+    private func summary(_ title: String, mark: PlatformMark.Platform? = nil, done: Bool) -> some View {
+        HStack(spacing: 8) {
+            if let mark { PlatformMark(platform: mark, size: 15) }
             Text(title).font(.snRowTitle).foregroundStyle(SN.textPrimary)
             Spacer()
             if done {

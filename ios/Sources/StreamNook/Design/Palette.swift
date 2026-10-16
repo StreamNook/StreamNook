@@ -171,6 +171,8 @@ enum FixedColor {
     static let live = RGBA(hex: 0xEF4444)
     static let twitch = RGBA(hex: 0x9146FF)
     static let kick = RGBA(hex: 0x53FC18)
+    /// 7TV blue, as desktop tints the 7TV mark.
+    static let sevenTV = RGBA(hex: 0x29B6F6)
     /// The watch-streak amber.
     static let streak = RGBA(hex: 0xFCD34D)
     static let goldenTrain = RGBA(hex: 0xFFC83D)

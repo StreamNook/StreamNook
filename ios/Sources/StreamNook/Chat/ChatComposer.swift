@@ -61,7 +61,7 @@ private struct ComposerBar: View {
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $model.commandsOpen) {
             ChatCommandSheet(session: session) { name in
