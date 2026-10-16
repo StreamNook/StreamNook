@@ -81,6 +81,7 @@ struct OfflineRoomView: View {
                         .font(.sn(12, 500))
                         .monospacedDigit()
                         .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if room.latestVod != nil {
@@ -88,11 +89,14 @@ struct OfflineRoomView: View {
                         Label("Latest broadcast", systemImage: Symbol.play)
                             .font(.sn(13, 600))
                             .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .fixedSize()
                             .padding(.horizontal, 14)
                             .frame(height: 34)
                             .snGlass(Capsule(), interactive: true)
                     }
                     .buttonStyle(.plain)
+                    .layoutPriority(1)
                     .accessibilityHint(room.latestVod?.title ?? "")
                 }
             }
