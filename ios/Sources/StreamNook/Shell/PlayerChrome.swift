@@ -54,7 +54,8 @@ struct PlayerChrome: View {
                 .padding(.leading, (landscape ? insets.leading : 0) + 12 + (chatLeading ? chatWidth : 0))
                 .padding(.trailing, (landscape ? insets.trailing : 0) + 12 + (chatLeading ? 0 : chatWidth))
                 .transition(.opacity)
-                if watch.error == nil {
+                // The loading mark holds the center until the first frame; the button takes it then.
+                if watch.error == nil, watch.firstPlayMS != nil {
                     playPause
                         .padding(chatLeading ? .leading : .trailing, chatWidth)
                         .transition(.opacity)
