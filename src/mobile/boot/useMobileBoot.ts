@@ -45,6 +45,7 @@ import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsSto
 import type { ProviderId } from '../../types/providers';
 import { streamProvider } from '../../utils/streamProvider';
 import { Logger } from '../../utils/logger';
+import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
 
 export function useMobileBoot(): void {
   useEffect(() => {
@@ -81,6 +82,18 @@ export function useMobileBoot(): void {
         // failed; either way drop the boot overlay.
         if (isMounted) useAppStore.setState({ isBooting: false });
       }
+
+      // Rust announces every settings write: a list edit, a field write, a
+      // reset. Re-read so the phone's screens follow, as desktop's App.tsx
+      // does. Without it a write made in Rust (the live-alert bell, the shared
+      // list editors) left the store, and every screen reading it, stale.
+      void addListener<SettingsUpdatedPayload>(SETTINGS_UPDATED_EVENT, (event) => {
+        if (event.payload?.source === SENDER_ID) return;
+        useAppStore
+          .getState()
+          .loadSettings()
+          .catch((err) => Logger.warn('[MobileBoot] settings re-read failed:', err));
+      });
 
       // Is the drops token actually still good?
       //

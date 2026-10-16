@@ -8,10 +8,15 @@
 // is what almost everyone should be on, and a hand-typed override that goes
 // stale is the most likely way for someone to end up watching ads while the
 // feature reports itself as on.
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CaretDown, Path, ShieldCheck } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { VideoPlayerSettings } from '../../types';
+import { Logger } from '../../utils/logger';
+import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+
+// How long the relay box waits after the last keystroke before saving.
+const RELAY_SAVE_MS = 500;
 
 const Toggle: React.FC<{ on: boolean; onChange: () => void }> = ({ on, onChange }) => (
   <button
@@ -72,23 +77,54 @@ function describeSource(
 }
 
 const AdFreeSettings: React.FC = () => {
-  const settings = useAppStore((s) => s.settings);
-  const updateSettings = useAppStore((s) => s.updateSettings);
+  const video: Partial<VideoPlayerSettings> = useAppStore((s) => s.settings.video_player) ?? {};
   const adSource = useAppStore((s) => s.adSource);
   const [relaysOpen, setRelaysOpen] = useState(false);
 
-  const video: Partial<VideoPlayerSettings> = settings.video_player ?? {};
   const on = video.ad_bypass_enabled !== false;
-  const relays = video.ad_bypass_proxies ?? '';
+  const stored = video.ad_bypass_proxies ?? '';
 
-  const patch = useCallback(
-    async (changes: Partial<VideoPlayerSettings>) => {
-      const current = settings.video_player;
-      if (!current) return;
-      await updateSettings({ ...settings, video_player: { ...current, ...changes } });
-    },
-    [settings, updateSettings],
-  );
+  // One field per write. The whole video_player group used to be spread from
+  // this screen's copy on every keystroke, so a write in flight could put back
+  // a sibling another screen had just changed, and the box lost characters
+  // while each save round-tripped.
+  const patch = useCallback(async (changes: Partial<VideoPlayerSettings>) => {
+    try {
+      await setSettingsFields(fieldsIn('video_player', changes));
+    } catch (err) {
+      Logger.warn('[AdFreeSettings] save failed:', err);
+      useAppStore.getState().addToast('Could not save that change.', 'error');
+    }
+  }, []);
+
+  // The relay box types into its own draft and saves it after a pause, so the
+  // store's echo of a save never overwrites what is being typed. The stored
+  // value takes over again once it has caught up with the last save.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  if (draft !== null && !dirty && draft === stored) setDraft(null);
+  const relays = draft ?? stored;
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRelays = useRef<string | null>(null);
+  const flushRelays = useCallback(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const value = pendingRelays.current;
+    pendingRelays.current = null;
+    if (value === null) return;
+    void patch({ ad_bypass_proxies: value }).finally(() => {
+      if (pendingRelays.current === null) setDirty(false);
+    });
+  }, [patch]);
+  const editRelays = (value: string) => {
+    setDraft(value);
+    setDirty(true);
+    pendingRelays.current = value;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flushRelays, RELAY_SAVE_MS);
+  };
+  // Leaving the screen mid-edit still saves it.
+  useEffect(() => () => flushRelays(), [flushRelays]);
 
   const source = useMemo(
     () => describeSource(adSource?.mode, !!adSource?.entitled, adSource?.region),
@@ -165,7 +201,8 @@ const AdFreeSettings: React.FC = () => {
                 </p>
                 <textarea
                   value={relays}
-                  onChange={(e) => void patch({ ad_bypass_proxies: e.target.value })}
+                  onChange={(e) => editRelays(e.target.value)}
+                  onBlur={flushRelays}
                   rows={3}
                   spellCheck={false}
                   autoCapitalize="none"
