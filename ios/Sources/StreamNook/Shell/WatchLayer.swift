@@ -37,6 +37,8 @@ struct WatchLayer: View {
     private var store: SettingsStore { model.settingsStore }
 
     static let miniSize = CGSize(width: 200, height: 112.5)
+    /// The mini box keeps the pages' 16 pt gutter, so its edge lines up with the cards under it.
+    static let gutter: CGFloat = 16
     /// How far the portrait chat reaches into the bottom safe area. With the composer's own 10 pt
     /// below it, the field ends 20 pt above the screen edge, just clear of the home indicator.
     static let indicatorOverlap: CGFloat = 24
@@ -138,7 +140,7 @@ struct WatchLayer: View {
                                             onHide: hideLandscapeChat, onTouch: { stripTouch += 1 })
                             .frame(width: columnWidth - outer - 24)
                             .offset(x: columnX + (chat.leading ? outer : 0) + 12,
-                                    y: screen.height - max(insets.bottom, 12) - 44 - 8)
+                                    y: screen.height - max(insets.bottom, 8) - 44)
                             .transition(.opacity.combined(with: .offset(y: 8)))
                     }
                 }
@@ -299,7 +301,7 @@ struct WatchLayer: View {
             .onChanged { value in miniDrag = value.translation }
             .onEnded { _ in
                 let left = rect.midX < screen.width / 2
-                let x = left ? insets.leading + 12 : screen.width - insets.trailing - 12 - Self.miniSize.width
+                let x = left ? insets.leading + Self.gutter : screen.width - insets.trailing - Self.gutter - Self.miniSize.width
                 withAnimation(SNMotion.run(SNMotion.settleBack)) {
                     nav.miniOrigin = CGPoint(x: x, y: rect.minY)
                     miniDrag = .zero
@@ -350,8 +352,8 @@ struct WatchLayer: View {
     static func miniRect(screen: CGSize, insets: EdgeInsets, origin: CGPoint?, drag: CGSize) -> CGRect {
         let size = miniSize
         let bottomClear = max(104, insets.bottom + 76)
-        let minX = insets.leading + 12
-        let maxX = screen.width - insets.trailing - 12 - size.width
+        let minX = insets.leading + gutter
+        let maxX = screen.width - insets.trailing - gutter - size.width
         let minY = insets.top + 12
         let maxY = screen.height - bottomClear - size.height
         let start = origin ?? CGPoint(x: maxX, y: maxY)

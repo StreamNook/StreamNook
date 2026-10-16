@@ -108,27 +108,15 @@ struct PlayerChrome: View {
                         if stream.isPartner { PartnerMark(size: 12) }
                         AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
                     }
+                    .layoutPriority(1)
                     Spacer(minLength: 8)
-                    HStack(spacing: 10) {
-                        if let group = group(stream) {
-                            Button { togetherShown = true } label: { TogetherTag(group: group, ink: .white) }
-                                .buttonStyle(.plain)
-                        }
-                        let viewers = live?.viewerCount ?? stream.viewerCount
-                        HStack(spacing: 4) {
-                            Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
-                            Text(viewers.formatted()).monospacedDigit()
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(viewers.formatted()) viewers")
-                        TimelineView(.periodic(from: .now, by: 30)) { context in
-                            Text(PlayerText.uptime(startedAt: live?.startedAt ?? stream.startedAt, now: context.date))
-                                .monospacedDigit()
-                        }
+                    // When room runs out the Together chip keeps only its faces, then the uptime
+                    // goes; the name never gives way to the counts.
+                    ViewThatFits(in: .horizontal) {
+                        metrics(stream, compactGroup: false, uptime: true)
+                        metrics(stream, compactGroup: true, uptime: true)
+                        metrics(stream, compactGroup: true, uptime: false)
                     }
-                    .font(.sn(12, 500))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .fixedSize()
                 }
                 Text(title)
                     .font(.sn(13))
@@ -137,12 +125,42 @@ struct PlayerChrome: View {
                 if !category.isEmpty {
                     Text(category)
                         .font(.sn(12))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The header's right side: the group, viewers, and uptime (only when the start is known).
+    private func metrics(_ stream: TwitchStream, compactGroup: Bool, uptime: Bool) -> some View {
+        let live = watch.live
+        let viewers = live?.viewerCount ?? stream.viewerCount
+        let started = live?.startedAt ?? stream.startedAt
+        return HStack(spacing: 10) {
+            if let group = group(stream) {
+                Button { togetherShown = true } label: {
+                    TogetherTag(group: group, compact: compactGroup, ink: .white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+            }
+            HStack(spacing: 4) {
+                Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
+                Text(viewers.formatted()).monospacedDigit()
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(viewers.formatted()) viewers")
+            if uptime, !PlayerText.uptime(startedAt: started).isEmpty {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(PlayerText.uptime(startedAt: started, now: context.date))
+                        .monospacedDigit()
+                }
+            }
+        }
+        .font(.sn(12, 500))
+        .foregroundStyle(.white.opacity(0.8))
+        .fixedSize()
     }
 
     /// The channel's group: Shared Viewership from the core's live collab section, else what the
@@ -188,9 +206,10 @@ struct PlayerChrome: View {
                 Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
             }
             .fixedSize()
-            .padding(.leading, 4)
+            .opacity(watch.error == nil ? 1 : 0)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Live")
+            .accessibilityHidden(watch.error != nil)
             Spacer(minLength: 8)
             IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
                        size: Self.barIcon, weight: .medium, tint: .white) {
@@ -214,7 +233,7 @@ struct PlayerChrome: View {
                 }
                 .accessibilityLabel("Share stream")
             }
-            IconButton(symbol: Symbol.minimize, label: "Minimize player", size: Self.barIcon, weight: .medium, tint: .white,
+            IconButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
                        action: onMinimize)
             Button {
                 onTouch()
@@ -234,13 +253,15 @@ struct PlayerChrome: View {
             }
             if landscape {
                 let on = model.nav.landscapeChat
-                IconButton(symbol: on ? Symbol.chatShown : Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
-                           size: Self.barIcon, weight: .medium, tint: .white) {
+                IconButton(symbol: Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
+                           size: 18, weight: .medium, tint: on ? SN.accent : .white) {
                     onTouch()
                     withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { model.nav.landscapeChat.toggle() }
                 }
             }
         }
+        // The last icon's ink, not its 44 pt target, ends on the header's right edge.
+        .padding(.trailing, -9)
     }
 
     #if DEBUG
@@ -288,6 +309,7 @@ struct QualitySheet: View {
                                             .foregroundStyle(SN.textMuted)
                                     }
                                 }
+                                .padding(.vertical, name == "best" ? 4 : 0)
                                 Spacer()
                                 if name == ticked {
                                     // The tick matches the label's size and sits one weight above
@@ -317,9 +339,10 @@ struct QualitySheet: View {
 /// reaches past the header's category line, so the three lines stay readable over bright video.
 private struct Scrim: View {
     var body: some View {
-        LinearGradient(stops: [.init(color: .black.opacity(0.66), location: 0), .init(color: .black.opacity(0.3), location: 0.26),
-                               .init(color: .clear, location: 0.44),
-                               .init(color: .clear, location: 0.62), .init(color: .black.opacity(0.55), location: 1)],
+        LinearGradient(stops: [.init(color: .black.opacity(0.66), location: 0), .init(color: .black.opacity(0.45), location: 0.30),
+                               .init(color: .clear, location: 0.46),
+                               .init(color: .clear, location: 0.60), .init(color: .black.opacity(0.35), location: 0.78),
+                               .init(color: .black.opacity(0.7), location: 1)],
                        startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
     }
@@ -376,9 +399,9 @@ private struct AlertBell: View {
         } label: {
             Image(systemName: on ? "bell.fill" : "bell.slash")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(on ? 1 : 0.45))
+                .foregroundStyle(.white.opacity(on ? 0.7 : 0.45))
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: 22, height: 20)
+                .frame(width: 14, height: 20)
                 .contentShape(Rectangle().inset(by: -10))
         }
         .buttonStyle(.plain)

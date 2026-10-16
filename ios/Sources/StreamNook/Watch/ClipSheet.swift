@@ -44,12 +44,10 @@ struct ClipSheet: View {
                 }
             }
             .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .padding(12)
-            Spacer(minLength: 0)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(16)
         }
-        .presentationDetents([.fraction(0.6)])
-        .presentationDragIndicator(.visible)
+        .fittedSheet()
         .task(id: url) { await load() }
         .onAppear {
             wasMuted = model.watch.player.isMuted

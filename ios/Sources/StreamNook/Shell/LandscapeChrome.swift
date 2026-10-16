@@ -84,8 +84,8 @@ struct ChatBackgroundStrip: View {
                 .frame(width: 36, alignment: .trailing)
             Button(action: onHide) {
                 Image(systemName: Symbol.close)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
                     .frame(width: 36, height: 36)
                     .contentShape(Circle())
             }
