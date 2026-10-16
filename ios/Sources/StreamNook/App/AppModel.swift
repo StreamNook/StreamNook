@@ -70,8 +70,9 @@ final class AppModel {
         watch.onRow = { [weak self] row in
             guard let self else { return }
             self.nav.refresh(row)
-            // The stream's room learns the id, name and avatar a bare login lacked.
-            if self.signedIn { self.chat.syncStream(row) }
+            // The stream's room learns the id, name and avatar a bare login lacked. Kick chat
+            // reads without any sign-in.
+            if self.signedIn || !row.isTwitch { self.chat.syncStream(row) }
         }
         let toasts = toasts
         watch.onToast = { toasts.show($0) }
@@ -205,11 +206,14 @@ final class AppModel {
     /// Opens the watch layer on `stream`; another stream already open switches in place. Chat
     /// opens first, so a playback failure never leaves the viewer with nothing.
     func startWatching(_ stream: TwitchStream) {
-        // Chat needs the account; signing in later points the stream tab then (see `ChatArea`).
-        if signedIn { chat.syncStream(stream) }
+        // Twitch chat needs the account; signing in later points the stream tab then (see
+        // `ChatArea`). Kick chat reads without one.
+        if signedIn || !stream.isTwitch { chat.syncStream(stream) }
         nav.open(stream)
-        // An offline channel opens its room; the core starts the stream if it is live after all.
-        if stream.isOffline {
+        // An offline Twitch channel opens its room; the core starts the stream if it is live
+        // after all. Kick has no room: its exact search can return an offline channel, which
+        // starts like any other and says so if it cannot play.
+        if stream.isOffline && stream.isTwitch {
             watch.openRoom(stream, core: core)
         } else {
             watch.open(stream, core: core)
@@ -222,7 +226,7 @@ final class AppModel {
         guard let stream = watch.stream else { return }
         do {
             let start = try await core.invoke(
-                "change_stream_quality", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": quality],
+                "change_stream_quality", args: ["url": stream.playbackURL, "quality": quality],
                 as: StreamStart.self
             )
             guard watch.stream?.id == stream.id else { return }
@@ -247,6 +251,10 @@ final class AppModel {
             return
         }
         log.error("restart failed: \(String(describing: failure), privacy: .public)")
+        guard stream.isTwitch else {
+            toasts.show("Failed to restart stream")
+            return
+        }
         do {
             let online = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
                                                as: TwitchStream?.self)
@@ -327,8 +335,19 @@ final class AppModel {
                     let json = event.payloadJSON
                     Task { await self.followRaid(json) }
                 case "watch-session://offline":
-                    // The confirmation polls Helix for up to 40 s; other events keep flowing.
-                    Task { await self.streamWentOffline() }
+                    let payload = Self.object(event.payloadJSON)
+                    if let provider = payload["provider"] as? String, provider != "twitch" {
+                        // Two missed provider checks: the stream ended.
+                        self.watch.providerEnded(provider: provider, channel: payload["login"] as? String ?? "")
+                    } else {
+                        // The confirmation polls Helix for up to 40 s; other events keep flowing.
+                        Task { await self.streamWentOffline() }
+                    }
+                case "provider-stream-offline":
+                    // The relay could not re-sign a Kick stream and Kick confirmed it ended.
+                    let payload = Self.object(event.payloadJSON)
+                    self.watch.providerEnded(provider: payload["provider"] as? String ?? "",
+                                             channel: payload["channel"] as? String ?? "")
                 case "watch-session://went-live":
                     // The room's channel went live: the stream starts in place, chat kept, unless
                     // its latest broadcast is playing, which is never cut off.
