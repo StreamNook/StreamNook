@@ -12,6 +12,64 @@ fn login_arg(raw: &str, what: &str) -> Result<String, String> {
     sc::clean_login(raw).ok_or_else(|| format!("\"{}\" is not a Twitch {what} name", raw.trim()))
 }
 
+/// Run a line typed in a room's composer: a slash command (or a plain-text
+/// trigger saved in Settings). `channel` is the room's bare lowercase Twitch
+/// login (or a provider room key such as `kick:slug`, where only commands that
+/// need no Twitch API run), `broadcaster_id` its Twitch user id, `platform`
+/// "desktop", "android" or "ios". The answer is described in
+/// `services::slash_dispatch`.
+#[tauri::command]
+pub async fn run_slash_command(
+    app: AppHandle,
+    window: crate::rt::Window,
+    channel: String,
+    broadcaster_id: String,
+    text: String,
+    depth: Option<u32>,
+    platform: Option<String>,
+) -> Result<crate::services::slash_dispatch::Outcome, String> {
+    use crate::services::slash_dispatch::{dispatch, Ctx, Platform};
+    let room = channel.trim().trim_start_matches('#');
+    let room = if room.contains(':') { room.to_string() } else { room.to_lowercase() };
+    let ctx = Ctx {
+        b: std::sync::Arc::new(crate::commands::slash_backend::TauriBackend { app, window: window.label().to_string() }),
+        channel: room,
+        broadcaster_id: broadcaster_id.trim().to_string(),
+        platform: Platform::parse(platform.as_deref().unwrap_or("desktop")),
+    };
+    Ok(dispatch(ctx, text, depth.unwrap_or(0)).await)
+}
+
+/// What `/nuke <args>` would hit in `channel` right now, for the count shown
+/// while it is typed. None while the line does not parse yet.
+#[derive(serde::Serialize)]
+pub struct NukePreview {
+    pub messages: usize,
+    pub users: usize,
+    pub action: String,
+}
+
+#[tauri::command]
+pub fn nuke_preview(channel: String, args: String) -> Option<NukePreview> {
+    let parsed = crate::services::nuke::parse_nuke_args(&args).ok()?;
+    let cutoff = chrono::Utc::now().timestamp_millis() - parsed.past_seconds as i64 * 1000;
+    let entries = crate::services::chat_history::ChatHistory::since(&channel, cutoff);
+    let (messages, affected) = crate::services::nuke::sweep(&entries, &parsed, cutoff);
+    Some(NukePreview { messages, users: affected.len(), action: parsed.action.describe() })
+}
+
+/// How many `/nuke` windows are still catching new messages in `channel`.
+#[tauri::command]
+pub fn nuke_active(channel: String) -> usize {
+    crate::services::nuke::active_count(&channel)
+}
+
+/// End every running `/nuke` window in `channel`. Returns how many.
+#[tauri::command]
+pub fn nuke_stop(channel: String) -> usize {
+    crate::services::nuke::stop(&channel)
+}
+
 /// `/followage [user] [channel]`.
 #[tauri::command]
 pub async fn slash_followage(channel: String, user: Option<String>) -> Result<String, String> {
@@ -419,7 +477,7 @@ pub async fn slash_run_program(app: AppHandle, command_line: String) -> Result<S
             let _ = tx.send(ok);
         });
     if !rx.await.unwrap_or(false) {
-        return Err("Cancelled".into());
+        return Err("Canceled".into());
     }
     let child = std::process::Command::new(program)
         .args(args)

@@ -36,6 +36,7 @@ pub mod chat_rules;
 pub mod chat_row_view;
 pub mod command_catalog;
 pub mod chat_send_limiter;
+pub mod recent_emotes;
 pub mod room_modes;
 pub mod chatter_name;
 pub mod chat_burst;
@@ -71,6 +72,7 @@ pub mod emoji_service;
 pub mod spellcheck;
 pub mod asset_cache_queue;
 pub mod emote_match;
+pub mod emote_picker;
 pub mod emote_prefetch_service;
 pub mod emote_service;
 pub mod emote_set_cache;
@@ -105,6 +107,8 @@ pub mod provider_live_service;
 pub mod link_adapt;
 pub mod ll_origin;
 pub mod theme_palette;
+pub mod settings_backups;
+pub mod settings_catalog;
 #[cfg(test)]
 mod ll_soak;
 #[cfg(test)]
@@ -160,11 +164,20 @@ pub mod update_watch;
 pub mod user_message_history_service;
 pub mod channel_link_service;
 pub mod channel_points_summary;
+pub mod channel_relationship;
 pub mod channel_rewards;
 pub mod channel_state;
+// The phone chat pane's open rooms (both phone shells).
+pub mod chat_tabs;
+// Rebuilds a dead Twitch chat connection with its rooms (the phones' reload and watchdog).
+pub mod chat_recovery;
+// A native shell's outage row and gap backfill for Twitch chat.
+pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
 pub mod slash_commands;
+pub mod slash_dispatch;
+pub mod nuke;
 pub mod hls_kind;
 pub mod home_snapshot;
 pub mod unified_discover;

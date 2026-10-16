@@ -1,11 +1,14 @@
 import SNKit
 import SwiftUI
 
-/// You: who you are, the accounts you are signed in with (each with its own sign in or sign out),
-/// where the app opens, then the settings sections, with no menu in between.
+/// You: your identity card as the screen's header (no title above it: the card says whose tab
+/// this is), the accounts you are signed in with (Twitch, 7TV, Kick, each with its own sign in or
+/// out), where the app opens, then the settings sections.
 struct YouScreen: View {
     let model: AppModel
     @AppStorage("sn-start-tab") private var startTab = MobileTab.following.rawValue
+    @State private var picks: CosmeticsScreenModel?
+    @State private var ownIdentity: OwnIdentityData?
 
     private var user: TwitchUser? { model.signIn.user }
 
@@ -13,82 +16,97 @@ struct YouScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 identity
-                NavigationLink(value: Route.cosmetics) {
-                    RowLabel(symbol: Symbol.cosmetics, title: "Cosmetics", detail: "Your badges, atmosphere, and 7TV paint",
-                             symbolTint: SN.accent)
-                }
-                .buttonStyle(RowPress())
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-
-                label("Accounts")
-                AccountsCard(model: model)
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                    .padding(.top, 8)
+
+                // Signed out, the card above already offers the sign-in; the accounts wait for it.
+                if user != nil {
+                    label("Accounts")
+                    AccountsCard(model: model, picks: picks, sevenTvPicture: ownIdentity?.picture)
+                        .padding(.horizontal, 16)
+                }
 
                 label("Open the app on")
                 GlazeSegments(MobileTab.allCases.map { Segment(value: $0, label: $0.title) },
                               selection: Binding(get: { MobileTab(rawValue: startTab) },
-                                                 set: { if let tab = $0 { startTab = tab.rawValue } }))
+                                                 set: { if let tab = $0 { startTab = tab.rawValue } }), fill: true)
                     .padding(.horizontal, 16)
-                .padding(.bottom, 16)
 
                 label("Settings")
-                VStack(spacing: 0) {
-                    ForEach(SettingsSection.allCases) { section in
-                        NavigationLink(value: Route.settings(section)) {
-                            RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
-                        }
-                        .buttonStyle(RowPress())
-                    }
-                }
-                .padding(.horizontal, 12)
+                SettingsDirectory(model: model)
             }
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
         .background(SN.background)
         .navigationTitle("You")
-        .toolbarTitleDisplayMode(.inlineLarge)
+        .toolbar(.hidden, for: .navigationBar)
+        // Every visit re-reads your picks, so a change made in Edit profile shows on return.
+        .task(id: user?.id) {
+            guard user != nil else { picks = nil; return }
+            let next = picks ?? CosmeticsScreenModel(app: model)
+            picks = next
+            await next.load()
+        }
+        .onAppear { if let picks { Task { await picks.load() } } }
+        .sheet(isPresented: Binding(get: { picks?.showSevenTvSignIn ?? false },
+                                    set: { picks?.showSevenTvSignIn = $0 })) {
+            SevenTvSignInSheet(core: model.core) { stored in
+                Task {
+                    await picks?.sevenTvSignInFinished(stored)
+                    await picks?.load()
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var identity: some View {
-        if let user {
-            OwnIdentityHeader(model: model, user: user)
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+        if let user, let picks {
+            OwnIdentityCard(model: model, user: user, picks: picks, identity: $ownIdentity)
         } else {
-            signedOutIdentity
+            SignedOutIdentityCard(model: model)
         }
-    }
-
-    private var signedOutIdentity: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Avatar(url: user?.profileImageURL, size: 56)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(user?.displayName ?? "Not signed in")
-                    .font(.sn(18, 700))
-                    .foregroundStyle(SN.textPrimary)
-                    .lineLimit(1)
-                Text(user.map { "@\($0.login)" } ?? "Sign in with Twitch below to follow channels and chat.")
-                    .font(.snRowDetail)
-                    .foregroundStyle(SN.textMuted)
-                    .lineLimit(2)
-            }
-            .padding(.top, user == nil ? 6 : 8)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
     }
 
     private func label(_ text: String) -> some View {
         Text(text)
             .snSectionStyle()
             .padding(.horizontal, 16)
-            .padding(.bottom, 6)
+            .padding(.top, 24)
+            .padding(.bottom, 8)
+    }
+}
+
+/// Signed out, the card keeps its shape: the quiet band, an empty avatar, why to sign in, and the
+/// Twitch sign-in.
+private struct SignedOutIdentityCard: View {
+    let model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AtmosphereBand(look: nil).frame(height: OwnIdentityCard.band)
+            Circle().fill(SN.surface)
+                .frame(width: OwnIdentityCard.avatar, height: OwnIdentityCard.avatar)
+                .overlay { Image(systemName: "person.fill").font(.system(size: 30)).foregroundStyle(SN.textMuted) }
+                .padding(4)
+                .background { Circle().fill(SN.background).overlay { Circle().fill(SN.floor) } }
+                .padding(.leading, 12)
+                .padding(.top, -(OwnIdentityCard.avatar / 2 + 4))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Not signed in").font(.sn(24, 700)).foregroundStyle(SN.textPrimary)
+                Text("Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.")
+                    .font(.snBody)
+                    .foregroundStyle(SN.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            SignInButton(model: model, maxWidth: .infinity)
+                .padding(16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: OwnIdentityCard.radius, style: .continuous))
+        .snPanel(radius: OwnIdentityCard.radius)
     }
 }
 
@@ -111,51 +129,77 @@ struct Avatar: View {
     }
 }
 
-/// One row per platform the phone signs in to. Twitch is the account the whole app runs on; Kick
-/// is optional.
+/// One row per account: Twitch (the account the whole app runs on) and 7TV (what lets you wear a
+/// paint and a 7TV badge). Each row is the platform's mark, its name, one line of state, and its own
+/// sign in or out.
 struct AccountsCard: View {
     let model: AppModel
+    let picks: CosmeticsScreenModel?
+    /// Your 7TV picture, for the 7TV row; the Twitch row shows your Twitch picture.
+    let sevenTvPicture: AvatarPick?
     @State private var twitchArmed = false
+    @State private var sevenTvArmed = false
 
     private var user: TwitchUser? { model.signIn.user }
+    private var sevenTvSignedIn: Bool { picks?.ext?.sevenTvSignedIn ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                AccountAvatar(url: user?.profileImageURL, platform: .twitch)
-                VStack(alignment: .leading, spacing: 2) {
-                    // The header above already names you; this row names the platform.
-                    Text("Twitch").font(.snRowStrong).foregroundStyle(SN.textPrimary).lineLimit(1)
-                    Text(user.map { twitchArmed ? "Signs you out of StreamNook" : "@\($0.login)" } ?? "Not signed in")
-                        .font(.snRowDetail)
-                        .foregroundStyle(SN.textMuted)
-                }
-                Spacer(minLength: 8)
+            row(picture: AnyView(AccountAvatar(url: user?.profileImageURL, platform: .twitch)), title: "Twitch",
+                detail: user.map { twitchArmed ? "Signs you out of StreamNook" : "@\($0.login)" } ?? "Not signed in") {
                 if user != nil {
                     ArmedPill(label: "Sign out", armed: $twitchArmed) {
                         Task { await model.signOut() }
                     }
                 } else {
-                    BrandPill(label: model.signIn.busy ? "Signing in" : "Sign in with Twitch", fill: SN.twitch, text: .white,
+                    BrandPill(label: model.signIn.busy ? "Signing in" : "Sign in", fill: SN.twitch, text: .white,
                               enabled: model.started && !model.signIn.busy) {
                         Task { await model.signIn.begin(core: model.core) }
                     }
                 }
             }
-            .padding(14)
-            Divider().overlay(SN.borderSubtle)
-            HStack(spacing: 12) {
-                AccountAvatar(url: nil, platform: .kick)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Kick").font(.snRowStrong).foregroundStyle(SN.textPrimary)
-                    Text("Not signed in").font(.snRowDetail).foregroundStyle(SN.textMuted)
+            if user != nil, let picks {
+                divider
+                row(picture: AnyView(SevenTvAccountPicture(picture: sevenTvPicture)), title: "7TV",
+                    detail: sevenTvSignedIn ? (sevenTvArmed ? "Your paint and badge stay on 7TV" : "Connected")
+                                            : "Paints and badges") {
+                    if sevenTvSignedIn {
+                        ArmedPill(label: "Disconnect", armed: $sevenTvArmed) {
+                            Task {
+                                await picks.signOutOfSevenTv()
+                                await picks.load()
+                            }
+                        }
+                    } else {
+                        BrandPill(label: picks.signingIn ? "Connecting" : "Connect", fill: FixedColor.sevenTV.color,
+                                  text: Color(red: 0.02, green: 0.13, blue: 0.18), enabled: !picks.signingIn) {
+                            picks.signInToSevenTv()
+                        }
+                    }
                 }
-                Spacer(minLength: 8)
-                BrandPill(label: "Sign in with Kick", fill: SN.kick, text: .white, enabled: false) {}
             }
-            .padding(14)
+            // Kick gets its row when Kick comes to the iPhone; a sign-in that leads nowhere is not shown.
         }
         .snPanel()
+    }
+
+    private var divider: some View {
+        Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.leading, 70)
+    }
+
+    private func row<Action: View>(picture: AnyView, title: String, detail: String,
+                                   @ViewBuilder action: () -> Action) -> some View {
+        HStack(spacing: 12) {
+            picture
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.snRowStrong).foregroundStyle(SN.textPrimary).lineLimit(1)
+                Text(detail).font(.snRowDetail).foregroundStyle(SN.textMuted).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            action()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }
 
@@ -180,7 +224,7 @@ private struct AccountAvatar: View {
     }
 }
 
-/// A sign-in in the platform's own colours, so it reads as signing in with that platform.
+/// A sign-in in the platform's own colors, so it reads as signing in with that platform.
 private struct BrandPill: View {
     let label: String
     let fill: Color
@@ -203,5 +247,29 @@ private struct BrandPill: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.6)
+    }
+}
+
+/// The 7TV row's picture: your 7TV picture with 7TV's mark on its corner, or the mark alone in its
+/// tile when you have none.
+private struct SevenTvAccountPicture: View {
+    let picture: AvatarPick?
+
+    var body: some View {
+        if let picture {
+            CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
+                          animate: picture.animated != nil, fill: true)
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
+                .overlay(alignment: .bottomTrailing) {
+                    PlatformMark(platform: .sevenTV, size: 9)
+                        .padding(3)
+                        .background(Circle().fill(SN.backgroundTertiary))
+                        .offset(x: 4, y: 2)
+                }
+                .accessibilityHidden(true)
+        } else {
+            BrandTile(platform: .sevenTV)
+        }
     }
 }

@@ -37,7 +37,7 @@ let package = Package(
     targets: [
         // The bridge to the core, its fake, and the shapes of what the core answers. Foundation
         // only, so it builds and tests on Linux.
-        .target(name: "SNKit", resources: [.copy("Resources/chat-frames.json")]),
+        .target(name: "SNKit", resources: [.copy("Resources/chat-frames.json"), .copy("Resources/emoji.json")]),
         .testTarget(name: "SNKitTests", dependencies: ["SNKit"]),
     ] + (kitOnly ? [] : coreTargets + [
         // The iPhone app: SwiftUI and AVFoundation over the core.
@@ -46,7 +46,7 @@ let package = Package(
             dependencies: ["SNKit"] + (hasCore ? ["SNCore"] : []),
             // Satoshi, the interface font, converted from the desktop's woff2 to TrueType, and
             // StreamNook's house badges (the apps ship them; the CDN does not have them).
-            resources: [.copy("Fonts"), .copy("HouseBadges")],
+            resources: [.copy("Fonts"), .copy("HouseBadges"), .copy("Logos")],
             linkerSettings: hasCore ? [
                 .unsafeFlags(["-L\(coreLib)"]),
                 .linkedLibrary("streamnook_lib"),

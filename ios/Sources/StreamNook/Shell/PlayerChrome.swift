@@ -3,7 +3,7 @@ import SwiftUI
 
 /// What sits over the full player: a quiet loader until the first frame and the failure if there
 /// is one; on a tap, the controls. The top carries the stream (avatar, name, viewers, uptime,
-/// title, category), the centre plays and pauses, and the bottom bar holds LIVE and the buttons
+/// title, category), the center plays and pauses, and the bottom bar holds LIVE and the buttons
 /// (mute, share, minimize, restart, quality, and chat on its side). The controls fade after
 /// three seconds without a touch; play/pause, mute and restart keep them up.
 struct PlayerChrome: View {
@@ -132,7 +132,7 @@ struct PlayerChrome: View {
                 .font(.system(size: 28))
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
-                // The triangle's weight sits at its flat left side; centred by its box it looks
+                // The triangle's weight sits at its flat left side; centered by its box it looks
                 // pushed left, so it moves right (see design-eye.md, optical nudges).
                 .offset(x: watch.paused ? Optical.playNudge(28) : 0)
                 .frame(width: 64, height: 64)

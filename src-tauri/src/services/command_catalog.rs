@@ -122,7 +122,7 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("reload", &[], "Everyone", "/reload", "Hard refresh: restart the stream and reconnect/reload chat (not just emotes)", "", &[], LOCAL),
     cmd("spam", &[], "Everyone", "/spam <count> <message>", "Send a message several times in a row (up to 1000). /spam stop ends it early.", "Lines go out 1 second apart, or the speed set in Settings, Chat, Spam & Pyramid; add --delay <ms> at the end to change it for one run. Faster than Twitch allows for your role gets lines dropped and can silence you for an hour, and moderators may time you out for spam. One run per channel.", &["/spam 5 Kappa", "/spam 20 GG --delay 200", "/spam stop"], 0),
     cmd("pyramid", &[], "Everyone", "/pyramid <height> <word>", "Stack a word or emote 1, 2, 3... up to the height and back down (height up to 100). /pyramid stop ends it early.", "Height N sends 2N-1 lines: /pyramid 5 Kappa sends 9, up to five and back down. Paced like /spam: the speed set in Settings, Chat, Spam & Pyramid, or --delay <ms> at the end. The widest row must fit the 500-character limit for one message. Going faster than Twitch allows for your role gets lines dropped and can silence you for an hour, and moderators may time you out for spam.", &["/pyramid 5 Kappa", "/pyramid 10 PogChamp --delay 300", "/pyramid stop"], 0),
-    cmd("me", &[], "Everyone", "/me <message>", "Send your message as an action, in your name colour", "", &["/me waves"], 0),
+    cmd("me", &[], "Everyone", "/me <message>", "Send your message as an action, in your name color", "", &["/me waves"], 0),
     cmd("help", &[], "Everyone", "/help [command]", "Show how a command works, or list them all", "", &["/help", "/help timeout"], LOCAL),
     cmd("untimeout", &[], "Moderator", "/untimeout <username>", "End a timeout early", "", &["/untimeout someuser"], 0),
     cmd("warn", &[], "Moderator", "/warn <username> <reason>", "Send a warning they must acknowledge before chatting again", "They see your reason and have to accept it before they can type again. Nothing else happens to them.", &["/warn someuser keep it friendly"], 0),
@@ -153,7 +153,7 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("redeem", &[], "Everyone", "/redeem", "Open this channel's rewards", "", &[], LOCAL | DESKTOP_ONLY),
     cmd("reconnect", &["rejoin"], "Everyone", "/reconnect", "Reconnect this chat without restarting the stream", "", &[], LOCAL),
     cmd("unignore", &[], "Everyone", "/unignore <user>", "Show someone you hid with /ignore again", "", &["/unignore someuser"], LOCAL),
-    cmd("setcolor", &[], "Everyone", "/setcolor <user> <color|off>", "Show someone's name in a colour you pick (only you see it)", "", &["/setcolor someuser orange", "/setcolor someuser #ff8800", "/setcolor someuser off"], LOCAL),
+    cmd("setcolor", &[], "Everyone", "/setcolor <user> <color|off>", "Show someone's name in a color you pick (only you see it)", "", &["/setcolor someuser orange", "/setcolor someuser #ff8800", "/setcolor someuser off"], LOCAL),
     cmd("setname", &[], "Everyone", "/setname <user> <nickname|off>", "Give someone a nickname only you see", "", &["/setname someuser Bob", "/setname someuser off"], LOCAL),
     cmd("localmod", &[], "Everyone", "/localmod", "Show only moderators and the broadcaster in this chat (only for you)", "Turn it off with /localmodoff. It lasts until you close StreamNook.", &[], LOCAL | DESKTOP_ONLY),
     cmd("localmodoff", &[], "Everyone", "/localmodoff", "Turn off the moderator-only view", "", &[], LOCAL | DESKTOP_ONLY),
@@ -184,7 +184,7 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("foreach", &[], "Everyone", "/foreach <a,b,c> <command with $>", "Run one command for each item in a list", "Up to 20 items. Messages are paced to stay inside Twitch’s limits.", &["/foreach alice,bob /shoutout $"], LOCAL),
     cmd("chain", &[], "Everyone", "/chain <command> | <command>", "Run several commands one after another", "", &["/chain /slow 10 | /announce Slow mode for a bit"], LOCAL),
     cmd("barrelroll", &[], "Everyone", "/barrelroll", "Do a barrel roll", "", &[], LOCAL),
-    cmd("party", &[], "Everyone", "/party", "Flash party colours over the app for a few seconds", "", &[], LOCAL),
+    cmd("party", &[], "Everyone", "/party", "Flash party colors over the app for a few seconds", "", &[], LOCAL),
     cmd("raw", &[], "Everyone", "/raw <IRC line>", "Send a raw IRC line on your chat connection", "For people who know Twitch IRC. Twitch ignores most raw commands since 2023. JOIN and PART are refused: use /join and /part.", &["/raw PRIVMSG #someone :hello"], LOCAL),
     cmd("fakemsg", &[], "Everyone", "/fakemsg <IRC line>", "Show a made-up chat message only you see (development builds)", "", &[], LOCAL | DEV_ONLY),
     cmd("debug-env", &[], "Everyone", "/debug-env", "Show the app version, system and data folders", "", &[], LOCAL),
@@ -221,6 +221,9 @@ pub struct UserCommand {
     pub enabled: bool,
     #[serde(default)]
     pub require_slash: Option<bool>,
+    /// A plain-text trigger that also fires as the message's last word.
+    #[serde(default)]
+    pub also_match_suffix: Option<bool>,
 }
 
 /// One row of the command list as a composer shows it.

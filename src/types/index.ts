@@ -491,9 +491,10 @@ export interface ChatCustomizationSettings {
 
 // User-defined slash command. Trigger is the bare word matched at the start
 // (and optionally end) of a message. Expansion is the templated message body.
-// See `expandUserCommand` in utils/chatCommands.ts for the full placeholder
-// grammar — {N}, {N+}, {*}, {{ }}, and dotted fields (user.name, user.id,
-// channel.name, channel.id, stream.title, stream.game, stream.uptime).
+// Rust expands it (`expand_user_command` in services/slash_dispatch.rs, the
+// full placeholder grammar): {N}, {N+}, {*}, {{ }}, and dotted fields
+// (user.name, user.id, channel.name, channel.id, stream.title, stream.game,
+// stream.uptime).
 export interface UserSlashCommand {
   id: string;
   trigger: string;

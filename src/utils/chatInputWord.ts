@@ -84,51 +84,6 @@ export interface EmoteTabCandidate {
   chatter?: { username: string; displayName: string };
 }
 
-/** The most candidates one Tab cycle walks through. */
-export const TAB_CYCLE_LIMIT = 50;
-
-/**
- * Chatter names after the emote matches, as the Tab cycle offers them. The
- * emotes arrive ranked from Rust; chatters always follow them. A `:` query is
- * emote-only, and an `@` query completes to `@name`.
- */
-export function withChatterCandidates(
-  emotes: EmoteTabCandidate[],
-  word: string,
-  users: ReadonlyArray<{ username: string; displayName?: string }>,
-  mode: EmoteTabMatchMode,
-): EmoteTabCandidate[] {
-  // Rust's cap never splits names that differ only by case (LULE and lule),
-  // and neither does this one: a pair on the last row comes along whole.
-  let end = Math.min(TAB_CYCLE_LIMIT, emotes.length);
-  while (end > 0 && end < emotes.length && emotes[end].name.toLowerCase() === emotes[end - 1].name.toLowerCase()) {
-    end++;
-  }
-  const out = emotes.slice(0, end);
-  if (word.startsWith(':') || out.length >= TAB_CYCLE_LIMIT) return out;
-  const isAt = word.startsWith('@');
-  const q = (isAt ? word.slice(1) : word).toLowerCase();
-  if (!q) return out;
-  const test = (s: string) => {
-    const t = s.toLowerCase();
-    return mode === 'starts_with' ? t.startsWith(q) : t.includes(q);
-  };
-  const seen = new Set(out.map((c) => c.name.toLowerCase()));
-  for (const u of users) {
-    const dn = u.displayName || u.username;
-    if (seen.has(dn.toLowerCase())) continue;
-    if (!test(dn) && !test(u.username)) continue;
-    seen.add(dn.toLowerCase());
-    out.push({
-      name: (isAt ? '@' : '') + dn,
-      priority: TAB_CYCLE_LIMIT,
-      chatter: { username: u.username, displayName: dn },
-    });
-    if (out.length >= TAB_CYCLE_LIMIT) break;
-  }
-  return out;
-}
-
 /**
  * The part of the current word that sits before the caret. Any whitespace ends
  * a word here (unlike `getWordRange`), so a word after a Shift+Enter newline

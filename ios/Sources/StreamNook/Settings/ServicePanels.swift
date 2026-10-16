@@ -38,22 +38,39 @@ struct AdFreePanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .snPanel()
-                DisclosureGroup(isExpanded: $relaysOpen) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
-                        Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
-                        SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
-                                         limit: 4000, monospaced: true, multiline: true)
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                                .font(.system(size: 15)).foregroundStyle(SN.textSecondary)
+                            Text("Relays").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(SN.textMuted)
+                                .rotationEffect(.degrees(relaysOpen ? 90 : 0))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .contentShape(Rectangle())
                     }
-                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    .padding(14)
-                    .snPanel()
-                    .padding(.top, 6)
-                } label: {
-                    Label("Relays", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                        .snSectionStyle()
+                    .buttonStyle(.plain)
+                    .accessibilityValue(relaysOpen ? "Shown" : "Hidden")
+                    if relaysOpen {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
+                            Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
+                            SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
+                                             limit: 4000, monospaced: true, multiline: true)
+                        }
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 14)
+                        .transition(.opacity)
+                    }
                 }
-                .tint(SN.textMuted)
+                .snPanel()
             }
         }
     }
@@ -88,16 +105,20 @@ struct MasterCard: View {
     var fallback = true
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .settingTitle, spacing: 12) {
             Image(systemName: symbol).font(.system(size: 17)).foregroundStyle(SN.accent)
+                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.sn(14.5, 600)).foregroundStyle(SN.textPrimary)
-                Text(detail).font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
+                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+                Text(detail).font(.sn(12)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             SettingToggle(path: path, fallback: fallback, label: title)
+                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
         }
-        .padding(14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .snPanel()
     }
 }
@@ -128,16 +149,19 @@ struct NotificationsPanel: View {
                     Divider().overlay(SN.borderSubtle)
                     Button { channelsOpen = true } label: {
                         let muted = store.strings("live_notifications.muted_live_channels").count
-                        HStack {
+                        HStack(alignment: .settingTitle, spacing: 16) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Which channels").font(.sn(14)).foregroundStyle(SN.textPrimary)
+                                Text("Which channels").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                                 Text(muted == 0 ? "Everything you follow" : "Everything you follow except \(muted)")
-                                    .font(.sn(12)).foregroundStyle(SN.textMuted)
+                                    .font(.sn(12)).foregroundStyle(SN.textSecondary)
                             }
-                            Spacer()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.textMuted)
+                                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                         }
-                        .padding(14)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -149,9 +173,9 @@ struct NotificationsPanel: View {
                          "live_notifications.push_notifications")
                     Divider().overlay(SN.borderSubtle)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("How often to check").font(.sn(14)).foregroundStyle(SN.textPrimary)
-                        Text("Checking less often uses less battery. Android may still wait longer than this.")
-                            .font(.sn(12)).foregroundStyle(SN.textMuted)
+                        Text("How often to check").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                        Text("Checking less often uses less battery. Your iPhone may still wait longer than this.")
+                            .font(.sn(12)).foregroundStyle(SN.textSecondary)
                         SettingSegmentsBound(path: "live_notifications.background_interval_minutes",
                                              choices: [Choice("15 min", "15"), Choice("30 min", "30"), Choice("60 min", "60")],
                                              fallback: "15", accessibility: "How often to check")
@@ -168,29 +192,32 @@ struct NotificationsPanel: View {
     }
 
     private func line(_ title: String, _ detail: String, _ path: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .settingTitle, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.sn(14)).foregroundStyle(SN.textPrimary)
-                Text(detail).font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+                Text(detail).font(.sn(12)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             SettingToggle(path: path, fallback: true, label: title)
+                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
         }
-        .padding(14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder private var permissionCard: some View {
         switch status {
         case .authorized, .provisional, .ephemeral:
             card(symbol: "bell", tint: SN.accent, title: "System notifications",
-                 body: "StreamNook can post to your notification shade.", allow: false, settingsLabel: "Sounds and categories in Android")
+                 body: "StreamNook can send notifications to this iPhone.", allow: false, settingsLabel: "Sounds and banners in iPhone Settings")
         case .notDetermined:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Allow notifications so alerts reach you when StreamNook is closed.", allow: true, settingsLabel: "Open system settings")
+                 body: "Allow notifications so alerts reach you when StreamNook is closed.", allow: true, settingsLabel: "Open iPhone Settings")
         case .denied:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Android will not ask again, so this has to be turned on in system settings.", allow: false,
-                 settingsLabel: "Open system settings")
+                 body: "Your iPhone will not ask again, so turn notifications on for StreamNook in Settings.", allow: false,
+                 settingsLabel: "Open iPhone Settings")
         default:
             EmptyView()
         }
@@ -347,7 +374,7 @@ struct CachePanel: View {
     var body: some View {
         SettingsBlock(title: "Cache", detail: "Keeps emotes, badges, and channel details on disk so chat loads without fetching them again. Come here to check how much is stored or start fresh.") {
             ToggleRow(title: "Disk cache", path: "cache.enabled", fallback: true,
-                      detail: "Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again.",
+                      detail: "Loads emotes and badges from disk: a copy is stored on this iPhone after the first download so later channel loads are near instant. Off means every launch fetches them again.",
                       help: "Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.")
             SliderRow(title: { "Refresh after: \(Int($0)) days" }, path: "cache.expiry_days", range: 1...30, step: 1, fallback: 7,
                       detail: "Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own.",
@@ -357,8 +384,8 @@ struct CachePanel: View {
                     detail: "View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.",
                     help: "Clearing is safe and does not touch your settings or login. Chat will feel slower for the first visit to each channel while the cache refills.") {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        SettingButton(title: "View cache info", tint: Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xeb / 255)) {
+                    VStack(spacing: 8) {
+                        SettingButton(title: "View cache info") {
                             Task { await stats() }
                         }
                         SettingButton(title: "Clear cache", role: .destructive, tint: Color(red: 0xdc / 255, green: 0x26 / 255, blue: 0x26 / 255)) {
@@ -531,7 +558,7 @@ struct SupportPanel: View {
                           detail: "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
                           help: "Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it.")
                 WideRow(title: "Log export",
-                        detail: "Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report.") {
+                        detail: "Shares your logs as one zip, so you can save it to Files or send it straight to an app for a bug report.") {
                     SettingButton(title: "Share", symbol: "square.and.arrow.up") { Task { await export() } }
                         .padding(.top, 10)
                 }
@@ -573,8 +600,8 @@ struct SupportPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     serverIcon.padding(.top, -36)
                     Text(invite?.name ?? "StreamNook").font(.sn(15, 600)).foregroundStyle(SN.textPrimary).lineLimit(1)
-                    Text(invite?.invite_label ?? "discord.gg/2xvuF9TES7").font(.sn(11, 500)).textCase(.uppercase).tracking(0.9)
-                        .foregroundStyle(SN.textMuted)
+                    // The invite code is case-sensitive, so it is never uppercased.
+                    Text(invite?.invite_label ?? "discord.gg/2xvuF9TES7").font(.sn(12, 500)).foregroundStyle(SN.textMuted)
                     if let description = invite?.description {
                         Text(description).font(.sn(12.5)).foregroundStyle(SN.textSecondary).lineLimit(2)
                     }
@@ -591,14 +618,9 @@ struct SupportPanel: View {
                         }
                         .font(.sn(12)).foregroundStyle(SN.textSecondary)
                     }
-                    Button {
+                    SettingButton(title: "Join the Discord", tint: Color(red: 0x58 / 255, green: 0x65 / 255, blue: 0xF2 / 255)) {
                         if let url = URL(string: invite?.invite_url ?? "https://discord.gg/2xvuF9TES7") { UIApplication.shared.open(url) }
-                    } label: {
-                        Text("Join the Discord").font(.sn(13, 600)).foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, minHeight: 40)
-                            .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(red: 0x58 / 255, green: 0x65 / 255, blue: 0xF2 / 255)) }
                     }
-                    .buttonStyle(.plain)
                     .padding(.top, 6)
                 }
                 .padding(14)

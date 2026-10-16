@@ -26,6 +26,7 @@ final class ChatPipeline: @unchecked Sendable {
     private var buffer: ChatRoomBuffer
     private var style: ChatStyle
     private var width: CGFloat = 0
+    private var visible = true
     private var scale: CGFloat
     private var layouts: [String: ChatRowLayout] = [:]
     private let onModes: @Sendable (ChatRoomModes) -> Void
@@ -49,7 +50,11 @@ final class ChatPipeline: @unchecked Sendable {
 
     /// A frame from the socket, from any thread.
     func ingest(_ raw: String) {
-        let frame = ChatSocketFrame.decode(raw)
+        ingest(frame: ChatSocketFrame.decode(raw))
+    }
+
+    /// A frame the rooms' shared reader already decoded and routed here, from any thread.
+    func ingest(frame: ChatSocketFrame) {
         queue.async { [self] in
             pending.append(frame)
             counters.withLock { $0.frames += 1 }
@@ -75,8 +80,41 @@ final class ChatPipeline: @unchecked Sendable {
         }
     }
 
+    /// Rows missed while the connection was down, put in time order among the rows held.
+    func backfill(_ messages: [ChatMessage]) {
+        queue.async { [self] in
+            guard buffer.insertInTimeOrder(messages), visible else { return }
+            relayoutAll()
+        }
+    }
+
     func setPaused(_ paused: Bool) {
         queue.async { [self] in buffer.paused = paused }
+    }
+
+    /// A room behind another tab keeps its rows but lays none out until it is on screen again.
+    func setVisible(_ visible: Bool) {
+        queue.async { [self] in self.visible = visible }
+    }
+
+    /// Every row the room holds, as one batch, for a list that just started showing it: live,
+    /// at the bottom, never a pause left from before. Rows laid out earlier are reused.
+    func replay() {
+        queue.async { [self] in
+            visible = true
+            buffer.paused = false
+            guard width > 0 else { return }
+            let rows = buffer.rows
+            let drawFrom = max(0, rows.count - 40)
+            let all = rows.enumerated().map { i, row -> ChatRowLayout in
+                guard let cached = layouts[row.id], cached.revision == row.revision else {
+                    return layout(row, bitmap: i >= drawFrom)
+                }
+                if i >= drawFrom, !cached.hasBitmap { cached.renderBitmap(scale: scale) }
+                return cached
+            }
+            ready.withLock { $0.append(Batch(reset: all, forceLive: true)) }
+        }
     }
 
     func setWidth(_ width: CGFloat, scale: CGFloat) {
@@ -137,7 +175,11 @@ final class ChatPipeline: @unchecked Sendable {
         pending.removeAll(keepingCapacity: true)
         let change = buffer.apply(frames)
         if let modes = buffer.modes { onModes(modes) }
-        guard width > 0, !change.isEmpty else { return }
+        onRowCount(buffer.rows.count)
+        guard width > 0, visible, !change.isEmpty else {
+            for (id, _) in layouts where buffer.row(id) == nil { layouts[id] = nil }
+            return
+        }
         var batch = Batch(trimmed: change.trimmed)
         // Rows pushed straight off by a burst never need a bitmap.
         let drawFrom = max(0, change.appended.count - 40)
@@ -148,7 +190,6 @@ final class ChatPipeline: @unchecked Sendable {
             batch.updated.append(layout(row, bitmap: true))
         }
         for (id, _) in layouts where buffer.row(id) == nil { layouts[id] = nil }
-        onRowCount(buffer.rows.count)
         ready.withLock { $0.append(batch) }
     }
 

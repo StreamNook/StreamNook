@@ -30,7 +30,7 @@ enum CosmeticsDrive {
     }
 
     private static func profile(_ value: String, model: AppModel) async {
-        let session = model.watch.chat
+        let session = model.chat.activeSession
         switch value {
         case "close":
             model.cosmetics.profile = nil
@@ -119,7 +119,7 @@ enum CosmeticsDrive {
 
     private static func findWashes(_ model: AppModel) async {
         log.notice("drive wash catalog \(model.cosmetics.atmospheres.map(\.id).joined(separator: ","), privacy: .public)")
-        guard let session = model.watch.chat else {
+        guard let session = model.chat.activeSession else {
             log.error("drive wash: no chat")
             return
         }

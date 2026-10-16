@@ -28,4 +28,12 @@ allow = [
   "sheet_redirected",
   "sheet_closed",
   "note_app_resumed",
+  "chat_tabs_get",
+  "chat_tabs_sync_stream",
+  "chat_tabs_add",
+  "chat_tabs_remove",
+  "chat_tabs_set_active",
+  "chat_room_from_link",
+  "search_chat_rooms",
+  "rebuild_chat",
 ]

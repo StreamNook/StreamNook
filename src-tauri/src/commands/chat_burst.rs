@@ -29,13 +29,33 @@ pub async fn run_chat_burst(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChatBurstReply, String> {
-    let kind = BurstKind::parse(&kind).ok_or("unknown command")?;
+    let settings = state
+        .settings
+        .lock()
+        .map(|s| (s.chat_burst.delay_ms, s.chat_burst.vary_repeats))
+        .map_err(|_| "settings unavailable".to_string())?;
+    start_burst(&kind, &args, &channel_login, &channel_id, settings, false).await
+}
+
+/// Start or stop a run, for the command above and the slash dispatcher.
+/// `settings` is (delay_ms, vary_repeats) from Settings. With `announce_end`
+/// the way the run ends (done, stopped, failed) is printed in the room's chat,
+/// for a phone, which shows no progress bar.
+pub(crate) async fn start_burst(
+    kind: &str,
+    args: &str,
+    channel_login: &str,
+    channel_id: &str,
+    settings: (u32, bool),
+    announce_end: bool,
+) -> Result<ChatBurstReply, String> {
+    let kind = BurstKind::parse(kind).ok_or("unknown command")?;
     let login = channel_login.trim().trim_start_matches('#').to_lowercase();
     if login.is_empty() || channel_id.trim().is_empty() {
         return Err("Open a Twitch channel's chat first".into());
     }
 
-    let (amount, text, delay_override) = match chat_burst::parse_args(kind, &args)? {
+    let (amount, text, delay_override) = match chat_burst::parse_args(kind, args)? {
         BurstArgs::Stop => {
             let message = match chat_burst::stop(&login) {
                 Some(job) => chat_burst::stopped_message(&job),
@@ -46,11 +66,7 @@ pub async fn run_chat_burst(
         BurstArgs::Start { amount, text, delay_ms } => (amount, text, delay_ms),
     };
 
-    let (delay_setting, vary) = state
-        .settings
-        .lock()
-        .map(|s| (s.chat_burst.delay_ms, s.chat_burst.vary_repeats))
-        .map_err(|_| "settings unavailable".to_string())?;
+    let (delay_setting, vary) = settings;
     let delay_ms = delay_override.unwrap_or_else(|| chat_burst::clamp_delay(delay_setting));
 
     let lines = match kind {
@@ -102,6 +118,9 @@ pub async fn run_chat_burst(
         };
         let end = chat_burst::run(job.clone(), lines, send, emit).await;
         chat_burst::release(&job);
+        if announce_end {
+            crate::services::slash_dispatch::post_room_notice(&end.channel, &end.label()).await;
+        }
         log::info!(
             "[ChatBurst] {:?} in #{} ended {} at {}/{}{}",
             end.kind,

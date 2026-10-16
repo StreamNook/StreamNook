@@ -1,0 +1,293 @@
+//! The phone chat pane's tabs and its "Add a chat" sheet. The rules live in
+//! `services::chat_tabs`; every change is emitted as `chat-tabs` and answers
+//! which rooms the shell must join and leave.
+
+use crate::models::settings::AppState;
+use crate::models::stream::TwitchStream;
+use crate::rt::AppHandle;
+use crate::services::chat_tabs::{self, ChatRoomInput, ChatTabsChange, ChatTabsView};
+use crate::services::providers::watch_urls::{classify, WatchTarget};
+use serde::Serialize;
+use tauri::{Emitter, State};
+
+fn emit(app: &AppHandle, view: &ChatTabsView) {
+    if let Err(e) = app.emit(chat_tabs::EVENT, view) {
+        log::debug!("[ChatTabs] emit failed: {e}");
+    }
+}
+
+/// The open rooms and the one on screen.
+#[tauri::command]
+pub fn chat_tabs_get() -> ChatTabsView {
+    chat_tabs::view()
+}
+
+/// Points the stream tab at the watched stream, or drops it with `None` when
+/// the player closed.
+#[tauri::command]
+pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>) -> ChatTabsChange {
+    let (change, ()) = chat_tabs::apply(|t| (t.sync_stream(room.as_ref()), ()));
+    emit(&app, &change.view);
+    change
+}
+
+/// Opens a room beside the stream and puts it on screen. A non-Twitch room
+/// that knows only its slug gets its real name and picture from the platform
+/// a moment later, as another `chat-tabs` event.
+#[tauri::command]
+pub fn chat_tabs_add(app: AppHandle, room: ChatRoomInput) -> ChatTabsChange {
+    let (change, needs_meta) = chat_tabs::apply(|t| t.add(&room));
+    emit(&app, &change.view);
+    if needs_meta {
+        if let Some(tab) = chat_tabs::ChatTabs::tab_for(&room, false) {
+            tauri::async_runtime::spawn(async move {
+                match crate::commands::provider_browse::provider_channel_meta(tab.provider.clone(), tab.login.clone())
+                    .await
+                {
+                    Ok(meta) => {
+                        let (patched, changed) = chat_tabs::apply(|t| {
+                            let changed = t.patch(&tab.channel, Some(meta.user_name), meta.profile_image_url);
+                            (Default::default(), changed)
+                        });
+                        if changed {
+                            emit(&app, &patched.view);
+                        }
+                    }
+                    Err(e) => log::debug!("[ChatTabs] no channel meta for {}: {e}", tab.channel),
+                }
+            });
+        }
+    }
+    change
+}
+
+/// Closes a room opened beside the stream (the stream tab stays).
+#[tauri::command]
+pub fn chat_tabs_remove(app: AppHandle, channel: String) -> ChatTabsChange {
+    let (change, ()) = chat_tabs::apply(|t| (t.remove(&channel), ()));
+    emit(&app, &change.view);
+    change
+}
+
+/// Puts an open room on screen.
+#[tauri::command]
+pub fn chat_tabs_set_active(app: AppHandle, channel: String) -> ChatTabsView {
+    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.set_active(&channel)));
+    if changed {
+        emit(&app, &change.view);
+    }
+    change.view
+}
+
+/// Rebuilds the Twitch chat with every room this window holds (see
+/// `services::chat_recovery`). `force` is a deliberate reload, never throttled.
+/// Answers the bridge's port when a cycle ran, also emitted as `chat-rebuilt`.
+#[tauri::command]
+pub async fn rebuild_chat(
+    app: AppHandle,
+    window: crate::rt::Window,
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    reason: Option<String>,
+) -> Result<Option<u16>, String> {
+    let reason = reason.unwrap_or_else(|| "manual reload".to_string());
+    let rebuilt = crate::services::chat_recovery::rebuild(&state, window.label(), force.unwrap_or(false), &reason)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rebuilt.map(|r| {
+        if let Err(e) = app.emit(crate::services::chat_recovery::EVENT, &r) {
+            log::debug!("[ChatRecovery] emit failed: {e}");
+        }
+        r.port
+    }))
+}
+
+/// One channel the "Add a chat" sheet lists.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ChatRoomRow {
+    pub provider: String,
+    /// The key the room's tab would get, so the sheet can mark rooms already open.
+    pub key: String,
+    pub user_login: String,
+    /// The numeric Twitch id; empty on other platforms.
+    pub user_id: String,
+    pub user_name: String,
+    pub profile_image_url: Option<String>,
+    pub is_live: bool,
+    pub viewer_count: u64,
+    pub game_name: String,
+    /// The row came from a pasted link, not a search.
+    pub pasted: bool,
+}
+
+impl ChatRoomRow {
+    fn twitch(s: TwitchStream) -> Self {
+        let login = s.user_login.to_lowercase();
+        Self {
+            provider: "twitch".into(),
+            key: login.clone(),
+            user_login: login,
+            user_id: s.user_id,
+            user_name: s.user_name,
+            profile_image_url: s.profile_image_url,
+            is_live: s.is_live.unwrap_or(false),
+            viewer_count: u64::from(s.viewer_count),
+            game_name: s.game_name,
+            pasted: false,
+        }
+    }
+
+    fn provider(provider: &str, s: crate::models::provider_stream::ProviderStream) -> Self {
+        let login = crate::services::providers::key::normalize_channel(provider, &s.user_login);
+        Self {
+            provider: provider.into(),
+            key: crate::services::providers::key::make_key(provider, &login).to_lowercase(),
+            user_login: login,
+            user_id: String::new(),
+            user_name: s.user_name,
+            profile_image_url: s.profile_image_url,
+            is_live: s.is_live,
+            viewer_count: u64::from(s.viewer_count),
+            game_name: s.game_name,
+            pasted: false,
+        }
+    }
+
+    fn pasted_kick(slug: &str) -> Self {
+        Self {
+            provider: "kick".into(),
+            key: format!("kick:{slug}"),
+            user_login: slug.into(),
+            user_id: String::new(),
+            user_name: slug.into(),
+            profile_image_url: None,
+            is_live: false,
+            viewer_count: 0,
+            game_name: String::new(),
+            pasted: true,
+        }
+    }
+}
+
+/// A Kick room named by a pasted kick.com link (scheme, `www.` and `@`
+/// optional) or typed as `kick:slug` / `kick/slug`.
+pub fn kick_room_in(query: &str) -> Option<String> {
+    let q = query.trim();
+    let typed = q
+        .strip_prefix("kick:")
+        .or_else(|| q.strip_prefix("kick/"))
+        .or_else(|| q.strip_prefix("Kick:"))
+        .or_else(|| q.strip_prefix("Kick/"));
+    let slug = match typed {
+        Some(rest) => rest.trim().trim_start_matches('@').to_lowercase(),
+        None if q.to_ascii_lowercase().contains("kick.com/") => match classify(q) {
+            WatchTarget::Provider { provider: "kick", channel } => channel.trim_start_matches('@').to_string(),
+            _ => return None,
+        },
+        None => return None,
+    };
+    let valid = !slug.is_empty() && slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    valid.then_some(slug)
+}
+
+/// Live channels first, biggest audience first, then everyone offline in the
+/// order the platforms answered: Twitch's channel search ranks by name, so a
+/// live room would otherwise sink under offline lookalikes.
+pub fn order_rooms(rows: Vec<ChatRoomRow>) -> Vec<ChatRoomRow> {
+    let (mut live, offline): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.is_live);
+    live.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+    live.extend(offline);
+    live
+}
+
+/// The room a pasted link names, answered at once without a search.
+#[tauri::command]
+pub fn chat_room_from_link(query: String) -> Option<ChatRoomRow> {
+    kick_room_in(&query).map(|slug| ChatRoomRow::pasted_kick(&slug))
+}
+
+/// Channels to open a chat with: Twitch and Kick searched together (offline
+/// channels included, since chat is joinable either way), one platform failing
+/// never emptying the other, ordered live first. A pasted Kick link answers
+/// that one room without searching.
+#[tauri::command]
+pub async fn search_chat_rooms(state: State<'_, AppState>, query: String) -> Result<Vec<ChatRoomRow>, String> {
+    if let Some(row) = chat_room_from_link(query.clone()) {
+        return Ok(vec![row]);
+    }
+    let q = query.trim();
+    if q.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    let state: &AppState = &state;
+    let (twitch, kick) = tokio::join!(
+        crate::services::twitch_service::TwitchService::search_channels(state, q),
+        async {
+            match crate::services::providers::registry().await.get_source("kick") {
+                Some(src) => src.search(q).await.map(|page| page.streams),
+                None => Ok(Vec::new()),
+            }
+        }
+    );
+    let mut rows = Vec::new();
+    match twitch {
+        Ok(found) => rows.extend(found.into_iter().map(ChatRoomRow::twitch)),
+        Err(e) => log::warn!("[AddChat] twitch search failed: {e}"),
+    }
+    match kick {
+        Ok(found) => rows.extend(found.into_iter().map(|s| ChatRoomRow::provider("kick", s))),
+        Err(e) => log::warn!("[AddChat] kick search failed: {e}"),
+    }
+    Ok(order_rooms(rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(login: &str, live: bool, viewers: u64) -> ChatRoomRow {
+        ChatRoomRow {
+            provider: "twitch".into(),
+            key: login.into(),
+            user_login: login.into(),
+            user_id: String::new(),
+            user_name: login.into(),
+            profile_image_url: None,
+            is_live: live,
+            viewer_count: viewers,
+            game_name: String::new(),
+            pasted: false,
+        }
+    }
+
+    #[test]
+    fn live_rooms_lead_by_audience_then_offline_keep_their_order() {
+        let ordered = order_rooms(vec![
+            row("off1", false, 0),
+            row("small", true, 10),
+            row("off2", false, 0),
+            row("big", true, 900),
+        ]);
+        let logins: Vec<_> = ordered.iter().map(|r| r.user_login.as_str()).collect();
+        assert_eq!(logins, ["big", "small", "off1", "off2"]);
+    }
+
+    #[test]
+    fn kick_links_and_prefixes_name_a_room() {
+        assert_eq!(kick_room_in("https://kick.com/xqc").as_deref(), Some("xqc"));
+        assert_eq!(kick_room_in("www.kick.com/@JoeWo").as_deref(), Some("joewo"));
+        assert_eq!(kick_room_in("kick.com/Some_One-1?x=1").as_deref(), Some("some_one-1"));
+        assert_eq!(kick_room_in("kick:xqc").as_deref(), Some("xqc"));
+        assert_eq!(kick_room_in("kick/@xqc").as_deref(), Some("xqc"));
+        assert_eq!(kick_room_in("kick.com/video/abc"), None);
+        assert_eq!(kick_room_in("xqc"), None);
+        assert_eq!(kick_room_in("kick: two words"), None);
+    }
+
+    #[test]
+    fn a_pasted_row_says_so() {
+        let r = chat_room_from_link("kick.com/xqc".into()).unwrap();
+        assert!(r.pasted);
+        assert_eq!((r.provider.as_str(), r.key.as_str()), ("kick", "kick:xqc"));
+    }
+}

@@ -55,6 +55,17 @@ pub struct SearchHit {
     pub flags: u32,
 }
 
+/// One held message as a moderation sweep reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SweepEntry {
+    pub id: String,
+    pub user_id: String,
+    pub login: String,
+    pub display: String,
+    pub content: String,
+    pub ts_ms: i64,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct HistoryStats {
     pub channels: usize,
@@ -232,6 +243,25 @@ impl ChatHistory {
             }
         }
         out
+    }
+
+    /// Every message `channel` holds that was sent at or after `since_ms`,
+    /// oldest first, for a moderation sweep (`/nuke`'s look-back window).
+    pub fn since(channel: &str, since_ms: i64) -> Vec<SweepEntry> {
+        let key = channel.trim_start_matches('#').to_lowercase();
+        let Ok(map) = rings().lock() else { return Vec::new() };
+        let Some(ring) = map.get(&key) else { return Vec::new() };
+        ring.iter()
+            .filter(|e| e.ts_ms >= since_ms)
+            .map(|e| SweepEntry {
+                id: e.id.clone(),
+                user_id: e.user_id.clone(),
+                login: e.login.clone(),
+                display: e.display.clone(),
+                content: e.content.clone(),
+                ts_ms: e.ts_ms,
+            })
+            .collect()
     }
 
     /// Drop a channel's ring. Called when its last consumer parts.

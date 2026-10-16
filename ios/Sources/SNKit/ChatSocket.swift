@@ -31,18 +31,25 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
     public var promptShort: String?
     public var standing: String?
     public var slowSeconds: Int
+    /// The mode that certainly keeps the viewer from sending ("subs_only", "emote_only",
+    /// "followers_only"); nil when nothing proves it.
+    public var blocked: String?
+    /// What the disabled message box says while `blocked` is set.
+    public var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds"
+        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds", blocked, reason
     }
 
     public init(modes: [ChatRoomMode] = [], prompt: String? = nil, promptShort: String? = nil, standing: String? = nil,
-                slowSeconds: Int = 0) {
+                slowSeconds: Int = 0, blocked: String? = nil, reason: String? = nil) {
         self.modes = modes
         self.prompt = prompt
         self.promptShort = promptShort
         self.standing = standing
         self.slowSeconds = slowSeconds
+        self.blocked = blocked
+        self.reason = reason
     }
 
     public init(from decoder: Decoder) throws {
@@ -52,6 +59,8 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
         promptShort = try c.decodeIfPresent(String.self, forKey: .promptShort)
         standing = try c.decodeIfPresent(String.self, forKey: .standing)
         slowSeconds = try c.decodeIfPresent(Int.self, forKey: .slowSeconds) ?? 0
+        blocked = try c.decodeIfPresent(String.self, forKey: .blocked)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
     }
 }
 
@@ -121,10 +130,38 @@ public enum ChatSocketFrame: Sendable, Equatable {
             })
         case "NOTICE":
             let frame = try? decoder.decode(NoticeFrame.self, from: data)
+            // A line StreamNook writes into one room itself (a command's later result, a
+            // reminder that could not post) is a system row in that room.
+            if frame?.msgID == localNoticeID, let line = frame?.message, !line.isEmpty,
+               let row = systemRow(line, channel: head.channel ?? "") {
+                return .row(row)
+            }
             return .notice(channel: head.channel, msgID: frame?.msgID, message: frame?.message)
         default:
             return .other(text)
         }
+    }
+
+    /// The `msg_id` of the NOTICE frames StreamNook posts into a room.
+    public static let localNoticeID = "streamnook_notice"
+
+    /// A row only the viewer sees, posted by the app in `channel`.
+    public static func systemRow(_ line: String, channel: String, at date: Date = Date()) -> ChatMessage? {
+        let row: [String: Any] = [
+            "id": "system-local-\(UUID().uuidString)",
+            "user_id": "",
+            "username": "System",
+            "display_name": "System",
+            "color": NSNull(),
+            "badges": [Any](),
+            "timestamp": ISO8601DateFormatter().string(from: date),
+            "content": line,
+            "provider": channel.contains(":") ? String(channel.split(separator: ":")[0]) : "twitch",
+            "channel": channel,
+            "tags": [String: String](),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
+        return try? decoder.decode(ChatMessage.self, from: data)
     }
 
     private struct FrameHead: Decodable {

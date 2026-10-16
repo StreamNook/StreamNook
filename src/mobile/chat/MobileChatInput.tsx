@@ -27,16 +27,13 @@ import ChannelPointsMenu from '../../components/ChannelPointsMenu';
 import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
-import { getWordRange, withChatterCandidates, type EmoteTabCandidate } from '../../utils/chatInputWord';
+import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
 import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
-import { useChatUserStore } from '../../stores/chatUserStore';
-import { useEmoteOwnerNames } from './useEmoteOwnerNames';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
-import type { ChatGating } from './chatGating';
-import type { RoomModeView } from '../../stores/chatConnectionStore';
+import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
@@ -58,6 +55,16 @@ import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 // straight up past the status bar once the keyboard opens.
 const PANEL_CLASS =
   'absolute bottom-full left-0 right-0 mb-2 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-borderSubtle rounded-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
+
+/** Whether you can send in this room, as Rust decided it (room_modes.rs). */
+export interface ChatGating {
+  /** The room's active modes in words, for the chat menu. */
+  labels: string[];
+  /** The mode that certainly keeps you from sending, or null. */
+  blocked: RoomModeKind | null;
+  /** What the disabled field says while blocked. */
+  reason: string | null;
+}
 
 interface Props {
   /** The room's bare name on its platform (login or slug). */
@@ -140,7 +147,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const pointsChannel = streamLogin && streamIsTwitch ? streamLogin : isTwitch ? channel : null;
   const pointsChannelId = streamId && streamIsTwitch ? streamId : isTwitch ? channelId : null;
   const points = useChannelPoints(pointsChannel, pointsChannelId);
-  const emoteOwnerNames = useEmoteOwnerNames(emotes);
 
   // Points feedback.
   //
@@ -319,20 +325,12 @@ const MobileChatInputImpl: React.FC<Props> = ({
     // One character matches most of the set and is noise, not help.
     if (word.length < 2 || !channel) return;
     const n = suggestSeq.next();
+    // Rust's cycle answer carries the room's recent chatters after the emotes.
     void matchEmotes({ provider, channel, channelId }, word, 'cycle').then((res) => {
       if (!suggestSeq.isCurrent(n)) return;
-      const includeChatters = chatInput?.emote_tab_complete_include_chatters ?? true;
-      setAnswered({
-        word,
-        items: withChatterCandidates(
-          rowsToTabCandidates(res.rows),
-          word,
-          includeChatters ? useChatUserStore.getState().getMatchingUsers(word.replace(/^@/, '')) : [],
-          chatInput?.emote_tab_complete_match_mode ?? 'starts_with',
-        ),
-      });
+      setAnswered({ word, items: rowsToTabCandidates(res.rows) });
     });
-  }, [word, channel, channelId, provider, chatInput, suggestSeq]);
+  }, [word, channel, channelId, provider, suggestSeq]);
   const suggestions = word.length >= 2 && answered.word === word ? answered.items : [];
 
   const showSuggestions =
@@ -629,7 +627,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
           channelId={channelId ?? undefined}
           channelLogin={channel ?? undefined}
           isLoadingEmotes={!emotes}
-          channelNameCache={emoteOwnerNames}
           onInsert={insertEmote}
           className={PANEL_CLASS}
         />
@@ -694,8 +691,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       <MobileCommandSheet
         open={commandsOpen}
         onClose={() => setCommandsOpen(false)}
-        isModerator={isModerator}
-        isBroadcaster={!!channelId && channelId === currentUser?.user_id}
+        channel={channel ?? ''}
         onPick={(cmd) => {
           setText(`/${cmd.name} `);
           inputRef.current?.focus();
