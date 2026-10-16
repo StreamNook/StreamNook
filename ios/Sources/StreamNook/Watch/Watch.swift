@@ -232,7 +232,8 @@ final class Watch {
     /// The player's own state drives the center button, the lock screen card, the earning gate
     /// (a rebuffer is not a pause) and keeping the screen awake while a stream plays.
     private func playerState(_ status: AVPlayer.TimeControlStatus) {
-        let paused = status == .paused
+        // With no item yet (a start resolving) nothing is paused: the button keeps saying Pause.
+        let paused = status == .paused && player.currentItem != nil
         self.paused = paused
         guard stream != nil else {
             UIApplication.shared.isIdleTimerDisabled = false

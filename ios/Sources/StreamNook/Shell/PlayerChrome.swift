@@ -186,6 +186,7 @@ struct PlayerChrome: View {
                 LiveDot(size: 7)
                 Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
             }
+            .fixedSize()
             .padding(.leading, 4)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Live")

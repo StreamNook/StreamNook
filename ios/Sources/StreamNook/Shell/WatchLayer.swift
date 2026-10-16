@@ -84,7 +84,7 @@ struct WatchLayer: View {
                     .overlay {
                         if full {
                             PlayerChrome(model: model, landscape: landscape,
-                                         insets: landscape ? chromeInsets(beside: beside, leading: chat.leading) : EdgeInsets(),
+                                         insets: landscape ? chromeInsets(sideChat: sideChat, leading: chat.leading) : EdgeInsets(),
                                          chatWidth: sideChat && !beside ? columnWidth : 0, chatLeading: chat.leading,
                                          shown: controlsShown && !dragging, onMinimize: minimize, onTouch: touchedControls)
                         }
@@ -225,10 +225,10 @@ struct WatchLayer: View {
         }
     }
 
-    /// The controls' insets in landscape: the safe area, except on the side a beside column
-    /// already covers.
-    private func chromeInsets(beside: Bool, leading: Bool) -> EdgeInsets {
-        guard beside else { return insets }
+    /// The controls' insets in landscape: the safe area, except on the side the chat column
+    /// already covers (its width includes that side's inset).
+    private func chromeInsets(sideChat: Bool, leading: Bool) -> EdgeInsets {
+        guard sideChat else { return insets }
         var adjusted = insets
         if leading { adjusted.leading = 0 } else { adjusted.trailing = 0 }
         return adjusted

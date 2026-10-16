@@ -99,6 +99,11 @@ enum Drive {
                 model.startWatching(TwitchStream(id: "", userLogin: value, userName: value, title: "", viewerCount: 0,
                                                  gameName: ""))
             case "corelog": coreLog(value.replacingOccurrences(of: "_", with: " "))
+            case "loginof":
+                // A Browse stream opened by its bare login, as a notification tap would.
+                guard await waitForStreams(model), let index = Int(value), model.streams.indices.contains(index) else { continue }
+                let login = model.streams[index].userLogin
+                model.startWatching(TwitchStream(id: "", userLogin: login, userName: login, title: "", viewerCount: 0, gameName: ""))
             case "clip": await openTopClip(model)
             case "mini": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .mini }
             case "full": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .full }
@@ -200,6 +205,7 @@ enum Drive {
     private static func coreLog(_ text: String) {
         guard let dir = try? CoreHost.dirs().logs else { return }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        log.notice("corelog: \(files.count) files in \(dir, privacy: .public): \(files.joined(separator: ","), privacy: .public)")
         for name in files.sorted() {
             guard let body = try? String(contentsOfFile: dir + "/" + name, encoding: .utf8) else { continue }
             for line in body.split(separator: "\n").filter({ $0.contains(text) }).suffix(12) {
