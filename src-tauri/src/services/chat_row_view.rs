@@ -915,6 +915,46 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
 
 // ---- The stamp ---------------------------------------------------------------
 
+/// Kick's own art for its role badges (moderator, VIP, OG and the rest), which
+/// Kick draws inline on its site and never serves as images. Rasterized from
+/// the same SVGs the webview shells bundle (`src/assets/kick-badges`), as PNG
+/// data URIs a native shell decodes without a fetch. A channel's custom
+/// subscriber art rides the row's own image URL and wins over these.
+fn kick_badge_art(name: &str) -> Option<String> {
+    use base64::Engine;
+    static ART: std::sync::OnceLock<std::collections::HashMap<&'static str, String>> = std::sync::OnceLock::new();
+    let art = ART.get_or_init(|| {
+        let png: [(&str, &[u8]); 7] = [
+            ("moderator", include_bytes!("../../assets/kick-badges/moderator.png")),
+            ("vip", include_bytes!("../../assets/kick-badges/vip.png")),
+            ("og", include_bytes!("../../assets/kick-badges/og.png")),
+            ("founder", include_bytes!("../../assets/kick-badges/founder.png")),
+            ("verified", include_bytes!("../../assets/kick-badges/verified.png")),
+            ("sub_gifter", include_bytes!("../../assets/kick-badges/sub_gifter.png")),
+            ("subscriber", include_bytes!("../../assets/kick-badges/subscriber.png")),
+        ];
+        png.into_iter()
+            .map(|(name, bytes)| {
+                (name, format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+            })
+            .collect()
+    });
+    art.get(name).cloned()
+}
+
+/// A Kick role badge's name in words, when the row carries no title.
+fn kick_badge_title(name: &str) -> String {
+    match name {
+        "vip" => "VIP".to_string(),
+        "og" => "OG".to_string(),
+        "sub_gifter" => "Sub Gifter".to_string(),
+        other => {
+            let mut chars = other.chars();
+            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    }
+}
+
 fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<ViewBadge> {
     let mut out = Vec::new();
     let twitch = msg.provider.is_empty() || msg.provider == "twitch";
@@ -936,6 +976,14 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             } else if twitch {
                 if let Some((url, title)) = twitch_badge_art(room, &badge.name, &badge.version) {
                     out.push(ViewBadge { url, title, provider: "twitch".to_string() });
+                }
+            } else if msg.provider == "kick" {
+                if let Some(url) = kick_badge_art(&badge.name) {
+                    out.push(ViewBadge {
+                        url,
+                        title: badge.title.clone().unwrap_or_else(|| kick_badge_title(&badge.name)),
+                        provider: "kick".to_string(),
+                    });
                 }
             }
         }
@@ -1095,6 +1143,17 @@ mod tests {
                 ViewSpan::Gif { text, .. } => format!("g:{text}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn kick_role_badges_carry_their_own_png_art() {
+        for name in ["moderator", "vip", "og", "founder", "verified", "sub_gifter", "subscriber"] {
+            let url = kick_badge_art(name).unwrap_or_else(|| panic!("{name} has art"));
+            assert!(url.starts_with("data:image/png;base64,iVBOR"), "{name} is a PNG, which iOS decodes");
+        }
+        assert!(kick_badge_art("broadcaster").is_none(), "no art beats wrong art");
+        assert_eq!(kick_badge_title("sub_gifter"), "Sub Gifter");
+        assert_eq!(kick_badge_title("moderator"), "Moderator");
     }
 
     #[test]
