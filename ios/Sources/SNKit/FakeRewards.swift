@@ -42,7 +42,7 @@ public final class FakeRewards: Sendable {
             let ready = claims.isEmpty
             return try FakeCore.json([
                 "campaign_id": "c1", "drop_id": ready ? "d2" : "d3", "instance_id": "inst", "name": ready ? "Hoodie" : "Pants",
-                "image": "", "trailing": ready ? "Ready to claim" : "1h 48m to watch", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
+                "image": "", "trailing": ready ? "" : "1h 48m to watch", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
                 "percent": ready ? 100.0 : 40.0, "complete": ready, "claim_label": "Claim",
                 "spoken": ready ? "Hoodie, ready to claim" : "Pants, 108 minutes left",
             ] as [String: Any])
