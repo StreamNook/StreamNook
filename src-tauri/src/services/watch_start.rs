@@ -216,10 +216,10 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     let state = app.state::<AppState>();
     if row.user_id.is_empty() {
         log::warn!("[WatchStart] no broadcaster id for {login}; drops and points monitoring off for this session");
-        let _ = crate::commands::drops::stop_drops_monitoring(state).await;
+        let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
     } else {
         crate::commands::drops::monitor_watched_channel(&app, row.user_id.clone(), login.clone()).await;
-        let _ = streaming::register_active_channel(row.user_id.clone(), state).await;
+        let _ = streaming::register_active_channel(row.user_id.clone(), state.clone()).await;
     }
     if !current(ticket) {
         return;
@@ -258,9 +258,9 @@ pub async fn stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: 
     if preserve_backend {
         return;
     }
-    let _ = crate::commands::drops::stop_drops_monitoring(state).await;
+    let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
     if let Some(id) = channel_id {
-        let _ = streaming::unregister_active_channel(id, state).await;
+        let _ = streaming::unregister_active_channel(id, state.clone()).await;
     }
 }
 
