@@ -192,8 +192,10 @@ final class ChatSession {
     /// The join backfill: recent history above the live rows, then the room's badge art.
     private func loadHistory() async {
         _ = try? await core.invoke("get_cached_global_badges", "{}")
+        let asked = Date()
         if let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
            let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
+            chatLog.notice("history for \(self.channel, privacy: .public): \(rows.count) rows in \(Int(Date().timeIntervalSince(asked) * 1000)) ms")
             pipeline.prepend(rows)
             if roomID == nil { roomID = rows.first?.tags["room-id"] }
         }

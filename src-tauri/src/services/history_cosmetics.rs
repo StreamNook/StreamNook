@@ -22,8 +22,10 @@ use crate::services::cosmetics_registry as registry;
 use crate::services::irc_service::IrcService;
 use crate::services::{chat_row_view, member_theme, seventv_cosmetics_resolver as resolver};
 
-/// How long the history answer waits for its authors' lookups.
-const ANSWER_WAIT: Duration = Duration::from_millis(1500);
+/// The longest the history answer waits for its authors' lookups. Short on
+/// purpose: an empty chat is worse than a name gaining its paint a moment later
+/// (which moves nothing), so anything slower arrives by patch.
+const ANSWER_WAIT: Duration = Duration::from_millis(250);
 /// How long the follow-up waits for lookups the answer could not wait for.
 const FOLLOW_WAIT: Duration = Duration::from_secs(20);
 /// How long it then waits for the authors' personal emote sets.
@@ -116,35 +118,47 @@ async fn look_up(need: Needed) -> Vec<(String, String)> {
     sets.into_iter().flatten().collect()
 }
 
-/// The backlog as the history answer returns it on a native shell: parsed
-/// again once its authors' lookups are in (waiting at most `ANSWER_WAIT`), and
-/// patched in later for the lookups that took longer. `rows` is the first
-/// parse of `raw`; on the web renderers it is returned untouched.
+/// What a backlog's authors still need, read from the caches now.
+fn needed_now(authors: &[(String, String)]) -> Needed {
+    needed(
+        authors,
+        |id| resolver::peek(id).is_some(),
+        registry::is_member,
+        |id| member_theme::peek(id).is_some(),
+    )
+}
+
+/// The backlog as the history answer returns it on a native shell. When every
+/// author is already known it is answered at once; otherwise it waits at most
+/// `ANSWER_WAIT` for their lookups, parses again, and patches in the slower
+/// ones later. `rows` is the first parse of `raw`; on the web renderers it is
+/// returned untouched.
 pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> Vec<ChatMessage> {
     if !chat_row_view::enabled() || rows.is_empty() {
         return rows;
     }
+    let started = Instant::now();
     let authors: Vec<(String, String)> = rows
         .iter()
         .map(|m| (m.provider.clone(), m.user_id.clone()))
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    // Members are only known once the registry has loaded; before that, the
+    // lookup task waits for it and the members arrive by patch.
+    if registry::ready(Duration::ZERO).await && needed_now(&authors).is_empty() {
+        log::info!("[ChatHistory] {channel}: every author's cosmetics known, answered at once");
+        return rows;
+    }
     let mut lookups: JoinHandle<Option<Vec<(String, String)>>> = tokio::spawn(async move {
         registry::ready(REGISTRY_WAIT).await;
-        let need = needed(
-            &authors,
-            |id| resolver::peek(id).is_some(),
-            registry::is_member,
-            |id| member_theme::peek(id).is_some(),
-        );
+        let need = needed_now(&authors);
         if need.is_empty() {
             return None;
         }
         Some(look_up(need).await)
     });
-    match tokio::time::timeout(ANSWER_WAIT, &mut lookups).await {
-        // Everything was already known: the first parse is the answer.
+    let rows = match tokio::time::timeout(ANSWER_WAIT, &mut lookups).await {
         Ok(Ok(None)) | Ok(Err(_)) => rows,
         Ok(Ok(Some(sets))) => {
             let rows = IrcService::parse_historical_messages(raw.to_vec()).await;
@@ -159,7 +173,9 @@ pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> 
             spawn_follow(channel, raw, &rows, Some(lookups), Vec::new());
             rows
         }
-    }
+    };
+    log::info!("[ChatHistory] {channel}: waited {} ms for authors' cosmetics", started.elapsed().as_millis());
+    rows
 }
 
 fn spawn_follow(
