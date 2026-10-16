@@ -45,6 +45,9 @@ struct WatchDropBar: View {
                        "gameId": stream.gameID ?? "", "gameName": stream.gameName],
                 as: WatchDrop?.self)
             guard model.watch.stream?.userLogin == stream.userLogin else { return }
+            if next != drop {
+                log.notice("drop bar \(stream.userLogin, privacy: .public) game '\(stream.gameName, privacy: .public)' (\(stream.gameID ?? "-", privacy: .public)): \(next.map { "\($0.name) \($0.trailing)" } ?? "nothing", privacy: .public), visible \(visible)")
+            }
             drop = next
         } catch {
             log.error("get_watch_drop failed: \(String(describing: error), privacy: .public)")

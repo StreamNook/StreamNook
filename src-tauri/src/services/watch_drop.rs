@@ -126,14 +126,23 @@ pub async fn get(
     game_id: &str,
     game_name: &str,
 ) -> Option<WatchDrop> {
+    let place = format!("{login} in \"{game_name}\" ({game_id})");
     if !crate::services::drops_auth_service::DropsAuthService::is_authenticated().await {
+        decided(&place, "drops not connected");
         return None;
     }
     let service = drops_service.lock().await;
-    let campaigns = service.get_all_active_campaigns_cached().await.ok()?;
+    let campaigns = match service.get_all_active_campaigns_cached().await {
+        Ok(c) => c,
+        Err(e) => {
+            decided(&place, &format!("campaign list unreadable: {e}"));
+            return None;
+        }
+    };
     if (!game_id.is_empty() || !game_name.is_empty())
         && !earnable_here(&campaigns, channel_id, login, game_id, game_name)
     {
+        decided(&place, &format!("nothing earnable here among {} campaigns", campaigns.len()));
         return None;
     }
     let inventory = match service.fetch_inventory().await {
@@ -143,7 +152,24 @@ pub async fn get(
             return None;
         }
     };
-    pick(&inventory.items, channel_id, login, game_id, game_name)
+    let bar = pick(&inventory.items, channel_id, login, game_id, game_name);
+    if let Some(b) = &bar {
+        decided(&place, &format!("showing {} ({})", b.name, b.trailing));
+    }
+    bar
+}
+
+/// One release-log line each time the bar's answer for a channel changes,
+/// so "the bar never showed" can be read back without a debug build.
+fn decided(place: &str, outcome: &str) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let line = format!("{place}: {outcome}");
+    if let Ok(mut last) = LAST.lock() {
+        if *last != line {
+            log::info!("[DropProgress] {line}");
+            *last = line;
+        }
+    }
 }
 
 #[cfg(test)]
