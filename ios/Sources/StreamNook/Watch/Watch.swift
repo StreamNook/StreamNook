@@ -55,6 +55,8 @@ final class Watch {
     private(set) var live: ChannelViewers?
     /// The Shared Viewership group the channel streams in, from the core's collab section.
     private(set) var group: ChannelGroup?
+    /// The core is confirming the stream went offline (restart waits for its answer).
+    var resolvingOffline = false
 
     /// The lock screen card and its remote commands.
     let nowPlaying = NowPlaying()
@@ -359,6 +361,7 @@ final class Watch {
         restarting = false
         live = nil
         group = nil
+        resolvingOffline = false
         pip.eligible = false
         nowPlaying.clear()
         Task.detached {

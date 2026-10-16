@@ -228,7 +228,7 @@ final class AppModel {
     /// The manual unstick: the relay and player cycle for the same stream. If it cannot come back,
     /// an offline channel shows as offline; otherwise the stream starts afresh.
     func restartStream() async {
-        guard let stream = watch.stream else { return }
+        guard let stream = watch.stream, !watch.resolvingOffline else { return }
         guard let failure = await watch.restart(core: core) else {
             toasts.show("Stream restarted with new settings", .success)
             return
@@ -316,6 +316,9 @@ final class AppModel {
                 case "watch-session://offline":
                     // The confirmation polls Helix for up to 40 s; other events keep flowing.
                     Task { await self.streamWentOffline() }
+                case "watch-session://resolving":
+                    // The core is confirming an offline stream; a restart now would fight it.
+                    self.watch.resolvingOffline = event.payloadJSON.trimmingCharacters(in: .whitespaces) == "true"
                 case "watch-session://stream-update":
                     if let update = ChannelViewers.streamUpdate(event.payloadJSON) { self.watch.take(update) }
                 case "ad-pivot":
