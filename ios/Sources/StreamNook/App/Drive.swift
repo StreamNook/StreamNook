@@ -201,14 +201,22 @@ enum Drive {
         LinkRouter.open(url)
     }
 
-    /// The core log's last lines holding `text`, copied into the app log.
+    /// The core log's last lines holding `text`, copied into the app log. The core writes its
+    /// `.log` files somewhere under the app's caches and data folders.
     private static func coreLog(_ text: String) {
-        guard let dir = try? CoreHost.dirs().logs else { return }
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-        log.notice("corelog: \(files.count) files in \(dir, privacy: .public): \(files.joined(separator: ","), privacy: .public)")
-        for name in files.sorted() {
-            guard let body = try? String(contentsOfFile: dir + "/" + name, encoding: .utf8) else { continue }
-            for line in body.split(separator: "\n").filter({ $0.contains(text) }).suffix(12) {
+        guard let dirs = try? CoreHost.dirs() else { return }
+        let files = FileManager.default
+        var logs: [String] = []
+        for root in [dirs.cache, dirs.data, dirs.logs] {
+            let found = files.enumerator(atPath: root)?.compactMap { $0 as? String }.filter { $0.hasSuffix(".log") } ?? []
+            logs += found.map { root + "/" + $0 }
+        }
+        if logs.isEmpty { log.notice("corelog: no .log files under \(dirs.cache, privacy: .public)") }
+        for path in Set(logs).sorted() {
+            guard let body = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            let name = (path as NSString).lastPathComponent
+            for line in body.split(separator: "
+").filter({ $0.contains(text) }).suffix(12) {
                 log.notice("corelog \(name, privacy: .public): \(String(line.suffix(400)), privacy: .public)")
             }
         }

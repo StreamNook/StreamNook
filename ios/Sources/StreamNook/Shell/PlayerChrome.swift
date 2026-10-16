@@ -1,3 +1,4 @@
+import AVKit
 import SNKit
 import SwiftUI
 
@@ -196,6 +197,10 @@ struct PlayerChrome: View {
                 watch.toggleMute()
                 onTouch()
             }
+            // The system's AirPlay picker: an Apple TV, a HomePod, AirPods.
+            RoutePicker()
+                .frame(width: 44, height: 44)
+                .accessibilityLabel("Watch on a TV")
             if let stream {
                 let title = watch.live?.title ?? stream.title
                 ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
@@ -441,4 +446,18 @@ struct LiveDot: View {
             .shadow(color: SN.live.opacity(0.6), radius: 1.5)
             .accessibilityLabel("Live")
     }
+}
+
+/// The system route picker in the bar's style: white, accent while a route is active, video
+/// devices first.
+private struct RoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.prioritizesVideoDevices = true
+        picker.tintColor = .white
+        picker.activeTintColor = UIColor(SN.accent)
+        return picker
+    }
+
+    func updateUIView(_ picker: AVRoutePickerView, context: Context) {}
 }
