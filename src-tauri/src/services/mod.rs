@@ -189,6 +189,7 @@ pub mod vod_storyboard;
 pub mod watch_heartbeat_service;
 pub mod whisper_history_service;
 pub mod watch_session;
+pub mod watch_start;
 pub mod whisper_inbox;
 pub mod whisper_service;
 pub mod whisper_storage_service;

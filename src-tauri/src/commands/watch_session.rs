@@ -2,7 +2,34 @@
 
 use crate::services::offline_room::{self, OfflineRoom};
 use crate::services::watch_session::{self, OfflineDecision, WatchTarget};
+use crate::commands::streaming::StartError;
+use crate::models::settings::AppState;
+// Named apart: the command macros make a same-named item for each command.
+use crate::services::watch_start::{self as starts, WatchSeed, WatchStart};
 use crate::rt::AppHandle;
+use tauri::State;
+
+/// Start watching a live Twitch channel in the main view: relay, row, drops
+/// aim and watch session in one call (see services/watch_start.rs).
+#[tauri::command]
+pub async fn watch_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    login: String,
+    seed: Option<WatchSeed>,
+    quality: Option<String>,
+    relay_ready: Option<bool>,
+) -> Result<WatchStart, StartError> {
+    starts::start(app, state, login, seed, quality, relay_ready.unwrap_or(false)).await
+}
+
+/// Stop watching in the main view: relay, watch session, and unless MultiNook
+/// takes the channel over, drops and channel points.
+#[tauri::command]
+pub async fn watch_stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: Option<bool>) -> Result<(), String> {
+    starts::stop(app, state, preserve_backend.unwrap_or(false)).await;
+    Ok(())
+}
 
 /// The main window started playing this stream.
 #[tauri::command]

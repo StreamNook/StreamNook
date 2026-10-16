@@ -2213,6 +2213,8 @@ pub fn run() {
             seventv_invalidate_cosmetics,
             seventv_clear_cosmetics,
             // Main-window watch session
+            watch_start,
+            watch_stop,
             watch_session_start,
             watch_session_stop,
             watch_session_resolve_offline,
