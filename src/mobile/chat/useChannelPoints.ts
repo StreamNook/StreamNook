@@ -107,9 +107,10 @@ export function useChannelPoints(
   // multipliers applied, which is better than a balance delta. Guarded against
   // overlapping runs because the poll and a tap can both reach it.
   //
-  // Deliberately does NOT record the lifetime points stat. This command emits
-  // `channel-points-earned` on its way out, and the boot listener already counts
-  // that event; doing it here as well would score every chest twice.
+  // Deliberately does NOT record the lifetime points stat. The claim goes
+  // through Rust's watched_chest, which emits `watched-chest-claimed` once per
+  // chest, and useWatchedChestStat (mounted by the boot hook) counts that;
+  // doing it here as well would score every chest twice.
   const claim = useCallback(
     async (claimId: string, id: string, login: string): Promise<number> => {
       if (claiming.current) return 0;
