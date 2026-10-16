@@ -57,6 +57,12 @@ final class Watch {
     private(set) var group: ChannelGroup?
     /// The core is confirming the stream went offline (restart waits for its answer).
     var resolvingOffline = false
+    /// The channel's offline room, while it is open (the band shows it instead of video).
+    private(set) var room: OfflineRoom?
+    /// The room's latest broadcast plays in the band.
+    private(set) var roomVod = false
+    /// A stale card: the room's channel is live after all, and the stream starts instead.
+    var onLive: ((TwitchStream) -> Void)?
 
     /// The lock screen card and its remote commands.
     let nowPlaying = NowPlaying()
@@ -141,7 +147,8 @@ final class Watch {
     /// Starts `stream`, replacing whatever played. The same channel already open stays as it is.
     /// The player is never rebuilt: only its item changes.
     func open(_ stream: TwitchStream, core: CoreBridge) {
-        guard self.stream?.userLogin.lowercased() != stream.userLogin.lowercased() else { return }
+        // The same channel already playing stays as it is; its room or a failure gives way.
+        if self.stream?.userLogin.lowercased() == stream.userLogin.lowercased(), room == nil, error == nil { return }
         close(core: core, stopping: false)
         self.core = core
         self.stream = stream
@@ -205,13 +212,87 @@ final class Watch {
     }
 
     /// The channel is offline: the player stops and says so.
-    func showOffline() {
+    /// Opens the channel's offline room: the core answers its facts (or the live row for a stale
+    /// card), stops whatever played and waits for the channel to go live. Chat stays.
+    func openRoom(_ stream: TwitchStream, core: CoreBridge) {
+        close(core: core, stopping: false)
+        self.core = core
+        self.stream = stream
+        status = "Offline"
+        room = OfflineRoom(login: stream.userLogin, displayName: stream.userName, avatarURL: stream.profileImageURL,
+                           lastTitle: stream.title.isEmpty ? nil : stream.title,
+                           lastCategory: stream.gameName.isEmpty ? nil : stream.gameName)
+        tasks.append(Task { await self.loadRoom(stream, core: core) })
+    }
+
+    private func loadRoom(_ stream: TwitchStream, core: CoreBridge) async {
+        guard let opened = try? await core.invoke("watch_open_room", args: ["login": stream.userLogin, "seed": stream.seed],
+                                                  as: RoomOpen.self),
+              !Task.isCancelled, !opened.superseded, self.stream?.userLogin == stream.userLogin else { return }
+        if let live = opened.live {
+            log.notice("room \(stream.userLogin, privacy: .public) is live after all")
+            onLive?(live)
+            return
+        }
+        if let found = opened.room { room = found }
+        if let row = opened.row {
+            self.stream = row
+            onRow?(row)
+        }
+        log.notice("room \(stream.userLogin, privacy: .public) open, vod \(self.room?.latestVod != nil), next \(self.room?.nextStream != nil), waiting \(self.room?.chatters ?? -1)")
+    }
+
+    /// The core's waiting count for the open room.
+    func roomWaiting(_ update: RoomWaiting) {
+        guard var room, room.login.lowercased() == update.login.lowercased() else { return }
+        room.chatters = update.count
+        self.room = room
+    }
+
+    /// The room's latest broadcast plays in the band; the room stays open behind it.
+    func playRoomVod() {
+        guard let vod = room?.latestVod, let core, !roomVod else { return }
+        roomVod = true
+        reloading()
+        let asked = askedQuality
+        tasks.append(Task {
+            do {
+                let start = try await core.invoke(
+                    "start_stream", args: ["url": "https://twitch.tv/videos/\(vod.id)", "quality": asked], as: StreamStart.self
+                )
+                guard !Task.isCancelled, self.roomVod else { return }
+                self.apply(start)
+                try self.activateAudio()
+                self.load(start.url, route: .direct)
+                self.nowPlaying.show(title: vod.title, channel: self.stream?.userName ?? "",
+                                     avatar: self.stream?.profileImageURL.flatMap(URL.init(string:)))
+                await self.measure(core: core)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.roomVod = false
+                self.onToast?("Could not play the latest broadcast")
+                log.error("room vod failed: \(String(describing: error), privacy: .public)")
+            }
+        })
+    }
+
+    /// Back from the latest broadcast to the room.
+    func leaveRoomVod() {
+        guard roomVod, let core else { return }
+        roomVod = false
+        reportState("teardown")
         player.pause()
         player.replaceCurrentItem(with: nil)
         pip.eligible = false
-        error = "This channel is offline right now."
-        status = "Offline"
         nowPlaying.clear()
+        available = []
+        Task.detached { _ = try? await core.invoke("stop_stream", "{}") }
+    }
+
+    private func activateAudio() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .moviePlayback)
+        try session.setActive(true)
     }
 
     private func apply(_ start: StreamStart) {
@@ -363,6 +444,8 @@ final class Watch {
         live = nil
         group = nil
         resolvingOffline = false
+        room = nil
+        roomVod = false
         pip.eligible = false
         nowPlaying.clear()
         Task.detached {
@@ -392,9 +475,7 @@ final class Watch {
             apply(start)
             let chosen = await Self.route(for: start, asked: route, core: core)
             log.notice("watch_start \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback)
-            try session.setActive(true)
+            try activateAudio()
             load(start.url, route: chosen)
             await measure(core: core)
         } catch {
@@ -427,7 +508,7 @@ final class Watch {
         }
         guard !Task.isCancelled, self.stream?.userLogin == stream.userLogin else { return }
         if offline {
-            showOffline()
+            openRoom(stream, core: core)
             return
         }
         error = "Playback unavailable. Chat keeps running."

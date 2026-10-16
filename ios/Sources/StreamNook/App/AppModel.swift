@@ -73,6 +73,7 @@ final class AppModel {
         }
         let toasts = toasts
         watch.onToast = { toasts.show($0) }
+        watch.onLive = { [weak self] live in self?.startWatching(live) }
         LinkRouter.clip = { [weak self] url in
             guard let self, LinkRouter.isClip(url) else { return false }
             self.clip = ClipLink(url: url)
@@ -203,7 +204,12 @@ final class AppModel {
         // Chat needs the account; signing in later points the stream tab then (see `ChatArea`).
         if signedIn { chat.syncStream(stream) }
         nav.open(stream)
-        watch.open(stream, core: core)
+        // An offline channel opens its room; the core starts the stream if it is live after all.
+        if stream.isOffline {
+            watch.openRoom(stream, core: core)
+        } else {
+            watch.open(stream, core: core)
+        }
     }
 
     /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
@@ -241,7 +247,7 @@ final class AppModel {
             let online = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
                                                as: TwitchStream?.self)
             if online == nil {
-                watch.showOffline()
+                watch.openRoom(stream, core: core)
                 return
             }
         } catch {
@@ -319,6 +325,24 @@ final class AppModel {
                 case "watch-session://offline":
                     // The confirmation polls Helix for up to 40 s; other events keep flowing.
                     Task { await self.streamWentOffline() }
+                case "watch-session://went-live":
+                    // The room's channel went live: the stream starts in place, chat kept, unless
+                    // its latest broadcast is playing, which is never cut off.
+                    if let wentLive = try? JSONDecoder().decode(WentLive.self, from: Data(event.payloadJSON.utf8)),
+                       self.watch.room?.login.lowercased() == wentLive.stream.userLogin.lowercased() {
+                        if self.watch.roomVod {
+                            let live = wentLive.stream
+                            self.toasts.show("\(live.userName) is live", .info, action: "Watch") { [weak self] in
+                                self?.startWatching(live)
+                            }
+                        } else {
+                            self.startWatching(wentLive.stream)
+                        }
+                    }
+                case "watch-session://waiting":
+                    if let waiting = try? JSONDecoder().decode(RoomWaiting.self, from: Data(event.payloadJSON.utf8)) {
+                        self.watch.roomWaiting(waiting)
+                    }
                 case "watch-session://resolving":
                     // The core is confirming an offline stream; a restart now would fight it.
                     self.watch.resolvingOffline = event.payloadJSON.trimmingCharacters(in: .whitespaces) == "true"
@@ -368,7 +392,7 @@ final class AppModel {
         case "offline_chat":
             // The video stops; chat stays. The phone has no offline room screen yet.
             _ = try? await core.invoke("stop_stream", args: [:])
-            watch.showOffline()
+            watch.openRoom(ended, core: core)
         case "stop":
             notice(decision.notice)
             stopWatching()

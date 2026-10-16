@@ -92,7 +92,8 @@ struct PlayerChrome: View {
 
     private func header(_ stream: TwitchStream) -> some View {
         let live = watch.live
-        let title = live?.title ?? stream.title
+        // The room's latest broadcast names itself; a live stream its current title.
+        let title = watch.roomVod ? (watch.room?.latestVod?.title ?? stream.title) : (live?.title ?? stream.title)
         let category = live?.gameName ?? stream.gameName
         // The avatar anchors a column: the name, the title and the category all start at the
         // name's edge, so the three read as one block about one stream. The live red is the
@@ -146,12 +147,14 @@ struct PlayerChrome: View {
                 }
                 .buttonStyle(.plain)
             }
-            HStack(spacing: 4) {
-                Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
-                Text(viewers.formatted()).monospacedDigit()
+            if watch.room == nil {
+                HStack(spacing: 4) {
+                    Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
+                    Text(viewers.formatted()).monospacedDigit()
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(viewers.formatted()) viewers")
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(viewers.formatted()) viewers")
             if uptime, !PlayerText.uptime(startedAt: started).isEmpty {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     Text(PlayerText.uptime(startedAt: started, now: context.date))
@@ -201,16 +204,30 @@ struct PlayerChrome: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            // A status, not a control: a dot and the word, no filled badge.
-            HStack(spacing: 5) {
-                LiveDot(size: 7)
-                Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
+            if watch.roomVod {
+                // The room's latest broadcast plays: the way back is where LIVE sits.
+                Button { watch.leaveRoomVod() } label: {
+                    Label("Room", systemImage: Symbol.back)
+                        .font(.sn(12, 700))
+                        .foregroundStyle(.white)
+                        .frame(height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to the room")
             }
-            .fixedSize()
-            .opacity(watch.error == nil ? 1 : 0)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Live")
-            .accessibilityHidden(watch.error != nil)
+            // A status, not a control: a dot and the word, no filled badge.
+            if !watch.roomVod {
+                HStack(spacing: 5) {
+                    LiveDot(size: 7)
+                    Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
+                }
+                .fixedSize()
+                .opacity(watch.error == nil ? 1 : 0)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Live")
+                .accessibilityHidden(watch.error != nil)
+            }
             Spacer(minLength: 8)
             IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
                        size: Self.barIcon, weight: .medium, tint: .white) {

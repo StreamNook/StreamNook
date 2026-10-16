@@ -82,6 +82,12 @@ public final class FakeCore: CoreBridge {
             }
             return try Self.json(["superseded": false, "row": row,
                                   "stream": ["url": Self.testStreamURL, "quality": "best", "entitled": false]] as [String: Any])
+        case "watch_open_room":
+            let login = (args["login"] as? String ?? "").lowercased()
+            return try Self.json(["superseded": false,
+                                  "room": ["user_id": "", "login": login, "display_name": login, "shiny": false, "chatters": 3],
+                                  "row": ["id": "", "user_login": login, "user_name": login, "title": "", "viewer_count": 0,
+                                          "game_name": "", "thumbnail_url": "", "is_live": false]] as [String: Any])
         case "stop_stream", "stop_chat", "watch_stop":
             return "null"
         case "get_settings":

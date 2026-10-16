@@ -84,7 +84,10 @@ struct WatchLayer: View {
                     .gesture(mini ? nil : (landscape ? nil : shrinkGesture(screen: screen)))
                     .simultaneousGesture(landscape && full ? dialGesture(band: band) : nil)
                     .overlay {
-                        if full {
+                        // An offline room takes the band (its latest broadcast gives it back).
+                        if watch.room != nil, !watch.roomVod {
+                            OfflineRoomView(model: model, compact: mini)
+                        } else if full {
                             PlayerChrome(model: model, landscape: landscape,
                                          insets: landscape ? chromeInsets(sideChat: sideChat, leading: chat.leading) : EdgeInsets(),
                                          chatWidth: sideChat && !beside ? columnWidth : 0, chatLeading: chat.leading,
