@@ -56,6 +56,8 @@ enum KickDrive {
         case "kickstate":
             await model.kick.refresh()
             let k = model.kick
+            let raw = (try? await model.core.invoke("get_provider_follows", args: [:])) ?? "failed"
+            log.notice("drive kickfollows raw \(String(raw.prefix(600)), privacy: .public)")
             log.notice("drive kickstate connected \(k.connected) name \(k.name ?? "-", privacy: .public) follows \(k.follows) busy \(k.busy) detail \(k.detail, privacy: .public)")
         case "kicksignin":
             Task { await model.kick.connect() }
