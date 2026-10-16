@@ -7211,14 +7211,6 @@ mod resolve_stream_tests {
     }
 }
 
-/// Order Twitch channel-search rows by how well they answer what was typed.
-///
-/// Helix returns its own order, which is not "best match first": a live
-/// channel whose login IS the query can come back fifteenth, and every picker
-/// shows only the first few rows, so typing a streamer's exact name could fail
-/// to show them. Tiers: exact login, login starting with the query, display
-/// name starting with it, contains it, anything else; live before offline
-/// inside a tier, then more viewers. Stable, so Twitch's order breaks ties.
 /// Settles each channel search row's liveness from Helix's streams answer.
 /// A row the answer lists is live. A row whose lookup was answered but which
 /// it leaves out has ended: Helix search keeps `is_live` true for a while after
@@ -7239,6 +7231,14 @@ pub fn mark_search_liveness(
     }
 }
 
+/// Order Twitch channel-search rows by how well they answer what was typed.
+///
+/// Helix returns its own order, which is not "best match first": a live
+/// channel whose login IS the query can come back fifteenth, and every picker
+/// shows only the first few rows, so typing a streamer's exact name could fail
+/// to show them. Tiers: exact login, login starting with the query, display
+/// name starting with it, contains it, anything else; live before offline
+/// inside a tier, then more viewers. Stable, so Twitch's order breaks ties.
 pub fn rank_search_results(query: &str, rows: &mut [TwitchStream]) {
     let q = query.trim().trim_start_matches('@').to_lowercase();
     if q.is_empty() {
