@@ -72,20 +72,24 @@ struct GlazeSegments<Value: Hashable>: View {
 /// The segment track: the theme's own raised surface (its surface over its background), the very
 /// pair the core's text floors are measured on (theme_palette::floor_secondary), so the labels'
 /// 4.5:1 holds on the track the phone draws. Liquid Glass would lighten it past that surface by an
-/// amount no palette knows. Opaque, so content scrolling under it never shows through; a light
-/// line along its top edge, as on the panels.
+/// amount no palette knows. Opaque, so content scrolling under it never shows through. It keeps the
+/// glass family's edge, measured off the Liquid Glass capsule it replaced: a lit rim all the way
+/// round that fades inward over about four points, and a dark hairline just outside. The rim stays
+/// at the edge, clear of the labels, so their contrast is the surface's.
 private struct SegmentTrack: View {
+    /// Nested inner strokes (width in points, white opacity) that add up to the glass rim's falloff:
+    /// about 0.26 at the outer pixel, 0.18, 0.12, then a faint glow.
+    private static let rim: [(CGFloat, Double)] = [(1.0 / 3, 0.08), (2.0 / 3, 0.06), (1, 0.07), (2, 0.02), (4, 0.025)]
+
     var body: some View {
         ZStack {
             Capsule().fill(SN.background)
             Capsule().fill(SN.surface)
+            ForEach(Self.rim.indices, id: \.self) { i in
+                Capsule().strokeBorder(Color.white.opacity(Self.rim[i].1), lineWidth: Self.rim[i].0)
+            }
         }
         .overlay { Capsule().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
-        .overlay {
-            Capsule().strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.09), location: 0),
-                                                         .init(color: .clear, location: 0.5)],
-                                                  startPoint: .top, endPoint: .bottom), lineWidth: 1)
-        }
     }
 }
 
