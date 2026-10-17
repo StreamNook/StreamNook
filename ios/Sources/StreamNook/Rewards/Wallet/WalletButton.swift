@@ -128,7 +128,7 @@ private struct GainFloat: View {
             .font(.system(size: 15, weight: .bold))
             .foregroundStyle(Color(red: 0.98, green: 0.75, blue: 0.14))
             .fixedSize()
-            .keyframeAnimator(initialValue: Float(), repeating: false) { content, f in
+            .keyframeAnimator(initialValue: Rise(), repeating: false) { content, f in
                 content
                     .opacity(f.opacity)
                     .scaleEffect(f.scale)
@@ -161,7 +161,7 @@ private struct GainFloat: View {
             }
     }
 
-    private struct Float {
+    private struct Rise {
         var opacity = 0.0
         var scale = 0.65
         var rise = 0.0
