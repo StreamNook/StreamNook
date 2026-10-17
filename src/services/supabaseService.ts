@@ -2,7 +2,6 @@ import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabas
 import { invoke } from '@tauri-apps/api/core';
 import type { TwitchUser } from '../types';
 import { getClientConfig } from './clientConfig';
-import { classifyLinkResponse, type LinkWriteResult } from './linkResponse';
 
 import { Logger } from '../utils/logger';
 import type { Atmosphere } from './atmospheres';
@@ -377,122 +376,6 @@ const recordClient = async (twitchUserId: string): Promise<void> => {
     } catch (e) {
         Logger.debug('[Supabase] Could not record client:', e);
     }
-};
-
-export type { LinkWriteResult } from './linkResponse';
-
-const LINK_PATH = '/api/v1/accounts/link';
-
-/**
- * Post to the link endpoint and classify the answer.
- *
- * Deliberately stricter than `postToApi`: a response only counts as the
- * endpoint's own if it is JSON carrying its `ok` field. An undeployed POST route
- * answers 405, and an unknown GET is served the website's HTML with a 200 by the
- * SPA fallback — neither is a claim being accepted, and treating either as one
- * would have a new build silently record nothing if it ever shipped ahead of the
- * server.
- */
-const postLink = async (body: Record<string, unknown>): Promise<LinkWriteResult> => {
-    let res: { status: number; ok: boolean; body: string };
-    try {
-        res = await invoke<{ status: number; ok: boolean; body: string }>('streamnook_api_post', {
-            path: LINK_PATH,
-            body,
-        });
-    } catch (e) {
-        // No token, offline, or the command refused. Not the member's doing.
-        Logger.debug('[StreamNookAPI] link endpoint unreachable:', e);
-        return { kind: 'unavailable' };
-    }
-    const result = classifyLinkResponse(res.status, res.ok, res.body);
-    if (result.kind !== 'failed') return result;
-    Logger.warn(`[StreamNookAPI] ${LINK_PATH} -> ${res.status} ${res.body.slice(0, 200)}`);
-    reportWriteIssue({
-        kind: res.status === 403 ? 'rls_denied' : 'other',
-        lastSeen: new Date().toISOString(),
-        detail: `${LINK_PATH} ${res.status}: ${res.body.slice(0, 200)}`,
-    });
-    return result;
-};
-
-/**
- * Record that a member has a non-Twitch platform account connected.
- *
- * The `users` table only holds the Twitch account someone signed in with, so
- * Kick and YouTube connections would otherwise go unrecorded.
- *
- * Keyed on the Twitch identity, like every other per-member table here. With no
- * Twitch user signed in there is no member to attach the link to, so this is a
- * no-op and the caller retries on its next read.
- *
- * Fire-and-forget: reporting must never be able to fail a sign-in.
- */
-export const recordLinkedAccount = async (
-    twitchUserId: string,
-    provider: string,
-    name: string | null,
-    avatarUrl: string | null,
-    platformUserId: string | null = null,
-): Promise<LinkWriteResult> => {
-    if (!twitchUserId) return { kind: 'unavailable' };
-    // The authenticated endpoint first, because it is the only one that can
-    // record `platformUserId`. That value decides whose cosmetics render on a
-    // Kick or YouTube message, so it must come from a caller the server has
-    // authenticated, never from an anon write anyone holding the shipped key
-    // could forge. The legacy RPC cannot carry it at all: its signature is four
-    // text arguments, which is why it is safe to keep as the fallback.
-    const result = await postLink({
-        provider,
-        platform_user_id: platformUserId,
-        account_name: name,
-        avatar_url: avatarUrl,
-        connected: true,
-    });
-    if (result.kind !== 'unavailable') return result;
-    // The endpoint is not there. Keep the dashboard's record going through the
-    // old RPC while it still answers; once the anon grant is revoked this fails
-    // quietly, which is the intended end state.
-    if (!supabase) return result;
-    try {
-        const { error } = await supabase.rpc('record_linked_account', {
-            p_user_id: twitchUserId,
-            p_provider: provider,
-            p_name: name,
-            p_avatar: avatarUrl,
-        });
-        if (error) Logger.debug(`[Supabase] Could not record ${provider} link:`, error);
-    } catch (e) {
-        Logger.debug(`[Supabase] Could not record ${provider} link:`, e);
-    }
-    return result;
-};
-
-/**
- * Stamp a platform account as disconnected. The row stays, so the dashboard can
- * tell someone who is connected from someone who tried it and dropped it.
- */
-export const clearLinkedAccount = async (
-    twitchUserId: string,
-    provider: string,
-): Promise<LinkWriteResult> => {
-    if (!twitchUserId) return { kind: 'unavailable' };
-    // Through the endpoint for the same reason as the record above, and with one
-    // more: a disconnect RELEASES the platform id, so an unauthenticated caller
-    // able to do this could free any member's claim and then take it themselves.
-    const result = await postLink({ provider, connected: false });
-    if (result.kind !== 'unavailable') return result;
-    if (!supabase) return result;
-    try {
-        const { error } = await supabase.rpc('clear_linked_account', {
-            p_user_id: twitchUserId,
-            p_provider: provider,
-        });
-        if (error) Logger.debug(`[Supabase] Could not clear ${provider} link:`, error);
-    } catch (e) {
-        Logger.debug(`[Supabase] Could not clear ${provider} link:`, e);
-    }
-    return result;
 };
 
 /**
