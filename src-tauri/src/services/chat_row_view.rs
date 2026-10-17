@@ -247,16 +247,33 @@ pub fn note_twitch_badges<'a>(room_id: Option<&str>, items: impl IntoIterator<It
     }
 }
 
-/// A badge's art: the channel's own set first, then the global one.
+/// A badge's art: the room's own FFZ moderator or VIP art when it has been
+/// read (and the viewer has it on), else the channel's own set, then the
+/// global one. The room art is read live rather than through the channel set
+/// noted here, so a row parsed after the room's read wears it even when the
+/// channel set was noted before: the history follow-up re-parses once the
+/// room is read and its patch carries the art.
 fn twitch_badge_art(room_id: Option<&str>, set: &str, version: &str) -> Option<(String, String)> {
     let guard = TWITCH_BADGES.read().ok()?;
     let index = guard.as_ref()?;
     let key = format!("{set}/{version}");
-    room_id
+    let noted = room_id
         .and_then(|room| index.rooms.get(room))
         .and_then(|m| m.get(&key))
-        .or_else(|| index.global.get(&key))
-        .cloned()
+        .or_else(|| index.global.get(&key));
+    let room_art = matches!(set, "moderator" | "vip")
+        .then(|| room_id.and_then(|room| crate::services::ffz_room_badges::art_for(room, set)))
+        .flatten()
+        .and_then(|art| [art.x2, art.x4, art.x1].into_iter().find(|u| !u.is_empty()));
+    match room_art {
+        Some(url) => {
+            let title = noted.map(|(_, t)| t.clone()).unwrap_or_else(|| {
+                if set == "vip" { "VIP" } else { "Moderator" }.to_string()
+            });
+            Some((url, title))
+        }
+        None => noted.cloned(),
+    }
 }
 
 // ---- 7TV cosmetics -----------------------------------------------------------
@@ -1353,6 +1370,20 @@ mod tests {
         assert_eq!(twitch_badge_art(Some("42"), "subscriber", "12").unwrap().0, "https://c/sub12/2");
         assert_eq!(twitch_badge_art(Some("42"), "moderator", "1").unwrap().0, "https://g/mod/2");
         assert!(twitch_badge_art(Some("7"), "subscriber", "12").is_none());
+    }
+
+    #[test]
+    fn a_read_ffz_room_dresses_its_moderators_without_a_new_channel_set() {
+        use crate::services::ffz_room_badges::{seed, RoleArt, RoomRoleArt};
+        note_twitch_badges(None, [("moderator", "1", "https://g/mod/2", "Moderator")]);
+        // Before the room is read, its moderators wear Twitch's art.
+        assert_eq!(twitch_badge_art(Some("9090"), "moderator", "1").unwrap().0, "https://g/mod/2");
+        let art = RoleArt { x1: "data:m1".into(), x2: "data:m2".into(), x4: "data:m4".into() };
+        seed("9090", RoomRoleArt { moderator: Some(art), vip: None });
+        // Once it is read, the next parse wears the room's art; no channel set was noted again.
+        assert_eq!(twitch_badge_art(Some("9090"), "moderator", "1"), Some(("data:m2".into(), "Moderator".into())));
+        assert_eq!(twitch_badge_art(Some("9090"), "vip", "1"), None);
+        assert_eq!(twitch_badge_art(Some("42"), "moderator", "1").unwrap().0, "https://g/mod/2");
     }
 
     #[test]

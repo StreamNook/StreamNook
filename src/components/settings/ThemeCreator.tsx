@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronRight, Palette, Trash2, Save, X, Wand2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -130,8 +131,10 @@ const ThemeCreator = ({ editingTheme, onClose, onSave, onDelete }: ThemeCreatorP
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['core', 'accent']));
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Apply live preview when palette changes
+  // Apply live preview when palette changes. Rust lifts muted text to the
+  // contrast floor on save, so the preview paints the theme as it will be saved.
   useEffect(() => {
+    let current = true;
     const previewTheme: CustomTheme = {
       id: 'preview',
       name: 'Preview',
@@ -139,8 +142,15 @@ const ThemeCreator = ({ editingTheme, onClose, onSave, onDelete }: ThemeCreatorP
       updatedAt: Date.now(),
       palette,
     };
-    applyTheme(customThemeToTheme(previewTheme));
+    invoke<CustomTheme>('lift_custom_theme', { theme: previewTheme })
+      .catch(() => previewTheme)
+      .then((lifted) => {
+        if (current) applyTheme(customThemeToTheme(lifted));
+      });
     queueMicrotask(() => setHasChanges(true));
+    return () => {
+      current = false;
+    };
   }, [palette]);
 
   // Restore original theme on unmount or cancel

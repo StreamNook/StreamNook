@@ -170,6 +170,17 @@ struct WatchLayer: View {
                         .frame(width: screen.width, height: screen.height, alignment: .topLeading)
                 }
             }
+            // The edge fades in as the layer shrinks, so a full-screen player shows none.
+            .overlay {
+                if progress > 0 {
+                    RoundedRectangle(cornerRadius: SNRadius.mini * progress, style: .continuous)
+                        .strokeBorder(SN.floatEdge.opacity(progress), lineWidth: 1)
+                        .frame(width: layer.width, height: layer.height)
+                        .offset(x: layer.minX, y: layer.minY)
+                        .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+                        .allowsHitTesting(false)
+                }
+            }
             .gesture(mini ? miniGesture(screen: screen, insets: insets, rect: miniRect) : nil)
             .onChange(of: nav.playing?.userLogin) { _, _ in touchedControls() }
             .onChange(of: nav.controlsPing) { _, _ in touchedControls() }

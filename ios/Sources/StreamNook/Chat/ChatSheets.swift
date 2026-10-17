@@ -37,14 +37,21 @@ struct ChatMenuSheet: View {
             List {
                 if let modes = session.modes, !modes.modes.isEmpty {
                     Section {
+                        // Status, not actions: no card behind them, quieter and tighter than the rows below.
                         ForEach(modes.modes, id: \.kind) { mode in
                             Label {
                                 Text(mode.compact)
+                                    .font(.sn(13.5))
+                                    .foregroundStyle(SN.textSecondary)
                             } icon: {
                                 Image(systemName: RoomModeSymbol.name(mode.kind))
-                                    .foregroundStyle(Color(ChatTheme.textSecondary))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(SN.textMuted)
                             }
                             .accessibilityHint(mode.detail)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 3, leading: 20, bottom: 3, trailing: 20))
                         }
                     } header: {
                         Text("This chat is in")
