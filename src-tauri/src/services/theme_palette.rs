@@ -50,6 +50,13 @@ fn lighten(hex: &str, percent: f64) -> String {
     format!("#{:02x}{:02x}{:02x}", mix(r), mix(g), mix(b))
 }
 
+/// How far OLED's secondary text mixes its accent toward white, from the shared
+/// JSON (the desktop reads the same key). A test pins that even a black accent
+/// reaches the secondary floor at this mix, so no accent needs a lift.
+fn oled_secondary_lighten() -> f64 {
+    BUILT_IN.get("oledSecondaryLighten").and_then(Value::as_f64).unwrap_or(51.0)
+}
+
 /// The OLED theme for a chosen accent: hover, muted, secondary text and the
 /// scrollbar follow it. An invalid accent falls back to the default purple.
 pub fn oled_palette(base: &Value, accent: Option<&str>) -> Value {
@@ -60,7 +67,7 @@ pub fn oled_palette(base: &Value, accent: Option<&str>) -> Value {
         p.insert("accent".into(), json!(accent));
         p.insert("accentHover".into(), json!(lighten(&accent, 20.0)));
         p.insert("accentMuted".into(), json!(format!("rgba({r}, {g}, {b}, 0.5)")));
-        p.insert("textSecondary".into(), json!(lighten(&accent, 45.0)));
+        p.insert("textSecondary".into(), json!(lighten(&accent, oled_secondary_lighten())));
         p.insert("scrollbarThumb".into(), json!(format!("rgba({r}, {g}, {b}, 0.25)")));
     }
     palette
@@ -452,6 +459,8 @@ mod tests {
         assert_eq!(t.palette["accent"], "#ff9933");
         assert_eq!(t.palette["accentMuted"], "rgba(255, 153, 51, 0.5)");
         assert_eq!(t.palette["accentHover"], lighten("#ff9933", 20.0));
+        // The desktop's getOledTheme pins the same value from the same JSON mix.
+        assert_eq!(t.palette["textSecondary"], "#ffcd9b");
         assert_eq!(resolve(OLED_THEME_ID, &[], Some("bad")).palette["accent"], DEFAULT_OLED_ACCENT);
     }
 
@@ -510,14 +519,16 @@ mod tests {
             lift_text(&mut lifted);
             assert_eq!(&lifted, palette, "{id}: the lift changed a shipped palette");
         }
-        // OLED derives secondary from the accent; every preset clears it with no lift.
-        for (name, accent) in OLED_ACCENT_PRESETS {
-            let palette = oled_palette(&resolve(OLED_THEME_ID, &[], None).palette, Some(accent));
+        // OLED derives secondary from the accent, by the shared mix toward white. Black is the
+        // darkest any accent can mix to, so if black clears the floor with no lift, every accent
+        // does, on every platform (the desktop derives it from the same JSON key).
+        let base = built_in_themes().iter().find(|t| t["id"] == OLED_THEME_ID).map(|t| t["palette"].clone()).unwrap();
+        for (name, accent) in OLED_ACCENT_PRESETS.iter().chain(&[("Black", "#000000"), ("Navy", "#000080")]) {
+            let palette = oled_palette(&base, Some(accent));
             assert!(palette_secondary_floor(&palette).is_none(), "OLED {name} needs a lift");
+            let (secondary, muted) = secondary_on_surface(&palette);
+            assert!(secondary >= SECONDARY_CONTRAST_FLOOR && secondary >= muted, "OLED {name}: {secondary:.2}");
         }
-        // A near-black accent does not, and the resolved palette is lifted.
-        let dark = resolve(OLED_THEME_ID, &[], Some("#100010"));
-        assert!(secondary_on_surface(&dark.palette).0 >= SECONDARY_CONTRAST_FLOOR);
     }
 
     #[test]
