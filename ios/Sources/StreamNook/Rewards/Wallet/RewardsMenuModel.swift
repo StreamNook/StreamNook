@@ -49,7 +49,7 @@ final class RewardsMenuModel {
         }
         let seq = request
         if let json = try? await core.invoke("get_cached_channel_rewards", args: ["channelLogin": login]),
-           let cached = try? JSONDecoder().decode(ChannelRewardsSnapshot?.self, from: Data(json.utf8)), let cached,
+           let cached = try? JSONDecoder().decode(ChannelRewardsSnapshot?.self, from: Data(json.utf8)),
            request == seq, snapshot == nil {
             take(cached)
         }

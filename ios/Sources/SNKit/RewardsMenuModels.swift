@@ -25,7 +25,8 @@ public struct WalletFaces: Sendable, Equatable {
 
     /// `get_channel_state`'s answer (null before the channel is watched).
     public static func parseState(_ json: String) -> WalletFaces? {
-        guard let state = try? JSONDecoder().decode(State?.self, from: Data(json.utf8)), let state else { return nil }
+        // `try?` flattens the optional: nil for a failed decode and for a JSON null alike.
+        guard let state = try? JSONDecoder().decode(State?.self, from: Data(json.utf8)) else { return nil }
         return WalletFaces(points: state.points, bits: state.bits)
     }
 

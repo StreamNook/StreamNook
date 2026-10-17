@@ -79,13 +79,13 @@ enum FakeWallet {
         ]
     }
 
-    static let emotes: [[String: Any]] = [
+    static var emotes: [[String: Any]] { [
         ["id": "25", "token": "nookHype", "emote_type": "SUBSCRIPTIONS",
          "modifications": [["id": "25_BW", "modifier_id": "MOD_BW", "token": "nookHype_BW"],
                            ["id": "25_SG", "modifier_id": "MOD_SG", "token": "nookHype_SG"]]],
         ["id": "1902", "token": "nookWave", "emote_type": "SUBSCRIPTIONS", "modifications": [[String: Any]]()],
         ["id": "354", "token": "nookLove", "emote_type": "SUBSCRIPTIONS", "modifications": [[String: Any]]()],
-    ]
+    ] }
 
     static func redeem(_ id: String, text: String?, emoteName: String?) -> [String: Any] {
         switch id {
