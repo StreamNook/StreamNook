@@ -90,7 +90,7 @@ struct GlazeSegments<Value: Hashable>: View {
 private struct SegmentTrack: View {
     /// Nested inner strokes (width in points, white opacity) that add up to the glass rim's falloff:
     /// about 0.26 at the outer pixel, 0.18, 0.12, then a faint glow.
-    private static let rim: [(CGFloat, Double)] = [(1.0 / 3, 0.08), (2.0 / 3, 0.06), (1, 0.07), (2, 0.02), (4, 0.025)]
+    private static let rim: [(CGFloat, Double)] = [(1.0 / 3, 0.08), (2.0 / 3, 0.08), (1, 0.08), (2, 0.02), (4, 0.025)]
 
     var body: some View {
         ZStack {
@@ -100,7 +100,8 @@ private struct SegmentTrack: View {
                 Capsule().strokeBorder(Color.white.opacity(Self.rim[i].1), lineWidth: Self.rim[i].0)
             }
         }
-        .overlay { Capsule().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
+        // Wholly outside the track, so it never dims the rim's brightest pixel.
+        .overlay { Capsule().inset(by: -0.25).stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
     }
 }
 

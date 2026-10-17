@@ -64,6 +64,9 @@ struct PlatformMenu: View {
     var size: CGFloat = 18
     /// The chevron after the logo; off where the surrounding control already reads as a menu.
     var chevron = true
+    /// The tap target's least height. Inside another control (the mode capsule) it matches that
+    /// control's segments, so the control keeps its own height.
+    var minHeight: CGFloat = 36
 
     private var chosen: PlatformOption { options.first { $0.value == selection } ?? options[0] }
 
@@ -89,7 +92,7 @@ struct PlatformMenu: View {
                         .foregroundStyle(SN.textSecondary)
                 }
             }
-            .frame(minWidth: 44, minHeight: 36)
+            .frame(minWidth: 44, minHeight: minHeight)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("Platform: \(chosen.name)")

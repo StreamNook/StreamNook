@@ -34,7 +34,8 @@ struct BrowseScreen: View {
                                    Segment(value: BrowseModel.Mode.categories, label: "Categories")],
                                   selection: modeBinding,
                                   accessory: chooser == .capsule
-                                      ? AnyView(PlatformMenu(options: [.twitch, .kick], selection: platformBinding, size: 16))
+                                      ? AnyView(PlatformMenu(options: [.twitch, .kick], selection: platformBinding, size: 16,
+                                                           minHeight: 30))
                                       : nil)
                     Spacer(minLength: 0)
                     if chooser == .row { PlatformSwitch(platform: platformBinding) }
