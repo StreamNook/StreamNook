@@ -179,22 +179,33 @@ fn floor_hundredths(fg: (f64, f64, f64, f64), bg: (f64, f64, f64, f64)) -> Optio
     Some((start..=100).find(|h| contrast_at(rgb, back, *h as f64 / 100.0) >= MUTED_CONTRAST_FLOOR).unwrap_or(100))
 }
 
-/// Lifts each saved custom theme's muted text (`palette.textMuted.opacity`, 0 to 100) to the
-/// floor, in place, so every shell that paints the theme from settings shows the lifted value
-/// without a contrast rule of its own. Returns whether any theme changed.
+/// Lifts each saved custom theme's text to both floors, in place: muted text's opacity
+/// (`palette.textMuted.opacity`, 0 to 100) against the background, then secondary text's color
+/// (and, only if it must, its opacity) on the raised surface. Every shell that paints the theme
+/// from settings then shows the lifted values without a contrast rule of its own. Returns
+/// whether any theme changed.
 pub fn lift_custom_themes(custom_themes: &mut Value) -> bool {
     let mut changed = false;
     for theme in custom_themes.as_array_mut().into_iter().flatten() {
         let palette = custom_palette(theme);
-        let (Some(bg), Some(fg)) = (
+        if let (Some(bg), Some(fg)) = (
             palette.get("background").and_then(Value::as_str).and_then(css_rgba),
             palette.get("textMuted").and_then(Value::as_str).and_then(css_rgba),
-        ) else {
-            continue;
-        };
-        let Some(hundredths) = floor_hundredths(fg, bg) else { continue };
-        if let Some(muted) = theme.pointer_mut("/palette/textMuted").and_then(Value::as_object_mut) {
-            muted.insert("opacity".into(), json!(hundredths));
+        ) {
+            if let Some(hundredths) = floor_hundredths(fg, bg) {
+                if let Some(muted) = theme.pointer_mut("/palette/textMuted").and_then(Value::as_object_mut) {
+                    muted.insert("opacity".into(), json!(hundredths));
+                    changed = true;
+                }
+            }
+        }
+        // Read again: the secondary floor is measured against the lifted muted text.
+        let Some((r, g, b, a)) = palette_secondary_floor(&custom_palette(theme)) else { continue };
+        if let Some(sec) = theme.pointer_mut("/palette/textSecondary").and_then(Value::as_object_mut) {
+            sec.insert("value".into(), json!(format!("#{:02x}{:02x}{:02x}", r as u8, g as u8, b as u8)));
+            if a >= 1.0 {
+                sec.insert("opacity".into(), json!(100));
+            }
             changed = true;
         }
     }
@@ -219,6 +230,132 @@ pub fn lift_muted(palette: &mut Value) {
     if let Some(p) = palette.as_object_mut() {
         p.insert("textMuted".into(), json!(lifted));
     }
+}
+
+/// The least contrast secondary text keeps on a raised surface (the palette's surface over its
+/// background), where segment labels and card details sit. Secondary text is also never quieter
+/// there than muted text.
+pub const SECONDARY_CONTRAST_FLOOR: f64 = 4.5;
+
+/// `fg` (with its alpha) composited over the opaque `bg`.
+fn over(fg: (f64, f64, f64, f64), bg: (f64, f64, f64)) -> (f64, f64, f64) {
+    let mix = |f: f64, b: f64| f * fg.3 + b * (1.0 - fg.3);
+    (mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
+}
+
+fn ratio(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+    let (l1, l2) = (luminance(a.0, a.1, a.2), luminance(b.0, b.1, b.2));
+    (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
+}
+
+fn rgb_to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let (r, g, b) = (r / 255.0, g / 255.0, b / 255.0);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (mx + mn) / 2.0;
+    if mx == mn {
+        return (0.0, 0.0, l);
+    }
+    let d = mx - mn;
+    let s = if l > 0.5 { d / (2.0 - mx - mn) } else { d / (mx + mn) };
+    let h = if mx == r {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if mx == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, l)
+}
+
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
+    let round = |x: f64| (x + 0.5).floor();
+    if s == 0.0 {
+        let v = round(l * 255.0);
+        return (v, v, v);
+    }
+    let hue = |p: f64, q: f64, mut t: f64| {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    (round(hue(p, q, h + 1.0 / 3.0) * 255.0), round(hue(p, q, h) * 255.0), round(hue(p, q, h - 1.0 / 3.0) * 255.0))
+}
+
+/// Secondary text at the floor, or `None` when it already is: the same hue and saturation with
+/// its HSL lightness moved away from the surface in 0.5% steps until it reaches
+/// `SECONDARY_CONTRAST_FLOOR` and muted text's own contrast there. One that cannot at its alpha
+/// tries again opaque; one that cannot at all becomes white or black.
+fn floor_secondary(
+    sec: (f64, f64, f64, f64),
+    bg: (f64, f64, f64),
+    surface: (f64, f64, f64, f64),
+    muted: (f64, f64, f64, f64),
+) -> Option<(f64, f64, f64, f64)> {
+    let track = over(surface, bg);
+    let target = SECONDARY_CONTRAST_FLOOR.max(ratio(over(muted, track), track));
+    let ok = |c: (f64, f64, f64, f64)| ratio(over(c, track), track) >= target;
+    if ok(sec) {
+        return None;
+    }
+    let up = ratio((255.0, 255.0, 255.0), track) >= ratio((0.0, 0.0, 0.0), track);
+    let (h, s, l) = rgb_to_hsl(sec.0, sec.1, sec.2);
+    let alphas: &[f64] = if sec.3 < 1.0 { &[sec.3, 1.0] } else { &[1.0] };
+    for &alpha in alphas {
+        for step in 0..=200 {
+            let nl = if up { (l + step as f64 * 0.005).min(1.0) } else { (l - step as f64 * 0.005).max(0.0) };
+            let (r, g, b) = hsl_to_rgb(h, s, nl);
+            if ok((r, g, b, alpha)) {
+                return Some((r, g, b, alpha));
+            }
+            if nl == 0.0 || nl == 1.0 {
+                break;
+            }
+        }
+    }
+    Some(if up { (255.0, 255.0, 255.0, 1.0) } else { (0.0, 0.0, 0.0, 1.0) })
+}
+
+/// A palette's secondary text at the floor, read from its CSS colours.
+fn palette_secondary_floor(palette: &Value) -> Option<(f64, f64, f64, f64)> {
+    let color = |key: &str| palette.get(key).and_then(Value::as_str).and_then(css_rgba);
+    let bg = color("background")?;
+    floor_secondary(color("textSecondary")?, (bg.0, bg.1, bg.2), color("surface")?, color("textMuted")?)
+}
+
+/// Lifts the palette's secondary text to its floor (see `floor_secondary`). Secondary text
+/// already there is left exactly as written; the built-ins ship at the floor (a test pins it).
+pub fn lift_secondary(palette: &mut Value) {
+    let Some((r, g, b, a)) = palette_secondary_floor(palette) else { return };
+    let lifted = if a >= 1.0 {
+        format!("#{:02x}{:02x}{:02x}", r as u8, g as u8, b as u8)
+    } else {
+        let alpha = format!("{a:.2}");
+        format!("rgba({r}, {g}, {b}, {})", alpha.trim_end_matches('0').trim_end_matches('.'))
+    };
+    if let Some(p) = palette.as_object_mut() {
+        p.insert("textSecondary".into(), json!(lifted));
+    }
+}
+
+/// Both text floors: muted against the background, then secondary on the raised surface (which
+/// reads the lifted muted text).
+pub fn lift_text(palette: &mut Value) {
+    lift_muted(palette);
+    lift_secondary(palette);
 }
 
 /// The theme a shell paints.
@@ -253,7 +390,7 @@ pub fn resolve(id: &str, custom_themes: &[Value], oled_accent: Option<&str>) -> 
     if id == OLED_THEME_ID {
         palette = oled_palette(&palette, oled_accent);
     }
-    lift_muted(&mut palette);
+    lift_text(&mut palette);
     let light_content = needs_light_content(palette.get("background").and_then(Value::as_str).unwrap_or("#000000"));
     ResolvedTheme { id, name, palette, light_content, effect }
 }
@@ -270,7 +407,7 @@ pub fn catalog(custom_themes: &[Value], oled_accent: Option<&str>) -> Value {
                 t["palette"] = palette;
             }
             if let Some(palette) = t.get_mut("palette") {
-                lift_muted(palette);
+                lift_text(palette);
             }
             t
         })
@@ -279,7 +416,7 @@ pub fn catalog(custom_themes: &[Value], oled_accent: Option<&str>) -> Value {
         .iter()
         .filter_map(|c| {
             let mut palette = custom_palette(c);
-            lift_muted(&mut palette);
+            lift_text(&mut palette);
             Some(json!({
                 "id": c.get("id")?.as_str()?,
                 "name": c.get("name").and_then(Value::as_str).unwrap_or("Custom"),
@@ -353,6 +490,46 @@ mod tests {
         assert!(muted_contrast(&oled.palette).unwrap_or(0.0) >= MUTED_CONTRAST_FLOOR);
     }
 
+    /// Secondary text on the raised surface: its contrast there, and muted text's.
+    fn secondary_on_surface(palette: &Value) -> (f64, f64) {
+        let color = |key: &str| css_rgba(palette[key].as_str().unwrap_or_default()).expect(key);
+        let bg = color("background");
+        let track = over(color("surface"), (bg.0, bg.1, bg.2));
+        (ratio(over(color("textSecondary"), track), track), ratio(over(color("textMuted"), track), track))
+    }
+
+    #[test]
+    fn every_built_in_ships_at_the_secondary_floor() {
+        for theme in built_in_themes() {
+            let id = theme["id"].as_str().unwrap_or("?");
+            let palette = &theme["palette"];
+            let (secondary, muted) = secondary_on_surface(palette);
+            assert!(secondary >= SECONDARY_CONTRAST_FLOOR, "{id}: secondary text at {secondary:.2}:1 on the surface");
+            assert!(secondary >= muted, "{id}: secondary ({secondary:.2}) quieter than muted ({muted:.2})");
+            let mut lifted = palette.clone();
+            lift_text(&mut lifted);
+            assert_eq!(&lifted, palette, "{id}: the lift changed a shipped palette");
+        }
+        // OLED derives secondary from the accent; every preset clears it with no lift.
+        for (name, accent) in OLED_ACCENT_PRESETS {
+            let palette = oled_palette(&resolve(OLED_THEME_ID, &[], None).palette, Some(accent));
+            assert!(palette_secondary_floor(&palette).is_none(), "OLED {name} needs a lift");
+        }
+        // A near-black accent does not, and the resolved palette is lifted.
+        let dark = resolve(OLED_THEME_ID, &[], Some("#100010"));
+        assert!(secondary_on_surface(&dark.palette).0 >= SECONDARY_CONTRAST_FLOOR);
+    }
+
+    #[test]
+    fn the_four_inverted_themes_were_baked_to_the_floor() {
+        let secondary = |id: &str| resolve(id, &[], None).palette["textSecondary"].clone();
+        assert_eq!(secondary("solarized-dark"), "#4aa1de");
+        assert_eq!(secondary("monokai"), "#fa5892");
+        assert_eq!(secondary("solarized-sand"), "#584a37");
+        assert_eq!(secondary("catppuccin-latte"), "#545667");
+        assert_eq!(secondary(DEFAULT_THEME_ID), "#97b1b9");
+    }
+
     #[test]
     fn winters_glass_muted_is_three_quarters() {
         assert_eq!(resolve(DEFAULT_THEME_ID, &[], None).palette["textMuted"], "rgba(151, 177, 185, 0.75)");
@@ -398,5 +575,32 @@ mod tests {
         // A second pass has nothing left to do.
         assert!(!lift_custom_themes(&mut saved));
         assert!(!lift_custom_themes(&mut json!(null)));
+    }
+
+    #[test]
+    fn a_custom_secondary_quieter_than_the_floor_is_lifted() {
+        // Catppuccin Latte as it shipped before the bake: the custom lift lands on the baked color.
+        let mut saved = json!([{ "id": "custom-latte", "name": "Latte", "palette": {
+            "background": { "value": "#d8dce4", "opacity": 100 },
+            "surface": { "value": "#8839ef", "opacity": 10 },
+            "textSecondary": { "value": "#6c6f85", "opacity": 100 },
+            "textMuted": { "value": "#4c4f69", "opacity": 89 },
+        }}]);
+        assert!(lift_custom_themes(&mut saved));
+        assert_eq!(saved[0]["palette"]["textSecondary"], json!({ "value": "#545667", "opacity": 100 }));
+        let (secondary, muted) = secondary_on_surface(&custom_palette(&saved[0]));
+        assert!(secondary >= SECONDARY_CONTRAST_FLOOR && secondary >= muted);
+        assert!(!lift_custom_themes(&mut saved));
+        // A translucent secondary that cannot reach the floor at its own opacity goes opaque.
+        let mut faint = json!([{ "id": "custom-faint", "name": "Faint", "palette": {
+            "background": { "value": "#0c0c0d", "opacity": 100 },
+            "surface": { "value": "#97b1b9", "opacity": 15 },
+            "textSecondary": { "value": "#97b1b9", "opacity": 20 },
+            "textMuted": { "value": "#97b1b9", "opacity": 75 },
+        }}]);
+        assert!(lift_custom_themes(&mut faint));
+        assert_eq!(faint[0]["palette"]["textSecondary"]["opacity"], 100);
+        let (secondary, muted) = secondary_on_surface(&custom_palette(&faint[0]));
+        assert!(secondary >= SECONDARY_CONTRAST_FLOOR && secondary >= muted);
     }
 }
