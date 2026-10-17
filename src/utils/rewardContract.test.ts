@@ -9,7 +9,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { formatCostShort, newTransactionId, rewardKind, rewardTakesText } from './rewardStatus';
 
 const root = resolve(__dirname, '..', '..');
 const read = (p: string) => readFileSync(resolve(root, p), 'utf8');
@@ -63,13 +62,6 @@ function invokeKeys(file: string, command: string): string[] {
   return [...src.slice(at, end).matchAll(/^\s*([A-Za-z]+):/gm)].map((x) => x[1]).sort();
 }
 
-/** A `pub const NAME: &str = "value";` from a Rust file. */
-function rustConst(file: string, name: string): string {
-  const m = read(file).match(new RegExp(`pub const ${name}: &str = "([^"]+)"`));
-  if (!m) throw new Error(`${name} not found in ${file}`);
-  return m[1];
-}
-
 /** String literals in a Rust file, above its test module. */
 function rustStrings(file: string, from?: string, to?: string): string[] {
   let src = read(file);
@@ -92,46 +84,34 @@ describe('rewards: Rust and the menu agree', () => {
     expect(tsRewardBlocks()).toEqual(rustRewardBlocks());
   });
 
-  it('the sub-only message invoke names every Rust parameter', () => {
-    const rust = rustParams('src-tauri/src/commands/drops.rs', 'send_sub_mode_message').map(camel);
-    expect(invokeKeys('src/components/ChannelPointsMenu.tsx', 'send_sub_mode_message')).toEqual(rust);
+  it('every redeem_reward invoke names only Rust parameters, the reward and channel always', () => {
+    const rust = rustParams('src-tauri/src/commands/drops.rs', 'redeem_reward').map(camel);
+    const src = read('src/components/ChannelPointsMenu.tsx');
+    let at = src.indexOf(`'redeem_reward', {`);
+    let calls = 0;
+    while (at >= 0) {
+      const end = src.indexOf('})', at);
+      const keys = [...src.slice(at, end).matchAll(/^\s*([A-Za-z]+):/gm)].map((x) => x[1]);
+      for (const k of keys) expect(rust, k).toContain(k);
+      for (const k of ['channelLogin', 'channelId', 'rewardId']) expect(keys, k).toContain(k);
+      calls += 1;
+      at = src.indexOf(`'redeem_reward', {`, end);
+    }
+    // The detail view, the modify-emote picker and the choose-emote picker.
+    expect(calls).toBe(3);
   });
 
-  it('the highlighted message invoke names every Rust parameter', () => {
-    const rust = rustParams('src-tauri/src/commands/drops.rs', 'send_highlighted_message').map(camel);
-    expect(invokeKeys('src/components/ChannelPointsMenu.tsx', 'send_highlighted_message')).toEqual(rust);
-  });
-
-  it('the custom reward invoke names only Rust parameters, the typed answer included', () => {
-    const rust = rustParams('src-tauri/src/commands/drops.rs', 'redeem_channel_reward').map(camel);
-    const keys = invokeKeys('src/components/ChannelPointsMenu.tsx', 'redeem_channel_reward');
-    for (const k of keys) expect(rust, k).toContain(k);
-    // The answer rides a conditional spread, which the key reader skips.
-    expect(rust).toContain('textInput');
-    expect(read('src/components/ChannelPointsMenu.tsx')).toContain('{ textInput: text }');
-  });
-
-  it('every message and custom redeem carries the retry-safe transaction id', () => {
-    for (const command of ['send_sub_mode_message', 'send_highlighted_message', 'redeem_channel_reward']) {
-      expect(rustParams('src-tauri/src/commands/drops.rs', command), command).toContain('transaction_id');
-      expect(invokeKeys('src/components/ChannelPointsMenu.tsx', command), command).toContain('transactionId');
+  it('the menu no longer routes or mints transaction ids itself', () => {
+    const src = read('src/components/ChannelPointsMenu.tsx');
+    for (const gone of ['send_highlighted_message', 'send_sub_mode_message', 'redeem_channel_reward', 'unlock_chosen_emote', 'unlock_modified_emote', 'transactionId']) {
+      expect(src, gone).not.toContain(gone);
     }
   });
 
-  it('a transaction id has the form Rust keeps (16 to 64 letters and digits)', () => {
-    const a = newTransactionId();
-    expect(a).toMatch(/^[0-9a-f]{32}$/);
-    expect(newTransactionId()).not.toBe(a);
-  });
-
-  it('the built-in message rewards route to their own senders by the type Rust writes', () => {
-    const rewards = 'src-tauri/src/services/channel_rewards.rs';
-    const highlight = rustConst(rewards, 'HIGHLIGHTED_MESSAGE_REWARD');
-    const bypass = rustConst(rewards, 'SUB_MODE_BYPASS_REWARD');
-    expect(rewardKind({ reward_type: highlight, is_user_input_required: true })).toBe('highlight');
-    expect(rewardKind({ reward_type: bypass, is_user_input_required: true })).toBe('sub_message');
-    expect(rewardTakesText('highlight')).toBe(true);
-    expect(rewardTakesText('sub_message')).toBe(true);
+  it('the built-in message rewards are named by the type Rust routes on', () => {
+    const redeem = read('src-tauri/src/services/reward_redeem.rs');
+    expect(redeem).toContain('Some(HIGHLIGHTED_MESSAGE_REWARD) => RewardKind::Highlight');
+    expect(redeem).toContain('Some(SUB_MODE_BYPASS_REWARD) => RewardKind::SubMessage');
   });
 });
 
@@ -144,7 +124,7 @@ describe('rewards and YouTube send: viewer-facing copy', () => {
   });
 
   it('the rewards menu has no dash punctuation and no twitch.tv detour', () => {
-    for (const file of ['src/components/ChannelPointsMenu.tsx', 'src/utils/rewardStatus.ts']) {
+    for (const file of ['src/components/ChannelPointsMenu.tsx', 'src/utils/rewardStatus.ts', 'src-tauri/src/services/reward_redeem.rs']) {
       const src = read(file);
       expect(src, file).not.toMatch(DASHES);
       expect(src.toLowerCase(), file).not.toContain('twitch.tv');
@@ -175,26 +155,5 @@ describe('rewards and YouTube send: viewer-facing copy', () => {
     );
     expect(strings.length).toBeGreaterThan(0);
     for (const s of strings) expect(s, s).not.toMatch(DASHES);
-  });
-});
-
-describe('formatCostShort edges', () => {
-  it('a cost that rounds up to the next unit uses that unit (999,999 is 1M)', () => {
-    expect(formatCostShort(999_999)).toBe('1M');
-    expect(formatCostShort(999_500)).toBe('1M');
-    expect(formatCostShort(999_499)).toBe('999k');
-  });
-
-  it('a rounded cost drops a trailing .0 (1,001 is 1k, 9,999 is 10k)', () => {
-    expect(formatCostShort(1_001)).toBe('1k');
-    expect(formatCostShort(9_999)).toBe('10k');
-    expect(formatCostShort(99_999)).toBe('100k');
-    expect(formatCostShort(1_050)).toBe('1.1k');
-  });
-
-  it('millions drop a trailing .0 too (1,999,999 is 2M)', () => {
-    expect(formatCostShort(1_999_999)).toBe('2M');
-    expect(formatCostShort(9_999_999)).toBe('10M');
-    expect(formatCostShort(12_400_000)).toBe('12M');
   });
 });

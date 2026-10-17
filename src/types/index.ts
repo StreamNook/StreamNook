@@ -2264,6 +2264,35 @@ export interface ChannelReward {
   description?: string | null;
   /** Rust's verdict on whether the viewer can redeem it right now. */
   availability: RewardAvailability;
+  /** How it is redeemed and what its controls say (services/reward_redeem.rs). */
+  view: RewardView;
+}
+
+/** What redeeming a reward involves, from its built-in type (Rust). */
+export type RewardKind = 'highlight' | 'sub_message' | 'random_emote' | 'choose_emote' | 'modify_emote' | 'input' | 'standard';
+
+/** Rust's words for a reward's controls (models/drops.rs RewardView). */
+export interface RewardView {
+  kind: RewardKind;
+  /** The redeem carries the viewer's typed text. */
+  takes_text: boolean;
+  /** "950", "3k", "2.5k", "1.2M". */
+  cost_label: string;
+  /** "Redeem", "Send highlighted", "Send", "Choose emote". */
+  action: string;
+  /** "Redeeming...", "Sending...". */
+  busy: string;
+  placeholder: string | null;
+  /** "Can't be undone". */
+  hint: string | null;
+}
+
+/** `redeem_reward`: what a redeem came to, with the toast to show. */
+export interface RedeemOutcome {
+  success: boolean;
+  message: string;
+  new_balance: number | null;
+  unlocked_emote: UnlockedEmote | null;
 }
 
 /** Why Rust judged a reward not redeemable (models/drops.rs RewardBlock). */
