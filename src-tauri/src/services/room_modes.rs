@@ -491,6 +491,7 @@ mod tests {
         let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
         let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(3 * 86_400));
         assert_eq!(v.modes[0].applies_to_you, Some(false));
+        assert!(v.exempt);
         assert_eq!(v.prompt, None, "the box keeps Send a message");
         assert_eq!(v.standing.as_deref(), Some("You can chat as a follower"));
         assert_eq!(v.blocked, None);
@@ -503,6 +504,7 @@ mod tests {
         assert_eq!(v.modes[0].applies_to_you, Some(true));
         assert_eq!(v.prompt.as_deref(), Some("Follow to chat"));
         assert_eq!(v.prompt_short.as_deref(), Some("Follow to chat"));
+        assert!(!v.exempt);
         assert_eq!(v.blocked, Some(ModeKind::FollowersOnly));
         assert_eq!(v.reason.as_deref(), Some("Follow to chat"));
     }
@@ -525,6 +527,7 @@ mod tests {
         // Any-follower room: following at all is enough.
         let any = ModesIn { followers_only_minutes: 0, ..Default::default() };
         let v = describe_with(&any, viewer(), OwnFollow::ForSecs(0));
+        assert!(v.exempt);
         assert_eq!(v.prompt, None);
         assert_eq!(v.blocked, None);
         // A moderator is spared whatever their follow.
@@ -571,54 +574,5 @@ mod tests {
         for standing in [Standing::Broadcaster, Standing::Moderator, Standing::Vip] {
             assert_eq!(describe_with(&all, standing, OwnFollow::NotFollowing).blocked, None);
         }
-    }
-
-    #[test]
-    fn a_long_enough_follow_spares_the_viewer() {
-        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
-        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(3 * 86_400));
-        assert_eq!(v.modes[0].applies_to_you, Some(false));
-        assert!(v.exempt);
-        assert_eq!(v.prompt, None, "the box keeps Send a message");
-        assert_eq!(v.standing.as_deref(), Some("You can chat as a follower"));
-    }
-
-    #[test]
-    fn a_viewer_who_does_not_follow_is_told_to() {
-        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
-        let v = describe_with(&modes, viewer(), OwnFollow::NotFollowing);
-        assert_eq!(v.modes[0].applies_to_you, Some(true));
-        assert_eq!(v.prompt.as_deref(), Some("Follow to chat"));
-        assert_eq!(v.prompt_short.as_deref(), Some("Follow to chat"));
-        assert!(!v.exempt);
-    }
-
-    #[test]
-    fn a_recent_follow_counts_down_in_whole_minutes() {
-        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
-        // 6 minutes 30 seconds in: 3.5 minutes left, said as 4.
-        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(390));
-        assert_eq!(v.prompt.as_deref(), Some("You can chat in 4 minutes"));
-        assert_eq!(v.prompt_short.as_deref(), Some("Chat in 4m"));
-        // Seconds from the end it still says a minute, never zero.
-        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(599));
-        assert_eq!(v.prompt.as_deref(), Some("You can chat in 1 minute"));
-    }
-
-    #[test]
-    fn a_follow_is_ignored_where_it_does_not_decide() {
-        // Any-follower room: following at all is enough.
-        let any = ModesIn { followers_only_minutes: 0, ..Default::default() };
-        let v = describe_with(&any, viewer(), OwnFollow::ForSecs(0));
-        assert!(v.exempt);
-        // A moderator is spared whatever their follow.
-        let ten = ModesIn { followers_only_minutes: 10, ..Default::default() };
-        let v = describe_with(&ten, Standing::Moderator, OwnFollow::NotFollowing);
-        assert_eq!(v.prompt, None);
-        assert_eq!(v.standing.as_deref(), Some("You can chat as a moderator"));
-        // A followed viewer in slow mode is still told about slow mode.
-        let slow = ModesIn { followers_only_minutes: 10, slow_seconds: 30, ..Default::default() };
-        let v = describe_with(&slow, viewer(), OwnFollow::ForSecs(86_400));
-        assert_eq!(v.prompt.as_deref(), Some("Slow mode (30 seconds)"));
     }
 }
