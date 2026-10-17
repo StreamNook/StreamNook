@@ -11,6 +11,8 @@ struct StreamCard: View {
     var variant = StreamView.cards
     /// Off where the screen already names the category (a category's own list).
     var showsCategory = true
+    /// A Kick row wears Kick's mark, only in a list that mixes platforms.
+    var showsPlatform = false
     var hypeTrain: HypeTrain?
     var streak: Int?
     var group: ChannelGroup?
@@ -77,6 +79,7 @@ struct StreamCard: View {
                     }
                     Text(stream.userName).lineLimit(1)
                     if let group { TogetherTag(group: group) }
+                    if showsPlatform && !stream.isTwitch { PlatformMark(platform: .kick, size: 12) }
                     if stream.isPartner { PartnerMark(size: 12) }
                 }
                 .font(.snCardLine)
@@ -128,6 +131,7 @@ struct StreamCard: View {
                 HStack(spacing: 4) {
                     Text(stream.userName).lineLimit(1)
                     if let group { TogetherTag(group: group, compact: true) }
+                    if showsPlatform && !stream.isTwitch { PlatformMark(platform: .kick, size: 11) }
                     if stream.isPartner { PartnerMark(size: 11) }
                 }
                 .font(.snCardLine)
@@ -163,7 +167,7 @@ struct StreamMenu: View {
     let open: () -> Void
     var openCategory: (() -> Void)?
 
-    private var link: URL { URL(string: "https://www.twitch.tv/\(stream.userLogin)")! }
+    private var link: URL { stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")! }
 
     var body: some View {
         MenuPick("Watch", symbol: Symbol.watch, action: open)

@@ -209,6 +209,8 @@ public struct HomeLists: Decodable, Sendable, Equatable {
     public var collaborations: [String: ChannelGroup]
     /// Shared Chat sessions by Twitch channel id, for channels in one and in no group.
     public var sharedChats: [String: ChannelGroup]
+    /// Your channels across every platform, finished in Rust (`unified_following`).
+    public var following: FollowingLists
 
     enum CodingKeys: String, CodingKey {
         case followedLive = "followed_live"
@@ -217,17 +219,20 @@ public struct HomeLists: Decodable, Sendable, Equatable {
         case watchStreaks = "watch_streaks"
         case collaborations
         case sharedChats = "shared_chats"
+        case following
     }
 
     public init(followedLive: [TwitchStream] = [], recommended: [TwitchStream] = [],
                 hypeTrains: [HypeTrain] = [], watchStreaks: [String: Int] = [:],
-                collaborations: [String: ChannelGroup] = [:], sharedChats: [String: ChannelGroup] = [:]) {
+                collaborations: [String: ChannelGroup] = [:], sharedChats: [String: ChannelGroup] = [:],
+                following: FollowingLists = FollowingLists()) {
         self.followedLive = followedLive
         self.recommended = recommended
         self.hypeTrains = hypeTrains
         self.watchStreaks = watchStreaks
         self.collaborations = collaborations
         self.sharedChats = sharedChats
+        self.following = following
     }
 
     public init(from decoder: Decoder) throws {
@@ -238,12 +243,21 @@ public struct HomeLists: Decodable, Sendable, Equatable {
         watchStreaks = try c.decodeIfPresent([String: Int].self, forKey: .watchStreaks) ?? [:]
         collaborations = try c.decodeIfPresent([String: ChannelGroup].self, forKey: .collaborations) ?? [:]
         sharedChats = try c.decodeIfPresent([String: ChannelGroup].self, forKey: .sharedChats) ?? [:]
+        following = (try? c.decodeIfPresent(FollowingLists.self, forKey: .following)) ?? FollowingLists()
+    }
+
+    /// The Following tab: every live follow on the platforms the iPhone plays (Twitch and Kick),
+    /// most watched first, as Rust ranked them. Before Rust has built the cross-platform list
+    /// (an older core), Twitch's own list.
+    public var followingLive: [TwitchStream] {
+        let rows = following.followedLive.filter { FollowingLists.watchable.contains($0.platform) }
+        return rows.isEmpty && following.platforms.isEmpty ? followedLive : rows
     }
 
     /// The Twitch ids of a list's rows, unique and sorted, so the same channels make the same set
     /// however the list was fetched.
     public static func channelIDs(of streams: [TwitchStream]) -> [String] {
-        Set(streams.compactMap(\.userID).filter { !$0.isEmpty }).sorted()
+        Set(streams.compactMap(\.twitchID).filter { !$0.isEmpty }).sorted()
     }
 
     /// What a card credits beside the name, by its Twitch id: the Shared Viewership group, else
@@ -264,6 +278,37 @@ public struct HomeLists: Decodable, Sendable, Equatable {
         guard let channelID, let days = watchStreaks[channelID], days > 0 else { return nil }
         return days
     }
+}
+
+/// The core's `following` section: live follows across every platform and the platforms you
+/// follow on.
+public struct FollowingLists: Decodable, Sendable, Equatable {
+    /// The platforms the iPhone can play.
+    public static let watchable: Set<String> = ["twitch", "kick"]
+
+    /// Every live follow, favorite or not, most watched first (Twitch first on a tie).
+    public var followedLive: [TwitchStream]
+    /// The platforms you follow at least one channel on.
+    public var platforms: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case followedLive = "followed_live"
+        case platforms
+    }
+
+    public init(followedLive: [TwitchStream] = [], platforms: [String] = []) {
+        self.followedLive = followedLive
+        self.platforms = platforms
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        followedLive = (try? c.decodeIfPresent([TwitchStream].self, forKey: .followedLive)) ?? []
+        platforms = (try? c.decodeIfPresent([String].self, forKey: .platforms)) ?? []
+    }
+
+    /// The platform filter shows only when you follow someone on Kick.
+    public var followsKick: Bool { platforms.contains("kick") }
 }
 
 /// Twitch image addresses carry `{width}` and `{height}` (or `-{w}x{h}`) placeholders.

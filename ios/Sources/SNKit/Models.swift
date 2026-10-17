@@ -20,6 +20,13 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
     public var isLive: Bool?
     /// Watching here earns drops right now; the core stamps it on every Twitch row it serves.
     public var dropsEarnable: Bool?
+    /// The platform of a row from another one (`kick`); nil on Twitch rows, which the core sends
+    /// without it.
+    public var provider: String?
+    /// Another platform's composite key (`kick:slug`), as the core stamps it.
+    public var key: String?
+    /// Another platform's watch page, which the core starts playback from.
+    public var watchURL: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -36,12 +43,15 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         case startedAt = "started_at"
         case isLive = "is_live"
         case dropsEarnable = "drops_earnable"
+        case provider, key
+        case watchURL = "watch_url"
     }
 
     public init(id: String, userLogin: String, userName: String, title: String, viewerCount: Int,
                 gameName: String, thumbnailURL: String = "", userID: String? = nil, gameID: String? = nil,
                 broadcasterType: String? = nil, profileImageURL: String? = nil, startedAt: String? = nil,
-                isLive: Bool? = nil, dropsEarnable: Bool? = nil) {
+                isLive: Bool? = nil, dropsEarnable: Bool? = nil, provider: String? = nil, key: String? = nil,
+                watchURL: String? = nil) {
         self.id = id
         self.userLogin = userLogin
         self.userName = userName
@@ -56,6 +66,33 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         self.startedAt = startedAt
         self.isLive = isLive
         self.dropsEarnable = dropsEarnable
+        self.provider = provider
+        self.key = key
+        self.watchURL = watchURL
+    }
+
+    /// The row's platform: `twitch` unless the core named another.
+    public var platform: String { provider.flatMap { $0.isEmpty ? nil : $0.lowercased() } ?? "twitch" }
+    public var isTwitch: Bool { platform == "twitch" }
+    /// The broadcaster's Twitch id, only on a Twitch row: hype trains, streaks, groups and every
+    /// Helix call are filed under it, and a Kick id (also numeric) would name an unrelated Twitch
+    /// channel.
+    public var twitchID: String? { isTwitch ? userID : nil }
+    /// One identity across platforms: the bare lowercased login on Twitch, `provider:slug`
+    /// otherwise, so Twitch `xqc` and Kick `xqc` are two rows.
+    public var rowKey: String {
+        if isTwitch { return userLogin.lowercased() }
+        if let key, !key.isEmpty { return key }
+        return "\(platform):\(userLogin.lowercased())"
+    }
+    /// Where the core starts playback for a quality change or a restart.
+    public var playbackURL: String {
+        if !isTwitch, let watchURL, !watchURL.isEmpty { return watchURL }
+        return platform == "kick" ? "https://kick.com/\(userLogin)" : "https://twitch.tv/\(userLogin)"
+    }
+    /// The channel page to share.
+    public var channelLink: URL? {
+        URL(string: isTwitch ? "https://www.twitch.tv/\(userLogin)" : playbackURL)
     }
 
     public var isPartner: Bool { broadcasterType == "partner" }

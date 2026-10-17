@@ -12,7 +12,7 @@ import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import type { TwitchStream } from '../../types';
 import { useFollowsStore } from '../../stores/followsStore';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
-import { mergeFollowedLive } from '../followingMerge';
+import { followsKick, phoneFollowedLive } from '../followingMerge';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { PROVIDERS } from '../../types/providers';
 
@@ -52,11 +52,11 @@ export function writeStreamView(mode: StreamViewMode): void {
 
 export const FollowingScreen: React.FC = () => {
   const followedStreams = useAppStore((s) => s.followedStreams);
-  // Live Kick follows, pushed by Rust's provider_live_service.
-  const providerLive = useFollowsStore((s) => s.liveByKey);
-  const merged = useMemo(() => mergeFollowedLive(followedStreams, providerLive), [followedStreams, providerLive]);
+  // Every live follow across platforms, merged and ranked in Rust.
+  const following = useAppStore((s) => s.following);
+  const merged = useMemo(() => phoneFollowedLive(following), [following]);
   // The filter only exists once there is a second platform to filter by.
-  const hasKick = useFollowsStore((s) => s.follows.some((f) => f.provider === 'kick'));
+  const hasKick = followsKick(following);
   const [filter, setFilter] = useState<PlatformFilter>(readFilter);
   const activeFilter = hasKick ? filter : null;
   const rows = useMemo(

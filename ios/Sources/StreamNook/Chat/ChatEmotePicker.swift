@@ -25,6 +25,7 @@ final class EmotePickerModel {
 
     init(session: ChatSession) {
         self.session = session
+        tab = PickerTabs.defaultTab(provider: session.provider)
     }
 
     /// The tabs in order: Favorites, Emoji, then the room's emote tabs.
@@ -76,7 +77,7 @@ final class EmotePickerModel {
         if tab == "emoji", emoji == nil { emoji = EmojiCatalog.bundled() }
         let core = session.core
         let args: [String: Any?] = [
-            "provider": "twitch", "channel": session.channel, "channelId": session.roomID,
+            "provider": session.provider, "channel": session.login, "channelId": session.roomID,
             "tab": tab == "emoji" ? nil : tab, "query": query, "tier": Self.tier,
         ]
         loading = true
@@ -84,7 +85,8 @@ final class EmotePickerModel {
         guard let first = try? await core.invoke("emote_picker", args: args, as: PickerAnswer.self),
               !Task.isCancelled else { return }
         answer = first
-        if !first.ready, query.isEmpty {
+        // A Kick room's set is read by its slug inside the same answer.
+        if !first.ready, query.isEmpty, !session.isKick {
             // The room's emotes are not in the core yet; ask it to fetch them, then ask again.
             _ = try? await core.invoke("fetch_channel_emotes", args: [
                 "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier,

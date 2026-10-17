@@ -113,6 +113,15 @@ final class ChatComposerModel {
 
     // MARK: Gating
 
+    /// A Kick room with no Kick sign-in: the field gives way to "Sign in to Kick to chat".
+    var needsKickSignIn: Bool { session.isKick && session.rooms?.kick?.connected != true }
+    var kickSigningIn: Bool { session.rooms?.kick?.busy == true }
+
+    func signInToKick() {
+        guard let kick = session.rooms?.kick else { return }
+        Task { await kick.connect() }
+    }
+
     /// Why the viewer cannot type here, when the core proves it (their badges, their follow).
     var blockedReason: String? {
         guard let modes = session.modes, modes.blocked != nil else { return nil }
@@ -141,6 +150,10 @@ final class ChatComposerModel {
 
     func send() async {
         guard !sending, slowWait == 0 else { return }
+        if session.isKick {
+            await sendKick()
+            return
+        }
         switch ComposerRoute.of(draft) {
         case .none:
             return
@@ -192,6 +205,38 @@ final class ChatComposerModel {
             failure = Failure(text: text, why: Self.words(error))
             chatLog.notice("send failed: \(String(describing: error), privacy: .public)")
             return false
+        }
+    }
+
+    /// A Kick room: plain text goes through Kick's adapter (Kick echoes it back over its socket,
+    /// so no row is built here); commands are Twitch's alone, so they stay in the draft.
+    private func sendKick() async {
+        switch ComposerRoute.of(draft) {
+        case .none:
+            return
+        case .slash:
+            show("Commands only work in Twitch chats")
+        case .chat(let text):
+            sending = true
+            defer { sending = false }
+            do {
+                let json = try await session.core.invoke("provider_send_message", args: [
+                    "provider": "kick", "channel": session.login, "text": text, "replyTo": session.replyTo?.id,
+                ])
+                let outcome = (try? JSONDecoder().decode(ProviderSendOutcome.self, from: Data(json.utf8)))
+                    ?? ProviderSendOutcome(isSent: true, dropReason: nil)
+                guard outcome.isSent else {
+                    failure = Failure(text: text, why: outcome.dropReason ?? "the room refused it")
+                    return
+                }
+                lastSent = text
+                failure = nil
+                draft = ""
+                session.replyTo = nil
+            } catch {
+                failure = Failure(text: text, why: Self.words(error))
+                chatLog.notice("kick send failed: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
@@ -295,7 +340,7 @@ final class ChatComposerModel {
             "badges": [Any](),
             "timestamp": ISO8601DateFormatter().string(from: Date()),
             "content": line,
-            "provider": "twitch",
+            "provider": session.provider,
             "channel": session.channel,
             "tags": [String: String](),
         ]
@@ -351,17 +396,28 @@ final class ChatComposerModel {
             return
         }
         let core = session.core
-        let channel = session.channel
+        let channel = session.login
+        let provider = session.provider
         let channelID = session.roomID
         let tier = EmotePickerModel.tier
         Task { [weak self] in
             // One answer: the emotes, then the room's recent chatters (provider "user").
             guard let json = try? await core.invoke("match_emote_tokens", args: [
-                "provider": "twitch", "channel": channel, "channelId": channelID, "query": word,
+                "provider": provider, "channel": channel, "channelId": channelID, "query": word,
                 "profile": "cycle", "order": "default", "tier": tier, "limit": nil,
             ]), let result = try? JSONDecoder().decode(EmoteMatchResult.self, from: Data(json.utf8)) else { return }
             guard let self, seq == self.suggestSeq else { return }
             self.suggestions = result.rows
         }
+    }
+}
+
+/// What Kick's adapter says about a sent message (Rust `SendOutcome`).
+struct ProviderSendOutcome: Decodable {
+    var isSent: Bool
+    var dropReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case isSent = "is_sent", dropReason = "drop_reason"
     }
 }

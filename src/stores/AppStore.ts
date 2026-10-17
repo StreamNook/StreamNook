@@ -736,20 +736,6 @@ type OfflineDecision =
   | { action: 'stop'; notice: OfflineNotice | null }
   | { action: 'switch_to'; stream: TwitchStream; notice: OfflineNotice | null };
 
-function watchTargetOf(info: TwitchStream, provider: ProviderId, login: string, authenticated: boolean) {
-  return {
-    provider,
-    login,
-    user_id: info.user_id || '',
-    user_name: info.user_name || login,
-    title: info.title || '',
-    game_id: info.game_id || null,
-    game_name: info.game_name || '',
-    started_at: info.started_at || '',
-    authenticated,
-  };
-}
-
 let watchSessionListening = false;
 
 /** Subscribe once to the session's events, in the window that plays streams. */
@@ -970,56 +956,36 @@ async function startProviderStream(
   set({ isLoading: true });
   trackActivity(`Started watching: ${key}`);
 
-  // Tear down whatever was playing before, Twitch or provider. The Twitch
-  // teardown lives in stopStream; here we only need its session bits gone so a
-  // Twitch EventSub subscription doesn't keep firing over a Kick stream.
+  // Tear down the previous provider stream's chat. Drops and channel points
+  // letting go of a Twitch channel before is Rust's (services/watch_start.rs).
   await teardownProviderSession();
-  // The session start below drops the Twitch EventSub subscription.
-  const previous = get().currentStream;
-  if (previous && streamProvider(previous) === 'twitch') {
-    invoke('stop_drops_monitoring').catch(() => {});
-  }
 
   try {
     const requestedQuality = get().settings.quality;
-    const result = preResolved
-      ?? await invoke<StreamStartResult>('start_stream', {
-        url: buildProviderUrl(provider, channel),
-        quality: requestedQuality,
-      });
-    if (!preResolved) logQualityFallback(requestedQuality, result.quality);
-
-    // Seed from the row the user clicked, then enrich from the platform. The
-    // metadata call is best-effort: a resolved stream must never fail to play
-    // because a secondary lookup hiccuped.
-    let info: TwitchStream = seed
-      ? { ...seed, provider, user_login: channel }
-      : {
-          id: '',
-          user_id: '',
-          user_name: channel,
-          user_login: channel,
-          title: '',
-          viewer_count: 0,
-          game_name: '',
-          thumbnail_url: '',
-          started_at: new Date().toISOString(),
-          provider,
-        };
-    try {
-      const meta = await invoke<TwitchStream>('provider_channel_meta', { provider, channel });
-      info = { ...info, ...meta, provider, user_login: channel };
-    } catch (e) {
-      Logger.warn(`[${provider}] Could not load channel metadata:`, e);
-    }
-
-    // A newer start won while we were resolving. Its `start_stream` has already
-    // replaced the single relay, so there is nothing of ours left to stop — but
+    // The watch session's events must be heard before Rust starts it.
+    ensureWatchSessionListeners(set, get);
+    // One Rust call resolves the relay on the platform's watch URL, completes
+    // the row from the platform's channel facts (best effort, never a made-up
+    // start time), lets drops and points go of any Twitch channel and starts
+    // the watch session's live check. A promoted tile's relay already serves
+    // the channel, so only the rest runs for it.
+    const started = await invoke<WatchStartResult>('watch_start', {
+      login: channel,
+      provider,
+      seed: seed ?? null,
+      quality: requestedQuality,
+      relayReady: !!preResolved,
+    });
+    // A newer start won while we were resolving. Rust touched nothing, and
     // publishing this result would point the player at the losing stream.
-    if (superseded()) {
+    if (started.superseded || superseded() || !started.row) {
       Logger.debug(`[${provider}] start for ${channel} superseded; discarding result`);
       return;
     }
+    const result = preResolved ?? started.stream;
+    if (!result) throw new Error('No stream to play');
+    if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+    const info: TwitchStream = { ...started.row, provider, user_login: started.row.user_login || channel };
 
     set({
       streamUrl: result.url,
@@ -1062,12 +1028,7 @@ async function startProviderStream(
     }
 
     // Presence, and the live check standing in for Twitch's `stream.offline`,
-    // are the watch session's. Guarded: a newer start already owns the session.
-    if (superseded()) return;
-    ensureWatchSessionListeners(set, get);
-    await invoke('watch_session_start', {
-      target: watchTargetOf(info, provider, channel, false),
-    }).catch((e) => Logger.warn(`[${provider}] Could not start the watch session:`, e));
+    // are the watch session's, which `watch_start` already started.
   } catch (e) {
     if (superseded()) return;
     // A stream the platform serves only to a signed-in account (an 18+ TikTok
@@ -1260,7 +1221,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingMore: false,
   unifiedDiscover: [],
   sidebarDiscover: null,
-  following: { favorites: [], live: [], offline: [] },
+  following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [] },
   otherCategories: [],
   streamUrl: null,
   isRestartingStream: false,
@@ -1514,7 +1475,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ sidebarDiscover: { scope: update.scope, streams: update.streams } });
         break;
       case 'following':
-        set({ following: { favorites: update.favorites, live: update.live, offline: update.offline } });
+        set({
+          following: {
+            favorites: update.favorites,
+            live: update.live,
+            offline: update.offline,
+            followed_live: update.followed_live ?? [],
+            platforms: update.platforms ?? [],
+          },
+        });
         break;
       case 'other_categories':
         set({ otherCategories: update.categories });
