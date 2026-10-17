@@ -105,7 +105,7 @@ pub fn view_of(reward: &ChannelReward) -> RewardView {
 }
 
 /// What a redeem came to, with the words to show.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RedeemOutcome {
     pub success: bool,
     /// The toast: "Redeemed: <title>", "Highlighted message sent!", or why it failed.
