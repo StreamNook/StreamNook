@@ -12,8 +12,8 @@ struct Segment<Value: Hashable>: Identifiable {
     var id: Value { value }
 }
 
-/// Segments in a glass capsule, the chosen one a darker pill set into the glass that glides
-/// between them (the look of the desktop Home tab strip). With `allowsNone`, tapping the chosen
+/// Segments in a capsule on the theme's raised surface, the chosen one a darker pill set into it
+/// that glides between them (the look of the desktop Home tab strip). With `allowsNone`, tapping the chosen
 /// segment again chooses nothing.
 struct GlazeSegments<Value: Hashable>: View {
     let segments: [Segment<Value>]
@@ -65,7 +65,27 @@ struct GlazeSegments<Value: Hashable>: View {
             }
         }
         .padding(4)
-        .snGlass(Capsule())
+        .background { SegmentTrack() }
+    }
+}
+
+/// The segment track: the theme's own raised surface (its surface over its background), the very
+/// pair the core's text floors are measured on (theme_palette::floor_secondary), so the labels'
+/// 4.5:1 holds on the track the phone draws. Liquid Glass would lighten it past that surface by an
+/// amount no palette knows. Opaque, so content scrolling under it never shows through; a light
+/// line along its top edge, as on the panels.
+private struct SegmentTrack: View {
+    var body: some View {
+        ZStack {
+            Capsule().fill(SN.background)
+            Capsule().fill(SN.surface)
+        }
+        .overlay { Capsule().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
+        .overlay {
+            Capsule().strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.09), location: 0),
+                                                         .init(color: .clear, location: 0.5)],
+                                                  startPoint: .top, endPoint: .bottom), lineWidth: 1)
+        }
     }
 }
 

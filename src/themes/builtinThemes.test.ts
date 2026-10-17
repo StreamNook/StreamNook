@@ -36,6 +36,8 @@ describe('built-in themes', () => {
     const oled = getOledTheme('#ff9933');
     expect(oled.palette.accent).toBe('#ff9933');
     expect(oled.palette.accentMuted).toBe('rgba(255, 153, 51, 0.5)');
+    // The Rust core pins the same value (theme_palette::oled_follows_its_accent).
+    expect(oled.palette.textSecondary).toBe('#ffcd9b');
     expect(getOledTheme('bad').palette.accent).toBe('#a064ff');
   });
 
@@ -91,5 +93,9 @@ describe('built-in themes', () => {
       expect(secondary, `${theme.id} secondary text`).toBeGreaterThanOrEqual(4.5);
       expect(secondary, `${theme.id} secondary vs muted`).toBeGreaterThanOrEqual(muted);
     }
+    // OLED's accent-derived secondary: black is the darkest an accent can mix to.
+    const oled = getOledTheme('#000000').palette;
+    const oledTrack = over(rgba(oled.surface), rgba(oled.background));
+    expect(ratio(over(rgba(oled.textSecondary), oledTrack), oledTrack)).toBeGreaterThanOrEqual(4.5);
   });
 });

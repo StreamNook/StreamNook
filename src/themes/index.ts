@@ -104,6 +104,11 @@ export const OLED_ACCENT_PRESETS: { name: string; value: string }[] = [
 
 const oledTheme: Theme = themes.find((t) => t.id === OLED_THEME_ID)!;
 
+// How far OLED's secondary text mixes its accent toward white. It lives in the
+// shared JSON so the Rust core derives the same color, and the core's tests pin
+// it: even a black accent reaches the 4.5:1 secondary floor at this mix.
+export const OLED_SECONDARY_LIGHTEN: number = builtIn.oledSecondaryLighten;
+
 // Helper functions
 export const getThemeById = (id: string): Theme | undefined => {
     return themes.find((theme) => theme.id === id);
@@ -334,7 +339,7 @@ export const getOledTheme = (accentHex?: string): Theme => {
             accentMuted: `rgba(${r}, ${g}, ${b}, 0.5)`,
             // Soft tint of the accent (lavender for purple, peach for orange…),
             // mixed toward white so secondary text stays readable on black.
-            textSecondary: lightenColor(accent, 45),
+            textSecondary: lightenColor(accent, OLED_SECONDARY_LIGHTEN),
             scrollbarThumb: `rgba(${r}, ${g}, ${b}, 0.25)`,
         },
     };
