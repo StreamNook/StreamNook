@@ -167,6 +167,40 @@ pub fn muted_contrast(palette: &Value) -> Option<f64> {
     Some(contrast_at((fg.0, fg.1, fg.2), (bg.0, bg.1, bg.2), fg.3))
 }
 
+/// The least alpha, in hundredths, at which `fg` reaches the floor over the opaque `bg`, or `None`
+/// when it already does at its own alpha. One that cannot reach it even opaque gets 100.
+fn floor_hundredths(fg: (f64, f64, f64, f64), bg: (f64, f64, f64, f64)) -> Option<u32> {
+    let rgb = (fg.0, fg.1, fg.2);
+    let back = (bg.0, bg.1, bg.2);
+    if contrast_at(rgb, back, fg.3) >= MUTED_CONTRAST_FLOOR {
+        return None;
+    }
+    let start = (fg.3 * 100.0).round() as u32;
+    Some((start..=100).find(|h| contrast_at(rgb, back, *h as f64 / 100.0) >= MUTED_CONTRAST_FLOOR).unwrap_or(100))
+}
+
+/// Lifts each saved custom theme's muted text (`palette.textMuted.opacity`, 0 to 100) to the
+/// floor, in place, so every shell that paints the theme from settings shows the lifted value
+/// without a contrast rule of its own. Returns whether any theme changed.
+pub fn lift_custom_themes(custom_themes: &mut Value) -> bool {
+    let mut changed = false;
+    for theme in custom_themes.as_array_mut().into_iter().flatten() {
+        let palette = custom_palette(theme);
+        let (Some(bg), Some(fg)) = (
+            palette.get("background").and_then(Value::as_str).and_then(css_rgba),
+            palette.get("textMuted").and_then(Value::as_str).and_then(css_rgba),
+        ) else {
+            continue;
+        };
+        let Some(hundredths) = floor_hundredths(fg, bg) else { continue };
+        if let Some(muted) = theme.pointer_mut("/palette/textMuted").and_then(Value::as_object_mut) {
+            muted.insert("opacity".into(), json!(hundredths));
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Lifts the palette's muted text to the floor: the same colour at the least alpha (in hundredths)
 /// that reaches `MUTED_CONTRAST_FLOOR` against the background. Muted text already at or above it
 /// is left exactly as written; one that cannot reach it even opaque goes opaque. The built-in
@@ -178,13 +212,7 @@ pub fn lift_muted(palette: &mut Value) {
     ) else {
         return;
     };
-    let rgb = (fg.0, fg.1, fg.2);
-    let back = (bg.0, bg.1, bg.2);
-    if contrast_at(rgb, back, fg.3) >= MUTED_CONTRAST_FLOOR {
-        return;
-    }
-    let start = (fg.3 * 100.0).round() as u32;
-    let hundredths = (start..=100).find(|h| contrast_at(rgb, back, *h as f64 / 100.0) >= MUTED_CONTRAST_FLOOR).unwrap_or(100);
+    let Some(hundredths) = floor_hundredths(fg, bg) else { return };
     let alpha = format!("{:.2}", hundredths as f64 / 100.0);
     let alpha = alpha.trim_end_matches('0').trim_end_matches('.');
     let lifted = format!("rgba({}, {}, {}, {alpha})", fg.0.round(), fg.1.round(), fg.2.round());
@@ -345,5 +373,30 @@ mod tests {
         let mut bright = json!({ "background": "#0c0c0d", "textMuted": "#ffffff" });
         lift_muted(&mut bright);
         assert_eq!(bright["textMuted"], "#ffffff");
+    }
+
+    #[test]
+    fn saved_custom_themes_are_lifted_in_place() {
+        let mut saved = json!([
+            { "id": "custom-dim", "name": "Dim", "palette": {
+                "background": { "value": "#0c0c0d", "opacity": 100 },
+                "textMuted": { "value": "#97b1b9", "opacity": 40 },
+                "accent": { "value": "#22d3ee", "opacity": 100 },
+            }},
+            { "id": "custom-ok", "name": "Fine", "palette": {
+                "background": { "value": "#0c0c0d", "opacity": 100 },
+                "textMuted": { "value": "#97b1b9", "opacity": 90 },
+            }},
+        ]);
+        assert!(lift_custom_themes(&mut saved));
+        assert_eq!(saved[0]["palette"]["textMuted"], json!({ "value": "#97b1b9", "opacity": 68 }));
+        assert_eq!(saved[0]["palette"]["accent"]["opacity"], 100);
+        assert_eq!(saved[1]["palette"]["textMuted"]["opacity"], 90);
+        // The stored value now paints exactly what resolve paints.
+        let resolved = resolve("custom-dim", saved.as_array().unwrap(), None);
+        assert_eq!(resolved.palette["textMuted"], "rgba(151, 177, 185, 0.68)");
+        // A second pass has nothing left to do.
+        assert!(!lift_custom_themes(&mut saved));
+        assert!(!lift_custom_themes(&mut json!(null)));
     }
 }

@@ -227,6 +227,15 @@ pub async fn get_active_theme(
     Ok(crate::services::theme_palette::resolve(&id, &custom, accent.as_deref()))
 }
 
+/// A custom theme as saving would store it, muted text lifted to the contrast
+/// floor: the theme creator previews this, so its preview is the saved theme.
+#[tauri::command]
+pub async fn lift_custom_theme(theme: Value) -> Result<Value, String> {
+    let mut list = Value::Array(vec![theme]);
+    crate::services::theme_palette::lift_custom_themes(&mut list);
+    list.as_array_mut().and_then(Vec::pop).ok_or_else(|| "no theme".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

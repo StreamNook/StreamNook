@@ -156,19 +156,26 @@ pub(crate) fn commit_settings_patch(
     source: Option<String>,
     build: impl FnOnce(&Settings) -> Result<serde_json::Map<String, serde_json::Value>, String>,
 ) -> Result<(), String> {
-    let (settings, keys, favorites_changed, role_art_changed) = {
+    let (settings, keys, favorites_changed, role_art_changed, source) = {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         let patch = build(&state_settings)?;
         if patch.is_empty() {
             return Ok(());
         }
         let keys: Vec<String> = patch.keys().cloned().collect();
+        let sent_themes = patch.get("custom_themes").filter(|v| !v.is_null()).cloned();
         let next = apply_settings_patch(&state_settings, patch)?;
+        // Custom themes come back with their muted text lifted to the contrast
+        // floor; when that changed what the window sent, it has to re-read too.
+        let source = match sent_themes {
+            Some(sent) if next.extra.get("custom_themes") != Some(&sent) => None,
+            _ => source,
+        };
         let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
         let role_art_changed = state_settings.chat_design.ffz_custom_role_badges
             != next.chat_design.ffz_custom_role_badges;
         *state_settings = next.clone();
-        (next, keys, favorites_changed, role_art_changed)
+        (next, keys, favorites_changed, role_art_changed, source)
     };
     after_settings_change(&settings, favorites_changed);
     state.layout_service.set_gif_scale(settings.chat_design.gif_scale);
@@ -491,6 +498,7 @@ fn apply_settings_patch(
     // is written by the follow commands, `drops` by the drops service, and
     // `channel_links` by the link service. A patch never overrides them.
     next.adopt_backend_owned(current);
+    next.lift_custom_theme_muted();
     Ok(next)
 }
 
@@ -627,8 +635,9 @@ pub(crate) fn apply_imported_settings(
         }
     }
 
-    let imported: Settings = serde_json::from_value(merged)
+    let mut imported: Settings = serde_json::from_value(merged)
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
+    imported.lift_custom_theme_muted();
 
     let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {
@@ -1163,6 +1172,17 @@ mod patch_tests {
         let next = apply_settings_patch(&current, patch(json!({ "provider_follows": [] }))).unwrap();
         assert_eq!(next.provider_follows.len(), 1);
         assert_eq!(next.provider_follows[0].channel, "xqc");
+    }
+
+    #[test]
+    fn a_saved_custom_theme_keeps_muted_text_at_the_floor() {
+        let current = Settings::default();
+        let dim = json!([{ "id": "custom-dim", "name": "Dim", "palette": {
+            "background": { "value": "#0c0c0d", "opacity": 100 },
+            "textMuted": { "value": "#97b1b9", "opacity": 40 },
+        }}]);
+        let next = apply_settings_patch(&current, patch(json!({ "custom_themes": dim }))).unwrap();
+        assert_eq!(next.extra["custom_themes"][0]["palette"]["textMuted"]["opacity"], 68);
     }
 
     #[test]
