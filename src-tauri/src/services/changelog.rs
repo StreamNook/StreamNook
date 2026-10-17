@@ -466,6 +466,8 @@ pub struct AndroidRelease {
     pub version: String,
     pub published_at: Option<String>,
     pub changes: Vec<AndroidChange>,
+    /// The APK's size in bytes, shown before someone commits to a download.
+    pub size: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -475,6 +477,8 @@ struct AndroidManifest {
     notes: Option<String>,
     #[serde(default)]
     published_at: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 static SENTENCE_RE: Lazy<Regex> =
@@ -529,9 +533,7 @@ pub fn parse_android_changes(notes: &str) -> Vec<AndroidChange> {
 /// The Android release notes. None is the manifest's documented "nothing
 /// published yet" state (HTTP 503).
 pub async fn load_android() -> Result<Option<AndroidRelease>, String> {
-    let res = crate::services::http::client()
-        .get(ANDROID_MANIFEST_URL)
-        .send()
+    let res = crate::services::sn_transport::send(crate::services::http::client().get(ANDROID_MANIFEST_URL))
         .await
         .map_err(|e| format!("Could not reach the update server: {e}"))?;
     if !res.status().is_success() {
@@ -543,6 +545,7 @@ pub async fn load_android() -> Result<Option<AndroidRelease>, String> {
         version: m.version,
         published_at: m.published_at,
         changes: m.notes.as_deref().map(parse_android_changes).unwrap_or_default(),
+        size: m.size,
     }))
 }
 
