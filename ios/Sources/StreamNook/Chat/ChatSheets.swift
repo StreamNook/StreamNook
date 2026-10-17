@@ -37,22 +37,28 @@ struct ChatMenuSheet: View {
             List {
                 if let modes = session.modes, !modes.modes.isEmpty {
                     Section {
-                        // Status, not actions: no card behind them, quieter and tighter than the rows below.
-                        ForEach(modes.modes, id: \.kind) { mode in
-                            Label {
-                                Text(mode.compact)
-                                    .font(.sn(13.5))
-                                    .foregroundStyle(SN.textSecondary)
-                            } icon: {
-                                Image(systemName: RoomModeSymbol.name(mode.kind))
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(SN.textMuted)
+                        // Status, not actions: one quiet block with no card, its lines closer together
+                        // than the rows below (a row per mode would keep the list's minimum row height).
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(modes.modes, id: \.kind) { mode in
+                                HStack(spacing: 12) {
+                                    Image(systemName: RoomModeSymbol.name(mode.kind))
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(SN.textMuted)
+                                        .frame(width: 20)
+                                        .accessibilityHidden(true)
+                                    Text(mode.compact)
+                                        .font(.sn(13.5))
+                                        .foregroundStyle(SN.textSecondary)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityHint(mode.detail)
                             }
-                            .accessibilityHint(mode.detail)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 3, leading: 20, bottom: 3, trailing: 20))
                         }
+                        .padding(.vertical, 4)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                     } header: {
                         Text("This chat is in")
                             .foregroundStyle(Color(red: 0x8C / 255, green: 0xA0 / 255, blue: 0xA7 / 255))
