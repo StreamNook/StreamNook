@@ -132,6 +132,10 @@ async fn send_once(app: &AppHandle) -> Result<(), SendError> {
         "target": id.target,
         "channel": id.channel,
         "report_failures": FAILURES.load(Ordering::Relaxed),
+        // How this client reaches streamnook.app right now: "direct", or
+        // "relay" on a network that drops the site's addresses. The server
+        // trusts its own view when the request arrived through the relay.
+        "api_route": crate::services::sn_transport::route(crate::services::sn_transport::Host::Site).as_str(),
     });
 
     // Only sent once a check has completed this session. Absent means "no check

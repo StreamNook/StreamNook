@@ -21,12 +21,13 @@
 //! and retry on the next tick; the server accepts minutes up to ten minutes old,
 //! so the queue holds no more than that.
 
+use crate::services::sn_transport::{self, Host, LogThrottle};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use log::{debug, warn};
 use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PATH: &str = "/api/v1/watch/minute";
 const TICK: Duration = Duration::from_secs(60);
@@ -66,6 +67,10 @@ struct State {
     playing_hint: BTreeMap<String, bool>,
     pending: VecDeque<(DateTime<Utc>, WatchedChannel)>,
     running: bool,
+    /// Sends that are waiting for a retry. Logged at `warn` so a member whose
+    /// minutes do not arrive has the reason in their own log, throttled so an
+    /// outage of hours stays a few lines.
+    deferred: LogThrottle,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -200,10 +205,18 @@ async fn flush() {
         match crate::commands::streamnook_api::post_json(PATH, &body, None).await {
             Ok(resp) if resp.ok => {
                 debug!("[WatchMinutes] {} sent ({})", minute, resp.body);
+                if let Some(run) = with_state(|s| s.deferred.recover()) {
+                    warn!(
+                        "[WatchMinutes] sending again ({} route) after {} deferred attempt{}",
+                        sn_transport::route(Host::Site).as_str(),
+                        run,
+                        if run == 1 { "" } else { "s" }
+                    );
+                }
             }
             // Rate limited or a server fault: keep it for the next tick.
             Ok(resp) if resp.status == 429 || resp.status >= 500 => {
-                warn!("[WatchMinutes] {} deferred: HTTP {}", minute, resp.status);
+                note_deferred(&format!("HTTP {}", resp.status));
                 return;
             }
             // Any other refusal (stale, malformed, signed out server-side) will
@@ -217,13 +230,29 @@ async fn flush() {
                 return;
             }
             Err(e) => {
-                debug!("[WatchMinutes] {} deferred: {}", minute, e);
+                note_deferred(&e);
                 return;
             }
         }
         with_state(|s| {
             s.pending.pop_front();
         });
+    }
+}
+
+/// A send that will be retried on the next tick. The first of a run is logged,
+/// then one line per `sn_transport::LOG_EVERY`. Never the token: `detail` is an
+/// HTTP status or the transport's error, which names the URL only.
+fn note_deferred(detail: &str) {
+    let (held, waiting) = with_state(|s| (s.deferred.hit(Instant::now(), sn_transport::LOG_EVERY), s.pending.len()));
+    if let Some(held) = held {
+        warn!(
+            "[WatchMinutes] {} minute{} waiting to send: {}{}",
+            waiting,
+            if waiting == 1 { "" } else { "s" },
+            detail,
+            if held == 0 { String::new() } else { format!(" ({held} more attempts since the last line)") }
+        );
     }
 }
 
