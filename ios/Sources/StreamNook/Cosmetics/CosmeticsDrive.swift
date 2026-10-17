@@ -24,6 +24,7 @@ enum CosmeticsDrive {
         case "profile": await profile(value, model: model)
         case "cosmetics": await cosmetics(value, model: model)
         case "wash" where value == "find": await findWashes(model)
+        case "wash" where value == "paints": countDecorated(model)
         default: return false
         }
         return true
@@ -132,6 +133,29 @@ enum CosmeticsDrive {
             log.notice("drive wash \(message.username, privacy: .public) atmosphere \(view.atmosphere ?? "-", privacy: .public) cologne \(view.cologne != nil) member badge \(member?.title ?? "-", privacy: .public)")
         }
         log.notice("drive wash members on screen \(seen.count)")
+    }
+
+    /// How many rows wear 7TV and StreamNook cosmetics, history and live apart.
+    private static func countDecorated(_ model: AppModel) {
+        guard let session = model.chat.activeSession else {
+            log.error("drive paints: no chat")
+            return
+        }
+        var tally: [Bool: (rows: Int, paint: Int, sevenTv: Int, member: Int)] = [:]
+        for message in session.pipeline.recentMessages(500) where !message.isSystem {
+            let history = message.metadata.fromBackfill
+            var count = tally[history] ?? (0, 0, 0, 0)
+            count.rows += 1
+            if let view = message.metadata.view {
+                if view.paint != nil { count.paint += 1 }
+                if view.badges.contains(where: { $0.provider == "7tv" }) { count.sevenTv += 1 }
+                if view.badges.contains(where: { $0.provider == "streamnook" }) { count.member += 1 }
+            }
+            tally[history] = count
+        }
+        for (history, count) in tally {
+            log.notice("drive paints \(history ? "history" : "live", privacy: .public) rows \(count.rows) paint \(count.paint) 7tv badge \(count.sevenTv) member badge \(count.member)")
+        }
     }
 }
 #endif

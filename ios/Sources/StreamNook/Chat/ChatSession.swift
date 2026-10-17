@@ -228,8 +228,10 @@ final class ChatSession {
         }
         // Cached when fresh, else fetched: moderator, VIP, partner and event badges come from here.
         _ = try? await core.invoke("fetch_global_badges", "{}")
+        let asked = Date()
         if let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
            let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
+            chatLog.notice("history for \(self.channel, privacy: .public): \(rows.count) rows in \(Int(Date().timeIntervalSince(asked) * 1000)) ms")
             pipeline.prepend(rows)
             if roomID == nil { roomID = rows.first?.tags["room-id"] }
         }

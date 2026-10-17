@@ -114,9 +114,18 @@ struct BrowseScreen: View {
             } else if shown.isEmpty {
                 EmptyNote(text: browse.streamResults != nil ? "No channels found." : "Nothing to recommend yet.")
             } else {
-                StreamGrid(model: model, streams: shown, view: view,
-                           settleKey: "\(view):\(browse.streamResults != nil ? "q:\(browse.trimmed)" : "recommended")",
-                           latch: liveLatch)
+                // A search also finds channels that are not streaming (Rust settles `is_live` from
+                // Twitch's streams answer); they get their own group under the live cards.
+                let live = shown.filter { !$0.isOffline }
+                let offline = shown.filter(\.isOffline)
+                if !live.isEmpty {
+                    StreamGrid(model: model, streams: live, view: view,
+                               settleKey: "\(view):\(browse.streamResults != nil ? "q:\(browse.trimmed)" : "recommended")",
+                               latch: liveLatch)
+                }
+                if !offline.isEmpty {
+                    OfflineChannels(channels: offline, open: { model.startWatching($0) })
+                }
             }
         case .categories:
             let shown = browse.categoryResults ?? browse.categories

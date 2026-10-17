@@ -8,6 +8,8 @@ struct MainShell: View {
     @Bindable var model: AppModel
     @State private var landscape = false
     @State private var insets = EdgeInsets()
+    /// The You tab's icon: your picture once it is drawn.
+    @State private var youAvatar = YouTabAvatar()
 
     private var nav: Navigator { model.nav }
 
@@ -26,8 +28,10 @@ struct MainShell: View {
                 Tab(MobileTab.rewards.title, systemImage: Symbol.rewards, value: MobileTab.rewards) {
                     stack(.rewards) { RewardsScreen(model: model) }
                 }
-                Tab(MobileTab.you.title, systemImage: Symbol.you, value: MobileTab.you) {
+                Tab(value: MobileTab.you) {
                     stack(.you) { YouScreen(model: model) }
+                } label: {
+                    YouTabLabel(avatar: youAvatar, selected: nav.tab == .you)
                 }
             }
             .tint(SN.accent)
@@ -47,6 +51,11 @@ struct MainShell: View {
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
         .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
+        // selected ring's color).
+        .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
+            await youAvatar.refresh(model: model)
+        }
         .sheet(item: $cosmetics.profile) { target in
             ProfileSheet(model: ProfileSheetModel(target: target, core: model.core))
         }
