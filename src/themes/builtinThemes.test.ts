@@ -65,4 +65,31 @@ describe('built-in themes', () => {
     }
     expect(themes.find((t) => t.id === DEFAULT_THEME_ID)?.palette.textMuted).toBe('rgba(151, 177, 185, 0.75)');
   });
+
+  // Twins theme_palette::floor_secondary: on the raised surface (surface over background), secondary
+  // text reaches 4.5:1 and is never quieter than muted text.
+  it('ships every secondary text at 4.5:1 on the surface, never quieter than muted', () => {
+    const rgba = (css: string): number[] => {
+      const c = css.trim().toLowerCase();
+      if (c.startsWith('#')) {
+        const h = c.length === 4 ? [...c.slice(1)].map((x) => x + x).join('') : c.slice(1);
+        const n = (i: number) => parseInt(h.slice(i, i + 2), 16);
+        return [n(0), n(2), n(4), h.length === 8 ? n(6) / 255 : 1];
+      }
+      const parts = c.replace(/^rgba?\(|\)$/g, '').split(/[\s,/]+/).filter(Boolean).map(Number);
+      return [parts[0], parts[1], parts[2], parts[3] ?? 1];
+    };
+    const over = (fg: number[], bg: number[]) => [0, 1, 2].map((i) => fg[i] * fg[3] + bg[i] * (1 - fg[3]));
+    const lin = (v: number) => (v / 255 <= 0.04045 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4);
+    const lum = (c: number[]) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+    const ratio = (a: number[], b: number[]) =>
+      (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    for (const theme of themes) {
+      const track = over(rgba(theme.palette.surface), rgba(theme.palette.background));
+      const secondary = ratio(over(rgba(theme.palette.textSecondary), track), track);
+      const muted = ratio(over(rgba(theme.palette.textMuted), track), track);
+      expect(secondary, `${theme.id} secondary text`).toBeGreaterThanOrEqual(4.5);
+      expect(secondary, `${theme.id} secondary vs muted`).toBeGreaterThanOrEqual(muted);
+    }
+  });
 });

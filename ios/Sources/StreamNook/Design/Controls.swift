@@ -48,7 +48,9 @@ struct GlazeSegments<Value: Hashable>: View {
                         }
                         Text(segment.label).font(on ? .snLabelStrong : .snLabel)
                     }
-                    .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
+                    // Unselected labels sit on the track's raised surface, where muted text falls
+                    // under 4.5:1, so they use secondary text.
+                    .foregroundStyle(on ? SN.textPrimary : SN.textSecondary)
                     .padding(.horizontal, fill ? 4 : 14)
                     .padding(.vertical, 7)
                     .frame(maxWidth: fill ? .infinity : nil)
