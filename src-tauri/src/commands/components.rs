@@ -223,6 +223,12 @@ pub(crate) mod update_check {
 /// `notes` are shared across them.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 struct UpdateArtifact {
+    /// This build's own version, when it differs from the manifest's. Set on
+    /// the Windows entry once Windows moved to the installer: that entry is the
+    /// frozen last portable build, which old portable copies update to while
+    /// the top-level `version` keeps advancing for every other platform.
+    #[serde(default)]
+    version: Option<String>,
     download_url: String,
     #[serde(default)]
     bundle_name: Option<String>,
@@ -321,6 +327,7 @@ impl UpdateManifest {
             return Some(found.clone());
         }
         (target == "windows-x86_64").then(|| UpdateArtifact {
+            version: None,
             download_url: self.download_url.clone(),
             bundle_name: self.bundle_name.clone(),
             sha256: self.sha256.clone(),
@@ -328,6 +335,16 @@ impl UpdateManifest {
             size: self.size,
         })
     }
+}
+
+/// The version a platform's build actually is: its own `version` when the
+/// manifest names one (the frozen Windows portable build), else the release
+/// version. Comparing the release version against a frozen build would offer
+/// the same build forever.
+fn offered_version(manifest: &UpdateManifest, artifact: Option<&UpdateArtifact>) -> String {
+    artifact
+        .and_then(|a| a.version.clone())
+        .unwrap_or_else(|| manifest.version.clone())
 }
 
 // ── Update artifact verification ────────────────────────────────────────────
@@ -349,11 +366,15 @@ impl UpdateManifest {
 /// the `UPDATE_SIGNING_KEY` CI secret and in Brandon's own backup; it has never
 /// been committed and must never reach the host serving updates.
 ///
+/// The Windows installer updater trusts the same key (`plugins.updater.pubkey`
+/// in tauri.windows.conf.json, base64 of the whole .pub file); a test in
+/// `services::installer_update` fails if the two ever differ.
+///
 /// Rotating means shipping a new value here, so every installed client keeps
 /// trusting the old key until it updates. That is survivable only while
 /// `ENFORCE_UPDATE_SIGNATURE` is false, which is the other reason not to flip
 /// that until signing has been proven across a release or two.
-const UPDATE_PUBKEY: Option<&str> =
+pub(crate) const UPDATE_PUBKEY: Option<&str> =
     Some("RWRed6FdImp0PGduGf4cCJdsO5sRuovojn1yv+FUgHJBJQVCT71Rv3+b");
 
 /// Whether a missing or unverifiable signature ABORTS the update.
@@ -432,7 +453,50 @@ fn verify_update_bundle(
 
 #[cfg(test)]
 mod update_manifest_tests {
-    use super::{UpdateArtifact, UpdateManifest};
+    use super::{offered_version, remote_is_newer, UpdateArtifact, UpdateManifest};
+
+    /// After Windows moved to the installer: the release version keeps
+    /// advancing for macOS and Linux while the Windows entry stays the frozen
+    /// last portable build.
+    fn frozen_windows_manifest() -> UpdateManifest {
+        serde_json::from_str(
+            r#"{
+                "version": "8.9.5",
+                "download_url": "https://streamnook.app/download/portable",
+                "platforms": {
+                    "windows-x86_64": {
+                        "version": "8.9.0",
+                        "download_url": "https://streamnook.app/download/portable",
+                        "bundle_name": "StreamNook.7z"
+                    },
+                    "macos-aarch64": {
+                        "download_url": "https://streamnook.app/d/mac/StreamNook.app.tar.gz",
+                        "bundle_name": "StreamNook.app.tar.gz"
+                    }
+                }
+            }"#,
+        )
+        .expect("frozen manifest must parse")
+    }
+
+    #[test]
+    fn the_frozen_windows_build_is_offered_by_its_own_version() {
+        let m = frozen_windows_manifest();
+        let win = m.artifact_for_target("windows-x86_64");
+        let offered = offered_version(&m, win.as_ref());
+        assert_eq!(offered, "8.9.0");
+        // An old portable copy moves up to the last portable build...
+        assert!(remote_is_newer(&offered, "8.8.11"));
+        // ...and that build is never offered itself again.
+        assert!(!remote_is_newer(&offered, "8.9.0"));
+    }
+
+    #[test]
+    fn macos_still_follows_the_release_version() {
+        let m = frozen_windows_manifest();
+        let mac = m.artifact_for_target("macos-aarch64");
+        assert_eq!(offered_version(&m, mac.as_ref()), "8.9.5");
+    }
 
     /// A manifest as the pipeline wrote it BEFORE per-platform builds existed:
     /// flat fields only, describing a Windows bundle.
@@ -689,8 +753,9 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
     // Resolve OUR platform's build first. A manifest that ships no build for
     // this platform is not an update, however new its version number is.
     let artifact = manifest.artifact_for_platform();
+    let offered_version = offered_version(&manifest, artifact.as_ref());
     let update_available =
-        artifact.is_some() && remote_is_newer(&manifest.version, &current_version);
+        artifact.is_some() && remote_is_newer(&offered_version, &current_version);
     if artifact.is_none() {
         // `warn`, not `info`: turning diagnostics off drops the file log to
         // Warn, which used to silence precisely the line that explains why a
@@ -707,7 +772,7 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
 
     // Always recorded, including the "already current" case, which previously
     // wrote nothing at all anywhere.
-    update_check::record_success(&manifest.version, artifact.is_some(), update_available);
+    update_check::record_success(&offered_version, artifact.is_some(), update_available);
 
     let artifact = artifact.unwrap_or_default();
 
@@ -715,7 +780,7 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
         .size
         .map(|s| format!("{:.1} MB", s as f64 / 1_048_576.0));
     let releases_behind = if update_available {
-        crate::services::changelog::releases_behind(&current_version, &manifest.version)
+        crate::services::changelog::releases_behind(&current_version, &offered_version)
     } else {
         None
     };
@@ -723,7 +788,7 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
     Ok(BundleUpdateStatus {
         update_available,
         current_version: current_version.clone(),
-        latest_version: manifest.version.clone(),
+        latest_version: offered_version.clone(),
         download_url: Some(artifact.download_url.clone()),
         bundle_name: Some(
             artifact
@@ -736,7 +801,7 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
             Some(ComponentChanges {
                 streamnook: Some(VersionChange {
                     from: current_version,
-                    to: manifest.version.clone(),
+                    to: offered_version.clone(),
                 }),
                 streamlink: None,
                 ttvlol: None,
@@ -767,9 +832,63 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
 /// This does NOT affect a user's FIRST download, which is a manual install and
 /// never touches the updater. See `docs` / the update-signing runbook: first-run
 /// trust is an Authenticode question, not a minisign one.
+///
+/// Windows asks the installer updater first (`services::installer_update`),
+/// once a real key is configured. Any error there falls back to this manifest,
+/// and so does the rest of the session after a download the plugin can never
+/// complete, so a fault in the installer's setup can never strand a copy.
 #[tauri::command]
-pub async fn check_for_bundle_update() -> Result<BundleUpdateStatus, String> {
+pub async fn check_for_bundle_update(
+    app_handle: crate::rt::AppHandle,
+) -> Result<BundleUpdateStatus, String> {
+    #[cfg(windows)]
+    if crate::services::installer_update::plugin_usable(&app_handle) {
+        match check_with_installer(&app_handle).await {
+            Ok(status) => return Ok(status),
+            Err(e) => log::warn!("[Update] installer update check failed, using the exe-swap updater: {e}"),
+        }
+    }
+    let _ = &app_handle;
     check_for_bundle_update_streamnook().await
+}
+
+/// The installer updater's answer in the status shape the UI already reads.
+#[cfg(windows)]
+async fn check_with_installer(app: &crate::rt::AppHandle) -> Result<BundleUpdateStatus, String> {
+    let current = get_current_app_version();
+    let found = match crate::services::installer_update::check(app).await {
+        Ok(found) => found,
+        Err(e) => {
+            update_check::record_failure(&e);
+            return Err(e);
+        }
+    };
+    let available = found.is_some();
+    let latest = found.as_ref().map_or_else(|| current.clone(), |u| u.version.clone());
+    update_check::record_success(&latest, true, available);
+    let releases_behind = if available {
+        crate::services::changelog::releases_behind(&current, &latest)
+    } else {
+        None
+    };
+    Ok(BundleUpdateStatus {
+        update_available: available,
+        current_version: current.clone(),
+        latest_version: latest.clone(),
+        download_url: found.as_ref().map(|u| u.download_url.to_string()),
+        bundle_name: Some("StreamNook-Setup.exe".to_string()),
+        download_size: None,
+        component_changes: available.then(|| ComponentChanges {
+            streamnook: Some(VersionChange { from: current, to: latest }),
+            streamlink: None,
+            ttvlol: None,
+        }),
+        release_notes: found.and_then(|u| u.body),
+        // Verified by the plugin against the key in tauri.windows.conf.json.
+        sha256: None,
+        signature: None,
+        releases_behind,
+    })
 }
 
 /// Legacy GitHub-release update check. RETIRED as an update source (see
@@ -901,9 +1020,15 @@ pub async fn extract_bundled_components() -> Result<(), String> {
 /// Download and install bundle update
 #[tauri::command]
 pub async fn download_and_install_bundle(app_handle: crate::rt::AppHandle) -> Result<(), String> {
-    let status = check_for_bundle_update().await?;
+    let status = check_for_bundle_update(app_handle.clone()).await?;
     if !status.update_available {
         return Err("No update available".to_string());
+    }
+    // The check above was answered by the installer updater: download its
+    // signed installer instead of a 7z.
+    #[cfg(windows)]
+    if crate::services::installer_update::has_pending() {
+        return crate::services::installer_update::download(&app_handle).await;
     }
     install_bundle_from_status(app_handle, status).await
 }
@@ -1346,7 +1471,7 @@ fn running_app_bundle() -> Result<PathBuf, String> {
 /// before a hard exit, matching the flags the plugin is built with
 /// (position/size/maximized only). The window-state plugin is desktop-only,
 /// and no swap path runs on mobile (Android updates via the package installer).
-fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
+pub(crate) fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
     #[cfg(desktop)]
     {
         use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -1430,6 +1555,12 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
                 .map_err(|e| format!("Failed to start the AppImage swap: {}", e))?;
             crate::services::app_exit::process_exit(0, "update: AppImage swap helper started");
         }
+    }
+
+    // Windows, installer updater: runs the downloaded installer and exits.
+    #[cfg(windows)]
+    if crate::services::installer_update::apply(&app_handle)? {
+        return Ok(());
     }
 
     let vbs_path = temp_dir.join("update_launcher.vbs");

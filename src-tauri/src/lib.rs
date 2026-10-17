@@ -40,7 +40,7 @@ use commands::moderation_tools::{
 };
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
-    badges::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
+    badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
@@ -77,44 +77,27 @@ use tokio::sync::Mutex as TokioMutex;
 
 /// A `streamnook://` deep link that arrived before the frontend was listening
 /// (cold start). The webview drains it via `take_pending_watch_link` on mount.
+/// On mobile every link passes through here, warm ones included.
 #[derive(Default)]
 struct PendingWatchLink(Mutex<Option<String>>);
 
-/// Parse a `streamnook://` share link into a Twitch channel login to open.
-///
-/// Accepts `streamnook://watch/<channel>` and `streamnook://w/<channel>` (the
-/// format the share button and web landing page produce), plus a bare
-/// `streamnook://<channel>` fallback. Returns a sanitized login (lowercase,
-/// `[a-z0-9_]`) or None when there's nothing watchable in the URL.
+/// Read a `streamnook://` (or streamnook.app) share link into the stream key the
+/// frontend's `startStream` takes: a bare login for Twitch, `provider:channel`
+/// otherwise. Building and parsing both live in `services::share_link`.
 fn parse_watch_link(url: &tauri::Url) -> Option<String> {
-    if url.scheme() != "streamnook" {
-        return None;
-    }
-    // The action ("watch"/"w") is the URL authority; the channel is the first
-    // path segment. A bare streamnook://<channel> has the channel as the authority.
-    let action = url.host_str().unwrap_or("");
-    let first_segment = url
-        .path_segments()
-        .and_then(|mut segments| segments.next())
-        .unwrap_or("");
-    let raw = match action {
-        "watch" | "w" => first_segment,
-        _ => action,
-    };
-    // Twitch logins are at most 25 chars; cap so a padded/junk URL can't emit an
-    // oversized string to the frontend.
-    let clean: String = raw
-        .trim()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .take(25)
-        .collect::<String>()
-        .to_lowercase();
-    if clean.is_empty() {
-        None
-    } else {
-        Some(clean)
-    }
+    services::share_link::parse(url).map(|link| link.stream_key())
+}
+
+/// The link a share button copies for a stream. `channel` is the row's
+/// `user_login`; `stream_id` its platform stream id, which names the live video
+/// for a YouTube stream started from a channel.
+#[tauri::command]
+fn share_link(provider: Option<String>, channel: String, stream_id: Option<String>) -> Result<String, String> {
+    use services::share_link as share;
+    let provider = provider.unwrap_or_else(|| "twitch".to_string());
+    let channel = share::share_channel(&provider, &channel, stream_id.as_deref());
+    share::share_url(&provider, &channel, &share::day_tag())
+        .ok_or_else(|| format!("Nothing to share for {provider} channel {channel:?}"))
 }
 
 /// Drain a deep link the app was cold-started with, if any. The frontend calls
@@ -278,6 +261,8 @@ fn show_main_window(app: &crate::rt::AppHandle) {
             if let Ok(hwnd) = win.hwnd() {
                 services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
             }
+            #[cfg(windows)]
+            services::webview2_failures::watch(&win);
             // Re-attach the aspect lock to the NEW window. Not `#[cfg(windows)]`
             // any more: Linux writes size hints on the X window, and a
             // recreated window is a new X window with no hints on it, so
@@ -401,6 +386,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.retire_legacy_live_edge_gap();
     settings.enable_low_latency_engine_once();
     settings.scope_blend_header_marks_once();
+    settings.move_room_modes_to_prompt_once();
     settings.adopt_first_run_look_once();
     settings.lift_custom_theme_muted();
     Ok(settings)
@@ -446,6 +432,29 @@ fn cleanup_update_artifacts() {
         if staging.is_dir() {
             debug!("[Main] Removing the update staging folder {:?}", staging);
             let _ = std::fs::remove_dir_all(&staging);
+        }
+    }
+    // Windows: the installer the move from the portable copy ran
+    // (services::installer_update::apply), and the ones tauri-plugin-updater
+    // ran for installed updates. The plugin writes each into its own
+    // `StreamNook-<version>-updater-*` folder and exits before it can delete
+    // it. They have finished by the time the app they started is running; if
+    // one has not quite exited, the next launch gets it.
+    if cfg!(windows) {
+        let temp = std::env::temp_dir();
+        let installer = temp.join("StreamNook-update").join("StreamNook-Setup.exe");
+        if installer.is_file() {
+            debug!("[Main] Removing the finished installer {:?}", installer);
+            let _ = std::fs::remove_file(&installer);
+        }
+        if let Ok(entries) = std::fs::read_dir(&temp) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("StreamNook-") && name.contains("-updater-") && entry.path().is_dir() {
+                    debug!("[Main] Removing the finished update installer folder {:?}", entry.path());
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
         }
     }
     if let Ok(current_exe) = std::env::current_exe() {
@@ -642,6 +651,13 @@ pub fn run() {
     // hand-off all happened in `linux_cef::enter` before this function was
     // called (CEF re-executes this binary for its helpers, which must never
     // reach the code below). Only the log lines it produced are left to write.
+    //
+    // Windows: an old portable copy hands over to the installed app here, and a
+    // build older than one that already ran asks first. Before anything else,
+    // so a hand-over never registers protocols, takes the single-instance lock
+    // or starts WebView2.
+    #[cfg(windows)]
+    services::installer_update::startup();
     services::app_exit::note_started();
 
     // Apply WebView2 browser arguments uniformly to every webview in the process.
@@ -702,6 +718,10 @@ pub fn run() {
     if let Some(extra) = inherited_webview_args.as_deref() {
         info!("[WebView2] Extra browser arguments from the environment: {extra}");
     }
+    // Before the config window builds the first webview: a browser process the
+    // previous run left on the data folder would adopt it and then die with it.
+    #[cfg(windows)]
+    services::webview2_failures::before_first_webview();
 
     // Every panic goes to streamnook.log and errors.log, with a backtrace.
     // Without this, a panic on a
@@ -843,6 +863,9 @@ pub fn run() {
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
+    #[cfg(desktop)]
+    services::mention_notify::refresh(&settings);
+    services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
@@ -959,6 +982,10 @@ pub fn run() {
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(linux_window_frame::plugin());
+    // Windows: installer updates (services::installer_update). Its key and
+    // endpoint live in tauri.windows.conf.json, the only config that has them.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "ios"))]
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
@@ -1096,7 +1123,8 @@ pub fn run() {
                         services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
                     }
                     // A crashed renderer or browser process leaves the window
-                    // dead with nothing on disk; record it, reload a renderer.
+                    // dead with nothing on disk; record it, reload a renderer,
+                    // relaunch after a browser process.
                     services::webview2_failures::watch(&main);
                 }
             }
@@ -1215,6 +1243,13 @@ pub fn run() {
             //    listener (and the webview) existed, so we also drain get_current()
             //    into PendingWatchLink, which the frontend pulls on mount.
             //
+            // Android delivers both through on_open_url, from the activity rather
+            // than from argv: the cold link fires when the plugin loads into the
+            // new webview, before any page script is listening, and a link that
+            // recreates the activity lands in a fresh page the same way. So on
+            // mobile every link is stashed first, and the event only tells a
+            // mounted shell to drain it; the one take decides who opens it.
+            //
             // iOS has no deep-link plugin; the Swift app receives the links.
             app.manage(PendingWatchLink::default());
             #[cfg(not(target_os = "ios"))]
@@ -1224,9 +1259,21 @@ pub fn run() {
                 let watch_handle = app_handle.clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
+                        // A Windows notification's click: never a channel.
+                        #[cfg(desktop)]
+                        if commands::notification_mirror::is_notice_url(&url) {
+                            commands::notification_mirror::on_notice_url(&watch_handle, &url);
+                            continue;
+                        }
                         if let Some(channel) = parse_watch_link(&url) {
                             #[cfg(desktop)]
                             show_main_window(&watch_handle);
+                            #[cfg(mobile)]
+                            if let Some(pending) = watch_handle.try_state::<PendingWatchLink>() {
+                                if let Ok(mut guard) = pending.0.lock() {
+                                    *guard = Some(channel.clone());
+                                }
+                            }
                             let _ = watch_handle.emit("streamnook:watch", channel);
                         }
                     }
@@ -1234,6 +1281,13 @@ pub fn run() {
 
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     for url in urls {
+                        // Started by a notification's click: its action waits
+                        // in the pending slot for the page to take on mount.
+                        #[cfg(desktop)]
+                        if commands::notification_mirror::is_notice_url(&url) {
+                            commands::notification_mirror::on_notice_url(&app_handle, &url);
+                            continue;
+                        }
                         if let Some(channel) = parse_watch_link(&url) {
                             if let Some(pending) = app.try_state::<PendingWatchLink>() {
                                 if let Ok(mut guard) = pending.0.lock() {
@@ -1341,6 +1395,10 @@ pub fn run() {
             // can count the watching they did before joining. Daily, and a no-op
             // until a week has passed or an answer is still unpublished.
             services::twitch_recap::start(app_handle.clone());
+
+            // VOD positions reconciled with the viewer's Twitch history. Spawns
+            // nothing until a VOD position is reported or a Home mounts.
+            services::vod_sync::init(app_handle.clone());
 
             // Keep the Kick OAuth pair perpetually fresh (single-flight refresh
             // on a clock), and the YouTube cookie harvest young. Both are what
@@ -1584,6 +1642,7 @@ pub fn run() {
             fetch_exchange_rates,
             get_window_size,
             take_pending_watch_link,
+            share_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
             #[cfg(target_os = "android")]
@@ -1615,6 +1674,14 @@ pub fn run() {
             open_chat_overlay,
             #[cfg(desktop)]
             open_multichat_window,
+            #[cfg(desktop)]
+            commands::notification_mirror::mirror_notification,
+            #[cfg(desktop)]
+            commands::notification_mirror::open_mirrored_notification,
+            #[cfg(desktop)]
+            commands::notification_mirror::test_system_notification,
+            #[cfg(desktop)]
+            commands::notification_mirror::take_notice_action,
             #[cfg(desktop)]
             grow_popout_width,
             #[cfg(desktop)]
@@ -1685,6 +1752,8 @@ pub fn run() {
             open_drops_login_window,
             // Two bodies: a desktop panel, and the phone's login overlay or sheet.
             open_subscribe_window,
+            #[cfg(any(desktop, target_os = "android"))]
+            open_bits_window,
             #[cfg(desktop)]
             open_youtube_channel_switcher,
             #[cfg(desktop)]
@@ -1980,6 +2049,10 @@ pub fn run() {
             get_boot_state,
             complete_setup,
             set_chat_user_hidden,
+            set_favorite_category,
+            set_channel_hidden,
+            set_hidden_channel_blocked,
+            set_hidden_channel_realms,
             set_chat_user_override,
             get_settings_view,
             set_settings_fields,
@@ -2002,7 +2075,6 @@ pub fn run() {
             import_settings,
             get_current_app_version,
             get_latest_app_version,
-            download_and_install_app_update,
             get_changelog,
             get_android_changelog,
             send_test_notification,
@@ -2045,6 +2117,7 @@ pub fn run() {
             get_badge_wall,
             get_badge_window,
             get_badge_drop_campaign,
+            get_badge_earn_guide,
             // Badge Metadata commands
             fetch_badge_metadata,
             // Link preview commands
@@ -2139,6 +2212,7 @@ pub fn run() {
             // Watch token allocation commands
             // Channel Points Rewards commands
             get_channel_rewards,
+            get_cached_channel_rewards,
             redeem_channel_reward,
             send_highlighted_message,
             send_sub_mode_message,
@@ -2244,6 +2318,10 @@ pub fn run() {
             get_gif_picker_status,
             search_gifs,
             send_gif_message,
+            // Bits: the insert menu's Bits section and a confirmed cheer
+            get_bits_state,
+            check_cheer,
+            send_cheer,
             ffz_local_user_status,
             // Emote prefetch (AFK bulk cache) commands
             emote_prefetch_plan,
@@ -2410,6 +2488,7 @@ pub fn run() {
             commands::slash_commands::watch_channel_poll,
             commands::slash_commands::slash_last_message,
             commands::slash_commands::slash_delete_message,
+            commands::slash_commands::slash_lurk_line,
             commands::slash_commands::slash_recent_messages,
             commands::slash_commands::slash_mass_unban_start,
             commands::slash_commands::slash_mass_unban_stop,
@@ -2518,6 +2597,12 @@ pub fn run() {
                 // the main window emits when it boots.
                 if label == "main" {
                     use tauri::Emitter;
+                    // Its player is gone without a `stop_stream`: file where
+                    // the viewer left the live stream it was showing. On the
+                    // runtime, so the progress store's flush task can start.
+                    tauri::async_runtime::spawn(async {
+                        services::live_bookmark::end(services::live_bookmark::EndKind::Async);
+                    });
                     let _ = app_handle.emit("main-closed", ());
                     #[cfg(target_os = "linux")]
                     commands::twitch::linux_overlays::close_with_main(&app_handle);
@@ -2678,7 +2763,14 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 services::app_exit::on_run_exit();
                 let shutdown_started = std::time::Instant::now();
+                // Quitting mid-stream is a close too: file where the viewer
+                // left before the progress store is written.
+                services::live_bookmark::end(services::live_bookmark::EndKind::Sync);
                 flush_debounced_stores();
+                // Send an unsent VOD position to the viewer's other devices.
+                // Started here so it runs alongside the plugin shutdown below;
+                // waited on after it, bounded.
+                let vod_sync_done = services::vod_sync::start_exit_sync();
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit
                 // gracefully (stragglers are killed with the supervisor).
@@ -2707,6 +2799,13 @@ pub fn run() {
                         .is_err()
                     {
                         warn!("[Main] plugin shutdown did not finish within 3 s; exiting anyway");
+                    }
+                }
+                if let Some(done) = vod_sync_done {
+                    // Usually finished already, having run during the plugin
+                    // wait. Never more than 2 s past it.
+                    if done.recv_timeout(std::time::Duration::from_secs(2)).is_err() {
+                        warn!("[Main] VOD position sync did not finish within 2 s; exiting anyway");
                     }
                 }
                 services::app_exit::on_shutdown_complete(shutdown_started.elapsed().as_millis());

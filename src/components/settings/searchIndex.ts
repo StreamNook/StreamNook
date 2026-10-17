@@ -114,6 +114,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
+    section: 'Playback',
+    sectionId: 'settings-section-video-player',
+    title: 'Device sync',
+    parent: 'Resume VODs',
+    description: 'Keep Continue Watching and your place in each VOD the same on every StreamNook you sign in to, and in Twitch apps.'
+  },
+  {
+    tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
     title: 'Auto-Switch',
@@ -449,7 +457,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Polls & Predictions',
     title: 'Starting a poll or prediction',
-    description: 'On your own channel, the chart button beside the message box opens a builder for polls and predictions, with outcomes, a duration, channel-point voting and a live preview. Also reachable with /poll and /prediction.'
+    description: 'On your own channel, the Tools button beside the message box has Start a poll and Start a prediction, which open a builder with outcomes, a duration, channel-point voting and a live preview. Also reachable with /poll and /prediction. Previously the chart button.'
   },
   {
     tab: 'Chat',
@@ -529,6 +537,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Names & Badges',
     title: 'Names & Badges',
     description: 'How chatter names look: name prefix and style, readable colors, badges and add-on badges, profile pictures, the @ before names, 7TV paints and cosmetics.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
+    title: 'Keep tinted',
+    parent: 'Highlight',
+    description: 'Hold the mention or reply color behind the whole message for as long as it is on screen, instead of only a flash. Highlight replies to me, mention background, persistent highlight, tint whole message.'
   },
   {
     tab: 'Chat',
@@ -739,7 +754,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Input',
     title: 'Chat modes',
-    description: 'Show when a channel limits who can chat in the message box: emote-only, followers-only, subscriber-only, slow mode and unique chat, with a countdown on the send button during slow mode. Room mode bar, chat restrictions, emote only chat, follower only, sub only.'
+    description: 'Tells you when a channel limits who can chat and it stops you: emote-only, followers-only, subscriber-only, slow mode and unique chat, named in place of Send a message with what to do (Follow to chat, You can chat in 4 minutes), or always as a chip (Style), with a countdown on the send button during slow mode. Room mode bar, chat restrictions, emote only chat, follower only, sub only.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Style',
+    parent: 'Chat modes',
+    description: 'When it limits you names the mode in place of Send a message only while it stops you from chatting. Always keeps one small chip at the end of the message box whenever a mode is on. Previously "Chip" and "Placeholder". Chat mode chip, room mode icon, slow mode placeholder, follow to chat.'
   },
   {
     tab: 'Chat',
@@ -750,20 +772,21 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Chat Input',
-    title: 'Hide command button',
-    description: 'Removes the slash button from inside the message box. It opens a browsable menu of every command you can run here, with examples; typing / still opens the quick list. Previously "Hide the command button".'
-  },
-  {
-    tab: 'Chat',
-    section: 'Chat Input',
     title: 'Hide emote button',
-    description: 'Remove the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion. Previously "Hide the emote button".'
+    description: 'Remove the smiley from inside the message box, and with it the menu of emotes, GIFs and commands (the command list moved into that menu; "Hide command button" is gone). Tab completion, : search and typing / still work. Previously "Hide the emote button".'
   },
   {
     tab: 'Chat',
     section: 'Chat Input',
-    title: 'Points balance',
-    description: 'Show your channel points beside the button next to the message box always, only on hover, or hide the button. Hidden still brings it back whenever a bonus chest is waiting. Previously "Channel points balance".'
+    title: 'Wallet balance',
+    description: 'Show your channel points and bits beside the wallet button next to the message box always, only on hover, or hide the button. Hidden still brings it back whenever a bonus chest is waiting. Previously "Points balance", before that "Channel points balance".'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Show gains',
+    parent: 'Wallet balance',
+    description: 'A "+N" rises off the wallet button for every points gain (watching, the bonus chest, predictions) and for bits you buy, or only for the bonus chest. Hover the button to see why your points went up.'
   },
   {
     tab: 'Chat',
@@ -1042,7 +1065,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Highlight Phrases',
     title: 'Highlight Phrases',
-    description: 'Flash chat messages that match specific words, names, or patterns. Mentions of your own name and replies to you are always highlighted; these are extra.'
+    description: 'Highlight chat messages that match specific words, names, or patterns, with a flash or, with Keep tinted, a color that stays. Mentions of your own name and replies to you are always highlighted; these are extra.'
   },
   {
     tab: 'Chat',
@@ -1293,9 +1316,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Mentions & Replies',
-    title: 'Replies to you',
-    parent: 'Mention sound',
-    description: 'A reply to one of your messages plays the mention sound too, even without an @. Reply sound.'
+    title: 'Reply sound',
+    description: 'Plays when someone replies to one of your messages: the mention sound, no sound, or a sound of its own. Replies to you, reply ping.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
+    title: 'Volume',
+    parent: 'Reply sound',
+    description: 'How loud a reply sound of its own plays. Reply sound volume, quieter, louder.'
   },
   {
     tab: 'Chat',
@@ -1622,6 +1651,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Pin bucket',
     parent: 'Method',
     description: 'Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well. Previously "Pin from the drag gesture too".'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Grab cursor',
+    parent: 'Method',
+    description: 'Whole message shows the grab hand anywhere on a message you can drag; Edge only keeps the normal cursor and shows the hand on the strip at its left edge. You can pick a message up from anywhere either way.'
   },
   {
     tab: 'Moderation',
@@ -2272,6 +2308,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Interface',
+    section: 'Hidden channels',
+    sectionId: 'settings-section-hidden-channels',
+    title: 'Also hide from',
+    description: 'Where a channel you hide is hidden besides Discover and categories: their chat messages, search results, and follows, favorites and live alerts. Hide user everywhere, mute streamer, block chatter.'
+  },
+  {
+    tab: 'Interface',
+    section: 'Hidden channels',
+    sectionId: 'settings-section-hidden-channels',
+    title: 'Channels',
+    description: 'Every channel you hid, with where each one is hidden. Show one again, or block a Twitch channel on Twitch too. Block a stream, hide streamer, never see, not interested, blocklist, hidden channels.'
+  },
+  {
+    tab: 'Interface',
     section: 'Motion',
     sectionId: 'settings-section-motion',
     title: 'Amount',
@@ -2358,7 +2408,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Notifications',
     section: 'Display',
     title: 'Display',
-    description: 'Choose how to display notifications: Dynamic Island, toasts, toast position, edge spacing. Previously "Notification Methods".'
+    description: 'Choose how to display notifications: Dynamic Island, toasts, toast position, edge spacing, system notifications. Previously "Notification Methods".'
   },
   {
     tab: 'Notifications',
@@ -2388,6 +2438,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Notifications',
+    section: 'Display',
+    title: 'System notifications',
+    description: 'Windows, macOS or desktop notifications while you are in another app, or StreamNook is minimized or in the tray. Native notifications, Action Center, notification popups outside the app.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Display',
+    title: 'Try one',
+    parent: 'System notifications',
+    description: 'Sends a sample system notification so you can see how it looks.'
+  },
+  {
+    tab: 'Notifications',
     section: 'Notification Types',
     title: 'Notification Types',
     description: 'Enable or disable specific types: live streams, whispers, updates, drops, channel points, badges.'
@@ -2409,6 +2472,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Notification Types',
     title: 'Whispers',
     description: 'A notification shows each new whisper, and clicking it opens the conversation. Previously "When you get a whisper".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Mentions and replies',
+    description: 'A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat.'
   },
   {
     tab: 'Notifications',
@@ -2646,6 +2715,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Account Data',
     title: 'Linked accounts',
     description: 'Records which other platforms you have connected so they survive a reinstall.'
+  },
+  {
+    tab: 'Support',
+    section: 'Account Data',
+    title: 'VOD positions',
+    description: 'With Device sync on, keeps where you left off in each VOD you open so Continue Watching follows you to your other devices. Privacy: only VODs you open yourself, kept 90 days.'
   },
   // === Backup ===
   {

@@ -1,4 +1,5 @@
 import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight, Radio } from 'lucide-react';
+import { ExternalAnchor } from './ui/ExternalAnchor';
 import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -16,7 +17,13 @@ import { BadgeEligibleCategories } from './badge/BadgeEligibleCategories';
 
 import { Logger } from '../utils/logger';
 import { decodeHtmlEntities } from '../utils/badgeWindow';
-import { getBadgeWindow, windowStatusAt, type WindowRun } from '../services/badgeStanding';
+import {
+  getBadgeEarnGuide,
+  getBadgeWindow,
+  windowStatusAt,
+  type EarnGuide,
+  type WindowRun,
+} from '../services/badgeStanding';
 import { extractChannelLogins, splitChannelMentions } from '../utils/badgeChannels';
 import { dedupeResolvedLinks } from '../utils/badgeLinks';
 
@@ -177,6 +184,9 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   const [techOpen, setTechOpen] = useState(false);
   const [refinedLinks, setRefinedLinks] = useState<DisplayLink[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
+  // What to do, how long, where: Rust reads the viewer's live Drops list
+  // first and the relay's campaign requirement otherwise.
+  const [earnGuide, setEarnGuide] = useState<EarnGuide | null>(null);
 
   // Navigation actions only, so no store subscription at all: read them once
   // (stable for the store's lifetime) instead of re-rendering on every write.
@@ -189,7 +199,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   // (e.g. "MARVEL TOKON: Fighting Souls").
   const parsedLinks = useMemo(() => {
     const fromProse = parseBadgeForLinks(badge.description, badgeBaseInfo?.more_info ?? undefined);
-    const campaignCategory = badgeBaseInfo?.enrichment?.category?.trim();
+    const campaignCategory = (earnGuide?.category ?? badgeBaseInfo?.enrichment?.category)?.trim();
     if (!campaignCategory) return fromProse;
     return [
       {
@@ -202,7 +212,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
         (l) => l.type !== 'category' || l.name.toLowerCase() !== campaignCategory.toLowerCase()
       ),
     ] as LinkCandidate[];
-  }, [badge.description, badgeBaseInfo?.more_info, badgeBaseInfo?.enrichment?.category]);
+  }, [badge.description, badgeBaseInfo?.more_info, badgeBaseInfo?.enrichment?.category, earnGuide?.category]);
 
   // Search Twitch for better category/drops names and validate they exist
   const refineLinks = useCallback(async (links: LinkCandidate[]) => {
@@ -398,10 +408,15 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
     invoke<LiveDropCampaign | null>('get_badge_drop_campaign', { setId, version: badge.id })
       .then((c) => { if (live) setLiveCampaign(c ?? null); })
       .catch(() => {});
+    getBadgeEarnGuide(setId, badge.id)
+      .then((g) => { if (live) setEarnGuide(g); })
+      .catch(() => {});
     return () => { live = false; };
   }, [setId, badge.id]);
+  // A long allow-list opens in the picker; a short one is shown as channel
+  // cards straight away, so a one-channel badge names its channel on sight.
   const aclCampaign =
-    liveCampaign?.is_acl_based && liveCampaign.allowed_channels.length > 0 ? liveCampaign : null;
+    liveCampaign?.is_acl_based && liveCampaign.allowed_channels.length > 3 ? liveCampaign : null;
   const aclNeedsSub = !!aclCampaign?.time_based_drops.some((d) => (d.required_subs ?? 0) > 0);
 
   // Live-amend: when the relay pushes enrichment for this badge, refresh the
@@ -419,6 +434,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             .then(setBadgeBaseInfo)
             .catch(() => {});
           getBadgeWindow(setId, badge.id).then(setWindowRuns).catch(() => {});
+          getBadgeEarnGuide(setId, badge.id).then(setEarnGuide).catch(() => {});
         }
       }
     );
@@ -457,8 +473,11 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   // The campaign's own channel list, when there is one, replaces the handful
   // read out of the copy: the picker shows every participant that is live.
   const relayChannels = badgeBaseInfo?.enrichment?.channels ?? [];
+  const guideChannels = earnGuide?.earn.channels ?? [];
   const channelLogins = aclCampaign ? [] : (
-    relayChannels.length > 0
+    guideChannels.length > 0
+      ? guideChannels
+      : relayChannels.length > 0
       ? relayChannels
       : extractChannelLogins(
           [badgeBaseInfo?.more_info, badgeBaseInfo?.enrichment?.action, badge.description]
@@ -466,6 +485,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             .join('\n')
         )
   ).slice(0, 6);
+
+  const earnSummary = earnGuide?.summary ?? null;
+  const proseText = (parsedBadge?.earnProse || badge.description || '').trim();
+  const aboutText = proseText && proseText !== earnSummary ? proseText : '';
 
   // Render More Info with channel mentions ("/studbudz") turned into clickable
   // avatar chips, keeping the date-highlighting on the surrounding text.
@@ -901,10 +924,8 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             {/* Badge Variations */}
             <div className="flex items-end gap-4">
               <Tooltip content="View 72px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_4x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-4 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -912,13 +933,11 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-18 h-18 object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
               <Tooltip content="View 36px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_2x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-3 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -926,13 +945,11 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-9 h-9 object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
               <Tooltip content="View 18px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_1x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-2 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -940,7 +957,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-[18px] h-[18px] object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
             </div>
 
@@ -957,14 +974,29 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             {/* Body: how to earn (the richer of enrichment prose / description,
                 never both — they say the same thing at two lengths), then tiers. */}
             <div className="space-y-5">
-              {(parsedBadge?.earnProse || badge.description) && (
+              {(earnSummary || aboutText) && (
                 <div>
                   <h4 className="text-[12px] font-semibold text-textSecondary uppercase tracking-wide mb-2">
                     How to earn
                   </h4>
-                  <div className="text-textPrimary text-[15px] leading-relaxed whitespace-pre-line">
-                    {renderMoreInfo(parsedBadge?.earnProse || badge.description || '')}
-                  </div>
+                  {/* The campaign's own numbers as one plain sentence: what,
+                      how long, and where. The writeup follows it as colour. */}
+                  {earnSummary && (
+                    <p className="text-textPrimary text-[15px] font-medium leading-relaxed">
+                      {earnSummary}
+                    </p>
+                  )}
+                  {aboutText && (
+                    <div
+                      className={
+                        earnSummary
+                          ? 'mt-2 text-textSecondary text-[14px] leading-relaxed whitespace-pre-line'
+                          : 'text-textPrimary text-[15px] leading-relaxed whitespace-pre-line'
+                      }
+                    >
+                      {renderMoreInfo(aboutText)}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1132,14 +1164,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                   {badge.click_url && (
                     <div className="flex gap-3">
                       <span className="text-textSecondary w-24 shrink-0">Click URL</span>
-                      <a
+                      <ExternalAnchor
                         href={badge.click_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         className="text-accent hover:underline break-all"
                       >
                         {badge.click_url}
-                      </a>
+                      </ExternalAnchor>
                     </div>
                   )}
                       </div>

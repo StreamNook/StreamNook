@@ -449,13 +449,25 @@ pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, c
     let login = login.trim().trim_start_matches('#').to_lowercase();
     let ticket = take_ticket();
     let seed = seed.unwrap_or_default();
-    let room = match crate::services::offline_room::open(&login).await {
+    let mut room = match crate::services::offline_room::open(&login).await {
         Ok(room) => Some(room),
         Err(e) => {
             log::warn!("[WatchStart] offline room for {login}: {e}");
             None
         }
     };
+    // Where the viewer left the latest broadcast, when resuming is on.
+    if let Some(r) = room.as_mut().filter(|r| r.live.is_none() || chat_only) {
+        let resume = app
+            .state::<AppState>()
+            .settings
+            .lock()
+            .map(|s| s.video_player.resume_vod_playback)
+            .unwrap_or(false);
+        if resume {
+            crate::services::offline_room::attach_resume(r).await;
+        }
+    }
     if !current(ticket) {
         return RoomOpen { superseded: true, room: None, live: None, row: None };
     }

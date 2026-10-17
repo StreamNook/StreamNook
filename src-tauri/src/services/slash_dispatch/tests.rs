@@ -380,8 +380,10 @@ async fn shrug_lurk_and_squishy_send_text() {
     let fake = Fake::new();
     assert_eq!(run(&fake, "/shrug").await.send.as_deref(), Some("¯\\_(ツ)_/¯"));
     assert_eq!(run(&fake, "/shrug no idea").await.send.as_deref(), Some("no idea ¯\\_(ツ)_/¯"));
-    assert_eq!(run(&fake, "/lurk").await.send.as_deref(), Some("/me is now lurking"));
-    assert_eq!(run(&fake, "/lurk dinner").await.send.as_deref(), Some("/me is now lurking: dinner"));
+    let lurk = run(&fake, "/lurk").await.send.unwrap();
+    assert!(lurk.strip_prefix("/me ").is_some_and(|l| crate::services::slash_commands::LURK_LINES.contains(&l)), "{lurk}");
+    let lurk = run(&fake, "/lurk dinner").await.send.unwrap();
+    assert!(lurk.starts_with("/me ") && lurk.ends_with(": dinner"), "{lurk}");
     assert!(run(&fake, "/squishy").await.send.unwrap().starts_with("notsquishY WHEN"));
 }
 
@@ -392,7 +394,8 @@ async fn a_provider_room_runs_only_commands_that_need_no_twitch_api() {
     assert_eq!(o.notices, vec!["hi"]);
     assert!(!run_in(&fake, "kick:somechan", "/ban bob").await.handled);
     // /me is Twitch's: another platform gets the words.
-    assert_eq!(run_in(&fake, "kick:somechan", "/lurk").await.send.as_deref(), Some("is now lurking"));
+    let lurk = run_in(&fake, "kick:somechan", "/lurk").await.send.unwrap();
+    assert!(crate::services::slash_commands::LURK_LINES.contains(&lurk.as_str()), "{lurk}");
     assert!(!run_in(&fake, "kick:somechan", "/me waves").await.handled);
 }
 

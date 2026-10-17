@@ -664,6 +664,10 @@ fn plugin_entry(v: &serde_json::Value) -> Option<Saved> {
 /// Put a new popout in place and show it. Runs on the main thread, where the
 /// window calls below are handled inline.
 fn settle(win: WebviewWindow, placement: Placement) {
+    // A popout can outlive main (closed to the tray), so it watches for a
+    // WebView2 failure itself.
+    #[cfg(windows)]
+    crate::services::webview2_failures::watch(&win);
     let target = win.clone();
     let queued = win.run_on_main_thread(move || {
         let maximize = match apply(&target.as_ref().window(), &placement) {

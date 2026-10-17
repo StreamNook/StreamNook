@@ -116,6 +116,10 @@ pub fn announce(app: &AppHandle, notification: LiveNotification) {
         if !type_enabled(app, &notification) {
             return;
         }
+        // A channel hidden from follows announces nothing.
+        if crate::services::hidden_channels::hides_notification(&notification.streamer_login) {
+            return;
+        }
         if shown_by_room(&notification, crate::services::watch_session::offline_room_login().as_deref()) {
             return;
         }

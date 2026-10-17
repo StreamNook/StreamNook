@@ -11,7 +11,7 @@
 // grant on the drops client.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowSquareOut, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
+import { ArrowSquareOut, Broadcast, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
@@ -31,8 +31,10 @@ import {
   type CampaignCard,
   type RewardsDrops,
 } from '../rewards/rewardsModel';
+import { getBadgeEarnGuide, type EarnGuide } from '../../services/badgeStanding';
 import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
+import type { TwitchStream } from '../../types';
 
 type RewardsTab = 'drops' | 'badges';
 
@@ -141,6 +143,8 @@ export const RewardsScreen: React.FC = () => {
   const [warmOnMount] = useState(() => badgeGalleryIsWarm());
   const [badgeSort, setBadgeSort] = useState<BadgeSort>('newest');
   const [badgeDetail, setBadgeDetail] = useState<BadgeTile | null>(null);
+  // How the open badge is earned and where, from Rust (badge_earn.rs).
+  const [badgeGuide, setBadgeGuide] = useState<{ key: string; guide: EarnGuide } | null>(null);
   const [drops, setDrops] = useState<RewardsDrops | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -151,6 +155,29 @@ export const RewardsScreen: React.FC = () => {
   const changeQuery = (value: string) => {
     latestQuery.current = value;
     setDropsQuery(value);
+  };
+
+  useEffect(() => {
+    if (!badgeDetail) return;
+    const [setId, versionId] = (badgeDetail.keys[0] ?? '').split('/');
+    if (!setId || !versionId) return;
+    let live = true;
+    const key = badgeDetail.key;
+    getBadgeEarnGuide(setId, versionId)
+      .then((guide) => { if (live) setBadgeGuide({ key, guide }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [badgeDetail]);
+  const openGuide = badgeDetail && badgeGuide?.key === badgeDetail.key ? badgeGuide.guide : null;
+
+  // A badge's channel, opened the way the desktop badge page opens it: with the
+  // live stream when there is one, so the player starts with its metadata.
+  const watchBadgeChannel = async (login: string) => {
+    const live = await invoke<TwitchStream | null>('check_stream_online', { userLogin: login }).catch(
+      () => null,
+    );
+    setBadgeDetail(null);
+    void startStream(login, live ?? undefined);
   };
 
   // A read on mount and on pull-to-refresh asks Twitch again; a new search
@@ -607,12 +634,42 @@ export const RewardsScreen: React.FC = () => {
             {(() => {
               const prose = blurbText(badgeDetail.prose);
               const window = blurbText(badgeDetail.window);
+              const summary = openGuide?.summary ?? null;
+              const channels = (openGuide?.earn.channels ?? []).slice(0, 10);
               return (
                 <>
-                  {prose && (
-                    <p className="text-[13px] text-textSecondary leading-relaxed whitespace-pre-line text-left w-full">
+                  {/* The campaign's own numbers in one sentence: what, how
+                      long, and where. The writeup below it is colour. */}
+                  {summary && (
+                    <p className="text-[14px] font-medium text-textPrimary leading-relaxed text-left w-full">
+                      {summary}
+                    </p>
+                  )}
+                  {prose && prose.trim() !== summary && (
+                    <p
+                      className={`text-[13px] text-textSecondary leading-relaxed whitespace-pre-line text-left w-full${summary ? ' mt-2' : ''}`}
+                    >
                       {prose}
                     </p>
+                  )}
+                  {/* The only channels it counts on, each a tap away. */}
+                  {channels.length > 0 && (
+                    <div className="mt-3 w-full flex flex-col gap-1.5">
+                      {channels.map((login) => (
+                        <button
+                          key={login}
+                          onClick={() => void watchBadgeChannel(login)}
+                          className="glass-panel sn-touch px-3 py-2.5 flex items-center gap-2.5 text-left active:opacity-80"
+                        >
+                          <Broadcast size={16} className="text-accent shrink-0" />
+                          <span className="flex-1 min-w-0 truncate text-[13.5px] font-medium text-textPrimary">
+                            {login}
+                          </span>
+                          <span className="text-[12px] text-textMuted shrink-0">Watch</span>
+                          <CaretRight size={13} weight="bold" className="text-textMuted shrink-0" />
+                        </button>
+                      ))}
+                    </div>
                   )}
                   {badgeDetail.caveat && (
                     <div className="mt-3 w-full flex items-start gap-2 rounded-lg px-3 py-2 bg-amber-500/10 border border-amber-500/25">

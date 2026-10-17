@@ -33,6 +33,17 @@ export interface EarnPath {
   inferred: boolean;
   /** The sentence it came from, for a tooltip. */
   detail: string | null;
+  /** The only channels it counts on (logins). Null: any channel in the category. */
+  channels: string[] | null;
+}
+
+/** Everything one badge's page says about earning it (badge_earn.rs). */
+export interface EarnGuide {
+  earn: EarnPath;
+  category: string | null;
+  /** The whole requirement as one sentence, only when it comes from the
+   *  campaign's own numbers. */
+  summary: string | null;
 }
 
 export interface MissingBadge {
@@ -87,6 +98,10 @@ export function getBadgeStanding(force = false): Promise<BadgeStanding> {
 
 export function getBadgeWindow(setId: string, version: string): Promise<WindowRun[] | null> {
   return invoke<WindowRun[] | null>('get_badge_window', { setId, version });
+}
+
+export function getBadgeEarnGuide(setId: string, version: string): Promise<EarnGuide> {
+  return invoke<EarnGuide>('get_badge_earn_guide', { setId, version });
 }
 
 /**

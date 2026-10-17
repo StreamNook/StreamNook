@@ -4,13 +4,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronUp, Plus, Trash2, Volume2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
+import { BUILT_IN_SOUNDS, SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
 import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import type { HighlightPhrase } from '../../types';
 
 const DEFAULT_COOLDOWN_SECONDS = 3;
-const SOUND_OPTIONS: SoundId[] = ['boop', 'tick', 'soft', 'whisper', 'gentle'];
+const SOUND_OPTIONS: SoundId[] = BUILT_IN_SOUNDS;
 
 /** One edit to the stored phrase list; Rust makes new entries and clamps the
  *  cooldown. Answers the list as stored, or null when the edit failed. */
@@ -95,7 +95,7 @@ const HighlightPhrasesSettings = () => {
   return (
     <SettingsSection
       label="Highlight Phrases"
-      description="Flash chat messages that match specific words, names, or patterns. Mentions of your own name and replies to you are always highlighted; these are extra."
+      description="Highlight chat messages that match specific words, names, or patterns, with a flash or, with Keep tinted, a color that stays. Mentions of your own name and replies to you are always highlighted; these are extra."
       bare
     >
       <div className="space-y-3">
@@ -208,6 +208,15 @@ const HighlightPhrasesSettings = () => {
                     className="accent-accent"
                   />
                   Regular expression
+                </label>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={phrase.hold === true}
+                    onChange={(e) => updatePhrase(phrase.id, { hold: e.target.checked })}
+                    className="accent-accent"
+                  />
+                  Keep tinted
                 </label>
               </div>
 

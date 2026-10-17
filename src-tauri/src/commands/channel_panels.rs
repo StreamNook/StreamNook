@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, warn};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -164,6 +164,11 @@ fn create_gql_headers() -> HeaderMap {
 #[derive(Debug, Deserialize)]
 struct GqlPanelsResponse {
     data: Option<GqlPanelsData>,
+    /// GQL answers partially on a resolver failure: `data` still arrives with the
+    /// failed field nulled (social links vanish without a trace), so these are
+    /// logged rather than ignored.
+    #[serde(default)]
+    errors: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,9 +256,157 @@ pub struct ChannelPanel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocialMediaLink {
+    /// Twitch's own key, which is just the link's domain label (`linktr`,
+    /// `steamcommunity`, `sodapoppin`), so it cannot pick a logo.
     pub name: String,
+    /// The streamer's label, with a bare platform name ("twitter", "REDDIT")
+    /// replaced by the platform's proper name.
     pub title: String,
     pub url: String,
+    /// Which logo to draw, from [`social_platform`]: a brand key, or one of the
+    /// generic kinds `merch`, `tip`, `links`, `website`.
+    #[serde(default)]
+    pub platform: String,
+    /// The link preview has a dedicated card for this URL (a Discord invite, a
+    /// YouTube channel, an X or Instagram profile, ...), so it is worth showing
+    /// as one. Links without one stay a compact logo pill.
+    #[serde(default)]
+    pub card: bool,
+}
+
+/// Brand key, proper name, the hosts that belong to it, and the bare titles
+/// streamers type for it. Hosts match exactly or as a parent domain.
+const SOCIAL_BRANDS: &[(&str, &str, &[&str], &[&str])] = &[
+    ("x", "X", &["x.com", "twitter.com"], &["twitter", "x (twitter)", "twitter / x", "twitter/x", "x/twitter"]),
+    ("instagram", "Instagram", &["instagram.com", "instagr.am"], &["ig", "insta"]),
+    ("youtube", "YouTube", &["youtube.com", "youtu.be"], &["yt"]),
+    ("tiktok", "TikTok", &["tiktok.com"], &["tik tok"]),
+    ("discord", "Discord", &["discord.gg", "discord.com", "discordapp.com"], &[]),
+    ("reddit", "Reddit", &["reddit.com", "redd.it"], &["subreddit"]),
+    ("facebook", "Facebook", &["facebook.com", "fb.com", "fb.me"], &["fb"]),
+    ("twitch", "Twitch", &["twitch.tv"], &[]),
+    ("kick", "Kick", &["kick.com"], &[]),
+    ("snapchat", "Snapchat", &["snapchat.com"], &["snap"]),
+    ("steam", "Steam", &["steamcommunity.com", "steampowered.com"], &[]),
+    ("spotify", "Spotify", &["spotify.com", "spotify.link"], &[]),
+    ("linktree", "Linktree", &["linktr.ee"], &[]),
+    ("patreon", "Patreon", &["patreon.com"], &[]),
+    ("kofi", "Ko-fi", &["ko-fi.com"], &["kofi"]),
+    ("bluesky", "Bluesky", &["bsky.app"], &["bsky"]),
+    ("threads", "Threads", &["threads.net", "threads.com"], &[]),
+    ("github", "GitHub", &["github.com"], &[]),
+];
+
+/// Tip pages and link-in-bio pages carry no brand worth showing; they get a
+/// generic icon that says what the link is for.
+const TIP_HOSTS: &[&str] = &["streamlabs.com", "streamelements.com", "tipeeestream.com"];
+const LINK_HUB_HOSTS: &[&str] = &[
+    "beacons.ai", "snipfeed.co", "carrd.co", "bio.link", "allmylinks.com", "solo.to", "lnk.bio",
+];
+
+fn host_of(url: &str) -> Option<String> {
+    let host = reqwest::Url::parse(url.trim()).ok()?.host_str()?.to_ascii_lowercase();
+    Some(host.strip_prefix("www.").map(str::to_string).unwrap_or(host))
+}
+
+fn host_matches(host: &str, domains: &[&str]) -> bool {
+    domains
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// The logo key for a social link: its brand from the URL host, else a generic
+/// kind read from the host or the streamer's title.
+fn social_platform(url: &str, title: &str) -> &'static str {
+    if let Some(host) = host_of(url) {
+        if let Some((key, ..)) = SOCIAL_BRANDS.iter().find(|(_, _, hosts, _)| host_matches(&host, hosts)) {
+            return key;
+        }
+        if host_matches(&host, TIP_HOSTS) {
+            return "tip";
+        }
+        if host_matches(&host, LINK_HUB_HOSTS) {
+            return "links";
+        }
+    }
+    let title = title.to_lowercase();
+    if ["merch", "shop", "store"].iter().any(|w| title.contains(w)) {
+        "merch"
+    } else if ["tip", "donat"].iter().any(|w| title.contains(w)) {
+        "tip"
+    } else {
+        "website"
+    }
+}
+
+/// The label to show: the streamer's own title, unless it is only the
+/// platform's name in some spelling, which becomes the proper name.
+fn social_label(title: &str, platform: &str, url: &str) -> String {
+    let trimmed = title.trim();
+    let brand = SOCIAL_BRANDS.iter().find(|(key, ..)| *key == platform);
+    if let Some((key, proper, _, aliases)) = brand {
+        let lower = trimmed.to_lowercase();
+        if lower.is_empty() || lower == *key || lower == proper.to_lowercase() || aliases.contains(&lower.as_str()) {
+            return proper.to_string();
+        }
+    }
+    if trimmed.is_empty() {
+        return host_of(url).unwrap_or_else(|| url.to_string());
+    }
+    trimmed.to_string()
+}
+
+#[cfg(test)]
+mod social_link_tests {
+    use super::{social_label, social_platform};
+
+    #[test]
+    fn platform_comes_from_the_host() {
+        assert_eq!(social_platform("https://twitter.com/KaiCenat", "twitter"), "x");
+        assert_eq!(social_platform("https://x.com/loltyler1?mx=2", "twitter"), "x");
+        assert_eq!(social_platform("https://Youtube.com/CohhCarnage", "Cohh on YouTube"), "youtube");
+        assert_eq!(social_platform("https://youtube.com/@kaicenatlive?si=x", "Youtube Live"), "youtube");
+        assert_eq!(social_platform("https://www.instagram.com/kaicenat/?hl=en", "Instagram"), "instagram");
+        assert_eq!(social_platform("https://steamcommunity.com/groups/x", "on Steam"), "steam");
+        assert_eq!(social_platform("https://linktr.ee/nmplol", "All links"), "linktree");
+        assert_eq!(social_platform("https://www.discord.gg/abc", "Discord"), "discord");
+    }
+
+    #[test]
+    fn unbranded_links_get_a_kind() {
+        assert_eq!(social_platform("https://streamlabs.com/fanumtv/tip#/", "TTS"), "tip");
+        assert_eq!(social_platform("https://snipfeed.co/amouranthtoo", "The BEST Links"), "links");
+        assert_eq!(social_platform("https://sodapoppin.shop", "Merch store"), "merch");
+        assert_eq!(social_platform("https://www.cohhilition.com", "The Cohhilition Website"), "website");
+        assert_eq!(social_platform("not a url", "Donate here"), "tip");
+    }
+
+    #[test]
+    fn bare_platform_titles_become_proper_names() {
+        assert_eq!(social_label("twitter", "x", ""), "X");
+        assert_eq!(social_label("REDDIT", "reddit", ""), "Reddit");
+        assert_eq!(social_label(" youtube ", "youtube", ""), "YouTube");
+        assert_eq!(social_label("", "kofi", ""), "Ko-fi");
+    }
+
+    #[test]
+    fn profile_links_with_a_card_are_flagged() {
+        use crate::commands::link_preview::has_dedicated_card;
+        assert!(has_dedicated_card("https://www.instagram.com/kaicenat/?hl=en"));
+        assert!(has_dedicated_card("https://twitter.com/KaiCenat"));
+        assert!(has_dedicated_card("https://www.youtube.com/c/KaiCenat"));
+        assert!(has_dedicated_card("https://youtube.com/@kaicenatlive?si=auACMqFfcaTcLJXl"));
+        assert!(has_dedicated_card("https://discord.gg/kaicenat"));
+        assert!(!has_dedicated_card("https://www.reddit.com/r/xqcow/"));
+        assert!(!has_dedicated_card("https://linktr.ee/nmplol"));
+    }
+
+    #[test]
+    fn streamer_titles_are_kept() {
+        assert_eq!(social_label("Youtube Live", "youtube", ""), "Youtube Live");
+        assert_eq!(social_label("🧡 Reddit", "reddit", ""), "🧡 Reddit");
+        assert_eq!(social_label("", "website", "https://www.tarik.gg/x"), "tarik.gg");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +515,10 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
         )
     })?;
 
+    if let Some(errors) = &gql_response.errors {
+        warn!("[ChannelPanels] GQL errors for {}: {}", channel_login, errors);
+    }
+
     let user = gql_response
         .data
         .and_then(|d| d.user)
@@ -395,8 +552,17 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
         .filter_map(|s| {
             let name = s.name?;
             let url = s.url?;
-            let title = s.title.unwrap_or_else(|| name.clone());
-            Some(SocialMediaLink { name, title, url })
+            let raw_title = s.title.unwrap_or_default();
+            let platform = social_platform(&url, &raw_title);
+            let title = social_label(&raw_title, platform, &url);
+            let card = crate::commands::link_preview::has_dedicated_card(&url);
+            Some(SocialMediaLink {
+                name,
+                title,
+                url,
+                platform: platform.to_string(),
+                card,
+            })
         })
         .collect();
 

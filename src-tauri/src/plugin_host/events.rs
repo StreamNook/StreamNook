@@ -28,9 +28,12 @@ pub fn start_background_emitters(host: Arc<HostInner>) {
                     continue;
                 }
                 let active = host.active_channel.read().await.clone();
+                // `credential_epoch` changes whenever the drops token is
+                // replaced or removed; a plugin holding a copy asks again.
                 let params = json!({
                     "active_channel_id": active.map(|c| c.channel_id),
                     "ts": chrono::Utc::now().to_rfc3339(),
+                    "credential_epoch": crate::services::drops_auth_service::DropsAuthService::token_epoch(),
                 });
                 host.emit_event("on_watch_tick", params).await;
             }

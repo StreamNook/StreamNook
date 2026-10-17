@@ -1,16 +1,16 @@
-// The channel's chat modes, drawn inside the message box at its trailing edge.
+// The channel's chat modes, as one chip at the message box's trailing edge.
 //
 // Rust words the room (services/room_modes.rs) and ships it on the ROOMSTATE
-// frame; this only draws it. The field's placeholder carries the words
-// ("Emote-only chat"), these icons stay while you type, and hovering them
-// lists every mode with what it does and whether you can still chat. The
-// field reserves the icons' width through `--sn-room-pad` (globals.css), so a
-// mode switching on or off never moves anything outside the box.
-import React from 'react';
+// frame; this only draws it. The chip names one mode ("Slow 30s") with a "+N"
+// for the rest, and hovering it lists every mode with what it does and whether
+// you can still chat. The box's own prompt never changes, so a mode never
+// reads as "you cannot type". The field reserves the chip's width through
+// `--sn-room-pad`, measured here, so the typed text never runs under it and a
+// mode switching on or off moves nothing outside the box.
+import React, { useLayoutEffect, useRef } from 'react';
 import { Fingerprint, Heart, Smile, Star, Timer, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
-import { COUNT_PX, EDGE_PX, GAP_PX, ICON_PX } from './roomModeLayout';
 
 const ICONS: Record<RoomModeKind, LucideIcon> = {
   subs_only: Star,
@@ -19,6 +19,11 @@ const ICONS: Record<RoomModeKind, LucideIcon> = {
   slow: Timer,
   unique: Fingerprint,
 };
+
+/** The chip's distance from the field's right edge. */
+export const EDGE_PX = 6;
+/** Clear space between the typed text and the chip. */
+export const CLEAR_PX = 6;
 
 /** Every mode with its sentence, and the "you can chat" line when it holds. */
 export const RoomModeDetails: React.FC<{ view: RoomModeView }> = ({ view }) => (
@@ -51,50 +56,47 @@ export const RoomModeIndicator: React.FC<{
   /** Touch has no hover: a tap opens wherever the surface lists the modes. */
   onActivate?: () => void;
   /** A flex item in the field's own row (the phone) instead of an inset over
-   *  the field's padding; it keeps the first icon and a "+N" count. */
+   *  the field's padding. */
   inline?: boolean;
 }> = ({ view, onActivate, inline = false }) => {
-  if (view.modes.length === 0) return null;
-  // Every mode spares you (a moderator, say): the icons step back a shade.
-  const exempt = view.modes.every((m) => m.applies_to_you === false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const shown = view.modes.length > 0 && !!view.chip;
+
+  // Hand the field the chip's width. Layout only: the words are Rust's.
+  useLayoutEffect(() => {
+    const chip = ref.current;
+    const field = chip?.parentElement;
+    if (inline || !chip || !field) return;
+    const reserve = () => field.style.setProperty('--sn-room-pad', `${chip.offsetWidth + EDGE_PX + CLEAR_PX}px`);
+    reserve();
+    const observer = new ResizeObserver(reserve);
+    observer.observe(chip);
+    return () => {
+      observer.disconnect();
+      field.style.removeProperty('--sn-room-pad');
+    };
+  }, [inline, shown]);
+
+  if (!shown) return null;
   const words = view.modes.map((m) => m.label).join(', ');
   const extra = view.modes.length - 1;
   return (
     <Tooltip content={<RoomModeDetails view={view} />} side="top">
       <span
+        ref={ref}
         role={onActivate ? 'button' : 'img'}
         tabIndex={onActivate ? 0 : undefined}
         aria-label={view.standing ? `${words}. ${view.standing}` : words}
         onClick={onActivate}
-        // Clicking the icons never takes the caret out of the field.
+        // Clicking the chip never takes the caret out of the field.
         onMouseDown={(e) => e.preventDefault()}
-        className={`sn-room-modes flex items-center ${
-          inline ? 'h-9 flex-shrink-0 self-end px-1' : 'absolute top-1/2 z-10 -translate-y-1/2'
-        } ${exempt ? 'text-textMuted' : 'text-textSecondary'}`}
-        style={inline ? { gap: GAP_PX } : { right: EDGE_PX, gap: GAP_PX }}
+        className={`sn-room-chip ${inline ? 'flex-shrink-0 self-center' : 'absolute top-1/2 z-10 -translate-y-1/2'} ${
+          view.exempt ? 'text-textMuted' : 'text-textSecondary'
+        }`}
+        style={inline ? undefined : { right: EDGE_PX }}
       >
-        {(inline ? view.modes.slice(0, 1) : view.modes).map((mode, i) => {
-          const Icon = ICONS[mode.kind];
-          return (
-            <Icon
-              key={mode.kind}
-              size={ICON_PX}
-              strokeWidth={2.2}
-              aria-hidden
-              className="flex-shrink-0"
-              data-room-mode-rest={i > 0 ? '' : undefined}
-            />
-          );
-        })}
-        {extra > 0 && (
-          <span
-            data-room-mode-count={inline ? undefined : ''}
-            className="text-[10px] font-semibold leading-none tabular-nums"
-            style={{ width: COUNT_PX }}
-          >
-            +{extra}
-          </span>
-        )}
+        {view.chip}
+        {extra > 0 && <span className="sn-room-chip-more">+{extra}</span>}
       </span>
     </Tooltip>
   );

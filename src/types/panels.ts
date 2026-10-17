@@ -13,6 +13,11 @@ export interface SocialMediaLink {
   name: string;
   title: string;
   url: string;
+  /** Logo key from Rust: a brand (`x`, `instagram`, `discord`, ...) or a
+   *  generic kind (`merch`, `tip`, `links`, `website`). */
+  platform: string;
+  /** The link preview has a dedicated card for this URL. */
+  card: boolean;
 }
 
 export interface ChannelAboutData {

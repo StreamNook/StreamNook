@@ -407,11 +407,53 @@ fn badge_reward_key(name: &str) -> String {
     badge_key(stem)
 }
 
+/// A badge reward's name as comparable words, without a leading channel handle
+/// or the "Chat Badge" / "Badge" Twitch appends: "/dnd d20 Badge" names the d20
+/// badge earned on dnd.
+fn badge_reward_words(name: &str) -> Vec<String> {
+    let mut words: Vec<String> = name.split_whitespace().map(str::to_lowercase).collect();
+    if words.len() > 1 && words[0].starts_with('/') {
+        words.remove(0);
+    }
+    if words.len() > 1 && words.last().map(String::as_str) == Some("badge") {
+        words.pop();
+        if words.len() > 1 && words.last().map(String::as_str) == Some("chat") {
+            words.pop();
+        }
+    }
+    words.iter().map(|w| badge_key(w)).filter(|w| !w.is_empty()).collect()
+}
+
+/// The tier of a campaign that awards a badge: the one whose reward is named
+/// for the title, else the first that awards any badge.
+pub fn badge_tier_for<'a>(
+    campaign: &'a DropCampaign,
+    title: Option<&str>,
+) -> Option<&'a crate::models::drops::TimeBasedDrop> {
+    let awards = |d: &&'a crate::models::drops::TimeBasedDrop| {
+        d.benefit_edges.iter().any(|b| b.distribution_type.as_deref() == Some("BADGE"))
+    };
+    let want = title.map(badge_key).filter(|k| !k.is_empty());
+    let named = want.and_then(|key| {
+        campaign.time_based_drops.iter().filter(awards).find(|d| {
+            d.benefit_edges.iter().any(|b| {
+                badge_reward_key(&b.name) == key || badge_reward_words(&b.name).concat() == key
+            })
+        })
+    });
+    named.or_else(|| campaign.time_based_drops.iter().find(awards))
+}
+
 /// The active campaign that awards a badge. Only a campaign that hands out a
 /// chat badge qualifies, and it is matched by its own name or its badge
 /// reward's name against the badge's title, then against its set id. The
 /// title goes first because tiers of one set (EWC) are separate campaigns that
 /// share the set id.
+///
+/// Last, a reward named for its event as well as its badge ("D&D Ampersand
+/// Badge" awards Ampersand): the title's words end the reward's name. Taken
+/// only when a single campaign ends that way, so a one-word title such as
+/// "Gold" never picks one event out of several.
 pub fn campaign_for_badge<'a>(
     campaigns: &'a [DropCampaign],
     set_id: &str,
@@ -423,18 +465,21 @@ pub fn campaign_for_badge<'a>(
             .flat_map(|d| &d.benefit_edges)
             .any(|b| b.distribution_type.as_deref() == Some("BADGE"))
     };
-    let names = |c: &DropCampaign| {
+    let rewards = |c: &'a DropCampaign| {
+        c.time_based_drops
+            .iter()
+            .flat_map(|d| &d.benefit_edges)
+            .filter(|b| b.distribution_type.as_deref() == Some("BADGE"))
+    };
+    let names = |c: &'a DropCampaign| {
         let mut keys = vec![badge_key(&c.name)];
-        keys.extend(
-            c.time_based_drops
-                .iter()
-                .flat_map(|d| &d.benefit_edges)
-                .filter(|b| b.distribution_type.as_deref() == Some("BADGE"))
-                .map(|b| badge_reward_key(&b.name)),
-        );
+        for b in rewards(c) {
+            keys.push(badge_reward_key(&b.name));
+            keys.push(badge_reward_words(&b.name).concat());
+        }
         keys
     };
-    [title.map(badge_key), Some(badge_key(set_id))]
+    let exact = [title.map(badge_key), Some(badge_key(set_id))]
         .into_iter()
         .flatten()
         .filter(|k| !k.is_empty())
@@ -443,7 +488,28 @@ pub fn campaign_for_badge<'a>(
                 .iter()
                 .filter(|c| awards_badge(c))
                 .find(|c| names(c).contains(&key))
+        });
+    if exact.is_some() {
+        return exact;
+    }
+
+    let title_words: Vec<String> = title
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(badge_key)
+        .filter(|w| !w.is_empty())
+        .collect();
+    if title_words.is_empty() {
+        return None;
+    }
+    let mut ends_with_title = campaigns.iter().filter(|c| {
+        rewards(c).any(|b| {
+            let words = badge_reward_words(&b.name);
+            words.len() > title_words.len() && words.ends_with(&title_words)
         })
+    });
+    let only = ends_with_title.next()?;
+    ends_with_title.next().is_none().then_some(only)
 }
 
 pub fn overview(
@@ -700,5 +766,27 @@ mod tests {
         ];
         let tier = campaign_for_badge(&campaigns, "ewc-2026", Some("EWC Tier 3")).unwrap();
         assert_eq!(tier.id, "t3");
+    }
+
+    #[test]
+    fn a_reward_named_with_its_channel_or_event_still_finds_the_badge() {
+        let campaigns = vec![
+            badge_campaign("d20", "/dnd d20 Badge", "/dnd d20 Badge", Some("BADGE")),
+            badge_campaign("amp", "D&D Ampersand Badge", "D&D Ampersand Badge", Some("BADGE")),
+        ];
+        assert_eq!(campaign_for_badge(&campaigns, "d20", Some("d20")).unwrap().id, "d20");
+        assert_eq!(
+            campaign_for_badge(&campaigns, "ampersand", Some("Ampersand")).unwrap().id,
+            "amp"
+        );
+    }
+
+    #[test]
+    fn a_title_ending_two_rewards_matches_neither() {
+        let campaigns = vec![
+            badge_campaign("a", "Spring Cup", "Spring Cup Gold Badge", Some("BADGE")),
+            badge_campaign("b", "Fall Cup", "Fall Cup Gold Badge", Some("BADGE")),
+        ];
+        assert!(campaign_for_badge(&campaigns, "gold", Some("Gold")).is_none());
     }
 }

@@ -158,3 +158,29 @@ describe("a window's Twitch claim survives a release and re-acquire", () => {
     expect(rustHolds('caseoh_')).toBe(false);
   });
 });
+
+describe('recent history when a channel is opened before its id is known', () => {
+  it('loads history once the id arrives on a later open of the same channel', async () => {
+    const { acquireChannel } = await import('./chatConnectionStore');
+    const historyCalls = () => invokeMock.mock.calls.filter(([c]) => c === 'load_channel_history');
+
+    // The chat dock (or a blended companion) opens it first, id unknown.
+    const first = acquireChannel('lynka', null, 'twitch', { background: true });
+    await settle();
+    await first;
+    expect(historyCalls()).toHaveLength(0);
+
+    // The main chat opens the same channel with its id.
+    const main = acquireChannel('lynka', '42', 'twitch');
+    await settle();
+    await main;
+    expect(historyCalls()).toHaveLength(1);
+    expect(historyCalls()[0][1]).toMatchObject({ channel: 'lynka' });
+
+    // A third open changes nothing: the id is already known.
+    const again = acquireChannel('lynka', '42', 'twitch');
+    await settle();
+    await again;
+    expect(historyCalls()).toHaveLength(1);
+  });
+});

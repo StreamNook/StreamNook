@@ -70,6 +70,9 @@ function VodModalInner({
     vod
       ? {
           videoId: vod.video_id,
+          // Rust's stamp from the same start_stream; without it Rust records
+          // nothing (an unknown play writes no position).
+          playId: vod.play_id,
           channelLogin: vod.channel_login ?? info.user_login,
           channelName: info.user_name,
           title: vod.title ?? info.title,

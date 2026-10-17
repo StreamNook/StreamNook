@@ -1256,7 +1256,7 @@ pub async fn get_channel_points_for_channel(
 
 // Persisted query hash for ChannelPointsContext - captured from Twitch's network traffic
 // This should return communityPointsSettings including customRewards
-const CHANNEL_POINTS_CONTEXT_HASH: &str =
+pub(crate) const CHANNEL_POINTS_CONTEXT_HASH: &str =
     "374314de591e69925fce3ddc2bcf085796f56ebb8cad67a0daa3165c03adc345";
 
 // Captured GQL hashes for channel points redemptions
@@ -1445,48 +1445,88 @@ fn parse_automatic_reward(
     })
 }
 
+/// The last reward list read for a channel, judged now, or `None`. The menu
+/// paints this at once and fetches a fresh list beside it.
+#[tauri::command]
+pub async fn get_cached_channel_rewards(
+    channel_login: String,
+) -> Result<Option<crate::models::drops::ChannelRewardsSnapshot>, String> {
+    Ok(crate::services::channel_rewards::cached(&channel_login).await)
+}
+
+/// `body` sent with `token` under `client_id`, or `None` when Twitch refused
+/// it (a dead token, a client id it does not take) or named no channel.
+async fn points_gql(client_id: &str, token: &str, body: &serde_json::Value) -> Option<serde_json::Value> {
+    let resp = HTTP_CLIENT
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", client_id)
+        .header("Authorization", format!("OAuth {token}"))
+        .header("X-Device-Id", crate::services::twitch_service::gql_device_id())
+        .json(body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let answer: serde_json::Value = resp.json().await.ok()?;
+    let has_channel = ["/data/community/channel", "/data/channel"]
+        .iter()
+        .any(|p| answer.pointer(p).is_some_and(|c| !c.is_null()));
+    has_channel.then_some(answer)
+}
+
+/// The channel's `ChannelPointsContext`. The reward list is public, so it
+/// never waits on a sign-in: the Drops token first (the one redemptions use),
+/// then the twitch.tv session the app is signed in with (still the viewer's own
+/// balance), then an anonymous read that carries the list alone.
+async fn points_context(
+    body: &serde_json::Value,
+    auth: &crate::services::twitch_auth_service::TwitchAuthService,
+) -> Result<serde_json::Value, String> {
+    use crate::services::drops_auth_service::DropsAuthService;
+
+    if let Ok(token) = DropsAuthService::get_token().await {
+        if let Some(answer) = points_gql(env!("TWITCH_ANDROID_CLIENT_ID"), &token, body).await {
+            return Ok(answer);
+        }
+    }
+    let session = tokio::time::timeout(std::time::Duration::from_secs(2), auth.get_token()).await;
+    if let Ok(Ok(token)) = session {
+        if !token.is_empty() {
+            let web = crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID;
+            if let Some(answer) = points_gql(web, &token, body).await {
+                return Ok(answer);
+            }
+        }
+    }
+    crate::services::twitch_service::TwitchService::gql_public_read(body.clone())
+        .await
+        .map_err(|e| format!("Failed to fetch channel rewards: {e}"))
+}
+
 #[tauri::command]
 pub async fn get_channel_rewards(
     channel_id: String, // Actually channel login (username)
+    state: State<'_, AppState>,
 ) -> Result<crate::models::drops::ChannelRewardsSnapshot, String> {
-    use crate::services::drops_auth_service::DropsAuthService;
     use serde_json::json;
 
-    // Use mobile client ID for persisted queries (same as predictions)
-    const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
-
-    let token = DropsAuthService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
-    let client = HTTP_CLIENT.clone();
-
     // Use ChannelPointsContext with includeGoalTypes (captured from Twitch)
-    let response = client
-        .post("https://gql.twitch.tv/gql")
-        .header("Client-Id", CLIENT_ID)
-        .header("Authorization", format!("OAuth {}", token))
-        .json(&json!({
-            "operationName": "ChannelPointsContext",
-            "variables": {
-                "channelLogin": channel_id.to_lowercase(),
-                "includeGoalTypes": ["CREATOR", "BOOST"]
-            },
-            "extensions": {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": CHANNEL_POINTS_CONTEXT_HASH
-                }
+    let body = json!({
+        "operationName": "ChannelPointsContext",
+        "variables": {
+            "channelLogin": channel_id.to_lowercase(),
+            "includeGoalTypes": ["CREATOR", "BOOST"]
+        },
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": CHANNEL_POINTS_CONTEXT_HASH
             }
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch channel rewards: {}", e))?;
-
-    let result: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse channel rewards response: {}", e))?;
+        }
+    });
+    let result = points_context(&body, &state.twitch_auth).await?;
 
     debug!(
         "[ChannelRewards] Raw response: {}",
@@ -2632,7 +2672,7 @@ mod tests {
         assert_eq!(a.cooldown_expires_at.as_deref(), Some("2023-11-14T22:14:20Z"));
         assert_eq!(a.global_cooldown_seconds, Some(30));
         assert!(!a.is_hidden_for_subs);
-        assert_eq!(a.description.as_deref(), Some("Everyone in chat sees it in a colored box"));
+        assert_eq!(a.description, None, "the title says what it does");
     }
 
     #[test]
@@ -2656,6 +2696,6 @@ mod tests {
         assert!(b.is_hidden_for_subs);
         assert!(b.is_user_input_required);
         assert_eq!(b.prompt, None);
-        assert_eq!(b.description.as_deref(), Some("Posts even though you're not subscribed"));
+        assert_eq!(b.description, None, "the title says what it does");
     }
 }

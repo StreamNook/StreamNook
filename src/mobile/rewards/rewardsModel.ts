@@ -106,6 +106,8 @@ export interface MissingRow {
   chips: EarnChip[];
   icons_only: boolean;
   random_note: string | null;
+  /** "Only on a, b" or "Only on 5 channels". */
+  channels_note: string | null;
   time_left: string;
   /** It closes within a day: the time left is drawn as a warning. */
   urgent: boolean;

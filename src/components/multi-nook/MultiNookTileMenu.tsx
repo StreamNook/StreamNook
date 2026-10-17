@@ -17,7 +17,7 @@ import {
 import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
-import { buildShareUrl } from '../../utils/shareLink';
+import { shareLinkFor } from '../../utils/shareLink';
 import { Logger } from '../../utils/logger';
 
 const ROW =
@@ -165,7 +165,9 @@ export const MultiNookTileMenu: React.FC = () => {
   const handleShare = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(buildShareUrl(slot.channelLogin));
+      await navigator.clipboard.writeText(
+        await shareLinkFor({ provider: slot.provider, user_login: slot.channelLogin }),
+      );
       setCopied(true);
       window.setTimeout(dismiss, 1100);
     } catch (err) {

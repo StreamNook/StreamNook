@@ -17,6 +17,8 @@ const blank = (login: string): ChannelState => ({
   viewers_at: null,
   points: null,
   points_at: null,
+  bits: null,
+  bits_at: null,
   pinned: [],
   pinned_at: null,
   collab: null,

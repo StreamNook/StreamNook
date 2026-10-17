@@ -68,7 +68,7 @@ const REPEAT_DEFAULT_COLOR = '#8b8b8b';
 // Everything defaults to on; the toggle stores `false` to hide.
 const USER_CARD_ROWS: { key: keyof UserCardSettings; title: string; description: string }[] = [
   { key: 'show_join_date', title: 'Join date', description: 'When their Twitch account was created.' },
-  { key: 'show_followage', title: 'Following since', description: 'When they followed this channel, or that they are not following.' },
+  { key: 'show_followage', title: 'Following since', description: "When they followed this channel. Twitch shares this with a channel's moderators, and for your own account." },
   { key: 'show_follows_count', title: 'Follow count', description: 'How many channels this person follows.' },
   { key: 'show_chatter_count', title: 'Chatters', description: "How many people are in this person's own chat right now." },
   { key: 'show_past_subscriber', title: 'Past subscriber', description: 'Total months subscribed, for people who are not subscribed now.' },
@@ -82,7 +82,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
+import { DeletedMessagePreview, EventRowPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -419,6 +419,13 @@ const ServiceMark = ({ id, size = 13 }: { id: string; size?: number }) => {
     />
   );
 };
+/** The Reply sound picker's value: a sound of its own, 'none', or 'same'
+ *  (follows the mention sound; the older replies switch off reads as 'none'). */
+function replySoundChoice(cd: { reply_sound?: string; mention_sound_replies?: boolean }): string {
+  const own = cd.reply_sound?.trim();
+  if (own) return own;
+  return cd.mention_sound_replies === false ? 'none' : 'same';
+}
 
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
@@ -447,7 +454,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       return next;
     });
   const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
+  const soundOptions = useSoundOptions();
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
+  const [roomModesStyleHover, setRoomModesStyleHover] = useState<'chip' | 'prompt' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
   const [pictureSourceHover, setPictureSourceHover] = useState<ProfilePictureSource | null>(null);
@@ -477,6 +486,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_color: stored?.mention_color ?? '#ff4444',
     reply_color: stored?.reply_color ?? '#ff6b6b',
     mention_animation: stored?.mention_animation ?? true,
+    mention_hold: stored?.mention_hold ?? false,
     show_timestamps: stored?.show_timestamps ?? false,
     show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
     timestamp_format: stored?.timestamp_format ?? '12h',
@@ -530,6 +540,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_sound: stored?.mention_sound,
     mention_sound_volume: stored?.mention_sound_volume,
     mention_sound_replies: stored?.mention_sound_replies,
+    reply_sound: stored?.reply_sound,
+    reply_sound_volume: stored?.reply_sound_volume,
     mention_weight: stored?.mention_weight,
     mention_italic: stored?.mention_italic,
     mention_style: stored?.mention_style,
@@ -1790,13 +1802,44 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                   />
                 }
               />
+            </SubControls>
+          )}
+        </SettingsRow>
+
+        <SettingsRow
+          title="Reply sound"
+          onReset={resetFor(['chat_design.reply_sound', ''], ['chat_design.mention_sound_replies', true], 'chat_design.reply_sound_volume')}
+          description="Plays when someone replies to one of your messages."
+          help="Same as mentions plays your mention sound at its volume. Pick a sound to give replies their own."
+        >
+          <Dropdown
+            value={replySoundChoice(cd)}
+            onChange={(v) =>
+              setDesign(
+                v === 'same'
+                  ? { reply_sound: undefined, mention_sound_replies: undefined }
+                  : { reply_sound: v },
+              )
+            }
+            className="w-full"
+            ariaLabel="Reply sound"
+            options={[
+              { value: 'same', label: 'Same as mentions' },
+              { value: 'none', label: 'No sound' },
+              ...soundOptions,
+            ]}
+          />
+          {!['same', 'none'].includes(replySoundChoice(cd)) && (
+            <SubControls>
               <SubControl
-                title="Replies to you"
-                onReset={resetFor(['chat_design.mention_sound_replies', true])}
+                title="Volume"
+                onReset={resetFor(['chat_design.reply_sound_volume', 100])}
                 control={
-                  <Toggle
-                    enabled={cd.mention_sound_replies ?? true}
-                    onChange={() => setDesign({ mention_sound_replies: !(cd.mention_sound_replies ?? true) })}
+                  <SoundVolume
+                    value={cd.reply_sound_volume ?? 100}
+                    onChange={(reply_sound_volume) => setDesign({ reply_sound_volume })}
+                    sound={cd.reply_sound}
+                    label="Reply sound volume"
                   />
                 }
               />
@@ -1887,7 +1930,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Highlight"
           onReset={resetFor(['chat_design.mention_color', '#ff4444'])}
           description="The color that marks a message mentioning or replying to you."
-          help="Flash briefly lights the message up as it lands, so you spot it in a fast chat. The color edge stays either way."
+          help="Flash briefly lights the message up as it lands, so you spot it in a fast chat. Keep tinted holds the color behind the whole message for as long as it is on screen. The color edge stays either way."
         >
           <ColorSwatch
             value={cd.mention_color ?? '#ff4444'}
@@ -1905,7 +1948,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 />
               }
             />
+            <SubControl
+              title="Keep tinted"
+              onReset={resetFor(['chat_design.mention_hold', false])}
+              control={
+                <Toggle
+                  enabled={cd.mention_hold ?? false}
+                  onChange={() => setDesign({ mention_hold: !(cd.mention_hold ?? false) })}
+                />
+              }
+            />
           </SubControls>
+          <div className="pt-3">
+            <MentionRowPreview
+              design={cd}
+              hold={cd.mention_hold ?? false}
+              opacity={settings.chat_highlights?.appearance?.opacity ?? 20}
+              mentionColor={cd.mention_color ?? '#ff4444'}
+              replyColor={cd.reply_color ?? '#ff6b6b'}
+            />
+          </div>
         </SettingsRow>
 
         {IS_MOBILE && (
@@ -2344,15 +2406,40 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Chat modes"
           onReset={resetFor(['chat_input.show_room_modes', true])}
-          description="Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type."
-          help="Hover the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          description="Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
+          help="When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
               onChange={() => setInput({ show_room_modes: !(settings.chat_input?.show_room_modes ?? true) })}
             />
           }
-        />
+        >
+          {(settings.chat_input?.show_room_modes ?? true) && (
+            <SubControls>
+              <SubControl
+                title="Style"
+                onReset={resetFor(['chat_input.room_modes_style', 'prompt'])}
+                control={
+                  <SegmentedSelect<'chip' | 'prompt'>
+                    value={settings.chat_input?.room_modes_style ?? 'prompt'}
+                    onChange={(room_modes_style) => setInput({ room_modes_style })}
+                    onPreview={setRoomModesStyleHover}
+                    options={[
+                      { value: 'prompt', label: 'When it limits you' },
+                      { value: 'chip', label: 'Always' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+          {(settings.chat_input?.show_room_modes ?? true) && (
+            <div className="pt-3">
+              <RoomModesPreview style={roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'prompt'} />
+            </div>
+          )}
+        </SettingsRow>
         <SettingsRow
           title="Hide placeholder"
           onReset={resetFor(['chat_input.hide_placeholder', false])}
@@ -2365,21 +2452,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Hide command button"
-          onReset={resetFor(['chat_input.hide_command_button', false])}
-          description="Removes the slash button from inside the message box. Typing / still opens the quick command list."
-          help="The command button opens a browsable menu of every command you can run here, with what each one does and examples you can click into the box. It also has a larger view for reading comfortably."
-          control={
-            <Toggle
-              enabled={settings.chat_input?.hide_command_button ?? false}
-              onChange={() => setInput({ hide_command_button: !(settings.chat_input?.hide_command_button ?? false) })}
-            />
-          }
-        />
-        <SettingsRow
           title="Hide emote button"
           onReset={resetFor(['chat_input.hide_emote_button', false])}
-          description="Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion."
+          description="Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work."
+          help="The smiley opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box."
           control={
             <Toggle
               enabled={settings.chat_input?.hide_emote_button ?? false}
@@ -2388,9 +2464,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Points balance"
+          title="Wallet balance"
           onReset={resetFor(['chat_input.hide_points_balance', false], ['chat_input.show_points_balance_inline', false])}
-          description="Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
+          description="Always shows your channel points and bits beside the wallet button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
+          help="The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers. Hover the button for your exact balances."
           control={
             <SegmentedSelect<'always' | 'hover' | 'hidden'>
               value={
@@ -2413,7 +2490,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ]}
             />
           }
-        />
+        >
+          {!settings.chat_input?.hide_points_balance && (
+            <SubControls>
+              <SubControl
+                title="Show gains"
+                onReset={resetFor(['chat_input.wallet_gains', 'all'])}
+                control={
+                  <SegmentedSelect<'all' | 'chest'>
+                    value={settings.chat_input?.wallet_gains === 'chest' ? 'chest' : 'all'}
+                    onChange={(gains) => setInput({ wallet_gains: gains })}
+                    options={[
+                      { value: 'all', label: 'Every gain' },
+                      { value: 'chest', label: 'Bonus chest only' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
       </SettingsSection>
 

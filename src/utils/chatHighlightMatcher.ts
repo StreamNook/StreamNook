@@ -9,4 +9,6 @@ export interface HighlightMatch {
   color: string;
   sound_id: SoundRef | null;
   cooldown_ms: number;
+  /** Keep tinted: the row holds the color while on screen. */
+  hold: boolean;
 }

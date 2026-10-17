@@ -32,10 +32,26 @@ pub async fn web_session_token(auth: &TwitchAuthService) -> Result<String, Strin
 /// the viewer, `None` for public data. GraphQL `errors` are logged under `tag`
 /// and returned in the JSON for the caller to read, never swallowed.
 pub async fn post(token: Option<&str>, body: serde_json::Value, tag: &str) -> Result<serde_json::Value, String> {
-    let mut req = crate::services::http::client()
-        .post(GQL_URL)
-        .header("Client-ID", TWITCH_WEB_CLIENT_ID)
-        .header("X-Device-ID", gql_device_id());
+    post_with(token, body, tag, None).await
+}
+
+/// `post` carrying a Client-Integrity token, for the mutations that refuse a
+/// call without one. The call goes out as the device and browser the token
+/// was minted for (`services::twitch_integrity`).
+pub async fn post_with(
+    token: Option<&str>,
+    body: serde_json::Value,
+    tag: &str,
+    integrity: Option<&crate::services::twitch_integrity::Integrity>,
+) -> Result<serde_json::Value, String> {
+    let mut req = crate::services::http::client().post(GQL_URL).header("Client-ID", TWITCH_WEB_CLIENT_ID);
+    req = match integrity {
+        Some(i) => req
+            .header("X-Device-ID", &i.device_id)
+            .header("Client-Integrity", &i.token)
+            .header("User-Agent", &i.user_agent),
+        None => req.header("X-Device-ID", gql_device_id()),
+    };
     if let Some(token) = token {
         req = req.header("Authorization", format!("OAuth {}", token));
     }

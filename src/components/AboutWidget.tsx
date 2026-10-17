@@ -1,4 +1,5 @@
 import { X, Github } from 'lucide-react';
+import { ExternalAnchor } from './ui/ExternalAnchor';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { Tooltip } from './ui/Tooltip';
@@ -70,14 +71,12 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
           <div className="text-center py-2">
             <p className="text-textPrimary italic">
               Made by{' '}
-              <a
+              <ExternalAnchor
                 href="https://discord.com/users/681989594341834765"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="font-semibold hover:text-[#5865F2] transition-colors underline decoration-dotted"
               >
                 Winters
-              </a>{' '}
+              </ExternalAnchor>{' '}
               with <span className="text-red-400">♥</span>
             </p>
           </div>
@@ -87,36 +86,30 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
             <p className="text-textSecondary text-xs mb-2">Special thanks and love to</p>
             <div className="flex items-center justify-center gap-3 flex-wrap">
               <Tooltip content="7TV" side="top">
-              <a
+              <ExternalAnchor
                 href="https://7tv.app"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="text-textPrimary hover:text-[#00A8FC] transition-colors font-medium text-sm"
               >
                 7TV
-              </a>
+              </ExternalAnchor>
               </Tooltip>
               <span className="text-textSecondary">•</span>
               <Tooltip content="BetterTTV" side="top">
-              <a
+              <ExternalAnchor
                 href="https://betterttv.com"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="text-textPrimary hover:text-[#D50014] transition-colors font-medium text-sm"
               >
                 BTTV
-              </a>
+              </ExternalAnchor>
               </Tooltip>
               <span className="text-textSecondary">•</span>
               <Tooltip content="FrankerFaceZ" side="top">
-              <a
+              <ExternalAnchor
                 href="https://www.frankerfacez.com"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="text-textPrimary hover:text-[#52A747] transition-colors font-medium text-sm"
               >
                 FFZ
-              </a>
+              </ExternalAnchor>
               </Tooltip>
 
             </div>
@@ -182,14 +175,12 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
                 Version {appVersion}
               </p>
               <Tooltip content="View on GitHub" side="top">
-              <a
+              <ExternalAnchor
                 href="https://github.com/winters27"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="p-2 text-textSecondary hover:text-textPrimary hover:bg-glass rounded transition-all duration-200"
               >
                 <Github size={18} />
-              </a>
+              </ExternalAnchor>
               </Tooltip>
             </div>
           </div>

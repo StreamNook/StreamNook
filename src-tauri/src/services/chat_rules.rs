@@ -54,6 +54,8 @@ struct HighlightPhrase {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -70,6 +72,8 @@ struct HighlightUser {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -86,6 +90,8 @@ struct HighlightBadge {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -190,7 +196,12 @@ fn default_true() -> bool {
 }
 
 const DEFAULT_COOLDOWN_SECONDS: f64 = 3.0;
-const VALID_SOUND_IDS: [&str; 5] = ["boop", "tick", "soft", "whisper", "gentle"];
+/// The built-in tones; `BUILT_IN_SOUNDS` in src/utils/notificationSound.ts
+/// lists the same ids (checked by its test).
+const VALID_SOUND_IDS: [&str; 12] = [
+    "boop", "tick", "soft", "whisper", "gentle", "morse", "pager", "flip", "arcade", "gadget",
+    "ringtone", "granvals",
+];
 
 fn normalize_sound(raw: &Option<String>) -> Option<String> {
     let s = raw.as_deref()?;
@@ -268,6 +279,7 @@ struct RuleMeta {
     color: String,
     sound_id: Option<String>,
     cooldown_ms: u64,
+    hold: bool,
 }
 
 struct BadgeRule {
@@ -303,6 +315,11 @@ pub struct CompiledRules {
     hide_bots: bool,
     hidden_global: HashSet<String>,
     hidden_per_channel: HashMap<String, HashSet<String>>,
+    /// Hidden channels' accounts (`hidden_channels::chat_accounts`):
+    /// `twitch:<user id>`, or `provider:<login>` elsewhere.
+    hidden_accounts: HashSet<String>,
+    /// Their logins, for clearing rows already on screen.
+    hidden_account_logins: HashSet<String>,
     ignore_set: Option<RegexSet>,
     pub filters: Vec<CompiledFilter>,
     /// Patterns that failed to compile, for the settings UI.
@@ -418,6 +435,7 @@ impl CompiledRules {
                         color: p.color.clone(),
                         sound_id: normalize_sound(&p.sound_id),
                         cooldown_ms: cooldown_ms(p.cooldown_seconds),
+                        hold: p.hold,
                     });
                 }
                 Err(e) => errors.push(RuleError {
@@ -458,6 +476,7 @@ impl CompiledRules {
                 color: u.color.clone(),
                 sound_id: normalize_sound(&u.sound_id),
                 cooldown_ms: cooldown_ms(u.cooldown_seconds),
+                hold: u.hold,
             });
         }
 
@@ -482,6 +501,7 @@ impl CompiledRules {
                     color: b.color.clone(),
                     sound_id: normalize_sound(&b.sound_id),
                     cooldown_ms: cooldown_ms(b.cooldown_seconds),
+                    hold: b.hold,
                 },
                 key,
                 wildcard,
@@ -594,6 +614,8 @@ impl CompiledRules {
             hide_bots: cf.hide_bots,
             hidden_global,
             hidden_per_channel,
+            hidden_accounts: HashSet::new(),
+            hidden_account_logins: HashSet::new(),
             ignore_set,
             filters,
             errors,
@@ -926,6 +948,7 @@ impl Evaluation {
 fn newly_hidden_frames(prev: &CompiledRules, next: &CompiledRules) -> Vec<String> {
     let mut frames = Vec::new();
     let mut everywhere: Vec<String> = next.hidden_global.difference(&prev.hidden_global).cloned().collect();
+    everywhere.extend(next.hidden_account_logins.difference(&prev.hidden_account_logins).cloned());
     if next.hide_bots && !prev.hide_bots {
         everywhere.extend(KNOWN_BOTS.iter().map(|b| b.to_string()));
     }
@@ -997,6 +1020,9 @@ impl ChatRules {
                 None => 0u8.hash(&mut hasher),
             }
         }
+        // Hidden channels whose chat is hidden ride the same rules.
+        let hidden_accounts = crate::services::hidden_channels::chat_accounts(settings);
+        hidden_accounts.hash(&mut hasher);
         // The mention and reply colours ride the scrollbar ticks.
         settings.chat_design.mention_color.hash(&mut hasher);
         settings.chat_design.reply_color.hash(&mut hasher);
@@ -1017,6 +1043,10 @@ impl ChatRules {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         let mut compiled = CompiledRules::compile(&hl, &cf, &cq);
+        for (account, login) in hidden_accounts {
+            compiled.hidden_accounts.insert(account);
+            compiled.hidden_account_logins.insert(login);
+        }
         compiled.mention_color = settings.chat_design.mention_color.clone();
         compiled.reply_color = settings.chat_design.reply_color.clone();
         for e in &compiled.errors {
@@ -1144,6 +1174,17 @@ impl ChatRules {
             }
             if let Some(set) = rules.hidden_per_channel.get(&facts.filter_channel_key) {
                 if set.contains(&facts.login) || set.contains(&facts.display_lower) {
+                    return Evaluation::dropped();
+                }
+            }
+            if !rules.hidden_accounts.is_empty() {
+                let account = if facts.twitch {
+                    format!("twitch:{}", facts.user_id)
+                } else {
+                    let provider = facts.filter_channel_key.split(':').next().unwrap_or("");
+                    format!("{}:{}", provider, facts.login)
+                };
+                if rules.hidden_accounts.contains(&account) {
                     return Evaluation::dropped();
                 }
             }
@@ -1355,6 +1396,7 @@ fn stamp(kind: &str, m: &RuleMeta) -> HighlightStamp {
         color: m.color.clone(),
         sound_id: m.sound_id.clone(),
         cooldown_ms: m.cooldown_ms,
+        hold: m.hold,
     }
 }
 
@@ -2031,6 +2073,31 @@ mod tests {
         assert_eq!(hl.rule_id, "a");
         assert_eq!(hl.kind, "phrase");
         assert_eq!(hl.cooldown_ms, 3000);
+        assert!(!hl.hold);
+    }
+
+    #[test]
+    fn keep_tinted_rides_the_stamp_for_every_rule_kind() {
+        let rules = rules_from(
+            r##"{
+                "phrases":[{"id":"p","pattern":"hello","enabled":true,"color":"#1","hold":true}],
+                "users":[{"id":"u","username":"alice","enabled":true,"color":"#2","hold":true}],
+                "badges":[{"id":"b","badge_key":"subscriber/*","enabled":true,"color":"#3","hold":true}]
+            }"##,
+            "{}",
+            "{}",
+        );
+        let mut m = msg("bob", "hello there");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.highlight.as_ref().unwrap().hold);
+        let mut m = msg("alice", "hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.highlight.as_ref().unwrap().hold);
+        let mut m = msg("carol", "hi");
+        eval_with(&rules, &mut m);
+        let hl = m.metadata.highlight.as_ref().unwrap();
+        assert_eq!(hl.rule_id, "b");
+        assert!(hl.hold);
     }
 
     #[test]
@@ -2233,6 +2300,28 @@ mod tests {
         assert!(ids.contains(&"re".to_string()));
         assert!(!ids.contains(&"bits".to_string()));
         assert!(ids.contains(&"chan".to_string()));
+    }
+
+    #[test]
+    fn a_hidden_channel_is_dropped_by_account_not_by_name() {
+        let mut rules = rules_from("{}", "{}", "{}");
+        rules.hidden_accounts.insert("twitch:42".into());
+        rules.hidden_accounts.insert("kick:carl".into());
+        // Twitch: the user id, so a rename does not escape it.
+        let mut renamed = msg("newname", "hi");
+        assert!(eval_with(&rules, &mut renamed).drop);
+        let mut other = msg("bob", "hi");
+        other.user_id = "43".into();
+        assert!(!eval_with(&rules, &mut other).drop);
+        // Kick: provider and login, so a Twitch "carl" still talks.
+        let mut kick = msg("carl", "hi");
+        kick.provider = "kick".into();
+        kick.channel = "kick:xqc".into();
+        kick.user_id = "9".into();
+        assert!(eval_with(&rules, &mut kick).drop);
+        let mut twitch_carl = msg("carl", "hi");
+        twitch_carl.user_id = "44".into();
+        assert!(!eval_with(&rules, &mut twitch_carl).drop);
     }
 
     #[test]

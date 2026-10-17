@@ -183,6 +183,12 @@ pub struct VideoPlayerSettings {
     /// VOD from the top (positions are still recorded for the cards).
     #[serde(default = "default_true")]
     pub resume_vod_playback: bool,
+    /// Keep Continue Watching in step across the viewer's StreamNook installs
+    /// (and their place in Twitch's own apps), so a VOD left on one device
+    /// resumes on another. On by default; only applies while
+    /// `resume_vod_playback` is on.
+    #[serde(default = "default_true")]
+    pub sync_vod_progress: bool,
     /// Ad-free live playback (Android). Routes the playlist through a public
     /// relay and strips ad segments out of what the player is served. On by
     /// default, matching the behavior the phone app shipped with through 7.8.6.
@@ -243,6 +249,7 @@ impl Default for VideoPlayerSettings {
             middle_click_multinook: true,
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
+            sync_vod_progress: true,
         }
     }
 }
@@ -294,6 +301,10 @@ pub struct ChatDesignSettings {
     pub mention_color: String,   // Hex color for @ mentions
     pub reply_color: String,     // Hex color for reply threads
     pub mention_animation: bool, // Enable red-shift animation for mentions
+    /// Keep a mention or reply to you tinted in its color for as long as it is
+    /// on screen, instead of only flashing as it lands.
+    #[serde(default)]
+    pub mention_hold: bool,
     #[serde(default)]
     pub show_timestamps: bool, // Show timestamp next to each message
     #[serde(default)]
@@ -367,6 +378,12 @@ pub struct ChatDesignSettings {
     pub drag_moderation_enabled: bool, // deprecated: superseded by mod_action_style
     #[serde(default = "default_mod_action_style")]
     pub mod_action_style: String, // buttons | drag | both
+    /// Where the grab cursor shows while drag-to-moderate is on: "row" (the
+    /// whole message, so the gesture announces itself) or "edge" (only the
+    /// accent strip at the left edge). A press anywhere lifts the chatter
+    /// either way.
+    #[serde(default = "default_mod_drag_cursor")]
+    pub mod_drag_cursor: String, // row | edge
     #[serde(default = "default_mod_drag_layout")]
     pub mod_drag_layout: String, // column | bar
     #[serde(default = "default_pinned_collapsed_style")]
@@ -428,9 +445,18 @@ pub struct ChatDesignSettings {
     /// Mention sound volume, percent of the sound's own level (0-200).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_sound_volume: Option<u32>,
-    /// Whether a reply to one of your messages also plays the mention sound.
+    /// Whether a reply to one of your messages also plays the mention sound,
+    /// while `reply_sound` follows the mention sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_sound_replies: Option<bool>,
+    /// Sound for a reply to one of your messages: absent or empty follows the
+    /// mention sound (and `mention_sound_replies`), "none" is silent, anything
+    /// else is a built-in tone id or `file:<id>` of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_sound: Option<String>,
+    /// Volume of a reply sound of its own, percent of its level (0-200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_sound_volume: Option<u32>,
     /// @mention text weight in message bodies: regular | medium | bold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_weight: Option<String>,
@@ -542,6 +568,9 @@ fn default_mod_action_style() -> String {
 fn default_mod_drag_layout() -> String {
     "column".to_string()
 }
+fn default_mod_drag_cursor() -> String {
+    "row".to_string()
+}
 fn default_pinned_collapsed_style() -> String {
     "bar".to_string()
 }
@@ -563,6 +592,7 @@ impl Default for ChatDesignSettings {
             mention_color: "#ff4444".to_string(),
             reply_color: "#ff6b6b".to_string(),
             mention_animation: true,
+            mention_hold: false,
             show_timestamps: false,
             show_timestamp_seconds: false,
             timestamp_format: default_timestamp_format(),
@@ -610,6 +640,8 @@ impl Default for ChatDesignSettings {
             mention_sound: None,
             mention_sound_volume: None,
             mention_sound_replies: None,
+            reply_sound: None,
+            reply_sound_volume: None,
             mention_weight: None,
             mention_italic: None,
             mention_style: None,
@@ -620,6 +652,7 @@ impl Default for ChatDesignSettings {
             username_accent_source: "user".to_string(),
             drag_moderation_enabled: true,
             mod_action_style: "both".to_string(),
+            mod_drag_cursor: default_mod_drag_cursor(),
             mod_drag_layout: "column".to_string(),
             pinned_collapsed_style: "bar".to_string(),
             mod_pin_style: "both".to_string(),
@@ -689,14 +722,22 @@ pub struct LiveNotificationSettings {
     /// that names them, whoever did the watching or the claiming.
     #[serde(default = "default_true")]
     pub show_twitch_reward_notifications: bool,
+    /// Someone mentions you, or replies to you, in a Twitch chat you joined,
+    /// while StreamNook is not the window in use (services/mention_notify.rs).
+    #[serde(default = "default_true")]
+    pub show_mention_notifications: bool,
     // Notification method toggles (Dynamic Island vs Toast)
     #[serde(default = "default_true")]
     pub use_dynamic_island: bool,
     #[serde(default = "default_true")]
     pub use_toast: bool,
-    // Native OS notifications (Windows/macOS)
+    /// System notifications: Windows / macOS / Linux desktop notifications
+    /// while StreamNook is not the window in use (services/system_notify.rs).
+    /// The phone keeps it on; the system shade is its delivery surface.
     #[serde(default)]
     pub use_native_notifications: bool,
+    /// Left from an earlier desktop attempt; nothing reads it. System
+    /// notifications always wait until StreamNook is not the window in use.
     #[serde(default = "default_true")]
     pub native_only_when_unfocused: bool,
     // Quick update: clicking update toast immediately starts update
@@ -760,6 +801,7 @@ impl Default for LiveNotificationSettings {
             show_badge_notifications: true,
             show_gift_sub_notifications: true,
             show_twitch_reward_notifications: true,
+            show_mention_notifications: true,
             use_dynamic_island: true,
             use_toast: true,
             use_native_notifications: false,
@@ -965,6 +1007,19 @@ pub struct Settings {
     /// settings file in the field needs migrating.
     #[serde(default)]
     pub favorite_channels: Vec<FavoriteChannel>,
+    /// Twitch categories the viewer starred, in the order they were added.
+    /// Edited only through `set_favorite_category` (an in-place change).
+    #[serde(default)]
+    pub favorite_categories: Vec<FavoriteCategory>,
+    /// Channels hidden from browsing (Discover, suggestions, categories,
+    /// directories), keyed like `favorite_streamers`. Edited only through
+    /// `set_channel_hidden` and `set_hidden_channel_blocked`.
+    #[serde(default)]
+    pub hidden_channels: Vec<HiddenChannel>,
+    /// What a newly hidden channel is hidden from besides browsing; each
+    /// hidden channel keeps its own copy, adjustable in Settings.
+    #[serde(default)]
+    pub hidden_channel_defaults: HiddenRealms,
     #[serde(default)]
     pub chat_design: ChatDesignSettings,
     #[serde(default)]
@@ -1169,6 +1224,15 @@ pub struct ChatInputSettings {
     /// Show the channel's chat modes (emote-only, followers-only, slow mode
     /// and the rest) in the message box while they are on.
     pub show_room_modes: bool,
+    /// How the modes show: `prompt` (the default: named in place of "Send a
+    /// message", and only while a mode holds you back) or `chip` (one chip at
+    /// the box's edge whenever a mode is on).
+    pub room_modes_style: String,
+    /// Set once `move_room_modes_to_prompt_once` has run. Field default false
+    /// so a file from before it existed takes the move; a new install starts
+    /// with it set.
+    #[serde(default)]
+    pub room_modes_prompt_adopted: bool,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1177,7 +1241,12 @@ pub struct ChatInputSettings {
 
 impl Default for ChatInputSettings {
     fn default() -> Self {
-        Self { show_room_modes: true, extra: HashMap::new() }
+        Self {
+            show_room_modes: true,
+            room_modes_style: "prompt".into(),
+            room_modes_prompt_adopted: true,
+            extra: HashMap::new(),
+        }
     }
 }
 
@@ -1342,6 +1411,49 @@ impl ChatBlendSettings {
 ///
 /// Rows whose id has left `favorite_streamers` are ignored where they're read
 /// rather than pruned, so nothing has to write settings during startup.
+/// A hidden channel: the favourites' row shape, so the list in Settings can
+/// draw it, whether StreamNook also blocked it on Twitch, and where besides
+/// browsing (always) it is hidden.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HiddenChannel {
+    #[serde(flatten)]
+    pub channel: FavoriteChannel,
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(flatten)]
+    pub realms: HiddenRealms,
+}
+
+/// Where a hidden channel is hidden besides browsing lists.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HiddenRealms {
+    /// Their messages, in every chat room.
+    pub chat: bool,
+    /// Search results.
+    pub search: bool,
+    /// Following, favourites, the Sidebar and live notifications.
+    pub follows: bool,
+}
+
+impl Default for HiddenRealms {
+    fn default() -> Self {
+        Self { chat: true, search: true, follows: true }
+    }
+}
+
+/// A starred Twitch category. The name and box art are kept so the row paints
+/// before Twitch answers, and when it does not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FavoriteCategory {
+    /// Twitch game id.
+    pub id: String,
+    pub name: String,
+    /// Helix's template form (`{width}x{height}`) or a sized URL.
+    #[serde(default)]
+    pub box_art_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FavoriteChannel {
     /// The key used in `favorite_streamers`: a Twitch numeric user id, or a
@@ -1379,6 +1491,9 @@ impl Default for Settings {
             drops: DropsSettings::default(),
             favorite_streamers: vec![],
             favorite_channels: vec![],
+            favorite_categories: vec![],
+            hidden_channels: vec![],
+            hidden_channel_defaults: HiddenRealms::default(),
             provider_follows: vec![],
             youtube_chat_view: YouTubeChatView::default(),
             channel_links: vec![],
@@ -1594,6 +1709,19 @@ impl Settings {
     /// every `false` there came from a header click aimed at one streamer, and
     /// it silently kept that platform out of every feed and every suggestion.
     /// The Settings switches stay the global control from here on.
+    /// One-time move of an existing install from the room-mode chip (the old
+    /// default) to the prompt, which says nothing unless a mode holds you back.
+    /// Runs once, so choosing the chip again afterwards sticks.
+    pub fn move_room_modes_to_prompt_once(&mut self) {
+        let input = &mut self.chat_input;
+        if !input.room_modes_prompt_adopted {
+            if input.room_modes_style == "chip" {
+                input.room_modes_style = "prompt".into();
+            }
+            input.room_modes_prompt_adopted = true;
+        }
+    }
+
     pub fn scope_blend_header_marks_once(&mut self) {
         if !self.chat_blend.header_marks_scoped {
             self.chat_blend.platforms.clear();
@@ -1990,6 +2118,29 @@ mod backup_persistence_tests {
     /// other keys must survive a load and save, and a file without the room
     /// modes switch shows them.
     #[test]
+    fn room_modes_move_from_the_chip_to_the_prompt_once() {
+        // An install from before the move, still on the old chip default.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["chat_input"] = serde_json::json!({ "show_room_modes": true, "room_modes_style": "chip" });
+        let mut old: Settings = serde_json::from_value(value).unwrap();
+        assert!(!old.chat_input.room_modes_prompt_adopted);
+        old.move_room_modes_to_prompt_once();
+        assert_eq!(old.chat_input.room_modes_style, "prompt");
+        assert!(old.chat_input.room_modes_prompt_adopted);
+
+        // Choosing the chip again afterwards sticks across later loads.
+        old.chat_input.room_modes_style = "chip".into();
+        let mut again: Settings = serde_json::from_value(serde_json::to_value(&old).unwrap()).unwrap();
+        again.move_room_modes_to_prompt_once();
+        assert_eq!(again.chat_input.room_modes_style, "chip");
+
+        // A new install starts on the prompt with nothing to move.
+        let fresh = Settings::default();
+        assert_eq!(fresh.chat_input.room_modes_style, "prompt");
+        assert!(fresh.chat_input.room_modes_prompt_adopted);
+    }
+
+    #[test]
     fn chat_input_is_modelled_and_keeps_its_other_keys() {
         assert!(Settings::default().chat_input.show_room_modes, "room modes show by default");
 
@@ -1998,15 +2149,20 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).unwrap();
         assert!(!parsed.extra.contains_key("chat_input"));
         assert!(parsed.chat_input.show_room_modes, "a missing switch takes the default");
+        assert_eq!(parsed.chat_input.room_modes_style, "prompt", "a missing style takes the prompt");
+        assert!(!parsed.chat_input.room_modes_prompt_adopted, "a file from before the move still takes it");
         assert_eq!(parsed.chat_input.extra.get("hide_placeholder"), Some(&serde_json::json!(true)));
 
         let mut off = parsed.clone();
         off.chat_input.show_room_modes = false;
+        off.chat_input.room_modes_style = "prompt".into();
         let out = serde_json::to_value(&off).unwrap();
         assert_eq!(out["chat_input"]["show_room_modes"], false);
+        assert_eq!(out["chat_input"]["room_modes_style"], "prompt");
         assert_eq!(out["chat_input"]["emote_tab_complete_match_mode"], "includes", "flattened back in place");
         let back: Settings = serde_json::from_value(out).unwrap();
         assert!(!back.chat_input.show_room_modes);
+        assert_eq!(back.chat_input.room_modes_style, "prompt");
     }
 
     /// The on/off switch the source choice replaced: a file that turned 7TV

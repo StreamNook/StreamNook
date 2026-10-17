@@ -60,6 +60,9 @@ const ALLOWED_PATHS: &[&str] = &[
     // billing resumes), read by services::membership_status. The member comes
     // from the token.
     "/api/v1/membership/status",
+    // Continue Watching across the member's StreamNook installs, synced by the
+    // Rust services::vod_sync. The member comes from the token.
+    "/api/v1/vod/sync",
 ];
 
 #[derive(Debug, Serialize)]

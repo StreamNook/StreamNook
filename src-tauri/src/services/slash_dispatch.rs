@@ -319,9 +319,12 @@ pub fn help_lines(arg: Option<&str>, phone: bool) -> Vec<String> {
                 None => by_category.push((c.category, vec![format!("/{}", c.name)])),
             }
         }
-        let mut lines = vec![
-            "Commands (try /help <command> for one of them, or the command button left of the emote picker):".to_string(),
-        ];
+        let mut lines = vec![if phone {
+            "Commands (try /help <command> for one of them, or the command button left of the emote picker):"
+        } else {
+            "Commands (try /help <command> for one of them, or Commands in the emote menu, the smiley in the message box):"
+        }
+        .to_string()];
         lines.extend(by_category.into_iter().map(|(cat, names)| format!("{cat}: {}", names.join(" "))));
         return lines;
     }
@@ -2410,9 +2413,9 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             o.send = Some(if c.rest.is_empty() { shrug.to_string() } else { format!("{} {shrug}", c.rest) });
         }
         "lurk" => {
-            let said = if c.rest.is_empty() { "is now lurking".to_string() } else { format!("is now lurking: {}", c.rest) };
-            // /me is Twitch's; Kick and YouTube would post it as the letters "/me".
-            o.send = Some(if login.contains(':') { said } else { format!("/me {said}") });
+            // A random line. /me is Twitch's; Kick and YouTube would post it as
+            // the letters "/me".
+            o.send = Some(crate::services::slash_commands::lurk(Some(c.rest), !login.contains(':')));
         }
         "squishy" => o.send = Some(SQUISHY.to_string()),
         "barrelroll" | "party" => o.ui = Some(Ui::WindowEffect { effect: c.command.to_string() }),

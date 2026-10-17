@@ -3,7 +3,7 @@
 // come ready from Rust (`get_badge_wall`, services/badge_wall.rs); this only
 // lays it out at phone density.
 import { Fragment, useRef, useState } from 'react';
-import { Clapperboard, Coins, Dices, Eye, Info, MapPin, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Coins, Dices, Eye, Info, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { CardChip } from '../../components/ui/CardChip';
 import { RewardsPopover } from './RewardsPopover';
 import type { CatchUp, EarnChip, MissingNow, MissingRow } from './rewardsModel';
@@ -153,7 +153,7 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
     <button
       type="button"
       onClick={() => onOpen(row.key)}
-      aria-label={[row.title, row.random_note, row.time_left].filter(Boolean).join(', ')}
+      aria-label={[row.title, row.random_note, row.channels_note, row.time_left].filter(Boolean).join(', ')}
       className="sn-missing-open absolute inset-0 w-full rounded-[inherit]"
     />
     <div className="relative pointer-events-none flex items-center gap-3 px-3 py-2">
@@ -165,12 +165,20 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
           </span>
           <EarnPill chips={row.chips} iconsOnly={row.icons_only} title={row.title} />
         </div>
-        {row.random_note && (
-          <div className="mt-0.5" aria-hidden>
-            <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
-              <Dices size={11} className="shrink-0" />
-              {row.random_note}
-            </span>
+        {(row.random_note || row.channels_note) && (
+          <div className="mt-0.5 flex items-center gap-2 min-w-0" aria-hidden>
+            {row.random_note && (
+              <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
+                <Dices size={11} className="shrink-0" />
+                {row.random_note}
+              </span>
+            )}
+            {row.channels_note && (
+              <span className="inline-flex items-center gap-1 min-w-0 whitespace-nowrap text-[11px] text-textMuted">
+                <Radio size={11} className="shrink-0" />
+                <span className="truncate">{row.channels_note}</span>
+              </span>
+            )}
           </div>
         )}
       </div>

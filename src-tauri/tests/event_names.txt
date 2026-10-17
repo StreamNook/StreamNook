@@ -14,6 +14,7 @@ badge-metadata-amended
 badge-notification
 badge-standing-changed
 badge-wall-sync
+bits-balance-changed
 bundle-update-progress
 channel-avatars
 channel-links
@@ -62,10 +63,13 @@ member-aliases-invalidated
 member-theme-changed
 membership-gift-received
 membership-status-changed
+mirrored-notification
+mirrored-notification-activate
 multi-nook://meta
 multi-nook://raid
 multichat-popout-closed
 new-favorite-drops
+notice-action-pending
 platform-account-changed
 platform-session-expired
 playback-adapt
@@ -109,7 +113,9 @@ twitch-reward-received
 update://status
 user-history-message
 watch-session://offline
+watch-session://reconnecting
 watch-session://redirect
+watch-session://reload
 watch-session://resolving
 watch-session://stream-update
 watch-session://waiting

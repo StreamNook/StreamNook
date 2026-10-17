@@ -707,6 +707,13 @@ impl ChannelPointsWebSocketService {
                         channel_login_str
                     );
 
+                    // The wallet's "+N" for every gain, not only the chest. Rust
+                    // keeps one record per channel; a rise already applied (the
+                    // claim's own answer) is not counted again.
+                    if let Some(cid) = channel_id.as_deref() {
+                        crate::services::channel_state::points_gained(cid, points, reason, Some(balance)).await;
+                    }
+
                     // The watched channel's chest claim also arrives through
                     // claim_channel_points, which emits this same event after its
                     // GQL mutation; whichever lands second is the duplicate.
@@ -765,6 +772,9 @@ impl ChannelPointsWebSocketService {
                         .map(|s| s.to_string());
 
                     debug!("Points spent: -{} - New balance: {}", points, balance);
+                    if let Some(cid) = spent_channel_id.as_deref() {
+                        crate::services::channel_state::points_spent(cid, balance).await;
+                    }
 
                     let _ = app_handle.emit(
                         "channel-points-spent",
@@ -1267,7 +1277,15 @@ impl ChannelPointsWebSocketService {
             })
             .unwrap_or("");
 
-        if reward_title.is_empty() || is_input_required {
+        if reward_title.is_empty() {
+            return;
+        }
+        // A reward that asks for text: its chat message is the row, and it
+        // carries only the reward's id. Remember the name so the row can say it.
+        if is_input_required {
+            if let Some(login) = Self::resolve_channel_login(&cid, channel_mappings).await {
+                crate::services::channel_rewards::note_reward_name(&login, reward_id, reward_title, reward_cost);
+            }
             return;
         }
 
@@ -1307,6 +1325,7 @@ impl ChannelPointsWebSocketService {
 
         IrcService::publish_redemption_row(RedemptionRow {
             channel: channel_login,
+            room_id: cid,
             redemption_id: redemption_id.to_string(),
             user_id: user_id.to_string(),
             user_login: user_login.to_string(),

@@ -5,7 +5,9 @@ import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/Styl
 import { deletedBodyStyle, deletedRowDimmed, type DeletedMessageStyle } from '../chat/deletedMessage';
 import { ModerationTag } from '../chat/ModerationTag';
 import { eventCardClass, eventCardStyle } from '../chat/eventCard';
-import type { ModerationContext } from '../../stores/chatConnectionStore';
+import type { ModerationContext, RoomModeView } from '../../stores/chatConnectionStore';
+import { RoomModeIndicator } from '../chat/RoomModeIndicator';
+import { mentionHoldBackground } from '../chat/mentionHold';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
@@ -435,6 +437,95 @@ export const ScrollbarMarksPreview = ({
           <ScrollbarMarks scrollerRef={scrollerRef} contentRef={contentRef} marks={marks} />
         </div>
       </div>
+    </SettingPreview>
+  );
+};
+
+/** Followers-only (10 minutes) and slow mode (30 s), in the words Rust ships
+ *  for them (services/room_modes.rs, several_modes_list_most_limiting_first). */
+const SAMPLE_ROOM_MODES: RoomModeView = {
+  modes: [
+    {
+      kind: 'followers_only',
+      label: 'Followers-only chat (10 minutes)',
+      compact: 'Followers-only (10m)',
+      short: 'Followers 10m',
+      detail: 'Only accounts that have followed for 10 minutes can chat.',
+      applies_to_you: null,
+    },
+    {
+      kind: 'slow',
+      label: 'Slow mode (30 seconds)',
+      compact: 'Slow mode (30s)',
+      short: 'Slow 30s',
+      detail: 'Chatters wait 30 seconds between messages.',
+      applies_to_you: true,
+    },
+  ],
+  chip: 'Followers 10m',
+  exempt: false,
+  prompt: 'You can chat in 4 minutes',
+  prompt_short: 'Chat in 4m',
+  standing: null,
+  slow_seconds: 30,
+};
+
+const ROOM_MODE_CAPTIONS: Record<'chip' | 'prompt', string> = {
+  chip: 'a followers-only room in slow mode; hover the chip for both',
+  prompt: 'a 10-minute followers-only room you followed 6 minutes ago',
+};
+
+/** The message box in a room with chat modes on, drawn the chosen way: the
+ *  real chip, or the prompt in place of "Send a message". */
+export const RoomModesPreview = ({ style }: { style: 'chip' | 'prompt' }) => (
+  <SettingPreview caption={ROOM_MODE_CAPTIONS[style]}>
+    <div className="sn-composer-field relative flex items-center">
+      <div
+        className="glass-input flex h-9 w-full items-center rounded-lg pl-3 text-sm text-textSecondary"
+        style={{ paddingRight: 'var(--sn-room-pad, 12px)' }}
+      >
+        <span className="truncate">{style === 'prompt' ? SAMPLE_ROOM_MODES.prompt : 'Send a message'}</span>
+      </div>
+      {style === 'chip' && <RoomModeIndicator view={SAMPLE_ROOM_MODES} />}
+    </div>
+  </SettingPreview>
+);
+
+/** A mention and a reply to you as they sit in chat after landing: the color
+ *  edge, and with Keep tinted the held wash chat rows draw (chat/mentionHold). */
+export const MentionRowPreview = ({
+  design,
+  hold,
+  opacity,
+  mentionColor,
+  replyColor,
+}: {
+  design: PreviewDesign;
+  hold: boolean;
+  opacity: number;
+  mentionColor: string;
+  replyColor: string;
+}) => {
+  const rows: { who: Chatter; text: string; color: string }[] = [
+    { who: PIXELFOX, text: '@you that clutch was unreal', color: mentionColor },
+    { who: MOSSY, text: 'right? best play of the night', color: replyColor },
+  ];
+  return (
+    <SettingPreview caption={hold ? 'a mention and a reply to you, tinted the whole time' : 'a mention and a reply to you after the flash'}>
+      <PreviewChat design={design}>
+        {rows.map((r, i) => (
+          <Row key={i}>
+            <div
+              style={{
+                borderLeft: `4px solid ${r.color}`,
+                backgroundImage: hold ? mentionHoldBackground(r.color, opacity) : undefined,
+              }}
+            >
+              <PreviewLine design={design} who={r.who} text={r.text} minutesAgo={2 - i} first={i === 0} />
+            </div>
+          </Row>
+        ))}
+      </PreviewChat>
     </SettingPreview>
   );
 };

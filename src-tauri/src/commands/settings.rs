@@ -304,6 +304,120 @@ pub async fn set_chat_user_hidden(
     Ok(())
 }
 
+/// Star (`favorite`) or unstar one Twitch category, edited in place so a
+/// window holding an older copy of the list cannot drop another's star. The
+/// Categories tab's favorites row updates at once.
+#[tauri::command]
+pub async fn set_favorite_category(
+    app: AppHandle,
+    category: crate::models::settings::FavoriteCategory,
+    favorite: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::favorite_categories::apply(&mut state_settings.favorite_categories, category, favorite) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["favorite_categories".to_string()] },
+    );
+    crate::services::home_snapshot::note_favorite_categories_changed();
+    Ok(())
+}
+
+/// Hide (`hidden`) or show again one channel in every browse list, edited in
+/// place so a window with an older copy of the list cannot drop another's.
+#[tauri::command]
+pub async fn set_channel_hidden(
+    app: AppHandle,
+    channel: crate::models::settings::FavoriteChannel,
+    hidden: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let realms = state_settings.hidden_channel_defaults;
+        if !crate::services::hidden_channels::apply(&mut state_settings.hidden_channels, channel, hidden, realms) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    crate::services::home_snapshot::note_hidden_channels_changed();
+    Ok(())
+}
+
+/// Change where one hidden channel is hidden besides browsing.
+#[tauri::command]
+pub async fn set_hidden_channel_realms(
+    app: AppHandle,
+    id: String,
+    realms: crate::models::settings::HiddenRealms,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::hidden_channels::set_realms(&mut state_settings.hidden_channels, &id, realms) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    crate::services::home_snapshot::note_hidden_channels_changed();
+    Ok(())
+}
+
+/// Block (`blocked`) or unblock a hidden Twitch channel on Twitch itself, and
+/// remember it beside the hide so the list in Settings can say so and undo it.
+#[tauri::command]
+pub async fn set_hidden_channel_blocked(
+    app: AppHandle,
+    id: String,
+    blocked: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = {
+        let s = state.settings.lock().map_err(|e| e.to_string())?;
+        crate::services::hidden_channels::twitch_target(&s.hidden_channels, &id)
+    }
+    .ok_or_else(|| "Only a hidden Twitch channel can be blocked here".to_string())?;
+    if blocked {
+        crate::services::twitch_service::TwitchService::block_user(&target).await
+    } else {
+        crate::services::twitch_service::TwitchService::unblock_user(&target).await
+    }
+    .map_err(|e| e.to_string())?;
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::hidden_channels::mark_blocked(&mut state_settings.hidden_channels, &id, blocked) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    Ok(())
+}
+
 /// Apply one hide or unhide to a `chat_filters` JSON group in place. Names
 /// compare the way the rule engine matches them (case-insensitive, leading @
 /// dropped) and per-channel keys through `channel_filter_key`, so an entry saved
@@ -514,6 +628,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
     crate::services::mention_ping::refresh(settings);
+    #[cfg(desktop)]
+    crate::services::mention_notify::refresh(settings);
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
     // restart and "off" costs no task at all.
     crate::services::onsite_notifications::refresh(settings);
@@ -522,6 +638,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::reminder_service::refresh(settings);
     #[cfg(target_os = "ios")]
     crate::services::twitch_resolver::refresh_device_codecs(settings);
+    crate::services::hidden_channels::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
     // nothing else: the favourites sweep only notices on its next pass.
@@ -949,115 +1066,6 @@ pub async fn get_release_notes(version: Option<String>) -> Result<ReleaseNotes, 
         body,
         published_at,
     })
-}
-
-#[tauri::command]
-pub async fn download_and_install_app_update(
-    app_handle: crate::rt::AppHandle,
-) -> Result<String, String> {
-    // First, get the latest version. Follow the full redirect chain so this
-    // survives a repo rename/transfer (old URLs 301 to the new home first)
-    let client = crate::services::http::client().clone();
-
-    let response = client
-        .get("https://github.com/StreamNook/StreamNook/releases/latest")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch latest release: {}", e))?;
-
-    let final_url = response.url().to_string();
-
-    // Extract version from the final URL
-    let version_regex = Regex::new(r"/tag/v?([0-9]+\.[0-9]+\.[0-9]+)")
-        .map_err(|e| format!("Failed to create regex: {}", e))?;
-
-    let version = version_regex
-        .captures(&final_url)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str())
-        .ok_or("Failed to extract version from final release URL")?;
-
-    // Construct the download URL for the executable
-    // Pattern: https://github.com/StreamNook/StreamNook/releases/download/v{version}/StreamNook.exe
-    let download_url = format!(
-        "https://github.com/StreamNook/StreamNook/releases/download/v{}/StreamNook.exe",
-        version
-    );
-
-    // Download the file
-    let client = crate::services::http::client().clone();
-    let response = client
-        .get(&download_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to download update: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Download failed with status: {}",
-            response.status()
-        ));
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read update bytes: {}", e))?;
-
-    // Get the current executable path
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {}", e))?;
-
-    let current_exe_dir = current_exe.parent().ok_or("Failed to get exe directory")?;
-
-    // Save the new exe to a temporary location in the same directory
-    let temp_new_exe = current_exe_dir.join("StreamNook_new.exe");
-    std::fs::write(&temp_new_exe, bytes)
-        .map_err(|e| format!("Failed to write new executable: {}", e))?;
-
-    // Create a batch script to replace the exe and restart
-    let batch_script = format!(
-        r#"@echo off
-timeout /t 3 /nobreak > nul
-:retry_delete
-del /f /q "{}" 2>nul
-if exist "{}" (
-    timeout /t 1 /nobreak > nul
-    goto retry_delete
-)
-move /y "{}" "{}"
-if exist "{}" del /f /q "{}"
-start "" "{}"
-(goto) 2>nul & del /f /q "%~f0"
-"#,
-        current_exe.display(),
-        current_exe.display(),
-        temp_new_exe.display(),
-        current_exe.display(),
-        temp_new_exe.display(),
-        temp_new_exe.display(),
-        current_exe.display()
-    );
-
-    let batch_path = current_exe_dir.join("update_streamnook.bat");
-    std::fs::write(&batch_path, batch_script)
-        .map_err(|e| format!("Failed to write update script: {}", e))?;
-
-    // Launch the batch script hidden
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "/min", "/b"])
-        .arg(&batch_path)
-        .spawn()
-        .map_err(|e| format!("Failed to launch update script: {}", e))?;
-
-    // Exit the application after a short delay to allow the script to start
-    let reason = format!("update: update_streamnook.bat started for {version}, exiting so it can swap the exe");
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        crate::services::app_exit::exit(&app_handle, 0, &reason);
-    });
-
-    Ok(version.to_string())
 }
 
 #[cfg(test)]

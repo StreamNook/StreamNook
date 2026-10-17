@@ -18,7 +18,7 @@ import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
 import { signInRequiredFrom } from '../utils/signInRequired';
 import { transientSwapVerdict } from '../utils/transientSwap';
-import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
+import { WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
 import { settleFirstSettings } from '../utils/settingsOnceLoaded';
 import { setWindowFullscreen } from '../utils/windowFullscreen';
@@ -252,6 +252,8 @@ interface AppState {
   following: FollowingLists;
   /** The unified Categories tab's "On other platforms" row, built in Rust. */
   otherCategories: ProviderCategory[];
+  /** The Categories tab's favorites row, built in Rust with live counts. */
+  favoriteCategories: TwitchCategory[];
   streamUrl: string | null;
   // The quality the resolver is actually serving right now (canonical name from
   // the playlist). May differ from `settings.quality` if the saved preference
@@ -299,6 +301,9 @@ interface AppState {
   /** Broadcast time at recording position 0 (ISO), from the same lookup. The
    *  player's broadcast timeline is anchored on it. */
   liveRewindAnchor: string | null;
+  /** Where the viewer left this broadcast before this playback (recording
+   *  seconds), for the timeline's "you left here" mark. Rust decides it. */
+  liveLeftOffSecs: number | null;
   /** Rewind the live broadcast into its recording VOD at an absolute
    *  broadcast position, or `behindSecs` behind now (null = from the start).
    *  No-op unless a Twitch live stream is playing. */
@@ -452,6 +457,9 @@ interface AppState {
   playerOverlayVisible: boolean;
   toasts: Toast[];
   isAutoSwitching: boolean;
+  /** The login of a stream whose streamer dropped and is being waited out
+   *  (Rust decides; the player says so), or null. */
+  streamReconnecting: string | null;
   // Track when raid redirect occurred to prevent auto-switch from overriding
   profileModalUser: TwitchStream | null;
   setProfileModalUser: (user: TwitchStream | null) => void;
@@ -505,7 +513,9 @@ interface AppState {
   setCurrentHypeTrain: (train: HypeTrainData | null) => void;
   // Hype Train status for stream badges (channel_id -> { level, isGolden })
   activeHypeTrainChannels: Map<string, { level: number; isGolden: boolean }>;
-  handleStreamOffline: () => Promise<void>;
+  /** Something says the stream ended; Rust confirms and decides. `'player'`
+   *  when the player stalled, so a stream still live is reloaded in place. */
+  handleStreamOffline: (trigger?: 'player') => Promise<void>;
   /** Merge fresh fields into the watched stream (viewers/title from a provider
    *  metadata poll). No-op when nothing is playing. */
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
@@ -557,7 +567,9 @@ interface AppState {
   openOwnChannel: () => Promise<void>;
   playMedia: (type: 'clip' | 'video', url: string, info: MediaInfo) => Promise<void>;
   stopStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
-  restartStream: () => Promise<void>;  // Restart current stream (stops and starts again)
+  /** Restart the current stream (stops and starts again). `quiet` skips the
+   *  confirmation toast, for a reload the viewer did not ask for. */
+  restartStream: (options?: { quiet?: boolean }) => Promise<void>;
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
   /** Phone only: why a provider stream has no picture while its chat keeps
    *  running (it ended, is offline, or failed to start). Keyed by the stream's
@@ -736,6 +748,7 @@ interface OfflineNotice {
 type OfflineDecision =
   | { action: 'nothing'; why: string }
   | { action: 'still_live' }
+  | { action: 'resume' }
   | { action: 'offline_chat' }
   | { action: 'notify'; notice: OfflineNotice }
   | { action: 'stop'; notice: OfflineNotice | null }
@@ -842,6 +855,20 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     set({ isAutoSwitching: event.payload });
   });
 
+  // A dropped streamer is being waited out on the same stream (Rust).
+  void listen<{ login: string; waiting: boolean }>('watch-session://reconnecting', (event) => {
+    set({ streamReconnecting: event.payload.waiting ? event.payload.login : null });
+  });
+
+  // The streamer reconnected under a fresh manifest (a new YouTube broadcast
+  // id on the same video): reload in place, as the platform's own player does.
+  void listen<{ login: string }>('watch-session://reload', (event) => {
+    const watching = get().currentStream;
+    if (!watching || watching.user_login !== event.payload.login) return;
+    Logger.info(`[WatchSession] ${event.payload.login} reconnected; reloading the stream`);
+    void get().restartStream({ quiet: true });
+  });
+
   // Surface EventSub subscription failures (e.g. channel.moderate dying on a
   // missing scope) instead of letting the mod-log pane sit silently empty.
   void listen<{ type: string; status: number; error: string }>('eventsub://subscription-failed', (event) => {
@@ -870,6 +897,14 @@ async function applyOfflineDecision(
     case 'still_live':
       Logger.debug('[AutoSwitch] Helix kept reporting the stream online; treating as a blip');
       return;
+    case 'resume':
+      // Live, and the player was stuck on a manifest the streamer reconnected
+      // out of. The confirmation is over, so the restart is not refused as
+      // mid-switch even if the resolving event has not landed yet.
+      Logger.info(`[WatchSession] ${ended.user_login} is live; reloading the stream in place`);
+      set({ isAutoSwitching: false });
+      await get().restartStream({ quiet: true });
+      return;
     case 'notify':
       say(decision.notice);
       return;
@@ -882,6 +917,21 @@ async function applyOfflineDecision(
       return;
     case 'stop':
     case 'switch_to':
+      // A provider stream that really ended goes back Home with a note.
+      if (decision.action === 'stop' && streamProvider(ended) !== 'twitch') {
+        // Phone: the picture ends, the room does not. The band says so and
+        // chat keeps running until the viewer leaves; no toast, the band is
+        // the one place it is said.
+        if (IS_MOBILE) {
+          const name = ended.user_name || ended.user_login;
+          await keepProviderChat(ended, `${name} went offline. Chat keeps running.`, set);
+          return;
+        }
+        await get().stopStream();
+        set({ isHomeActive: true });
+        say(decision.notice);
+        return;
+      }
       set({ isAutoSwitching: true });
       try {
         // The relay, the watch session, drops and channel points (services/watch_start.rs).
@@ -1381,6 +1431,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarDiscover: null,
   following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [] },
   otherCategories: [],
+  favoriteCategories: [],
   streamUrl: null,
   isRestartingStream: false,
   playbackNotice: null,
@@ -1399,6 +1450,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   offlineRoomJoining: false,
   liveRewindAvailable: null,
   liveRewindAnchor: null,
+  liveLeftOffSecs: null,
   clipModal: null,
   vodModal: null,
   clipEditor: null,
@@ -1452,6 +1504,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   playerOverlayVisible: false,
   toasts: [],
   isAutoSwitching: false,
+  streamReconnecting: null,
   // Track when raid redirect occurred to prevent auto-switch from overriding
   profileModalUser: null,
   profileModalInitialTab: 'about',
@@ -1589,6 +1642,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (snapshot.other_categories_at != null && snapshot.other_categories) {
       set({ otherCategories: snapshot.other_categories });
     }
+    if (snapshot.favorite_categories_at != null && snapshot.favorite_categories) {
+      set({ favoriteCategories: snapshot.favorite_categories });
+    }
   },
   applyHomeUpdate: (update) => {
     switch (update.section) {
@@ -1647,6 +1703,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'other_categories':
         set({ otherCategories: update.categories });
         break;
+      case 'favorite_categories':
+        set({ favoriteCategories: update.categories });
+        break;
     }
   },
   dismissContinueWatching: async (videoId) => {
@@ -1678,29 +1737,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ currentStream: { ...current, ...partial } });
   },
 
-  handleStreamOffline: async () => {
+  handleStreamOffline: async (trigger) => {
     const state = get();
     const { currentStream } = state;
-
-    // A provider stream has no Helix verification loop and no same-category
-    // auto-switch (both are Twitch-only), so it takes the simple exit: stop,
-    // tell the user, and return to Home.
-    if (currentStream && streamProvider(currentStream) !== 'twitch') {
-      const label = providerLabel(streamProvider(currentStream));
-      Logger.info(`[${label}] ${currentStream.user_login} went offline; leaving the stream`);
-      const name = currentStream.user_name || currentStream.user_login;
-      // Phone: the picture ends, the room does not. The band says so and chat
-      // keeps running until the viewer leaves; no toast, the band is the one
-      // place it is said.
-      if (IS_MOBILE) {
-        await keepProviderChat(currentStream, `${name} went offline. Chat keeps running.`, set);
-        return;
-      }
-      await get().stopStream();
-      set({ isHomeActive: true });
-      get().addToast(`${name} went offline`, 'info');
-      return;
-    }
 
     if (!currentStream) {
       Logger.debug('[AutoSwitch] No current stream to switch from');
@@ -1708,10 +1747,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Rust confirms the stream is really offline (Helix lags EventSub by a
-    // while) and picks what to switch to; every trigger lands on one decision,
-    // and a confirmation already running answers the rest with "nothing".
+    // while; a YouTube streamer's brief drop is waited out on the same video)
+    // and decides what follows; every trigger lands on one decision, and a
+    // confirmation already running answers the rest with "nothing".
     ensureWatchSessionListeners(set, get);
-    const decision = await invoke<OfflineDecision>('watch_session_resolve_offline').catch((e) => {
+    const decision = await invoke<OfflineDecision>('watch_session_resolve_offline', { trigger: trigger ?? null }).catch((e) => {
       Logger.error('[AutoSwitch] Could not resolve the offline stream:', e);
       return null;
     });
@@ -2153,6 +2193,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         liveRewind: null,
         liveRewindAvailable: null,
         liveRewindAnchor: null,
+        liveLeftOffSecs: null,
         isHomeActive: false,
         // Preserve the origin category so the back button works for clips/VODs.
         // stopStream() clears this, so we re-set it here from the current navigation context.
@@ -2208,7 +2249,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e: unknown) {
       Logger.error(`Failed to start ${type}:`, e);
       get().addToast(`Failed to load ${type}: ${String(e)}`, 'error');
-      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
+      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
     } finally {
       set({ isLoading: false });
     }
@@ -2368,7 +2409,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
+      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
 
 
     } catch (e) {
@@ -2376,7 +2417,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  restartStream: async () => {
+  restartStream: async (options) => {
+    const quiet = options?.quiet ?? false;
     const { currentStream, settings, currentMediaType, isAutoSwitching } = get();
     if (!currentStream) {
       Logger.warn('[Stream] Cannot restart: no current stream');
@@ -2424,7 +2466,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           currentStream: streamInfo,
           isRestartingStream: false,
         });
-        get().addToast('Stream restarted with new settings', 'success');
+        if (!quiet) get().addToast('Stream restarted with new settings', 'success');
       } catch (e) {
         Logger.error(`[${provider}] Failed to restart:`, e);
         set({ isRestartingStream: false });
@@ -2479,7 +2521,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: streamInfo, vodPlayback: null, liveRewind: null, isRestartingStream: false });
 
       // Show toast notification
-      get().addToast('Stream restarted with new settings', 'success');
+      if (!quiet) get().addToast('Stream restarted with new settings', 'success');
     } catch (e) {
       Logger.error('[Stream] Failed to restart:', e);
 
@@ -2818,14 +2860,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // The row is Rust's; only the unified lists' provider marks ride along.
       const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
 
-      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
+      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
       // Can this broadcast be rewound? One cached Rust lookup per live start;
       // the player disables Rewind (with the reason) on a channel that keeps
       // no VODs instead of letting the viewer find out from a failure.
       void invoke<LiveRewindInfo>('get_live_rewind_info', { channel })
         .then((r) => {
-          if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null });
+          if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null, liveLeftOffSecs: r.left_off_secs ?? null });
         })
         .catch(() => {});
     } catch (e) {
@@ -2906,6 +2948,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         liveRewind: null,
         liveRewindAvailable: null,
         liveRewindAnchor: null,
+        liveLeftOffSecs: null,
         isHomeActive: false,
         offlineRoom: room,
         // chatOnly: live, but playback failed. The room offers it again.

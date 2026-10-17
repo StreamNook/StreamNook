@@ -18,6 +18,8 @@
 // upstream callers using mixed case still resolve correctly via `.toLowerCase()`
 // at the API boundary.
 
+import type { CheerCheck } from '../services/bitsService';
+import { useCheerPromptStore } from './cheerPromptStore';
 import { sameSentContent } from '../utils/sentContent';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
 import { IS_MOBILE } from '../utils/platform';
@@ -106,7 +108,11 @@ export interface RoomMode {
 /** Mirrors Rust `room_modes::RoomModeView`. */
 export interface RoomModeView {
   modes: RoomMode[];
-  /** Replaces "Send a message" while a mode may hold you back. */
+  /** The chip style's words: the most limiting mode, in a word or two. */
+  chip: string | null;
+  /** Every mode spares you: the chip is drawn a shade quieter. */
+  exempt: boolean;
+  /** The prompt style: replaces "Send a message" while a mode may hold you back. */
   prompt: string | null;
   prompt_short: string | null;
   /** "You can chat as a moderator" when every mode spares you. */
@@ -3327,14 +3333,15 @@ export async function acquireChannel(
     reviewHold(key);
     if (channelId && !existing.channelId) {
       existing.channelId = channelId;
-      // MultiChat opens panes before the channel's broadcaster_id has resolved
-      // (the stream-info poll runs after first render). That means the initial
-      // acquireChannel call comes through with channelId=null, preloadChannel
-      // bails, and the badge metadata cache never gets populated for this
-      // channel. When the real channelId arrives a moment later and the caller
-      // re-acquires to refresh it, kick off the badge init we deferred so
-      // Twitch channel badges (subscriber/bits/etc.) start resolving.
-      if (provider === 'twitch') void initializeBadgesForChannel(channelId);
+      // The slice was opened without an id: MultiChat panes before their
+      // stream info resolves, the chat dock's held channel before its live
+      // row arrives, the blended feed's companion chats. That first open
+      // skipped the badge init AND the recent-history backfill, so when the
+      // main chat then opened the same channel with its id it landed here and
+      // a quiet channel sat on "Waiting for messages" with no history. Now
+      // that the id is known, run the whole preload; it skips rows the slice
+      // already holds, so a backfill that did run is never doubled.
+      if (provider === 'twitch') void preloadChannel(key, channelId);
     }
     bumpRevision();
     Logger.debug(`[ChatStore] +1 ref on ${key} (now ${existing.refCount})`);
@@ -3559,6 +3566,8 @@ export interface SendChannelOutcome {
   is_sent: boolean;
   drop_reason: string | null;
   pin_error?: string;
+  /** The message cheers, so Rust held it for the cheer card instead. */
+  cheer?: CheerCheck;
 }
 
 /** Send a message to `channel`. The row shown for it is built by Rust with
@@ -3678,6 +3687,9 @@ export async function sendChannelMessage(
       if (result.drop_reason && !IS_MOBILE) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
+      // Held, not dropped: the chat box showing this channel asks before any
+      // bits are spent.
+      if (result.cheer) useCheerPromptStore.getState().hold(result.cheer);
       return result;
     }
 

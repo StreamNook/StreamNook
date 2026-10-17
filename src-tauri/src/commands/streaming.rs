@@ -156,6 +156,10 @@ pub struct VodStartInfo {
     /// True when the viewer rewound a live broadcast into this recording; the
     /// live session stays up and the player offers "Back to live".
     pub rewound_from_live: bool,
+    /// Stamp for this start. The player's position reports carry it back, so
+    /// Rust decides what each report may write (`live_bookmark::origin_of`).
+    /// 0 is never issued, so an unstamped start writes nothing.
+    pub play_id: u64,
     /// Audio ranges Twitch muted, for the seekbar marks. Empty when none are
     /// known; on a `recording` VOD that means not yet determined, not "none".
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -538,6 +542,7 @@ pub async fn start_stream(
     // keeps this the single playback entry point, so quality changes, restarts
     // and session resume all keep working with no new command surface.
     if let WatchTarget::Provider { provider, channel } = watch_urls::classify(&url) {
+        crate::services::live_bookmark::starting(None);
         return start_provider_stream(provider, &channel, &quality).await;
     }
 
@@ -553,6 +558,7 @@ pub async fn start_stream(
 
     // Clip → signed MP4, loaded directly by the player (no HLS proxy).
     if let Some(slug) = tr::clip_slug_from_url(&url) {
+        crate::services::live_bookmark::starting(None);
         let r = tr::resolve_clip(&slug, oauth.as_deref(), &quality)
             .await
             .map_err(|e| e.to_string())?;
@@ -572,14 +578,24 @@ pub async fn start_stream(
 
     // VOD → HLS media playlist, relayed through the local stream server.
     if let Some(vod_id) = tr::vod_id_from_url(&url) {
-        return start_vod(&vod_id, oauth.as_deref(), &quality, &state, None)
+        crate::services::live_bookmark::starting(None);
+        let mut result = start_vod(&vod_id, oauth.as_deref(), &quality, &state, None)
             .await
-            .map_err(StartError::from);
+            .map_err(StartError::from)?;
+        if let Some(v) = result.vod.as_mut() {
+            v.play_id = crate::services::live_bookmark::register_play(
+                crate::services::live_bookmark::Origin::Deliberate,
+            );
+        }
+        return Ok(result);
     }
 
     // Live channel.
     let channel =
         channel_from_url(&url).ok_or_else(|| format!("Unrecognized Twitch URL: {}", url))?;
+    // A restart or quality change of the same channel keeps the live
+    // bookmark's session; any other channel ends it.
+    crate::services::live_bookmark::starting(Some(&channel));
     // retry_streams = delay between attempts, stream_timeout = total budget, so a
     // channel that just went live connects once its playlist appears.
     let core = tr::resolve_live_resilient(
@@ -660,6 +676,12 @@ pub async fn start_stream(
     };
     #[cfg(not(target_os = "ios"))]
     let url = local_player_url(port);
+    let resume = state
+        .settings
+        .lock()
+        .map(|s| s.video_player.resume_vod_playback)
+        .unwrap_or(false);
+    crate::services::live_bookmark::begin_live(&channel, resume);
     Ok(StreamStartResult {
         url,
         quality: r.quality,
@@ -673,6 +695,9 @@ pub async fn start_stream(
     })
 }
 
+/// How long a VOD open waits for the viewer's Twitch-side position.
+const VOD_REMOTE_POSITION_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// Resolve a VOD, relay it, and decide where it starts. `start_override`
 /// (a live rewind's mapped position) wins over the stored resume position;
 /// otherwise the progress store answers, when the resume setting is on.
@@ -683,15 +708,28 @@ async fn start_vod(
     state: &State<'_, AppState>,
     start_override: Option<f64>,
 ) -> Result<StreamStartResult, String> {
-    let (resolved, info) = tokio::join!(
+    let resume_enabled = state.settings.lock().unwrap().video_player.resume_vod_playback;
+    // A position saved on another device lands in the store while the VOD
+    // resolves, so the resume read below sees it. Bounded: a slow answer only
+    // means this device's own position wins.
+    let remote_read = async {
+        if resume_enabled && start_override.is_none() {
+            let _ = tokio::time::timeout(
+                VOD_REMOTE_POSITION_BUDGET,
+                crate::services::vod_sync::sync_on_open(vod_id),
+            )
+            .await;
+        }
+    };
+    let (resolved, info, ()) = tokio::join!(
         tr::resolve_vod(vod_id, oauth, quality),
-        tr::fetch_vod_info(vod_id)
+        tr::fetch_vod_info(vod_id),
+        remote_read
     );
     let r = resolved.map_err(|e| e.to_string())?;
     let port = StreamServer::start_proxy_server_with(r.url, false)
         .await
         .map_err(|e| e.to_string())?;
-    let resume_enabled = state.settings.lock().unwrap().video_player.resume_vod_playback;
     let start_position = match start_override {
         Some(p) => Some(p),
         None if resume_enabled => {
@@ -728,6 +766,7 @@ async fn start_vod(
             thumbnail_url: info.thumbnail_url,
             start_position_secs: start_position,
             rewound_from_live: false,
+            play_id: 0,
             muted_segments: info.muted_segments,
             chapters: info.chapters,
             storyboard: info.storyboard,
@@ -744,6 +783,10 @@ pub struct LiveRewindInfo {
     pub video_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recorded_at: Option<String>,
+    /// Where the viewer left this broadcast before this playback, for the
+    /// timeline's "you left here" mark. Never cached: it changes as they watch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_off_secs: Option<f64>,
 }
 
 /// Per-channel answer cache so the player can ask at every live start
@@ -758,49 +801,81 @@ const LIVE_REWIND_CACHE_NEGATIVE: std::time::Duration = std::time::Duration::fro
 
 /// Can this live channel be rewound into its recording? Cached; a lookup
 /// failure reports `available: false` without caching, so the next ask
-/// retries.
+/// retries. Also hands the recording to the live bookmark, and says where the
+/// viewer left this broadcast before, for the timeline mark.
 #[tauri::command]
 pub async fn get_live_rewind_info(channel: String) -> Result<LiveRewindInfo, String> {
     let channel = channel.trim().trim_start_matches('#').to_lowercase();
     if channel.is_empty() {
         return Err("No channel".to_string());
     }
+    let mut info = live_rewind_lookup(&channel).await;
+    if let (true, Some(id)) = (info.available, info.video_id.clone()) {
+        crate::services::live_bookmark::note_archive(&channel, &id, info.recorded_at.as_deref());
+        info.left_off_secs = left_off_secs(&channel, &id, info.recorded_at.as_deref()).await;
+    }
+    Ok(info)
+}
+
+/// The "you left here" mark for this broadcast's recording, decided by
+/// `live_bookmark::mark_position`.
+async fn left_off_secs(channel: &str, video_id: &str, recorded_at: Option<&str>) -> Option<f64> {
+    let start = chrono::DateTime::parse_from_rfc3339(recorded_at?).ok()?;
+    let elapsed = (chrono::Utc::now() - start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+    let id = video_id.to_string();
+    let entry = tokio::task::spawn_blocking(move || crate::services::vod_progress_service::lookup(&id))
+        .await
+        .ok()
+        .flatten()
+        .filter(|e| !e.completed)?;
+    crate::services::live_bookmark::mark_position(
+        entry.position_secs,
+        entry.updated_at,
+        crate::services::live_bookmark::begun_ms(channel),
+        elapsed,
+    )
+}
+
+async fn live_rewind_lookup(channel: &str) -> LiveRewindInfo {
     if let Ok(cache) = LIVE_REWIND_CACHE.lock() {
-        if let Some((info, at)) = cache.get(&channel) {
+        if let Some((info, at)) = cache.get(channel) {
             let ttl = if info.available {
                 LIVE_REWIND_CACHE_POSITIVE
             } else {
                 LIVE_REWIND_CACHE_NEGATIVE
             };
             if at.elapsed() < ttl {
-                return Ok(info.clone());
+                return info.clone();
             }
         }
     }
-    let info = match tr::fetch_live_archive(&channel).await {
+    let info = match tr::fetch_live_archive(channel).await {
         Ok(Some(archive)) => LiveRewindInfo {
             available: true,
             video_id: Some(archive.video_id),
             recorded_at: archive.recorded_at,
+            left_off_secs: None,
         },
         Ok(None) => LiveRewindInfo {
             available: false,
             video_id: None,
             recorded_at: None,
+            left_off_secs: None,
         },
         Err(e) => {
             debug!("[Streaming] live rewind lookup for {} failed: {}", channel, e);
-            return Ok(LiveRewindInfo {
+            return LiveRewindInfo {
                 available: false,
                 video_id: None,
                 recorded_at: None,
-            });
+                left_off_secs: None,
+            };
         }
     };
     if let Ok(mut cache) = LIVE_REWIND_CACHE.lock() {
-        cache.insert(channel, (info.clone(), std::time::Instant::now()));
+        cache.insert(channel.to_string(), (info.clone(), std::time::Instant::now()));
     }
-    Ok(info)
+    info
 }
 
 /// Rewind a live broadcast: switch the solo relay onto the channel's
@@ -850,7 +925,11 @@ pub async fn rewind_live_stream(
     .await?;
     if let Some(v) = result.vod.as_mut() {
         v.rewound_from_live = true;
+        v.play_id = crate::services::live_bookmark::register_play(
+            crate::services::live_bookmark::Origin::Rewind,
+        );
     }
+    crate::services::live_bookmark::begin_rewind(&channel, &archive.video_id, archive.recorded_at.as_deref());
     log::info!(
         "[Streaming] rewind {} → vod {} at {:.0}s (behind={:?}, position={:?})",
         channel,
@@ -864,6 +943,9 @@ pub async fn rewind_live_stream(
 
 #[tauri::command]
 pub async fn stop_stream() -> Result<(), String> {
+    // Every close of a live stream comes through here, the tray close too
+    // (it stops the stream but not the watch session).
+    crate::services::live_bookmark::end(crate::services::live_bookmark::EndKind::Async);
     // Tear down the YouTube DASH relay for this stream too. Unconditional: it is
     // a no-op for an id it does not know, which is every non-YouTube stream.
     // Without it a stopped stream's session stayed registered, held its init

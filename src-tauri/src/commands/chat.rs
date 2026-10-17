@@ -712,6 +712,7 @@ pub async fn nudge_chat_channels() -> Result<usize, String> {
 
 #[tauri::command]
 pub async fn send_chat_message(
+    state: State<'_, AppState>,
     message: String,
     reply_parent_msg_id: Option<String>,
     target_channel: Option<String>,
@@ -720,6 +721,32 @@ pub async fn send_chat_message(
     sender_account_id: Option<String>,
     pin_after_send: Option<bool>,
 ) -> Result<SentMessage, String> {
+    // A typed message that cheers is never sent as chat: that would spend
+    // nothing and show as plain text. It comes back held, with the total and
+    // anything in the way, for the page to confirm (bits::send then sends it).
+    // Paced and scripted sends do not come through here and are untouched.
+    if let Some(channel) = target_channel.as_deref() {
+        let main_id = crate::services::account_store::AccountStore::primary().map(|a| a.user_id);
+        let sender_is_main = match (sender_account_id.as_deref(), main_id.as_deref()) {
+            (Some(acc), Some(main)) => acc == main,
+            _ => true,
+        };
+        if let Some(cheer) = crate::services::bits::typed_cheer(
+            &state.twitch_auth,
+            &message,
+            channel,
+            broadcaster_id.as_deref(),
+            sender_is_main,
+        )
+        .await
+        {
+            return Ok(SentMessage {
+                sent: SendResult { message_id: None, is_sent: false, drop_reason: None },
+                pin_error: None,
+                cheer: Some(cheer),
+            });
+        }
+    }
     let sent = ChatService::send_message(
         &message,
         reply_parent_msg_id.as_deref(),
@@ -741,17 +768,20 @@ pub async fn send_chat_message(
     } else {
         None
     };
-    Ok(SentMessage { sent, pin_error })
+    Ok(SentMessage { sent, pin_error, cheer: None })
 }
 
 /// A send's outcome, plus why the pin failed when one was asked for. Without a
-/// pin the wire shape is exactly `SendResult`.
+/// pin or a held cheer the wire shape is exactly `SendResult`.
 #[derive(serde::Serialize)]
 pub struct SentMessage {
     #[serde(flatten)]
     sent: SendResult,
     #[serde(skip_serializing_if = "Option::is_none")]
     pin_error: Option<String>,
+    /// The message cheers, so it was held rather than sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cheer: Option<crate::services::bits::CheerCheck>,
 }
 
 /// Pins a message this app just sent (`/pin <text>`). A dropped message is not
@@ -946,9 +976,12 @@ async fn fetch_recent_messages(
         .unwrap_or_default()
 }
 
-/// The join backfill, fetched and parsed by Rust in one call: the recent
-/// messages mirror (recent-messages.robotty.de) tagged `historical=1`, then
-/// the same parse the live path uses. Until 2026-09-07 the page fetched the
+/// The join backfill, fetched and parsed by Rust in one call: Twitch's own
+/// recent chat when the viewer is signed in to twitch.tv
+/// (`twitch_chat_history`), else the recent messages mirror
+/// (recent-messages.robotty.de), as lines tagged `historical=1`, then the same
+/// parse the live path uses. A reconnect's windowed backfill always uses the
+/// mirror, since Twitch's answer has no time window. Until 2026-09-07 the page fetched the
 /// mirror itself, serially after the badge cache init, so history landed one
 /// to two seconds after the first live rows and visibly prepended; now the
 /// store starts this call at acquire time, in parallel with the IRC join,
@@ -973,9 +1006,20 @@ pub async fn load_channel_history(
     let raw = match if windowed { None } else { cached_history(&key) } {
         Some(lines) => lines,
         None => {
-            let lines =
-                fetch_recent_messages(&key, limit.unwrap_or(HISTORY_DEFAULT_LIMIT), after_ms, before_ms)
-                    .await;
+            let from_twitch = if windowed {
+                None
+            } else {
+                crate::services::twitch_chat_history::fetch(&key, &state.twitch_auth)
+                    .await
+                    .filter(|lines| !lines.is_empty())
+            };
+            let lines = match from_twitch {
+                Some(lines) => lines,
+                None => {
+                    fetch_recent_messages(&key, limit.unwrap_or(HISTORY_DEFAULT_LIMIT), after_ms, before_ms)
+                        .await
+                }
+            };
             if !windowed {
                 store_history(&key, lines.clone());
             }

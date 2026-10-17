@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { User, UserPlus, UserMinus, Loader2, ExternalLink, X } from 'lucide-react';
+import { User, UserPlus, UserMinus, Loader2, Play, MessageSquare, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 import { useAppStore } from '../stores/AppStore';
@@ -146,10 +146,22 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
                                     </>
                                 )}
                             </button>
-                            <a href={`https://www.twitch.tv/${user.user_login}`} target="_blank" rel="noopener noreferrer" className="glass-button text-textSecondary hover:text-white text-sm py-2 px-4 rounded-lg flex items-center gap-2">
-                                <ExternalLink size={16} />
-                                Channel
-                            </a>
+                            {/* Opens the channel here, not on twitch.tv: its stream while
+                                live, its offline room (chat, latest VOD) otherwise.
+                                startOfflineChat asks Rust which and switches to the
+                                stream itself when the channel turns out to be live. */}
+                            <button
+                                onClick={() => {
+                                    const store = useAppStore.getState();
+                                    onClose();
+                                    if (store.isHomeActive) store.toggleHome();
+                                    void store.startOfflineChat(user.user_login, user);
+                                }}
+                                className="glass-button text-textSecondary hover:text-white text-sm py-2 px-4 rounded-lg flex items-center gap-2"
+                            >
+                                {isLive ? <Play size={16} /> : <MessageSquare size={16} />}
+                                {isLive ? 'Watch' : 'Open chat'}
+                            </button>
                             <button onClick={onClose} className="p-2 text-textSecondary hover:text-white hover:bg-glass hover:text-red-400 rounded-lg transition-all ml-2 border border-transparent hover:border-red-500/30">
                                 <X size={24} />
                             </button>
