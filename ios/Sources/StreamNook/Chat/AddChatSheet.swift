@@ -28,7 +28,7 @@ struct AddChatSheet: View {
                     .foregroundStyle(SN.textMuted)
                     .frame(width: 36)
                     .accessibilityHidden(true)
-                TextField("Search channels", text: $query)
+                TextField("Search, or paste a kick.com link", text: $query)
                     .font(.sn(15))
                     .foregroundStyle(SN.textPrimary)
                     .textInputAutocapitalization(.never)
@@ -58,12 +58,13 @@ struct AddChatSheet: View {
                     } else if list.isEmpty {
                         note(searchingNow ? "No channels found." : "Nobody you follow is live. Search above to open any channel.")
                     } else {
+                        let mixed = Set(list.map(\.provider)).count > 1
                         ForEach(list) { row in
                             let open = rooms.tabs.contains { $0.channel == row.key }
                             Button {
                                 pick(row)
                             } label: {
-                                RoomRow(row: row, open: open)
+                                RoomRow(row: row, open: open, mixed: mixed)
                             }
                             .buttonStyle(PressFade())
                             .disabled(open)
@@ -107,7 +108,8 @@ struct AddChatSheet: View {
             .padding(.vertical, 24)
     }
 
-    /// Two characters or more, 0.32 s after the last keystroke. The iPhone opens Twitch rooms only.
+    /// Two characters or more, 0.32 s after the last keystroke: Twitch and Kick together, or the
+    /// one Kick room a pasted kick.com link names.
     private func search() async {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
@@ -120,7 +122,7 @@ struct AddChatSheet: View {
         guard !Task.isCancelled else { return }
         let found = (try? await rooms.core.invoke("search_chat_rooms", args: ["query": q], as: [ChatRoomRow].self)) ?? []
         guard !Task.isCancelled else { return }
-        results = found.filter { $0.provider == "twitch" }
+        results = found.filter { $0.provider == "twitch" || $0.provider == "kick" }
         searching = false
     }
 
@@ -135,6 +137,8 @@ struct AddChatSheet: View {
 private struct RoomRow: View {
     let row: ChatRoomRow
     let open: Bool
+    /// The list spans platforms, so a Kick room wears Kick's mark.
+    var mixed = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -151,10 +155,13 @@ private struct RoomRow: View {
                         }
                     }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(row.userName.isEmpty ? row.userLogin : row.userName)
-                        .font(.sn(15))
-                        .foregroundStyle(SN.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(row.userName.isEmpty ? row.userLogin : row.userName)
+                            .font(.sn(15))
+                            .foregroundStyle(SN.textPrimary)
+                            .lineLimit(1)
+                        if mixed && row.provider == "kick" { PlatformMark(platform: .kick, size: 12) }
+                    }
                     Text(row.subline)
                         .font(.sn(12.5))
                         .foregroundStyle(SN.textMuted)
@@ -184,7 +191,9 @@ private struct RoomRow: View {
 
     private var face: some View {
         Group {
-            if let url = row.profileImageURL.flatMap(URL.init(string:)) {
+            if row.profileImageURL == nil, row.provider == "kick" {
+                BrandTile(platform: .kick, size: 36)
+            } else if let url = row.profileImageURL.flatMap(URL.init(string:)) {
                 AsyncImage(url: url) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {

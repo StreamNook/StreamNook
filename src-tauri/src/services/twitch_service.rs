@@ -2398,6 +2398,11 @@ impl TwitchService {
                     // Map of user_id -> live stream data, filled across chunks.
                     let mut stream_data_map: std::collections::HashMap<String, serde_json::Value> =
                         std::collections::HashMap::new();
+                    // The ids whose chunk Helix answered. For these the streams
+                    // answer is the truth about liveness; search's own `is_live`
+                    // lags and kept channels that had ended "live".
+                    let mut checked: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
 
                     // Helix takes at most 100 `user_id` params per call, and defaults
                     // `first` to 20. Without it a fully-live page of search results
@@ -2423,12 +2428,20 @@ impl TwitchService {
                         }
 
                         if let Ok(streams_response) = streams_request.send().await {
+                            if !streams_response.status().is_success() {
+                                debug!(
+                                    "[TwitchService] channel search: streams HTTP {}, liveness left to search",
+                                    streams_response.status()
+                                );
+                                continue;
+                            }
                             if let Ok(streams_json) =
                                 streams_response.json::<serde_json::Value>().await
                             {
                                 if let Some(streams_data) =
                                     streams_json.get("data").and_then(|d| d.as_array())
                                 {
+                                    checked.extend(chunk.iter().cloned());
                                     for stream_data in streams_data {
                                         if let Some(uid) =
                                             stream_data.get("user_id").and_then(|v| v.as_str())
@@ -2442,10 +2455,11 @@ impl TwitchService {
                         }
                     }
 
+                    mark_search_liveness(&mut streams, &stream_data_map, &checked);
+
                     // Update our streams with actual stream data
                     for stream in &mut streams {
                         if let Some(stream_data) = stream_data_map.get(&stream.user_id) {
-                            stream.is_live = Some(true);
                             // Update viewer count
                             if let Some(viewer_count) =
                                 stream_data.get("viewer_count").and_then(|v| v.as_u64())
@@ -7197,6 +7211,26 @@ mod resolve_stream_tests {
     }
 }
 
+/// Settles each channel search row's liveness from Helix's streams answer.
+/// A row the answer lists is live. A row whose lookup was answered but which
+/// it leaves out has ended: Helix search keeps `is_live` true for a while after
+/// a stream stops, and such a row drew as a live card with 0 viewers that
+/// opened onto nothing. A row whose lookup failed keeps search's word.
+pub fn mark_search_liveness(
+    rows: &mut [TwitchStream],
+    live: &std::collections::HashMap<String, serde_json::Value>,
+    checked: &std::collections::HashSet<String>,
+) {
+    for row in rows {
+        if live.contains_key(&row.user_id) {
+            row.is_live = Some(true);
+        } else if checked.contains(&row.user_id) {
+            row.is_live = Some(false);
+            row.viewer_count = 0;
+        }
+    }
+}
+
 /// Order Twitch channel-search rows by how well they answer what was typed.
 ///
 /// Helix returns its own order, which is not "best match first": a live
@@ -7371,6 +7405,21 @@ mod search_rank_tests {
         ];
         rank_search_results("moon", &mut rows);
         assert_eq!(logins(&rows), ["moonbig", "moonlive", "moonoffline", "themoonfan"]);
+    }
+
+    #[test]
+    fn the_streams_answer_settles_liveness_search_got_wrong() {
+        use super::mark_search_liveness;
+        use std::collections::{HashMap, HashSet};
+        // Search still calls `dnd` live after its stream ended; streams does not list it.
+        let mut rows = vec![row("dnd", true, 0), row("onair", false, 0), row("unasked", true, 0)];
+        let live: HashMap<_, _> = [("onair".to_string(), serde_json::json!({}))].into();
+        let checked: HashSet<_> = ["dnd".to_string(), "onair".to_string()].into();
+        mark_search_liveness(&mut rows, &live, &checked);
+        assert_eq!(rows[0].is_live, Some(false));
+        assert_eq!(rows[1].is_live, Some(true));
+        // Its lookup failed, so search's word stands.
+        assert_eq!(rows[2].is_live, Some(true));
     }
 }
 

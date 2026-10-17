@@ -26,7 +26,10 @@ struct ChatMenuSheet: View {
     @State private var followBusy = false
     @State private var moderates = false
 
-    private var label: String { session.channel }
+    /// The room's name: its tab's label (a Kick room's key is `kick:slug`), else its login.
+    private var label: String {
+        session.rooms?.tabs.first(where: { $0.channel == session.channel })?.label ?? session.login
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,7 +78,7 @@ struct ChatMenuSheet: View {
                         }
                         .disabled(followBusy)
                     }
-                    if session.roomID != nil {
+                    if session.roomID != nil || session.isKick {
                         Button {
                             dismiss()
                             subscribe()
@@ -91,7 +94,7 @@ struct ChatMenuSheet: View {
                                     }
                                 }
                                 Spacer()
-                                if relationship?.subscribed == true {
+                                if relationship?.subscribed == true || kickSubscribed {
                                     Text("Subscribed").font(.sn(12.5)).foregroundStyle(SN.textSecondary)
                                 }
                             }
@@ -111,11 +114,14 @@ struct ChatMenuSheet: View {
                     } label: {
                         Label("Reload this chat", systemImage: "arrow.clockwise")
                     }
-                    Button {
-                        dismiss()
-                        model.commandsOpen = true
-                    } label: {
-                        Label("Chat commands", systemImage: "terminal")
+                    // Commands are Twitch's; a Kick room sends text only.
+                    if !session.isKick {
+                        Button {
+                            dismiss()
+                            model.commandsOpen = true
+                        } label: {
+                            Label("Chat commands", systemImage: "terminal")
+                        }
                     }
                     // Only where the actions would succeed: Helix refuses them without mod powers here.
                     if moderates || session.isModerator {
@@ -136,7 +142,7 @@ struct ChatMenuSheet: View {
                             }
                         }
                     }
-                    if let tab = session.rooms?.tabs.first(where: { $0.login == session.channel }), !tab.pinnedToStream {
+                    if let tab = session.rooms?.tabs.first(where: { $0.channel == session.channel }), !tab.pinnedToStream {
                         Button(role: .destructive) {
                             dismiss()
                             session.rooms?.close(tab.channel)
@@ -163,7 +169,11 @@ struct ChatMenuSheet: View {
         .task { await load() }
     }
 
+    /// Your Kick follow list says you subscribe here.
+    private var kickSubscribed: Bool { session.isKick && session.rooms?.kick?.subscribed(to: session.login) == true }
+
     private var subscribeTitle: String {
+        if session.isKick { return kickSubscribed ? "Gift Subs" : "Subscribe to \(label)" }
         guard let relationship else { return "Subscribe to \(label)" }
         if relationship.subscribed { return "Gift Subs" }
         return relationship.hasSubHistory ? "Resubscribe to \(label)" : "Subscribe to \(label)"
@@ -171,6 +181,7 @@ struct ChatMenuSheet: View {
 
     private func load() async {
         let core = session.core
+        guard !session.isKick else { return }
         if let json = try? await core.invoke("chat_send_budget", args: ["channel": session.channel]),
            let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
            let role = budget["role"] as? String {
@@ -196,12 +207,15 @@ struct ChatMenuSheet: View {
         }
     }
 
+    /// The platform's own checkout in the web sheet, as the signed-in account.
     private func subscribe() {
         let core = session.core
-        let login = session.channel
+        let login = session.login
+        let provider = session.provider
+        let title = "Subscribe to \(label)"
         Task {
             _ = try? await core.invoke("open_subscribe_window", args: [
-                "channelLogin": login, "title": "Subscribe to \(login)", "provider": "twitch",
+                "channelLogin": login, "title": title, "provider": provider,
             ])
         }
     }

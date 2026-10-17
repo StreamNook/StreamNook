@@ -932,6 +932,46 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
 
 // ---- The stamp ---------------------------------------------------------------
 
+/// Kick's own art for its role badges (moderator, VIP, OG and the rest), which
+/// Kick draws inline on its site and never serves as images. Rasterized from
+/// the same SVGs the webview shells bundle (`src/assets/kick-badges`), as PNG
+/// data URIs a native shell decodes without a fetch. A channel's custom
+/// subscriber art rides the row's own image URL and wins over these.
+fn kick_badge_art(name: &str) -> Option<String> {
+    use base64::Engine;
+    static ART: std::sync::OnceLock<std::collections::HashMap<&'static str, String>> = std::sync::OnceLock::new();
+    let art = ART.get_or_init(|| {
+        let png: [(&str, &[u8]); 7] = [
+            ("moderator", include_bytes!("../../assets/kick-badges/moderator.png")),
+            ("vip", include_bytes!("../../assets/kick-badges/vip.png")),
+            ("og", include_bytes!("../../assets/kick-badges/og.png")),
+            ("founder", include_bytes!("../../assets/kick-badges/founder.png")),
+            ("verified", include_bytes!("../../assets/kick-badges/verified.png")),
+            ("sub_gifter", include_bytes!("../../assets/kick-badges/sub_gifter.png")),
+            ("subscriber", include_bytes!("../../assets/kick-badges/subscriber.png")),
+        ];
+        png.into_iter()
+            .map(|(name, bytes)| {
+                (name, format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+            })
+            .collect()
+    });
+    art.get(name).cloned()
+}
+
+/// A Kick role badge's name in words, when the row carries no title.
+fn kick_badge_title(name: &str) -> String {
+    match name {
+        "vip" => "VIP".to_string(),
+        "og" => "OG".to_string(),
+        "sub_gifter" => "Sub Gifter".to_string(),
+        other => {
+            let mut chars = other.chars();
+            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    }
+}
+
 fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<ViewBadge> {
     let mut out = Vec::new();
     let twitch = msg.provider.is_empty() || msg.provider == "twitch";
@@ -953,6 +993,14 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             } else if twitch {
                 if let Some((url, title)) = twitch_badge_art(room, &badge.name, &badge.version) {
                     out.push(ViewBadge { url, title, provider: "twitch".to_string() });
+                }
+            } else if msg.provider == "kick" {
+                if let Some(url) = kick_badge_art(&badge.name) {
+                    out.push(ViewBadge {
+                        url,
+                        title: badge.title.clone().unwrap_or_else(|| kick_badge_title(&badge.name)),
+                        provider: "kick".to_string(),
+                    });
                 }
             }
         }
@@ -978,13 +1026,99 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             }
         }
     }
-    // A StreamNook member's own badge, last, as every surface orders it.
-    if prefs.show_third_party_badges && twitch && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook") {
-        if let Some(badge) = member_badge(&msg.user_id) {
+    // A StreamNook member's own badge, last, as every surface orders it. On Kick
+    // or YouTube the member is the one who claimed that account, never whoever
+    // holds the same number on Twitch.
+    if prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook") {
+        if let Some(badge) = member_of(msg).and_then(|member| member_badge(&member)) {
             out.push(badge);
         }
     }
     out
+}
+
+/// The StreamNook member who wrote a row: the Twitch author when they are a
+/// member, or the member who claimed the Kick or YouTube account, once the
+/// alias cache knows it (a lookup starts otherwise, and its answer repaints the
+/// chatter's rows as `ROW_MEMBER` keyed `provider:id`).
+fn member_of(msg: &ChatMessage) -> Option<String> {
+    use crate::services::cosmetics_registry;
+    if msg.user_id.is_empty() {
+        return None;
+    }
+    let twitch = msg.provider.is_empty() || msg.provider == "twitch";
+    if twitch {
+        return cosmetics_registry::is_member(&msg.user_id).then(|| msg.user_id.clone());
+    }
+    let key = alias_key(&msg.provider, &msg.user_id)?;
+    match crate::services::member_alias::peek(&key) {
+        Some(found) => found,
+        None => {
+            queue_alias(key);
+            None
+        }
+    }
+}
+
+/// The alias key a Kick or YouTube chatter is resolved by (`kick:<id>`).
+fn alias_key(provider: &str, user_id: &str) -> Option<String> {
+    matches!(provider, "kick" | "youtube").then(|| format!("{provider}:{user_id}"))
+}
+
+static ALIAS_QUEUE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Batches the chatters seen in the last moment into one alias request, then
+/// repaints those that turned out to be members.
+fn queue_alias(key: String) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let first = {
+        let Ok(mut queue) = ALIAS_QUEUE.lock() else { return };
+        let set = queue.get_or_insert_with(HashSet::new);
+        let first = set.is_empty();
+        set.insert(key);
+        first
+    };
+    if !first {
+        return;
+    }
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        let keys: Vec<String> = ALIAS_QUEUE
+            .lock()
+            .ok()
+            .and_then(|mut q| q.take())
+            .map(|set| set.into_iter().collect())
+            .unwrap_or_default();
+        if keys.is_empty() {
+            return;
+        }
+        let outcome = crate::services::member_alias::resolve(keys).await;
+        for (key, member) in outcome.resolved {
+            let theme = crate::services::member_theme::resolve(&member)
+                .await
+                .unwrap_or_else(|| crate::services::member_theme::resolve_theme(&member, None, false, false));
+            let frame = alias_frame(&key, &member, &theme);
+            crate::services::providers::publish_frame(frame).await;
+        }
+    });
+}
+
+/// `ROW_MEMBER` for one Kick or YouTube chatter, keyed by their alias key, so
+/// only that platform's rows of that account repaint.
+fn alias_frame(key: &str, member: &str, theme: &crate::services::member_theme::MemberTheme) -> String {
+    let prefs = prefs();
+    let badge = member_badge(member)
+        .filter(|_| prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook"));
+    serde_json::json!({
+        "type": "ROW_MEMBER",
+        "user_id": key,
+        "atmosphere": theme.chat_atmosphere(),
+        "cologne": theme.chat_cologne(),
+        "badge": badge,
+    })
+    .to_string()
 }
 
 /// A member's StreamNook badge as row art, at the chat-size cut.
@@ -998,14 +1132,15 @@ fn member_badge(member_id: &str) -> Option<ViewBadge> {
 fn known_member_theme(msg: &ChatMessage) -> Option<crate::services::member_theme::MemberTheme> {
     use crate::services::{cosmetics_registry, member_theme};
     let twitch = msg.provider.is_empty() || msg.provider == "twitch";
-    if !twitch || msg.user_id.is_empty() || !cosmetics_registry::is_member(&msg.user_id) {
+    if twitch && (msg.user_id.is_empty() || !cosmetics_registry::is_member(&msg.user_id)) {
         return None;
     }
-    if let Some(theme) = member_theme::peek(&msg.user_id) {
+    let member_id = if twitch { msg.user_id.clone() } else { member_of(msg)? };
+    if let Some(theme) = member_theme::peek(&member_id) {
         return Some(theme);
     }
     if tokio::runtime::Handle::try_current().is_ok() {
-        let member = msg.user_id.clone();
+        let member = member_id;
         tokio::spawn(async move {
             // The answer reaches rows through the theme's own change frame.
             let _ = member_theme::resolve(&member).await;
@@ -1112,6 +1247,33 @@ mod tests {
                 ViewSpan::Gif { text, .. } => format!("g:{text}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn alias_keys_name_the_platform_and_never_twitch() {
+        assert_eq!(alias_key("kick", "676").as_deref(), Some("kick:676"));
+        assert_eq!(alias_key("youtube", "UCx").as_deref(), Some("youtube:UCx"));
+        assert_eq!(alias_key("twitch", "676"), None);
+        assert_eq!(alias_key("tiktok", "1"), None);
+    }
+
+    #[test]
+    fn a_kick_alias_frame_is_keyed_by_the_kick_account() {
+        let theme = crate::services::member_theme::resolve_theme("42", None, false, false);
+        let frame: serde_json::Value = serde_json::from_str(&alias_frame("kick:676", "42", &theme)).unwrap();
+        assert_eq!(frame["type"], "ROW_MEMBER");
+        assert_eq!(frame["user_id"], "kick:676", "never the bare number a Twitch account could hold");
+    }
+
+    #[test]
+    fn kick_role_badges_carry_their_own_png_art() {
+        for name in ["moderator", "vip", "og", "founder", "verified", "sub_gifter", "subscriber"] {
+            let url = kick_badge_art(name).unwrap_or_else(|| panic!("{name} has art"));
+            assert!(url.starts_with("data:image/png;base64,iVBOR"), "{name} is a PNG, which iOS decodes");
+        }
+        assert!(kick_badge_art("broadcaster").is_none(), "no art beats wrong art");
+        assert_eq!(kick_badge_title("sub_gifter"), "Sub Gifter");
+        assert_eq!(kick_badge_title("moderator"), "Moderator");
     }
 
     #[test]

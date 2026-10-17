@@ -163,7 +163,8 @@ final class Watch {
     /// The player is never rebuilt: only its item changes.
     func open(_ stream: TwitchStream, core: CoreBridge) {
         // The same channel already playing stays as it is; its room or a failure gives way.
-        if self.stream?.userLogin.lowercased() == stream.userLogin.lowercased(), room == nil, error == nil { return }
+        // Twitch `xqc` and Kick `xqc` are two channels.
+        if self.stream?.rowKey == stream.rowKey, room == nil, error == nil { return }
         close(core: core, stopping: false)
         self.core = core
         self.stream = stream
@@ -205,7 +206,7 @@ final class Watch {
         try? await Task.sleep(for: .milliseconds(300))
         do {
             let start = try await core.invoke(
-                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
+                "start_stream", args: ["url": stream.playbackURL, "quality": askedQuality],
                 as: StreamStart.self
             )
             guard self.stream?.id == stream.id else { return nil }
@@ -230,6 +231,11 @@ final class Watch {
     /// Opens the channel's offline room: the core answers its facts (or the live row for a stale
     /// card), stops whatever played and waits for the channel to go live. Chat stays.
     func openRoom(_ stream: TwitchStream, core: CoreBridge) {
+        // Offline rooms are Twitch's; a Kick channel opens as a stream.
+        guard stream.isTwitch else {
+            open(stream, core: core)
+            return
+        }
         close(core: core, stopping: false)
         self.core = core
         self.stream = stream
@@ -255,6 +261,21 @@ final class Watch {
             onRow?(row)
         }
         log.notice("room \(stream.userLogin, privacy: .public) open, vod \(self.room?.latestVod != nil), next \(self.room?.nextStream != nil), waiting \(self.room?.chatters ?? -1)")
+    }
+
+    /// A Kick stream ended (the watch session's two missed checks, or the relay's re-sign
+    /// failing): the player stops and the band says so; chat keeps running.
+    func providerEnded(provider: String, channel: String) {
+        guard let stream, !stream.isTwitch, stream.platform == provider.lowercased(),
+              stream.userLogin.lowercased() == channel.lowercased() else { return }
+        reportState("teardown")
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        pip.eligible = false
+        nowPlaying.clear()
+        error = "\(stream.userName) went offline. Chat keeps running."
+        status = "Offline"
+        if let core { Task.detached { _ = try? await core.invoke("watch_stop", args: [:]) } }
     }
 
     /// The core's waiting count for the open room.
@@ -479,8 +500,10 @@ final class Watch {
     /// superseded start touches nothing.
     private func play(_ stream: TwitchStream, core: CoreBridge) async {
         do {
+            // A Kick row starts on Kick's path in the same Rust call (services/watch_start.rs).
             let started = try await core.invoke(
-                "watch_start", args: ["login": stream.userLogin, "seed": stream.seed, "quality": askedQuality],
+                "watch_start", args: ["login": stream.userLogin, "provider": stream.isTwitch ? nil : stream.platform,
+                                      "seed": stream.seed, "quality": askedQuality],
                 as: WatchStart.self
             )
             guard !Task.isCancelled, !started.superseded, let start = started.stream else {
@@ -508,12 +531,22 @@ final class Watch {
         stream = row
         onRow?(row)
         showCard()
-        tasks.append(Task { await self.follow(row, core: core) })
+        // The channel-state poll is Twitch's; a Kick stream's numbers move with the watch
+        // session's provider check (`watch-session://stream-update`).
+        if row.isTwitch { tasks.append(Task { await self.follow(row, core: core) }) }
     }
 
     /// Playback could not start, but chat runs on: an offline channel says so; a live one keeps
     /// the band's failure line and a toast saying chat still works.
     private func failed(_ stream: TwitchStream, core: CoreBridge) async {
+        guard stream.isTwitch else {
+            // Kick has no offline room: the band says so and chat keeps running.
+            error = "Playback unavailable. Chat keeps running."
+            status = "Failed"
+            pip.eligible = false
+            onToast?("Playback unavailable - showing chat only")
+            return
+        }
         // An unanswerable check counts as live: the honest message is then about playback.
         var offline = false
         do {

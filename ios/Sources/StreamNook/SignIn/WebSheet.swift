@@ -73,6 +73,16 @@ private struct SheetWebView: UIViewRepresentable {
             return SignInNavigator.allows(url) ? .allow : .cancel
         }
 
+        /// Kick's mobile site ignores `/login` and shows its home page with the form closed, so on
+        /// that page the sheet presses Kick's own Log In button (twice a second, up to 20 times,
+        /// stopping once a password field shows).
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let url = webView.url, KickLogin.opensForm(url) else { return }
+            webView.evaluateJavaScript(KickLogin.script) { _, error in
+                if let error { log.notice("kick login press failed: \(String(describing: error), privacy: .public)") }
+            }
+        }
+
         /// Nothing listens at a stop URL (a localhost callback), so a load of it that slipped
         /// past the policy check fails; its URL still carries the result.
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {

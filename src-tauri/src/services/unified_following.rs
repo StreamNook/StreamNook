@@ -58,6 +58,13 @@ pub struct Following {
     /// Follows and favourites that are not live: Twitch's roster, then the
     /// other platforms' follows, then favourites followed nowhere.
     pub offline: Vec<DiscoverRow>,
+    /// Every live follow on every platform, favourite or not, most watched
+    /// first (Twitch first on a tie): the phones' Following list, which has no
+    /// Favourites shelf. A phone keeps the platforms it can play.
+    pub followed_live: Vec<DiscoverRow>,
+    /// The platforms you follow at least one channel on, in platform order:
+    /// a phone shows its platform filter only when there is a second one.
+    pub platforms: Vec<String>,
 }
 
 fn row_favorite_id(row: &DiscoverRow) -> Option<String> {
@@ -217,7 +224,24 @@ pub fn build(inputs: &Inputs) -> Following {
         .filter(|row| seen.insert(identity(row)))
         .collect();
 
-    Following { favorites, live, offline }
+    // Every live follow, favourite or not. Keyed by card, so Twitch `xqc` and
+    // Kick `xqc` stay two rows; the sort is stable, so ties keep Twitch first.
+    let mut cards = HashSet::new();
+    let mut followed_live: Vec<DiscoverRow> =
+        twitch_live().chain(provider_live()).filter(|row| cards.insert(row.card_key())).collect();
+    followed_live.sort_by(|a, b| b.viewers().cmp(&a.viewers()));
+
+    let mut platforms: Vec<String> = Vec::new();
+    if !inputs.followed_live.is_empty() || !inputs.followed_offline.is_empty() {
+        platforms.push("twitch".to_string());
+    }
+    for provider in crate::services::providers::key::PROVIDER_IDS.iter().filter(|p| **p != "twitch") {
+        if inputs.provider_follows.iter().any(|f| f.provider == *provider) {
+            platforms.push(provider.to_string());
+        }
+    }
+
+    Following { favorites, live, offline, followed_live, platforms }
 }
 
 #[cfg(test)]
@@ -407,5 +431,34 @@ mod tests {
         let f = g.build();
         assert!(f.offline.is_empty());
         assert_eq!(logins(&f.favorites), ["fav"]);
+    }
+
+    #[test]
+    fn the_phone_list_holds_every_live_follow_favourite_or_not() {
+        let mut g = Given::new();
+        g.favorite_ids = vec!["2".into()];
+        g.followed_live = vec![twitch("fav", "2", 10), twitch("xqc", "3", 500)];
+        g.provider_followed_live = vec![provider("kick", "xqc", "676", 500), provider("kick", "small", "9", 3)];
+        // A live favourite followed nowhere is not a follow.
+        g.favorites_live = vec![provider("kick", "solo", "77", 9_000)];
+        g.favorite_ids.push("kick:solo".into());
+        g.provider_follows = vec![follow("kick", "xqc"), follow("kick", "small")];
+        let f = g.build();
+        // Twitch xqc and Kick xqc are two rows, Twitch first on the tie.
+        let keys: Vec<String> = f.followed_live.iter().map(|r| r.card_key()).collect();
+        assert_eq!(logins(&f.followed_live), ["xqc", "xqc", "fav", "small"]);
+        assert_eq!(f.followed_live[0].provider(), "twitch");
+        assert_eq!(f.followed_live[1].provider(), "kick");
+        assert_eq!(keys.len(), 4);
+        assert_eq!(f.platforms, ["twitch", "kick"]);
+    }
+
+    #[test]
+    fn the_platforms_name_only_where_you_follow_someone() {
+        let mut g = Given::new();
+        g.followed_offline = vec![twitch("sleepy", "5", 0)];
+        assert_eq!(g.build().platforms, ["twitch"]);
+        let empty = Given::new().build();
+        assert!(empty.platforms.is_empty());
     }
 }

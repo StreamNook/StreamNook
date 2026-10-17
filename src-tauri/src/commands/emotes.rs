@@ -370,6 +370,11 @@ pub async fn emote_picker(
     let run = |set: &EmoteSet| picker::build(Some(set), &ctx, tab, &query);
     let found = if joined {
         irc_service::with_channel_emotes(&channel, run).await
+    } else if room == picker::Room::Kick {
+        // A Kick room carries no Twitch channel id: its set is the slug's,
+        // native emotes and 7TV, from the Kick caches the chat resolve fills.
+        let set = crate::services::providers::kick_emotes::channel_emote_set(&channel).await;
+        Some(run(&set))
     } else {
         match channel_id.as_deref() {
             Some(id) => state.0.read().await.with_cached_set(id, run).await,

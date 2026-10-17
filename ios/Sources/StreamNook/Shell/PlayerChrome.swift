@@ -108,7 +108,10 @@ struct PlayerChrome: View {
                             .foregroundStyle(.white)
                             .lineLimit(1)
                         if stream.isPartner { PartnerMark(size: 12) }
-                        AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
+                        // Live alerts are Twitch's (the notify worker watches Twitch logins).
+                        if stream.isTwitch {
+                            AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
+                        }
                     }
                     .layoutPriority(1)
                     Spacer(minLength: 8)
@@ -171,7 +174,7 @@ struct PlayerChrome: View {
     /// home lists know (a Shared Chat session included).
     private func group(_ stream: TwitchStream) -> ChannelGroup? {
         if let group = watch.group { return group }
-        guard let id = stream.userID, !id.isEmpty else { return nil }
+        guard let id = stream.twitchID, !id.isEmpty else { return nil }
         let lists = model.home.lists
         return lists.collaborations[id] ?? lists.sharedChats[id]
     }
@@ -240,7 +243,7 @@ struct PlayerChrome: View {
                 .accessibilityLabel("Watch on a TV")
             if let stream {
                 let title = watch.live?.title ?? stream.title
-                ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
+                ShareLink(item: stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
                           subject: Text(title.isEmpty ? stream.userName : title),
                           message: Text("\(stream.userName) is live")) {
                     Image(systemName: Symbol.share)

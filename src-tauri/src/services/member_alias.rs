@@ -132,6 +132,21 @@ pub struct ResolveOutcome {
     pub unresolved: Vec<String>,
 }
 
+/// What the cache already knows about one chat key, with no request: the
+/// member behind it (`Some(Some(id))`), nobody (`Some(None)`), or not asked
+/// yet / gone stale (`None`).
+pub fn peek(key: &str) -> Option<Option<String>> {
+    if !is_resolvable(key) {
+        return None;
+    }
+    let st = state().lock().ok()?;
+    match st.entries.get(key) {
+        Some(e) if e.member_id.is_none() => Some(None),
+        Some(e) if e.stored_at.elapsed() < POSITIVE_TTL => Some(e.member_id.clone()),
+        _ => None,
+    }
+}
+
 /// Resolve a batch of chat keys to the members behind them.
 ///
 /// Answers from cache where it can and asks about the rest in one request.

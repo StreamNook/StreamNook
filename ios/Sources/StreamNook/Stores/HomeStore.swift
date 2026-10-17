@@ -76,6 +76,7 @@ final class HomeStore {
     /// Forgets the account's lists, for a sign-out.
     func signedOut() {
         lists.followedLive = []
+        lists.following = FollowingLists()
         followedLoaded = false
     }
 
