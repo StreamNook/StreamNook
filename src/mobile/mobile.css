@@ -20,6 +20,21 @@
   --sn-safe-l: var(--sn-inset-l, env(safe-area-inset-left, 0px));
 }
 
+/* One device pixel, the iPhone's hairline (1 / scale). A 1px CSS line is four
+   device pixels on a 4x phone and reads as an outline, not an edge. */
+.sn-mobile {
+  --sn-hairline: 1px;
+}
+@media (min-resolution: 2dppx) {
+  .sn-mobile { --sn-hairline: 0.5px; }
+}
+@media (min-resolution: 3dppx) {
+  .sn-mobile { --sn-hairline: 0.34px; }
+}
+@media (min-resolution: 4dppx) {
+  .sn-mobile { --sn-hairline: 0.25px; }
+}
+
 /* Touch surfaces scroll with overlay scrolling; the 8px hover-styled desktop
    scrollbar is noise on a phone. */
 .sn-mobile ::-webkit-scrollbar {
@@ -171,6 +186,26 @@
     inset 0 0 0 2px rgba(255, 255, 255, 0.02),
     inset 0 0 0 4px rgba(255, 255, 255, 0.025),
     0 0 0 0.5px rgba(0, 0, 0, 0.4);
+}
+
+/* The tab bar's glass. It rides over its own floor (below), which is nearly the
+   page background, so the desktop dock's black film made it darker than the
+   page and it read as a hole. A light glass instead: about 12% white over the
+   blur, the lift the iPhone's bar shows over the same page (#2B2B2C on
+   #0C0C0D), with the chosen tab's pill at half black so it reads as sunk into
+   the glass. The opaque floor still fades in as Glassiness drops, so at 0
+   nothing is see-through. */
+.sn-mobile .chrome-glaze--dock {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%),
+    rgb(255 255 255 / 0.12)
+  );
+  -webkit-backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(140%);
+  backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(140%);
+}
+.sn-mobile .chrome-glaze--dock .glaze-selected {
+  background-color: rgb(0 0 0 / 0.5);
 }
 
 /* The floor under the floating tab bar: the page's own background rising from

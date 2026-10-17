@@ -150,11 +150,16 @@ export const MobileStreamCard: React.FC<{
             </CardChip>
           )}
         </div>
+        {/* Line heights at about 1.2 times the size, as the iPhone sets them:
+            five lines then stand as tall as the 156-wide preview, so the card's
+            8px inset reads the same on every side. Looser leading made the
+            column 14px taller than the preview, which sat 15px from the top and
+            bottom but 8px from the left. */}
         <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
-          <h3 className="text-textPrimary font-semibold text-[14px] leading-snug line-clamp-2 mb-px">
+          <h3 className="text-textPrimary font-semibold text-[14px] leading-[17px] line-clamp-2 mb-px">
             <StreamTitleWithEmojis title={stream.title} />
           </h3>
-          <div className="flex items-center gap-1 text-textSecondary text-[13px]">
+          <div className="flex items-center gap-1 text-textSecondary text-[13px] leading-4">
             <span className="truncate">{stream.user_name}</span>
             {collab && <TogetherTag collab={collab} compact />}
             {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
@@ -169,14 +174,14 @@ export const MobileStreamCard: React.FC<{
             )}
           </div>
           {showCategory && stream.game_name && (
-            <div className="flex items-center gap-1 text-textMuted text-[12.5px]">
+            <div className="flex items-center gap-1 text-textMuted text-[12.5px] leading-[15px]">
               <span className="truncate">{stream.game_name}</span>
               {/* The DROPS badge over the thumbnail already says this. */}
             </div>
           )}
           {/* The streak rides the viewers line as amber words: as a dark chip it
               was the heaviest thing in the text column. */}
-          <div className="flex items-center gap-2 text-[12.5px]">
+          <div className="flex items-center gap-2 text-[12.5px] leading-[15px]">
             <span className="text-textMuted">{stream.viewer_count.toLocaleString()} viewers</span>
             {!!watchStreak && watchStreak > 0 && (
               <span
