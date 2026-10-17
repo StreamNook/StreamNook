@@ -469,6 +469,7 @@ pub async fn kick_chat_history(
                 None
             } else {
                 m.metadata.from_backfill = true;
+                crate::services::chat_row_view::stamp(&mut m);
                 Some(m)
             }
         })

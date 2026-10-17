@@ -21,6 +21,8 @@ final class ChatRooms {
 
     let core: CoreBridge
     @ObservationIgnored weak var toasts: Toasts?
+    /// Your Kick account, which a Kick room's composer needs to send.
+    @ObservationIgnored weak var kick: KickAccount?
 
     private(set) var state = ChatTabsState()
     private(set) var sessions: [String: ChatSession] = [:]
@@ -54,6 +56,10 @@ final class ChatRooms {
     @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private var listening = false
     @ObservationIgnored private var backgroundedAt: ContinuousClock.Instant?
+    /// Twitch's connection is up (a Twitch room ran `start_chat`); Kick rooms ride the bridge alone.
+    @ObservationIgnored private var ircUp = false
+    /// Kick rooms closed within their release grace, by room key.
+    @ObservationIgnored private var releasing: [String: Task<Void, Never>] = [:]
 
     init(core: CoreBridge) {
         self.core = core
@@ -65,7 +71,8 @@ final class ChatRooms {
     /// The strip shows from two rooms up; one room keeps every point of height for chat.
     var showsStrip: Bool { state.tabs.count >= 2 }
     /// The stream's own chat is on screen, so its hype train, drops, polls and predictions may show.
-    var viewingStream: Bool { active?.pinnedToStream == true }
+    /// Twitch only: a Kick id would name an unrelated Twitch channel.
+    var viewingStream: Bool { active?.pinnedToStream == true && active?.provider == "twitch" }
 
     /// The active room's pins, when it is a Twitch room.
     var activePins: [PinnedChat] {
@@ -114,8 +121,10 @@ final class ChatRooms {
     /// Points the stream tab at the watched stream; nil when the player closed (rooms opened
     /// beside it stay).
     func syncStream(_ stream: TwitchStream?) {
+        // A Kick room is `kick:slug` and carries no Twitch id.
         let room = stream.map {
-            Self.room(provider: "twitch", channel: $0.userLogin, id: $0.userID, label: $0.userName, avatar: $0.profileImageURL)
+            Self.room(provider: $0.platform, channel: $0.userLogin, id: $0.twitchID, label: $0.userName,
+                      avatar: $0.profileImageURL)
         }
         change("chat_tabs_sync_stream", ["room": room])
     }
@@ -179,7 +188,7 @@ final class ChatRooms {
         mirror(change)
         // A stream switch leaves one room and joins another: the connection stays up between.
         let staying = Set(sessions.keys).subtracting(change.release.map(\.channel))
-            .union(change.acquire.filter { $0.provider == "twitch" }.map(\.channel))
+            .union(change.acquire.map(\.channel))
         for tab in change.release { leave(tab, last: staying.isEmpty) }
         for tab in change.acquire { join(tab) }
         showActive()
@@ -197,28 +206,43 @@ final class ChatRooms {
     // MARK: Joining and leaving
 
     private func join(_ tab: ChatTabInfo) {
+        // Back inside a Kick room's release grace: the adapter never let go.
+        releasing[tab.channel]?.cancel()
+        releasing[tab.channel] = nil
         guard sessions[tab.channel] == nil else { return }
-        guard tab.provider == "twitch" else {
-            chatLog.notice("chat room \(tab.channel, privacy: .public) skipped: only Twitch chat runs on the iPhone")
+        guard tab.provider == "twitch" || tab.provider == "kick" else {
+            chatLog.notice("chat room \(tab.channel, privacy: .public) skipped: the iPhone plays Twitch and Kick")
             return
         }
-        let session = ChatSession(channel: tab.login, core: core, source: .room, roomID: tab.channelID)
+        let kick = tab.provider == "kick"
+        let session = ChatSession(channel: kick ? tab.channel : tab.login, core: core, source: .room,
+                                  roomID: kick ? nil : tab.channelID, provider: tab.provider)
         session.rooms = self
         session.pipeline.setVisible(tab.channel == state.activeChannel)
         sessions[tab.channel] = session
-        routes.set(tab.login, session.pipeline)
+        // Frames name their room: the Twitch login, or `kick:slug`.
+        routes.set(tab.channel, session.pipeline)
+        if kick {
+            joinKick(tab, session: session)
+            return
+        }
         let core = core
         let login = tab.login
         enqueue { [weak self] in
             guard let self else { return }
             do {
-                if let port = self.port {
+                if self.ircUp, let port = self.port {
                     _ = try await core.invoke("join_chat_channel", args: ["channel": login])
                     chatLog.notice("chat room \(login, privacy: .public) joined on port \(port)")
                 } else {
+                    // The first Twitch room starts Twitch's connection; a Kick room may already
+                    // have the bridge up, on the same port.
                     let port = try await core.invoke("start_chat", args: ["channel": login, "reattach": false], as: Int.self)
-                    self.port = port
-                    self.read(port: port)
+                    self.ircUp = true
+                    if self.port != port {
+                        self.port = port
+                        self.read(port: port)
+                    }
                     chatLog.notice("chat socket for \(login, privacy: .public) on port \(port)")
                 }
             } catch {
@@ -229,10 +253,36 @@ final class ChatRooms {
         loadExtras(tab)
     }
 
+    /// A Kick room: Kick's adapter (its own Pusher socket) publishes onto the core's one chat
+    /// bridge, which this reads like any room; the adapter's answer is the bridge's port.
+    private func joinKick(_ tab: ChatTabInfo, session: ChatSession) {
+        let core = core
+        let slug = tab.login
+        enqueue { [weak self] in
+            guard let self else { return }
+            do {
+                let port = try await core.invoke("provider_chat_connect", args: ["provider": "kick", "channel": slug],
+                                                 as: Int.self)
+                if self.port == nil || self.port != port {
+                    self.port = port
+                    self.read(port: port)
+                }
+                chatLog.notice("kick room \(slug, privacy: .public) joined on port \(port)")
+            } catch {
+                chatLog.error("kick room \(slug, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        session.start()
+    }
+
     private func leave(_ tab: ChatTabInfo, last: Bool) {
         guard let session = sessions.removeValue(forKey: tab.channel) else { return }
         session.stop()
-        routes.remove(tab.login)
+        routes.remove(tab.channel)
+        if tab.provider == "kick" {
+            leaveKick(tab, last: last)
+            return
+        }
         pins[tab.login] = nil
         let core = core
         let login = tab.login
@@ -241,6 +291,7 @@ final class ChatRooms {
             if last {
                 // The last room closed: the connection goes too.
                 _ = try? await core.invoke("stop_chat", "{}")
+                self?.ircUp = false
                 self?.stopReading()
                 chatLog.notice("chat closed with its last room \(login, privacy: .public)")
             } else {
@@ -248,6 +299,24 @@ final class ChatRooms {
                 chatLog.notice("chat room \(login, privacy: .public) left")
             }
         }
+    }
+
+    /// A Kick room lets its adapter go after a 15 s grace, so a stream switch away and back (or a
+    /// closed tab reopened) keeps the socket.
+    private func leaveKick(_ tab: ChatTabInfo, last: Bool) {
+        let core = core
+        let slug = tab.login
+        let key = tab.channel
+        releasing[key] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled, let self else { return }
+            self.releasing[key] = nil
+            guard self.sessions[key] == nil else { return }
+            _ = try? await core.invoke("provider_chat_disconnect", args: ["provider": "kick", "channel": slug])
+            chatLog.notice("kick room \(slug, privacy: .public) released")
+            if self.sessions.isEmpty { self.stopReading() }
+        }
+        _ = last
     }
 
     private func enqueue(_ work: @escaping @MainActor () async -> Void) {
@@ -327,6 +396,25 @@ final class ChatRooms {
     /// "Reload this chat": the Twitch connection is rebuilt with every room, never throttled.
     func reload(_ session: ChatSession) {
         let core = core
+        if session.isKick {
+            // A Kick room drops its adapter and takes it again: a fresh Pusher socket.
+            let slug = session.login
+            Task {
+                _ = try? await core.invoke("provider_chat_disconnect", args: ["provider": "kick", "channel": slug])
+                do {
+                    let port = try await core.invoke("provider_chat_connect", args: ["provider": "kick", "channel": slug],
+                                                     as: Int.self)
+                    if self.port != port {
+                        self.port = port
+                        self.read(port: port)
+                    }
+                    session.backfillGap()
+                } catch {
+                    chatLog.error("kick reload failed: \(String(describing: error), privacy: .public)")
+                }
+            }
+            return
+        }
         let reason = "manual reload of \(session.channel)"
         Task {
             do {

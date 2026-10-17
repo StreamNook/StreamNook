@@ -17,9 +17,8 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import type { ProviderId } from '../../types/providers';
 import { ProviderMark } from '../../components/ProviderLogo';
-import { useFollowsStore } from '../../stores/followsStore';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
-import { mergeFollowedLive } from '../followingMerge';
+import { phoneFollowedLive } from '../followingMerge';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
@@ -59,7 +58,6 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
   onClose,
 }) => {
-  const followedStreams = useAppStore((s) => s.followedStreams);
   const openTabs = useChatTabsStore((s) => s.tabs);
   const addTab = useChatTabsStore((s) => s.addTab);
 
@@ -70,9 +68,9 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   // not, without a search round trip.
   const [pasted, setPasted] = useState<TwitchStream | null>(null);
 
-  // Live Kick follows sit beside the Twitch ones.
-  const providerLive = useFollowsStore((s) => s.liveByKey);
-  const liveNow = useMemo(() => mergeFollowedLive(followedStreams, providerLive), [followedStreams, providerLive]);
+  // Live Kick follows sit beside the Twitch ones (merged in Rust).
+  const following = useAppStore((s) => s.following);
+  const liveNow = useMemo(() => phoneFollowedLive(following), [following]);
 
   const openSet = useMemo(
     () => new Set(openTabs.map((t) => t.channel)),

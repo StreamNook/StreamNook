@@ -81,6 +81,10 @@ enum SN {
     /// The darker pill that marks the chosen item inside glass.
     static let glazeSelected = Color.black.opacity(0.72)
 
+    /// The 1 point edge of a layer floating over content (the mini player), so it reads over any
+    /// thumbnail, with `floatShadow` under it.
+    static let floatEdge = Color.white.opacity(0.12)
+
     /// The opaque floor under every glass surface, showing more as glassiness falls.
     static var floor: Color { p.backgroundTertiary.color.opacity(Look.shared.floorOpacity) }
 }

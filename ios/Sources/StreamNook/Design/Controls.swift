@@ -6,6 +6,8 @@ struct Segment<Value: Hashable>: Identifiable {
     let label: String
     var symbol: String?
     var accessibility: String?
+    /// A platform's own mark before the label, instead of a symbol.
+    var mark: PlatformMark.Platform?
 
     var id: Value { value }
 }
@@ -39,7 +41,9 @@ struct GlazeSegments<Value: Hashable>: View {
                     withAnimation(still ? SNMotion.run(.easeOut(duration: 0.15)) : SNMotion.run(SNMotion.glide)) { selection = next }
                 } label: {
                     HStack(spacing: 6) {
-                        if let symbol = segment.symbol {
+                        if let mark = segment.mark {
+                            PlatformMark(platform: mark, size: 15)
+                        } else if let symbol = segment.symbol {
                             Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
                         }
                         Text(segment.label).font(on ? .snLabelStrong : .snLabel)
