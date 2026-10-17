@@ -85,6 +85,14 @@ final class KickAccount {
         }
         busy = false
         await refresh()
+        // The follows can come in while Kick's Authorize step was left unfinished: the row would
+        // read "Not signed in" with nothing said, so it says the sign-in did not complete.
+        if !connected, step == nil {
+            let reason = KickWords.outcome("")
+            log.notice("kick sign-in returned without Kick's authorization")
+            show(reason)
+            toasts?.show(reason)
+        }
     }
 
     /// Signs out of Kick: the core drops the token, the sign-in browser's kick.com cookies and

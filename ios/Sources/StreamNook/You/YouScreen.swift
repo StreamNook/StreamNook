@@ -209,6 +209,8 @@ struct AccountsCard: View {
                         Task { await kick.disconnect() }
                     }
                 }
+                // The buttons keep their words; a long name gives way instead.
+                .fixedSize()
             } else {
                 BrandPill(label: kick.busy ? "Signing in" : "Sign in with Kick", fill: SN.kick, text: .black,
                           enabled: model.started && !kick.busy) {
