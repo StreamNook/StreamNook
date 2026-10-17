@@ -176,6 +176,9 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     connect: async (provider) => {
       if (get()[provider].busy) return;
       patch(provider, { busy: true, step: 'Waiting for you to sign in…' });
+      // Set when the flow already said why it did not finish, so the check
+      // after the roster read never says it a second time.
+      let reported = false;
       try {
         if (provider === 'kick') {
           // ONE window takes consent and then promotes the login into a kick.com
@@ -213,8 +216,18 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
         // and the Home empty state shows nothing at all, so a failure there read
         // as a click that did nothing. The toast reaches all of them.
         useAppStore.getState().addToast(reason, 'error');
+        reported = true;
       }
       await refreshOne(provider);
+      // Kick's sign-in is two steps in one window: the kick.com login, then
+      // Kick's Authorize page. Closing it after the login reads the follows and
+      // returns without error, yet holds no token, so the row would fall back
+      // to "Not signed in" with nothing said about why.
+      if (provider === 'kick' && !reported && !get().kick.connected) {
+        const reason = 'Sign-in was not completed';
+        transientStep(provider, reason);
+        useAppStore.getState().addToast(reason, 'error');
+      }
       // The follow list is only visible once connected, so paint it now rather
       // than leaving the Following tab empty until something else hydrates.
       await useFollowsStore.getState().hydrate();

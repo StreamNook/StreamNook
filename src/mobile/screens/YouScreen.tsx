@@ -11,12 +11,11 @@ import { usePhonePrefs } from '../phonePrefs';
 import { SegmentedSelect } from '../../components/settings/_primitives';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
 import { OwnIdentityCard, SignedOutIdentityCard } from '../profile/OwnIdentityHeader';
-import { SETTINGS_ROWS } from './SettingsScreen';
+import { SettingsDirectory } from './SettingsSearch';
 import { AccountsCard } from '../profile/AccountsCard';
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
-  const openSettings = useMobileNavStore((s) => s.openSettings);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
@@ -115,22 +114,9 @@ export const YouScreen: React.FC = () => {
       <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">
         Settings
       </div>
-      <div className="px-3">
-        {SETTINGS_ROWS.map(({ id, label, icon: Icon, description }) => (
-          <button
-            key={id}
-            onClick={() => openSettings(id)}
-            className="w-full flex items-center gap-3 px-3 py-3 rounded-lg active:bg-surface-active text-left"
-          >
-            <Icon size={20} className="text-textSecondary shrink-0" />
-            <span className="flex-1 min-w-0">
-              <span className="block text-[15px] font-medium text-textPrimary">{label}</span>
-              <span className="block text-[12.5px] text-textMuted truncate">{description}</span>
-            </span>
-            <ChevronRight size={16} className="text-textMuted shrink-0" />
-          </button>
-        ))}
-      </div>
+      {/* The search field over the section rows; while something is typed
+          the rows give way to the settings that match. */}
+      <SettingsDirectory />
     </div>
   );
 };

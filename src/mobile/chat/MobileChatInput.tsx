@@ -17,6 +17,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
+import { CircleSlash } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
@@ -83,12 +84,15 @@ function failureWords(err: unknown): string {
 
 /** Whether you can send in this room, as Rust decided it (room_modes.rs). */
 export interface ChatGating {
-  /** The room's active modes in words, for the chat menu. */
+  /** The room's active modes in words. */
   labels: string[];
   /** The mode that certainly keeps you from sending, or null. */
   blocked: RoomModeKind | null;
   /** What the disabled field says while blocked. */
   reason: string | null;
+  /** The room's modes in full for the chat menu, whatever the composer's
+   *  room-mode icons are set to. */
+  view?: RoomModeView | null;
 }
 
 interface Props {
@@ -185,6 +189,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const spellcheck = chatInput?.spellcheck_enabled ?? true;
   const hidePlaceholder = chatInput?.hide_placeholder ?? false;
   const hideEmoteButton = chatInput?.hide_emote_button ?? false;
+  const hideCommandButton = chatInput?.hide_command_button ?? false;
   // The last message each room took, for Duplicate sends.
   const lastSent = useRef<Map<string, string>>(new Map());
 
@@ -676,6 +681,22 @@ const MobileChatInputImpl: React.FC<Props> = ({
               roomModes &&
               !gating.blocked && <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
             ))}
+          {/* The command list one tap from the field instead of two menus deep.
+              Commands are Twitch calls (any other room would post the "/" as
+              text), so only a Twitch room shows it; Settings can hide it. */}
+          {isTwitch && channel && !hideCommandButton && (
+            <button
+              onClick={() => {
+                setEmotesOpen(false);
+                setPointsOpen(false);
+                setCommandsOpen(true);
+              }}
+              className="shrink-0 w-9 h-9 flex items-center justify-center text-textSecondary active:opacity-70"
+              aria-label="Chat commands"
+            >
+              <CircleSlash size={19} strokeWidth={2} />
+            </button>
+          )}
           {/* Icon only. The balance was briefly shown here to prove earning was
               happening, and once proven it went back: it cost the message field
               real width to state a number nobody needs at rest, and the menu has
@@ -889,7 +910,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         activeLabel={channelLabel}
         channelId={channelId}
         isModerator={isModerator}
-        gatingLabels={gating.labels}
+        roomModes={gating.view ?? null}
         modToolsOn={modToolsOn}
         onToggleModTools={onToggleModTools}
         onAddChat={onAddChat}

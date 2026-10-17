@@ -44,6 +44,15 @@ import { filterChannelKey } from '../../utils/chatFilters';
 import { Logger } from '../../utils/logger';
 import { parseKey } from '../../utils/providerKey';
 import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
+import { ProviderMark } from '../ProviderLogo';
+import EmoteProviderLogo from '../chat/EmoteProviderLogo';
+import streamNookMark from '../../assets/streamnook-logo-128.webp';
+import chatterinoLogo from '../../assets/chatterino-logo.svg';
+import homiesLogo from '../../assets/homies-logo.png';
+import moltorinoLogo from '../../assets/moltorino-logo.svg';
+import chatsenLogo from '../../assets/chatsen-logo.png';
+import chattyLogo from '../../assets/chatty-logo.png';
+import dankchatLogo from '../../assets/dankchat-logo.png';
 
 /** Platforms that can join a combined feed. Derived from the chat-capability
  *  flags rather than hand-listed, so a newly chat-enabled platform appears here
@@ -374,6 +383,42 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'chatty', label: 'Chatty' },
   { id: 'dankchat', label: 'DankChat' },
 ];
+
+/** The chat clients' own icons, bundled like the Badges gallery's. */
+const SERVICE_ICONS: Record<string, string> = {
+  streamnook: streamNookMark,
+  chatterino: chatterinoLogo,
+  homies: homiesLogo,
+  'homies-custom': homiesLogo,
+  moltorino: moltorinoLogo,
+  chatsen: chatsenLogo,
+  chatty: chattyLogo,
+  dankchat: dankchatLogo,
+};
+
+/** A badge service's or emote provider's mark, drawn beside its name. The
+ *  three emote services are vectors; FFZ takes the text color because its
+ *  brand white would vanish on a light theme. */
+const ServiceMark = ({ id, size = 13 }: { id: string; size?: number }) => {
+  if (id === '7tv' || id === 'bttv' || id === 'ffz') {
+    return (
+      <span className="flex shrink-0" style={{ width: size, height: size }}>
+        <EmoteProviderLogo provider={id} tinted={id !== 'ffz'} className="h-full w-full" />
+      </span>
+    );
+  }
+  const src = SERVICE_ICONS[id];
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      className="shrink-0 object-contain"
+      style={{ width: size, height: size }}
+    />
+  );
+};
 
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
@@ -908,6 +953,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                             })
                           }
                         />
+                        <ProviderMark provider={p} size={13} />
                         {PROVIDERS[p].label}
                       </label>
                     ))}
@@ -922,6 +968,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       <SettingsSection
         id="settings-section-youtube-chat"
         label="YouTube Chat"
+        // The phone names the platform with its mark, as the iPhone page does;
+        // the desktop's section strip and search keep the written name.
+        logo={IS_MOBILE ? <ProviderMark provider="youtube" size={14} /> : undefined}
+        shownLabel={IS_MOBILE ? 'Chat' : undefined}
         description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
       >
         <SettingsRow
@@ -1204,7 +1254,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <div className="flex flex-col gap-2 w-full">
             {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).map((provider) => (
               <div key={provider} className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[12px] text-textSecondary w-16 shrink-0">{PROVIDER_LABELS[provider] ?? provider}</span>
+                <span className="flex w-[78px] shrink-0 items-center gap-1 text-[12px] text-textSecondary">
+                  <ProviderMark provider={provider} size={13} />
+                  {PROVIDER_LABELS[provider] ?? provider}
+                </span>
                 {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
                   const key = `${provider}:${cat}`;
                   const on = !hiddenEvents.includes(key);
@@ -1605,10 +1658,15 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                           type="button"
                           aria-pressed={on}
                           onClick={() => toggleBadgeProvider(p.id)}
-                          className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
                             on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
                           }`}
                         >
+                          {/* The service's own mark, dimmed with its chip while
+                              that service's badges are hidden. */}
+                          <span className={`flex transition-opacity ${on ? '' : 'opacity-45'}`}>
+                            <ServiceMark id={p.id} size={14} />
+                          </span>
                           {p.label}
                         </button>
                       );
@@ -1859,7 +1917,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         )}
 
         <SettingsRow
-          title="7TV paint"
+          title={IS_MOBILE ? 'Paint' : '7TV paint'}
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.paint_mentions_in_body', true])}
           description="Draws a mentioned name in that person's 7TV paint instead of a flat color."
           help="Off shows mentions in the chatter's plain name color."
@@ -1999,6 +2058,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Personal emotes"
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.show_personal_emotes', true])}
           description="Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead."
           control={
@@ -2148,7 +2208,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="7TV notices"
+          title={IS_MOBILE ? 'Notices' : '7TV notices'}
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.seventv_emote_notices', true])}
           description="Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel."
           help="The new emote is usable right away either way."
@@ -2165,8 +2226,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Emote Effects"
         description="Emotes that change the emote beside them, and Twitch's giant power-up emotes."
       >
+        {/* On the phone the service's mark stands in for its name, as on the
+            iPhone page and in the settings search; desktop search still lands
+            on the written titles. */}
         <SettingsRow
-          title="FFZ effects"
+          title={IS_MOBILE ? 'Effects' : 'FFZ effects'}
+          logo={IS_MOBILE ? <ServiceMark id="ffz" size={14} /> : undefined}
           onReset={resetFor(['chat_design.ffz_emote_effects', true])}
           description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
           help="Off shows modifier emotes as plain overlay emotes."
@@ -2179,7 +2244,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="BetterTTV modifiers"
+          title={IS_MOBILE ? 'Modifiers' : 'BetterTTV modifiers'}
+          logo={IS_MOBILE ? <ServiceMark id="bttv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.bttv_emote_modifiers', true])}
           description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
           help="Off shows the modifiers as plain emotes."
