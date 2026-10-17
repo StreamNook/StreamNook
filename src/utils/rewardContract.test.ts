@@ -53,15 +53,6 @@ function rustParams(file: string, fnName: string): string[] {
     .sort();
 }
 
-/** The argument keys of an `invoke('<command>', { ... })` call in a TS file. */
-function invokeKeys(file: string, command: string): string[] {
-  const src = read(file);
-  const at = src.indexOf(`'${command}', {`);
-  if (at < 0) throw new Error(`invoke('${command}') not found in ${file}`);
-  const end = src.indexOf('})', at);
-  return [...src.slice(at, end).matchAll(/^\s*([A-Za-z]+):/gm)].map((x) => x[1]).sort();
-}
-
 /** String literals in a Rust file, above its test module. */
 function rustStrings(file: string, from?: string, to?: string): string[] {
   let src = read(file);
