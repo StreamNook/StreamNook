@@ -559,6 +559,11 @@ interface AppState {
   stopStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   restartStream: () => Promise<void>;  // Restart current stream (stops and starts again)
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
+  /** Phone only: why a provider stream has no picture while its chat keeps
+   *  running (it ended, is offline, or failed to start). Keyed by the stream's
+   *  `makeKey`, so it can only ever describe the stream it was written for;
+   *  the player shows it while `streamUrl` is the `'offline'` marker. */
+  playbackNotice: { key: string; message: string } | null;
   reloadStreamAndChat: () => Promise<void>;  // Hard refresh: restart the stream AND reconnect/reload chat
   getAvailableQualities: () => Promise<string[]>;
   changeStreamQuality: (quality: string) => Promise<void>;
@@ -747,10 +752,17 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
   // size): startStream backfills the rest from the target's live row.
   void listen<{ reason: 'raid'; target: TwitchStream }>('watch-session://redirect', async (event) => {
     const { target } = event.payload;
+    // Phone: a raid follows a stream that is open. One closed before the
+    // notice (or during it) stays closed; the raid must not reopen the layer.
+    if (IS_MOBILE && !get().currentStream) return;
     Logger.debug(`[WatchSession] Raid detected, joining ${target.user_login}`);
     get().addToast(`Raid starting! Joining ${target.user_login}...`, 'info');
     // Long enough to read the notice before the stream changes under it.
     await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (IS_MOBILE && !get().currentStream) {
+      Logger.debug('[WatchSession] Stream closed during the raid notice; not following');
+      return;
+    }
     await get().startStream(target.user_login, target);
   });
 
@@ -930,6 +942,117 @@ async function settleTransientSwap(): Promise<void> {
  *  releases the loader freeze it set itself. */
 let lastSwapSeq = 0;
 
+/** Every start on either path takes a number, so only the latest one clears
+ *  the loading flag on the phone. The phone drops the old URL at the tap
+ *  (`showSwitchAtOnce`), which leaves `isLoading` as the only thing holding
+ *  the watch layer open; an older start finishing first (a Twitch start a
+ *  Kick tap overtook, or the reverse) must not close it under the newer one.
+ *  The per-path tickets above cannot see across the two paths. */
+let startLoadSeq = 0;
+
+/** Whether `stream` is `channel` on `provider` (Twitch `xqc` and Kick `xqc` are
+ *  two channels). */
+function isSameChannel(stream: TwitchStream | null, provider: ProviderId, channel: string): boolean {
+  return (
+    !!stream &&
+    streamProvider(stream) === provider &&
+    stream.user_login.toLowerCase() === channel.toLowerCase()
+  );
+}
+
+/**
+ * Phone only: a start for another channel shows that channel at once. The
+ * header takes the seed row (what the tapped card, raid or Together member
+ * already knows), and the old video is dropped before `watch_start` answers,
+ * so the band runs the loading mark instead of the previous stream under the
+ * new name. The start's ticket rules are untouched: this writes nothing the
+ * winning start does not overwrite with Rust's completed row.
+ *
+ * The same channel already playing live is left alone; its offline room, a
+ * VOD in that room, or a failure gives way like any other switch.
+ *
+ * Desktop keeps its own switch (VideoPlayer hands the old player over to the
+ * new URL), so this is a no-op there.
+ */
+function showSwitchAtOnce(
+  provider: ProviderId,
+  channel: string,
+  seed: TwitchStream | undefined,
+  set: StoreSet,
+  get: StoreGet,
+): void {
+  if (!IS_MOBILE) return;
+  const state = get();
+  if (
+    isSameChannel(state.currentStream, provider, channel) &&
+    state.currentMediaType === 'live' &&
+    !!state.streamUrl &&
+    state.streamUrl !== 'offline'
+  ) {
+    return;
+  }
+  const twitch = provider === 'twitch';
+  const row: TwitchStream = seed
+    ? { ...seed, user_login: seed.user_login || channel, provider: twitch ? seed.provider : provider }
+    : {
+        id: '',
+        user_id: '',
+        user_name: channel,
+        user_login: channel,
+        title: '',
+        viewer_count: 0,
+        game_name: '',
+        thumbnail_url: '',
+        // Never fabricated: an empty start shows no uptime until Rust's row.
+        started_at: '',
+        provider: twitch ? undefined : provider,
+      };
+  set({
+    streamUrl: null,
+    activeQuality: null,
+    availableQualities: [],
+    adSource: null,
+    currentStream: row,
+    currentMediaType: 'live',
+    currentHypeTrain: null,
+    vodPlayback: null,
+    liveRewind: null,
+    liveRewindAvailable: null,
+    liveRewindAnchor: null,
+    offlineRoom: null,
+    offlineRoomLive: null,
+    offlineRoomJoining: false,
+    playbackNotice: null,
+    isHomeActive: false,
+    // The layer is shown while a start loads, so dropping the URL never
+    // closes it between the tap and the answer.
+    isLoading: true,
+  });
+}
+
+/**
+ * Phone only: a provider stream with no picture keeps its chat. The band says
+ * why (`message`), the player is let go of before the core stops the relay,
+ * and `watch_stop` ends the relay, the live check and any Twitch earning the
+ * previous stream left aimed. The provider chat slice is the store's own
+ * (`mainProviderChatKey`) and stays acquired.
+ */
+async function keepProviderChat(stream: TwitchStream, message: string, set: StoreSet): Promise<void> {
+  set({
+    streamUrl: 'offline',
+    activeQuality: null,
+    availableQualities: [],
+    adSource: null,
+    currentStream: stream,
+    currentMediaType: 'live',
+    isHomeActive: false,
+    playbackNotice: { key: makeKey(streamProvider(stream), stream.user_login), message },
+  });
+  await invoke('watch_stop', { preserveBackend: false }).catch((e) =>
+    Logger.warn('[Provider] Could not stop the watch session:', e),
+  );
+}
+
 /**
  * Watch a stream on a non-Twitch platform.
  *
@@ -953,12 +1076,69 @@ async function startProviderStream(
   // is still awaiting immediately invalidates everything below.
   const seq = ++providerStartSeq;
   const superseded = () => seq !== providerStartSeq;
+  const loadTicket = ++startLoadSeq;
+  showSwitchAtOnce(provider, channel, seed, set, get);
   set({ isLoading: true });
   trackActivity(`Started watching: ${key}`);
 
   // Tear down the previous provider stream's chat. Drops and channel points
   // letting go of a Twitch channel before is Rust's (services/watch_start.rs).
   await teardownProviderSession();
+
+  // Chat through the shared provider path. The main window is a real consumer
+  // of the `provider:channel` slice, exactly like a MultiChat pane. Shared by
+  // a start that plays and (on the phone) one that keeps only chat.
+  const acquireChat = async (info: TwitchStream): Promise<void> => {
+    try {
+      const { acquireChannel, releaseChannel } = await import('./chatConnectionStore');
+      await acquireChannel(channel, info.user_id || null, provider);
+      if (superseded()) {
+        // We took a real refcount on the slice, so we owe a release. Recording
+        // the key instead would clobber the winner's and leak both.
+        await releaseChannel(channel, provider);
+        return;
+      }
+      mainProviderChatKey = key;
+    } catch (e) {
+      // acquireChannel commits the slice BEFORE it connects and deliberately
+      // leaves it in place on failure so the watchdog can retry. This path
+      // abandons the channel, so it owes the release that every other consumer
+      // performs on unmount; without it the slice is ownerless and retries for
+      // the rest of the session on a channel nobody is watching.
+      try {
+        const { releaseChannel } = await import('./chatConnectionStore');
+        await releaseChannel(channel, provider);
+      } catch {
+        // Best effort: the warning below is the real report.
+      }
+      Logger.warn(`[${provider}] Could not connect chat for ${channel}:`, e);
+    }
+  };
+
+  // Phone: the start failed, but chat does not depend on playback. The band
+  // says which of the two happened and the room keeps running. A channel the
+  // platform already called offline (a search hit) is offline, not a failure.
+  // Only while this start still owns the screen: a newer start on either path
+  // has already put its own channel up.
+  const keepChatOnFailure = async (signInOffered: boolean): Promise<boolean> => {
+    if (!IS_MOBILE || superseded() || !isSameChannel(get().currentStream, provider, channel)) return false;
+    // The same channel still playing (a repeat tap whose start failed) keeps
+    // playing; only a start that dropped the old picture owes the band line.
+    const url = get().streamUrl;
+    if (url && url !== 'offline') return false;
+    const shown = get().currentStream as TwitchStream;
+    const name = shown.user_name || shown.user_login || channel;
+    const offline = seed?.is_live === false;
+    if (!offline && !signInOffered) get().addToast('Playback unavailable - showing chat only', 'error');
+    await keepProviderChat(
+      shown,
+      offline ? `${name} is offline. Chat keeps running.` : 'Playback unavailable. Chat keeps running.',
+      set,
+    );
+    if (superseded()) return true;
+    await acquireChat(shown);
+    return true;
+  };
 
   try {
     const requestedQuality = get().settings.quality;
@@ -1000,32 +1180,7 @@ async function startProviderStream(
       isHomeActive: false,
     });
 
-    // Chat through the shared provider path. The main window is now a real
-    // consumer of the `provider:channel` slice, exactly like a MultiChat pane.
-    try {
-      const { acquireChannel, releaseChannel } = await import('./chatConnectionStore');
-      await acquireChannel(channel, info.user_id || null, provider);
-      if (superseded()) {
-        // We took a real refcount on the slice, so we owe a release. Recording
-        // the key instead would clobber the winner's and leak both.
-        await releaseChannel(channel, provider);
-        return;
-      }
-      mainProviderChatKey = key;
-    } catch (e) {
-      // acquireChannel commits the slice BEFORE it connects and deliberately
-      // leaves it in place on failure so the watchdog can retry. This path
-      // abandons the channel, so it owes the release that every other consumer
-      // performs on unmount; without it the slice is ownerless and retries for
-      // the rest of the session on a channel nobody is watching.
-      try {
-        const { releaseChannel } = await import('./chatConnectionStore');
-        await releaseChannel(channel, provider);
-      } catch {
-        // Best effort: the warning below is the real report.
-      }
-      Logger.warn(`[${provider}] Could not connect chat for ${channel}:`, e);
-    }
+    await acquireChat(info);
 
     // Presence, and the live check standing in for Twitch's `stream.offline`,
     // are the watch session's, which `watch_start` already started.
@@ -1052,15 +1207,18 @@ async function startProviderStream(
           })();
         },
       });
+      // The phone keeps the room up under the offer, rather than closing on it.
+      await keepChatOnFailure(true);
       return;
     }
     const message = e instanceof Error ? e.message : String(e);
     Logger.error(`Failed to start ${provider} stream:`, message);
+    if (await keepChatOnFailure(false)) return;
     get().addToast(`Failed to start stream: ${message}`, 'error');
   } finally {
     // Only the winning start owns the spinner. A superseded call clearing it
     // here would blank the loading state while the real start is still running.
-    if (!superseded()) set({ isLoading: false });
+    if (!superseded() && (!IS_MOBILE || loadTicket === startLoadSeq)) set({ isLoading: false });
   }
 }
 
@@ -1225,6 +1383,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   otherCategories: [],
   streamUrl: null,
   isRestartingStream: false,
+  playbackNotice: null,
   activeQuality: null,
   availableQualities: [],
   adSource: null,
@@ -1530,6 +1689,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const label = providerLabel(streamProvider(currentStream));
       Logger.info(`[${label}] ${currentStream.user_login} went offline; leaving the stream`);
       const name = currentStream.user_name || currentStream.user_login;
+      // Phone: the picture ends, the room does not. The band says so and chat
+      // keeps running until the viewer leaves; no toast, the band is the one
+      // place it is said.
+      if (IS_MOBILE) {
+        await keepProviderChat(currentStream, `${name} went offline. Chat keeps running.`, set);
+        return;
+      }
       await get().stopStream();
       set({ isHomeActive: true });
       get().addToast(`${name} went offline`, 'info');
@@ -2583,6 +2749,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     channel = parsed.channel;
 
+    // Phone: the new channel's header now, the old video gone now.
+    const loadTicket = ++startLoadSeq;
+    showSwitchAtOnce('twitch', channel, providedStreamInfo, set, get);
+
     // Leaving a provider stream for a Twitch one: drop its chat + offline poll
     // before the Twitch session sets up its own.
     await teardownProviderSession();
@@ -2685,7 +2855,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         Logger.error('[Stream] Chat-only fallback failed:', fallbackErr);
       }
     } finally {
-      set({ isLoading: false });
+      // Phone: only the latest start lets go of the loading flag (see
+      // startLoadSeq); desktop keeps its unconditional clear.
+      if (!IS_MOBILE || loadTicket === startLoadSeq) set({ isLoading: false });
     }
   },
   startOfflineChat: async (channel, providedStreamInfo?, opts?) => {

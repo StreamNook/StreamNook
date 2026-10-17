@@ -37,6 +37,7 @@ import {
 } from '../watch/watchLayout';
 import { SplitHandle } from '../watch/SplitHandle';
 import { MobilePlayer } from '../player/MobilePlayer';
+import { useLiveVideoPaused } from '../player/liveVideo';
 import { MobileChatPane } from '../chat/MobileChatPane';
 import {
   CHAT_TAB_STRIP_H,
@@ -87,6 +88,9 @@ const NO_PINS: PinnedMessage[] = [];
 const MINI_W = 200;
 const MINI_H = Math.round((MINI_W * 9) / 16);
 const EDGE_GAP = 12;
+// The mini box's side gutter: the pages' own 16 px, so its edge lines up with
+// the cards under it. Used by the clamp, the resting spot and the snap alike.
+const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar.
 const BOTTOM_GAP = 104;
 
@@ -121,8 +125,8 @@ function clampMini(
   // Clear of the BACK strips at the sides, and of the status bar plus the home /
   // quick-switch strips top and bottom. An app cannot opt out of the home
   // gesture at all, so simply not overlapping it is the only thing that works.
-  const left = EDGE_GAP + Math.max(ins.left, ins.gestureLeft);
-  const right = EDGE_GAP + Math.max(ins.right, ins.gestureRight);
+  const left = MINI_GUTTER + Math.max(ins.left, ins.gestureLeft);
+  const right = MINI_GUTTER + Math.max(ins.right, ins.gestureRight);
   const top = EDGE_GAP + Math.max(ins.top, ins.gestureTop);
   const bottom = Math.max(BOTTOM_GAP, ins.bottom + ins.gestureBottom + EDGE_GAP);
 
@@ -190,7 +194,7 @@ export const WatchScreen: React.FC = () => {
   // the gesture strips on a device whose insets differ from the hardcoded gaps.
   const [miniPos, setMiniPos] = useState(() =>
     clampMini(
-      window.innerWidth - MINI_W - EDGE_GAP,
+      window.innerWidth - MINI_W - MINI_GUTTER,
       window.innerHeight - MINI_H - BOTTOM_GAP,
       window.innerWidth,
       window.innerHeight,
@@ -445,10 +449,19 @@ export const WatchScreen: React.FC = () => {
     };
   }, [exitStream]);
 
-  // Native playback affordances: stay awake + PiP eligibility while playing,
-  // immersive bars only for full landscape playback.
+  // Keep-awake follows playback, not the open layer: a paused stream lets the
+  // screen sleep like any other paused video, and pressing play keeps it on
+  // again. Its own effect, so a pause never touches PiP or the refresh rate.
+  const videoPaused = useLiveVideoPaused();
+  const keepAwake = watching && !videoPaused;
   useEffect(() => {
-    setKeepScreenOn(watching);
+    setKeepScreenOn(keepAwake);
+    return () => setKeepScreenOn(false);
+  }, [keepAwake]);
+
+  // Native playback affordances: PiP eligibility while playing, immersive bars
+  // only for full landscape playback.
+  useEffect(() => {
     // A 60 Hz window while a stream plays. The panel's 90 Hz mode was drawing
     // every frame at 90 for a picture that is 60 at most, and frame
     // presentation (RenderThread + GPU process + compositor) was the biggest
@@ -461,7 +474,6 @@ export const WatchScreen: React.FC = () => {
     // rendition, and the media notification is what brings it back.
     setPipEligible(watching && backgroundMode !== 'audio');
     return () => {
-      setKeepScreenOn(false);
       setPreferredRefreshRate(0);
       setPipEligible(false);
     };
@@ -671,6 +683,15 @@ export const WatchScreen: React.FC = () => {
       const dx = e.clientX - g.x;
       const dy = e.clientY - g.y;
       if (!g.moved && (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX)) {
+        // A dial is a mostly vertical swipe. One that leaves the slop sideways
+        // (a stray swipe across the picture, a thumb resting while the phone
+        // is held) is not a dial and not a tap: the gesture ends here, touching
+        // neither brightness nor volume, and its trailing click is swallowed.
+        if (g.kind === 'dial' && Math.abs(dy) <= Math.abs(dx)) {
+          gesture.current = null;
+          suppressClick.current = true;
+          return;
+        }
         g.moved = true;
         // Captured on first MOVE, not on pointerdown. Capturing straight away
         // would retarget pointerup to the band and rob the overlay's own
@@ -764,9 +785,9 @@ export const WatchScreen: React.FC = () => {
         if (isInPip() === true) return;
         setMiniPos((pos) => {
           const ins = readInsets();
-          const leftBound = EDGE_GAP + Math.max(ins.left, ins.gestureLeft);
+          const leftBound = MINI_GUTTER + Math.max(ins.left, ins.gestureLeft);
           const rightBound =
-            viewport.w - MINI_W - EDGE_GAP - Math.max(ins.right, ins.gestureRight);
+            viewport.w - MINI_W - MINI_GUTTER - Math.max(ins.right, ins.gestureRight);
           const snappedX = pos.x + MINI_W / 2 < viewport.w / 2 ? leftBound : rightBound;
           return clampMini(snappedX, pos.y, viewport.w, viewport.h, ins);
         });
@@ -1253,6 +1274,21 @@ export const WatchScreen: React.FC = () => {
         </div>
       </div>
 
+      {/* A hairline edge on the floating box, so it reads over any thumbnail
+          under it; on a dark card the shadow alone does not. It fades in with
+          the shrink, so the full-screen player shows none. Above the content,
+          and never in the way of a touch. */}
+      {(mini || shrink > 0) && !pip && (
+        <div
+          aria-hidden
+          className="absolute inset-0 z-[35] pointer-events-none"
+          style={{
+            borderRadius: 'inherit',
+            boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, ${(0.12 * (mini ? 1 : shrink)).toFixed(3)})`,
+            transition: dragging ? undefined : 'box-shadow 200ms ease-out',
+          }}
+        />
+      )}
     </motion.div>
     )}
     </AnimatePresence>

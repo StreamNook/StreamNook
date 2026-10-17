@@ -1,6 +1,6 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
@@ -12,7 +12,8 @@ import { useAppStore } from '../../stores/AppStore';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
-import { useMobileHlsEngine } from './useMobileHlsEngine';
+import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngine';
+import { makeKey } from '../../utils/providerKey';
 import { setLiveVideo } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
@@ -25,6 +26,8 @@ import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 const CONTROLS_HIDE_MS = 3000;
+// Every bottom-bar glyph at one size, so no button out-pulls another.
+const BAR_ICON = 20;
 
 // "2h 14m" since the broadcast started, refreshed while the overlay is up.
 function formatUptime(startedAt: string | undefined, nowMs: number): string {
@@ -36,6 +39,37 @@ function formatUptime(startedAt: string | undefined, nowMs: number): string {
   const m = Math.floor((totalSec % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
+
+// The error line says what went wrong in words a viewer can act on, rather
+// than one "Stream unavailable" for every cause.
+function failureLine(reason: MobilePlayerFailure | null): string {
+  switch (reason) {
+    case 'network':
+      return 'The stream stopped loading. Check your connection.';
+    case 'stall':
+      return 'The stream stopped sending video.';
+    case 'timeout':
+      return 'The stream took too long to start.';
+    case 'media':
+      return 'This phone could not play the video.';
+    case 'unsupported':
+      return 'This phone cannot play live video here.';
+    default:
+      return 'Playback failed. Try again in a moment.';
+  }
+}
+
+// The header gives way in this order when the row runs out of room, and never
+// pushes anything onto a second line: the Together chip keeps only its faces,
+// then the uptime goes, then Subscribe drops out whole (a pill cut to "Subsc"
+// says less than none). Past that the name truncates, last of all.
+const GIVE_WAY_FACES = 1;
+const GIVE_WAY_UPTIME = 2;
+const GIVE_WAY_SUBSCRIBE = 3;
+// Gaps the row puts between its parts, matching the classes below: the name
+// block to Subscribe (ml-2), and the minimum before the metrics (pl-2).
+const GAP_SUB = 8;
+const GAP_METRICS = 8;
 
 export const MobilePlayer: React.FC<{
   /** Landscape immersive mode: overlay carries no bottom rounding, adds insets. */
@@ -65,11 +99,19 @@ export const MobilePlayer: React.FC<{
   controlsInset,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { state } = useMobileHlsEngine(videoRef);
+  const { state, reason } = useMobileHlsEngine(videoRef);
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
   // A channel that is not streaming, opened as its offline room.
   const offline = useAppStore((s) => s.streamUrl === 'offline');
+  // A provider stream that ended or could not start keeps its chat, and the
+  // band says which (AppStore's playbackNotice). Read only for the stream it
+  // was written for.
+  const playbackNotice = useAppStore((s) => s.playbackNotice);
+  const noticeLine =
+    offline && currentStream && playbackNotice?.key === makeKey(streamProvider(currentStream), currentStream.user_login)
+      ? playbackNotice.message
+      : null;
   // Channel state, avatar repair and live alerts are Twitch services keyed by
   // login or numeric id; a Kick slug or id would address an unrelated Twitch
   // channel of the same name.
@@ -105,6 +147,39 @@ export const MobilePlayer: React.FC<{
   // open into who else is on.
   const collab = channelState?.collab ?? null;
   const viewerCount = channelState?.viewer_count ?? currentStream?.viewer_count ?? 0;
+
+  // Title, category and start time follow the same pushes, so a retitle or a
+  // game change shows here without reopening the stream. A push that left a
+  // field out never blanks it: the last value a push carried holds, and the
+  // row the stream opened with stands in until the first one.
+  const pushTitle = channelState?.title || null;
+  const pushGame = channelState?.game_name || null;
+  const pushStarted = channelState?.started_at || null;
+  const [liveFacts, setLiveFacts] = useState<{
+    login: string | null;
+    title: string | null;
+    game: string | null;
+    started: string | null;
+  }>({ login: null, title: null, game: null, started: null });
+  // Render-time adjustment, as the restart phase below does: no effect round
+  // trip, and the guards make it settle in one pass.
+  if (liveFacts.login !== channelStateLogin) {
+    setLiveFacts({ login: channelStateLogin, title: pushTitle, game: pushGame, started: pushStarted });
+  } else if (
+    (pushTitle && pushTitle !== liveFacts.title) ||
+    (pushGame && pushGame !== liveFacts.game) ||
+    (pushStarted && pushStarted !== liveFacts.started)
+  ) {
+    setLiveFacts({
+      login: channelStateLogin,
+      title: pushTitle ?? liveFacts.title,
+      game: pushGame ?? liveFacts.game,
+      started: pushStarted ?? liveFacts.started,
+    });
+  }
+  const liveTitle = liveFacts.title || currentStream?.title || '';
+  const liveCategory = liveFacts.game || currentStream?.game_name || '';
+  const liveStartedAt = liveFacts.started || currentStream?.started_at;
 
   // A stream that arrived without its avatar (a lookup hiccup on open) gets
   // one repair, keyed so a second miss for the same channel does not loop.
@@ -173,7 +248,7 @@ export const MobilePlayer: React.FC<{
   // re-renders in between.
   const nowPlaying = currentStream
     ? {
-        title: currentStream.title || currentStream.user_name,
+        title: liveTitle || currentStream.user_name,
         artist: currentStream.user_name,
         artUrl: currentStream.profile_image_url ?? '',
       }
@@ -299,6 +374,62 @@ export const MobilePlayer: React.FC<{
     };
   }, []);
 
+  // Stable, so React attaches it once per element rather than detaching and
+  // re-attaching on every render: the published element also carries the
+  // play/pause state the watch layer's keep-awake reads, which a per-render
+  // detach would reset.
+  const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    (videoRef as React.MutableRefObject<HTMLVideoElement | null>).current = el;
+    setLiveVideo(el);
+  }, []);
+
+  // Header give-way (see GIVE_WAY_*), decided from hidden copies of each part
+  // at full size, so the choice never depends on what is already cut.
+  const identityRowRef = useRef<HTMLDivElement>(null);
+  const measureNameRef = useRef<HTMLSpanElement>(null);
+  const measureSubRef = useRef<HTMLSpanElement>(null);
+  const measureFullRef = useRef<HTMLSpanElement>(null);
+  const measureFacesRef = useRef<HTMLSpanElement>(null);
+  const measureNoUptimeRef = useRef<HTMLSpanElement>(null);
+  const [giveWay, setGiveWay] = useState(0);
+  const uptimeText = formatUptime(liveStartedAt, nowMs);
+  const subLabel = sub.isSubscribed ? subTerms.paidGift : sub.hasSubHistory ? subTerms.paidAgain : subTerms.paid;
+  useLayoutEffect(() => {
+    const row = identityRowRef.current;
+    if (!row) return;
+    const width = (el: Element | null) => (el ? el.getBoundingClientRect().width : 0);
+    const measure = () => {
+      const available = row.clientWidth;
+      const name = width(measureNameRef.current);
+      const subscribe = canSubscribe ? width(measureSubRef.current) + GAP_SUB : 0;
+      const metrics = [
+        width(measureFullRef.current),
+        width(measureFacesRef.current),
+        width(measureNoUptimeRef.current),
+      ];
+      const needs = (level: number) =>
+        name + (level >= GIVE_WAY_SUBSCRIBE ? 0 : subscribe) + GAP_METRICS + metrics[Math.min(level, GIVE_WAY_UPTIME)];
+      let level = 0;
+      while (level < GIVE_WAY_SUBSCRIBE && needs(level) > available + 0.5) level += 1;
+      setGiveWay(level);
+    };
+    measure();
+    // The row follows the viewport and the landscape chat inset; the copies
+    // follow late loads (a subscriber badge) and live numbers.
+    const observer = new ResizeObserver(measure);
+    for (const el of [
+      row,
+      measureNameRef.current,
+      measureSubRef.current,
+      measureFullRef.current,
+      measureFacesRef.current,
+      measureNoUptimeRef.current,
+    ]) {
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount]);
+
   const onSurfaceTap = () => {
     setControlsVisible((v) => {
       const next = !v;
@@ -332,6 +463,123 @@ export const MobilePlayer: React.FC<{
     scheduleHide();
   };
 
+  // The header's parts, drawn once for real and once as the hidden full-size
+  // copies the give-way measures (`interactive` false: the same boxes, no
+  // buttons).
+  const nameBlock = (interactive: boolean) =>
+    currentStream && (
+      <>
+        <span className="text-[14px] leading-5 font-semibold text-white truncate">{currentStream.user_name}</span>
+        {currentStream.broadcaster_type === 'partner' && (
+          <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="#9146FF" aria-hidden>
+            <path
+              fillRule="evenodd"
+              d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z"
+              clipRule="evenodd"
+            ></path>
+          </svg>
+        )}
+        {/* Live-alert opt-out for this channel, next to who it is rather than
+            down in the playback controls: it is a fact about the channel, not
+            about this session's playback. Quiet, a step below the name. */}
+        {streamIsTwitch &&
+          (interactive ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void toggleChannelMuted(currentStream.user_login);
+              }}
+              aria-label={
+                alertsOff
+                  ? `Turn on live alerts for ${currentStream.user_name}`
+                  : `Turn off live alerts for ${currentStream.user_name}`
+              }
+              aria-pressed={!alertsOff}
+              className={`relative shrink-0 w-3.5 h-5 flex items-center justify-center transition-colors ${
+                alertsOff ? 'text-white/45' : 'text-white/70'
+              }`}
+            >
+              {alertsOff ? <BellSlash size={11} weight="bold" /> : <Bell size={11} weight="fill" />}
+              {/* A finger-sized target around the small glyph; the row keeps
+                  its spacing. */}
+              <span className="absolute -inset-2.5" />
+            </button>
+          ) : (
+            <span className="shrink-0 w-3.5 h-5" />
+          ))}
+      </>
+    );
+
+  const subscribeClass =
+    'shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[11.5px] font-semibold text-white leading-none whitespace-nowrap';
+  const subscribeInk = (
+    <>
+      {sub.subscriberBadgeUrl ? (
+        <img src={sub.subscriberBadgeUrl} alt="" draggable={false} className="w-3.5 h-3.5" />
+      ) : (
+        <Star size={12} weight="fill" />
+      )}
+      {subLabel}
+    </>
+  );
+  // Subscribe sits beside who it is. Whole or not at all: GIVE_WAY_SUBSCRIBE
+  // drops it before the name gives way, never cut to a fragment.
+  const subscribePill = (interactive: boolean) =>
+    interactive ? (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          void sub.handleSubscribeClick();
+        }}
+        aria-label={`${subLabel}, ${currentStream?.user_name ?? ''}`}
+        className={`${subscribeClass} active:scale-95 transition-transform`}
+      >
+        {subscribeInk}
+      </button>
+    ) : (
+      <span className={subscribeClass}>{subscribeInk}</span>
+    );
+
+  // The right side: the group, viewers, and the uptime (only when the start is
+  // known). White at 80 percent, not live red: the numbers inform, the name
+  // leads.
+  const metrics = (compactGroup: boolean, withUptime: boolean, interactive: boolean) => {
+    const togetherClass = `flex items-center gap-1 rounded-full bg-white/15 py-0.5 pl-0.5 ${
+      compactGroup ? 'pr-0.5' : 'pr-2'
+    } text-[11.5px] font-semibold text-white/85 leading-none`;
+    const together = collab && (
+      <>
+        <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
+        {!compactGroup && 'Together'}
+      </>
+    );
+    return (
+      <span className="flex items-center gap-2.5 text-[12px] font-medium leading-none text-white/80 tabular-nums whitespace-nowrap">
+        {collab &&
+          (interactive ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setTogetherOpen(true);
+              }}
+              aria-label={collabLabel(collab)}
+              className={`${togetherClass} active:scale-95 transition-transform`}
+            >
+              {together}
+            </button>
+          ) : (
+            <span className={togetherClass}>{together}</span>
+          ))}
+        <span className="flex items-center gap-1">
+          <UsersThree size={11} weight="fill" aria-hidden />
+          {viewerCount.toLocaleString()}
+          <span className="sr-only"> viewers</span>
+        </span>
+        {withUptime && uptimeText && <span>{uptimeText}</span>}
+      </span>
+    );
+  };
+
   return (
     <div
       className="relative w-full h-full bg-black overflow-hidden"
@@ -341,10 +589,7 @@ export const MobilePlayer: React.FC<{
         // Callback ref so the clip sheet can duck this element's audio while a
         // clip plays. Assigns the same ref object the engine reads, then
         // publishes it; both are cleared on unmount when React passes null.
-        ref={(el) => {
-          (videoRef as React.MutableRefObject<HTMLVideoElement | null>).current = el;
-          setLiveVideo(el);
-        }}
+        ref={attachVideo}
         className="w-full h-full object-contain"
         playsInline
         autoPlay
@@ -374,12 +619,20 @@ export const MobilePlayer: React.FC<{
       )}
 
       {/* An offline room: who, when, what is next, and the stream starts here
-          when they go live. Not an error, so no Retry and no live chrome. */}
-      {offline && !compact && <MobileOfflineRoom />}
+          when they go live. Not an error, so no Retry and no live chrome. The
+          mini box shows it compact: the face and an Offline ring. */}
+      {offline && !noticeLine && <MobileOfflineRoom mini={compact} />}
 
-      {state === 'error' && !offline && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70">
-          <div className="text-sm text-white/80">Stream unavailable</div>
+      {/* Playback that cannot go on: what happened in plain words, and Retry.
+          A provider stream that ended or never started says so here while its
+          chat keeps running below. Not in the mini box, which has no room for
+          a sentence and whose taps belong to the box. */}
+      {!compact && (noticeLine || (state === 'error' && !offline)) && (
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3.5 bg-black/70 p-6"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="text-[14px] text-white/80 text-center">{noticeLine ?? failureLine(reason)}</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -400,116 +653,88 @@ export const MobilePlayer: React.FC<{
           controlsVisible && !compact && !offline ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         style={{
+          // Dark at the top and the bottom, clear through the middle. The top
+          // reaches past the header's category line, so all three lines stay
+          // readable over bright video.
           background:
-            'linear-gradient(to bottom, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.28) 26%, transparent 46%, transparent 62%, rgba(0,0,0,0.6) 100%)',
+            'linear-gradient(to bottom, rgba(0,0,0,0.66) 0%, rgba(0,0,0,0.45) 30%, transparent 46%, transparent 60%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0.7) 100%)',
           ...(controlsInset ? { [controlsInset.side]: controlsInset.px } : null),
         }}
       >
-        {/* Stream info, top-left */}
+        {/* Stream info, top-left. The avatar anchors a column: the name, the
+            title and the category all start at the name's edge, so the three
+            read as one block about one stream. The live red is the avatar's
+            ring alone; the counts stay white so they never out-pull the name. */}
         {currentStream && (
           <div
             className="absolute inset-x-0 top-0 px-3 pt-2"
             style={immersive ? { paddingTop: 'calc(var(--sn-safe-t, 0px) + 8px)' } : undefined}
           >
-            {/* Identity row: avatar + name, with the live metrics opposite. */}
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-start gap-2.5">
               {currentStream.profile_image_url ? (
                 <SevenTvAvatar
                   cosmeticsId={sevenTvIdForStream(currentStream)}
-                  px={28}
+                  px={32}
                   motion="animate"
                   src={currentStream.profile_image_url}
                   alt=""
                   draggable={false}
-                  className="w-7 h-7 rounded-full object-cover shrink-0 ring-2 ring-live/80"
+                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-live/80"
                 />
               ) : (
-                <div className="w-7 h-7 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ring-live/80">
+                <div className="w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ring-live/80">
                   {currentStream.user_name?.charAt(0).toUpperCase()}
                 </div>
               )}
-              <span className="text-[13.5px] font-semibold text-white truncate">
-                {currentStream.user_name}
-              </span>
-              {currentStream.broadcaster_type === 'partner' && (
-                <svg className="w-3 h-3 shrink-0 -ml-0.5" viewBox="0 0 16 16" fill="#9146FF">
-                  <path
-                    fillRule="evenodd"
-                    d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z"
-                    clipRule="evenodd"
-                  ></path>
-                </svg>
-              )}
-              {/* Live-alert opt-out for this channel, next to who it is rather
-                  than down in the playback controls: it is a fact about the
-                  channel, not about this session's playback. */}
-              {streamIsTwitch && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void toggleChannelMuted(currentStream.user_login);
-                  }}
-                  aria-label={
-                    alertsOff
-                      ? `Turn on live alerts for ${currentStream.user_name}`
-                      : `Turn off live alerts for ${currentStream.user_name}`
-                  }
-                  aria-pressed={!alertsOff}
-                  className={`shrink-0 flex items-center justify-center p-1 transition-colors ${
-                    alertsOff ? 'text-white/45' : 'text-white'
-                  }`}
-                >
-                  {alertsOff ? <BellSlash size={15} /> : <Bell size={15} weight="fill" />}
-                </button>
-              )}
-              {canSubscribe && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void sub.handleSubscribeClick();
-                  }}
-                  className="shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
-                >
-                  {sub.subscriberBadgeUrl ? (
-                    <img src={sub.subscriberBadgeUrl} alt="" draggable={false} className="w-3.5 h-3.5" />
-                  ) : (
-                    <Star size={12} weight="fill" />
+              <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                {/* Identity row: the name, then Subscribe, then the live
+                    numbers opposite. One line always; parts give way in order
+                    (GIVE_WAY_*) instead of wrapping. */}
+                <div ref={identityRowRef} className="relative flex items-center min-w-0 h-5">
+                  <span className="flex items-center gap-1 min-w-0">{nameBlock(true)}</span>
+                  {canSubscribe && giveWay < GIVE_WAY_SUBSCRIBE && (
+                    <span className="ml-2 shrink-0 flex">{subscribePill(true)}</span>
                   )}
-                  {sub.isSubscribed ? subTerms.paidGift : sub.hasSubHistory ? subTerms.paidAgain : subTerms.paid}
-                </button>
-              )}
-              <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
-                {collab && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setTogetherOpen(true);
-                    }}
-                    aria-label={collabLabel(collab)}
-                    className="flex items-center gap-1 rounded-full bg-white/15 py-0.5 pl-0.5 pr-2 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
+                  <span className="ml-auto pl-2 shrink-0 flex">
+                    {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
+                  </span>
+                  {/* Full-size copies for the give-way measurement. Invisible,
+                      out of the accessibility tree, and in a zero-size clip so
+                      their width never adds overflow to the row; clipped boxes
+                      still measure at their natural size. */}
+                  <div
+                    aria-hidden
+                    className="absolute left-0 top-0 w-0 h-0 overflow-hidden invisible pointer-events-none"
                   >
-                    <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
-                    Together
-                  </button>
+                    <div className="w-max flex items-center gap-4">
+                      <span ref={measureNameRef} className="flex items-center gap-1">
+                        {nameBlock(false)}
+                      </span>
+                      {canSubscribe && (
+                        <span ref={measureSubRef} className="flex">
+                          {subscribePill(false)}
+                        </span>
+                      )}
+                      <span ref={measureFullRef} className="flex">
+                        {metrics(false, true, false)}
+                      </span>
+                      <span ref={measureFacesRef} className="flex">
+                        {metrics(true, true, false)}
+                      </span>
+                      <span ref={measureNoUptimeRef} className="flex">
+                        {metrics(true, false, false)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                {liveTitle && (
+                  <div className="text-[13px] leading-[17px] text-white/85 truncate">{liveTitle}</div>
                 )}
-                <span className="flex items-center gap-1 text-[12px] font-medium text-live">
-                  <UsersThree size={12} weight="fill" />
-                  {viewerCount.toLocaleString()}
-                </span>
-                <span className="text-[12px] text-white/70">
-                  {formatUptime(currentStream.started_at, nowMs)}
-                </span>
-              </span>
-            </div>
-            {/* Title + category run the full width beneath the identity row. */}
-            <div className="text-[12.5px] text-white/85 truncate leading-snug mt-1">
-              {currentStream.title}
-            </div>
-            {currentStream.game_name && (
-              <div className="text-[11.5px] text-white/60 truncate leading-snug">
-                {currentStream.game_name}
+                {liveCategory && (
+                  <div className="text-[12px] leading-4 text-white/70 truncate">{liveCategory}</div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
         {/* Center play/pause */}
@@ -532,18 +757,30 @@ export const MobilePlayer: React.FC<{
           className="absolute inset-x-0 bottom-0 flex items-center justify-between px-3 pb-2"
           style={immersive ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' } : undefined}
         >
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-live/90 text-white leading-none">
-              LIVE
-            </span>
+          {/* A status, not a control: a dot and the word, no filled badge.
+              Gone while playback has failed, which is not live. */}
+          <div
+            className={`flex items-center gap-[5px] min-w-0 ${state === 'error' ? 'opacity-0' : ''}`}
+            role="img"
+            aria-label="Live"
+            aria-hidden={state === 'error'}
+          >
+            <span
+              className="w-[7px] h-[7px] rounded-full bg-live shrink-0"
+              style={{ boxShadow: '0 0 3px color-mix(in srgb, var(--color-live) 60%, transparent)' }}
+            />
+            <span className="text-[12px] font-bold tracking-[0.4px] text-white leading-none">LIVE</span>
           </div>
-          <div className="flex items-center">
+          {/* One size and one weight for every bar icon, so no button
+              out-pulls another. The last icon's ink, not its 44 px target,
+              ends on the header's right edge. */}
+          <div className="flex items-center -mr-[9px]">
             <button
               onClick={toggleMute}
               className="sn-touch flex items-center justify-center text-white"
               aria-label={muted ? 'Unmute' : 'Mute'}
             >
-              {muted ? <SpeakerSlash size={21} /> : <SpeakerHigh size={21} />}
+              {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
             </button>
             {currentStream && (
               <button
@@ -560,13 +797,13 @@ export const MobilePlayer: React.FC<{
                         ? buildShareUrl(currentStream.user_login)
                         : buildProviderUrl(streamProvider(currentStream), currentStream.user_login)
                     }`,
-                    currentStream.title || currentStream.user_name,
+                    liveTitle || currentStream.user_name,
                   );
                 }}
                 className="sn-touch flex items-center justify-center text-white"
                 aria-label="Share stream"
               >
-                <ShareNetwork size={21} />
+                <ShareNetwork size={BAR_ICON} />
               </button>
             )}
             {onMinimize && (
@@ -578,7 +815,9 @@ export const MobilePlayer: React.FC<{
                 className="sn-touch flex items-center justify-center text-white"
                 aria-label="Minimize player"
               >
-                <PictureInPicture size={21} />
+                {/* A touch larger: its outline encloses empty space and reads
+                    lighter than the solid glyphs beside it at the same size. */}
+                <PictureInPicture size={BAR_ICON + 2} />
               </button>
             )}
             {/* The unstick button. A frozen player looks exactly like a paused
@@ -596,7 +835,7 @@ export const MobilePlayer: React.FC<{
               className="sn-touch flex items-center justify-center text-white"
               aria-label="Restart stream"
             >
-              <ArrowClockwise size={21} className={restarting ? 'animate-spin' : ''} />
+              <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
             </button>
             <button
               onClick={(e) => {
@@ -606,7 +845,7 @@ export const MobilePlayer: React.FC<{
               className="sn-touch flex items-center justify-center text-white"
               aria-label="Quality"
             >
-              <Gear size={21} />
+              <Gear size={BAR_ICON} />
             </button>
             {/* Only on a screen where both arrangements genuinely work, so this
                 never appears as a control with one sensible setting. */}
@@ -621,7 +860,7 @@ export const MobilePlayer: React.FC<{
                   layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
                 }
               >
-                {layoutMode === 'columns' ? <Rows size={21} /> : <Columns size={21} />}
+                {layoutMode === 'columns' ? <Rows size={BAR_ICON} /> : <Columns size={BAR_ICON} />}
               </button>
             )}
             {onToggleFullscreen && (
@@ -636,7 +875,7 @@ export const MobilePlayer: React.FC<{
                 {/* One glyph, filled while chat is showing: this button is
                     "chat" in both states, and a crossed-out icon read as a
                     warning rather than as the way back. */}
-                <ChatTeardropText size={21} weight={chatOpen ? 'fill' : 'regular'} />
+                <ChatTeardropText size={BAR_ICON} weight={chatOpen ? 'fill' : 'regular'} />
               </button>
             )}
           </div>
