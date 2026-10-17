@@ -18,6 +18,11 @@ fn main() {
         // without them still compiles (Kick connect just reports "not configured").
         "KICK_APP_CLIENT_ID",
         "KICK_APP_CLIENT_SECRET",
+        // The Supabase project URL the frontend is built with. Rust derives the
+        // `sn-relay` route from it (services/sn_transport.rs) and reads it with
+        // option_env!, so a build without it compiles and simply has no relay.
+        // A public URL, not a secret: it already ships in the JS bundle.
+        "VITE_SUPABASE_URL",
     ];
 
     // Try loading from project root .env file
