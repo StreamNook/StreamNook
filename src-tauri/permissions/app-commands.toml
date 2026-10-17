@@ -342,6 +342,7 @@ allow = [
   "delete_custom_sound",
   "get_theme_catalog",
   "get_active_theme",
+  "lift_custom_theme",
   "search_settings",
   "get_changed_settings",
   "list_settings_backups",

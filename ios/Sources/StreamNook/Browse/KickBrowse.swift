@@ -107,9 +107,18 @@ struct KickBrowseBody: View {
         } else if shown.isEmpty {
             EmptyNote(text: kick.results != nil ? "No Kick channels found." : "Nothing live on Kick right now.")
         } else {
-            StreamGrid(model: model, streams: shown, view: view,
-                       settleKey: "kick:\(view):\(kick.results != nil ? "q:\(trimmed)" : "c:\(kick.category?.id ?? "all")")",
-                       latch: liveLatch)
+            // A search can find a channel that is not streaming: it joins the offline group, never
+            // a live card with no viewers.
+            let live = shown.filter { !$0.isOffline }
+            let offline = shown.filter(\.isOffline)
+            if !live.isEmpty {
+                StreamGrid(model: model, streams: live, view: view,
+                           settleKey: "kick:\(view):\(kick.results != nil ? "q:\(trimmed)" : "c:\(kick.category?.id ?? "all")")",
+                           latch: liveLatch)
+            }
+            if !offline.isEmpty {
+                OfflineChannels(channels: offline, open: { model.startWatching($0) })
+            }
         }
     }
 

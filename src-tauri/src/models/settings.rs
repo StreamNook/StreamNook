@@ -1606,6 +1606,16 @@ impl Settings {
             self.video_player.ll_target_latency = None;
         }
     }
+
+    /// Lifts each custom theme's muted text to the contrast floor in the saved
+    /// value itself, so every window that builds a palette from settings paints
+    /// the lifted color. Runs on load and on every save; returns whether
+    /// anything changed.
+    pub fn lift_custom_theme_muted(&mut self) -> bool {
+        self.extra
+            .get_mut("custom_themes")
+            .is_some_and(crate::services::theme_palette::lift_custom_themes)
+    }
 }
 
 #[cfg(test)]
