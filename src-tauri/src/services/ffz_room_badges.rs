@@ -782,18 +782,24 @@ mod tests {
 
     #[test]
     fn moderator_glyphs_are_painted_on_the_moderator_green() {
-        // A PNG header for an 18x18 image is all the painter reads.
-        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-        png.extend_from_slice(&18u32.to_be_bytes());
-        png.extend_from_slice(&18u32.to_be_bytes());
+        // An empty (fully transparent) 18 px glyph shows the square alone.
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 18, 18);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0u8; 18 * 18 * 4]).unwrap();
+            writer.finish().unwrap();
+        }
         let uri = crate::services::badge_service::badge_with_backdrop(&png, MOD_BACKDROP).unwrap();
-        assert!(uri.starts_with("data:image/svg+xml;base64,"));
+        // A PNG, which native shells decode (they cannot read SVG).
+        let body = uri.strip_prefix("data:image/png;base64,").expect("a PNG data URI");
         use base64::Engine;
-        let svg = base64::engine::general_purpose::STANDARD
-            .decode(uri.trim_start_matches("data:image/svg+xml;base64,"))
-            .unwrap();
-        let svg = String::from_utf8(svg).unwrap();
-        assert!(svg.contains("fill=\"#34AE0A\""));
-        assert!(svg.contains("width=\"18\""));
+        let bytes = base64::engine::general_purpose::STANDARD.decode(body).unwrap();
+        let (w, h, px) = crate::services::badge_service::decode_rgba(&bytes).unwrap();
+        assert_eq!((w, h), (18, 18));
+        let centre = (9 * 18 + 9) * 4;
+        assert_eq!(&px[centre..centre + 4], &[0x34, 0xAE, 0x0A, 255]);
     }
 }
