@@ -30,6 +30,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// Faster cadence while the socket is down and polling is the only path.
 const OFFLINE_POLL_INTERVAL: Duration = Duration::from_secs(120);
 const RECONNECT_BACKOFF_SECS: &[u64] = &[2, 5, 10, 30];
+/// Socket retry gap while modroom is reachable only through the relay.
+const RELAYED_RECONNECT_SECS: u64 = 5 * 60;
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// The relay auto-answers `ping`, so silence this long means a half-open
 /// socket: alive locally, delivering nothing, never closing on its own.
@@ -84,7 +86,7 @@ async fn ingest(app: &AppHandle, badges: Vec<BadgeNotification>) {
 
 async fn poll_once(app: &AppHandle) {
     let client = crate::services::http::client();
-    let resp = match client.get(LATEST_URL).send().await {
+    let resp = match crate::services::sn_transport::send(client.get(LATEST_URL)).await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
             debug!("[BadgeFeed] latest.json answered {}", r.status());
@@ -173,8 +175,15 @@ pub fn start(app: AppHandle) {
             if started.elapsed() > LIVENESS_TIMEOUT {
                 attempt = 0;
             }
-            let delay = RECONNECT_BACKOFF_SECS[attempt.min(RECONNECT_BACKOFF_SECS.len() - 1)];
+            let mut delay = RECONNECT_BACKOFF_SECS[attempt.min(RECONNECT_BACKOFF_SECS.len() - 1)];
             attempt += 1;
+            // The socket has no relay. While the host only answers through it,
+            // the poll above carries the drops, so the socket retries rarely.
+            if crate::services::sn_transport::route(crate::services::sn_transport::Host::Modroom)
+                == crate::services::sn_transport::Route::Relay
+            {
+                delay = delay.max(RELAYED_RECONNECT_SECS);
+            }
             sleep(Duration::from_secs(delay)).await;
         }
     });

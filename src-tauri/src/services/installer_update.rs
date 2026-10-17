@@ -52,6 +52,13 @@ const APP_ID: &str = "com.streamnook.dev";
 const MAIN_EXE: &str = "StreamNook.exe";
 /// Highest version that has run against this machine's data, in the data root.
 const VERSION_STAMP: &str = "last_run_version";
+/// The plugin's manifest, as `tauri.windows.conf.json` names it (pinned by a
+/// test). The check passes it through the StreamNook transport's route order.
+const TAURI_MANIFEST_URL: &str = "https://streamnook.app/api/v1/update/tauri";
+/// Cap on the plugin's manifest request, so a dropped address moves the check
+/// on to the next endpoint instead of hanging it. The installer download sets
+/// no timeout of its own and is not affected.
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// How this copy of StreamNook is installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,6 +343,12 @@ pub async fn check(app: &AppHandle) -> Result<Option<Update>, String> {
     if first_install {
         builder = builder.version_comparator(|current, release| release.version >= current);
     }
+    // Both routes to the manifest, the one that works first: the plugin tries
+    // its endpoints in order and moves on when one fails.
+    builder = builder
+        .endpoints(crate::services::sn_transport::ordered_urls(TAURI_MANIFEST_URL))
+        .map_err(|e| format!("updater setup: {e}"))?
+        .timeout(CHECK_TIMEOUT);
     let updater = builder.build().map_err(|e| format!("updater setup: {e}"))?;
     let found = updater.check().await.map_err(|e| format!("update check: {e}"))?;
     *staged() = found.clone().map(|update| Staged { update, bytes: None, first_install });
@@ -434,6 +447,7 @@ mod tests {
             serde_json::from_str(include_str!("../../tauri.windows.conf.json")).expect("tauri.windows.conf.json");
         let updater = &conf["plugins"]["updater"];
         assert_eq!(updater["endpoints"][0].as_str(), Some("https://streamnook.app/api/v1/update/tauri"));
+        assert_eq!(updater["endpoints"][0].as_str(), Some(TAURI_MANIFEST_URL));
         assert_eq!(updater["windows"]["installMode"].as_str(), Some("passive"));
         assert_eq!(conf["bundle"]["windows"]["nsis"]["installMode"].as_str(), Some("currentUser"));
     }

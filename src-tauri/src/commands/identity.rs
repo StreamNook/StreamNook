@@ -56,7 +56,7 @@ struct PutBody {
 pub async fn get_streamnook_identity(user_id: String) -> Result<IdentityLoadout, String> {
     let client = crate::services::http::client();
     let url = format!("{}/{}", IDENTITY_API, user_id);
-    match client.get(&url).send().await {
+    match crate::services::sn_transport::send(client.get(&url)).await {
         Ok(resp) if resp.status().is_success() => resp
             .json::<IdentityLoadout>()
             .await
@@ -76,11 +76,8 @@ pub async fn get_streamnook_identities(
     }
     let client = crate::services::http::client();
     let ids = user_ids.join(",");
-    let result = client
-        .get(IDENTITY_API)
-        .query(&[("ids", ids.as_str())])
-        .send()
-        .await;
+    let result =
+        crate::services::sn_transport::send(client.get(IDENTITY_API).query(&[("ids", ids.as_str())])).await;
 
     let mut map = match result {
         Ok(resp) if resp.status().is_success() => match resp.json::<BatchResponse>().await {
@@ -134,15 +131,12 @@ pub async fn set_streamnook_identity(
     };
 
     let client = crate::services::http::client();
-    let resp = client
-        .put(IDENTITY_API)
-        .bearer_auth(&token)
-        .json(&PutBody {
-            badges,
-            paint,
-            customized,
-        })
-        .send()
+    let request = client.put(IDENTITY_API).bearer_auth(&token).json(&PutBody {
+        badges,
+        paint,
+        customized,
+    });
+    let resp = crate::services::sn_transport::send(request)
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
@@ -212,7 +206,7 @@ fn default_resolved(user_id: &str) -> ResolvedIdentity {
 pub async fn get_streamnook_identity_resolved(user_id: String) -> Result<ResolvedIdentity, String> {
     let client = crate::services::http::client();
     let url = format!("{}/{}?resolve=1", IDENTITY_API, user_id);
-    match client.get(&url).send().await {
+    match crate::services::sn_transport::send(client.get(&url)).await {
         Ok(resp) if resp.status().is_success() => Ok(resp
             .json::<ResolvedIdentity>()
             .await

@@ -198,8 +198,8 @@ async fn shared_pro_design_ids() -> Vec<String> {
         }
     }
     let fetched = async {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(6)).build().ok()?;
-        let body: serde_json::Value = client.get(SHARED_PRO_BADGES_URL).send().await.ok()?.json().await.ok()?;
+        let request = crate::services::http::client().get(SHARED_PRO_BADGES_URL).timeout(Duration::from_secs(6));
+        let body: serde_json::Value = crate::services::sn_transport::send(request).await.ok()?.json().await.ok()?;
         Some(
             body.get("badges")?
                 .as_array()?
