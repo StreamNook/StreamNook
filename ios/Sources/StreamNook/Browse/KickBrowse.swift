@@ -134,25 +134,28 @@ private struct CategoryChip: View {
     let clear: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(name)
-                .font(.sn(13, 500))
-                .foregroundStyle(SN.textPrimary)
-                .lineLimit(1)
-            Button(action: clear) {
+        Button(action: clear) {
+            HStack(spacing: 2) {
+                Text(name)
+                    .font(.sn(13, 500))
+                    .foregroundStyle(SN.textPrimary)
+                    .lineLimit(1)
                 Image(systemName: Symbol.close)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(SN.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+                    .frame(width: 22, height: 24)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Show all of Kick, not just \(name)")
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .padding(.vertical, 2)
+            .snGlass(Capsule())
+            // The whole chip clears, with a full-size target around it.
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .padding(.vertical, -10)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 2)
-        .snGlass(Capsule())
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show all of Kick, not just \(name)")
     }
 }
 
@@ -177,12 +180,11 @@ struct PlatformSwitch: View {
             guard !on else { return }
             withAnimation(SNMotion.run(SNMotion.glide)) { platform = value }
         } label: {
-            PlatformMark(platform: mark, size: 16)
+            PlatformMark(platform: mark, size: 16, color: on ? nil : SN.textPrimary.opacity(0.55))
                 .frame(width: 40, height: 32)
                 .background {
                     if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) }
                 }
-                .opacity(on ? 1 : 0.5)
                 .frame(width: 44, height: 36)
                 .contentShape(Rectangle())
         }

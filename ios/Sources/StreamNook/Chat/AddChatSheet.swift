@@ -191,7 +191,9 @@ private struct RoomRow: View {
 
     private var face: some View {
         Group {
-            if let url = row.profileImageURL.flatMap(URL.init(string:)) {
+            if row.profileImageURL == nil, row.provider == "kick" {
+                BrandTile(platform: .kick, size: 36)
+            } else if let url = row.profileImageURL.flatMap(URL.init(string:)) {
                 AsyncImage(url: url) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
