@@ -312,11 +312,22 @@ private struct MissingRowView: View {
                         .lineLimit(1)
                     EarnPill(chips: row.chips, iconsOnly: row.iconsOnly)
                 }
-                if let random = row.randomNote {
-                    Label(random, systemImage: Symbol.dice)
-                        .font(.sn(11))
-                        .foregroundStyle(SN.textMuted)
-                        .labelStyle(TightLabel())
+                if row.randomNote != nil || row.channelsNote != nil {
+                    HStack(spacing: 8) {
+                        if let random = row.randomNote {
+                            Label(random, systemImage: Symbol.dice)
+                                .labelStyle(TightLabel())
+                                .fixedSize()
+                        }
+                        // The campaign counts only on these channels.
+                        if let channels = row.channelsNote {
+                            Label(channels, systemImage: Symbol.broadcast)
+                                .labelStyle(TightLabel())
+                                .lineLimit(1)
+                        }
+                    }
+                    .font(.sn(11))
+                    .foregroundStyle(SN.textMuted)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

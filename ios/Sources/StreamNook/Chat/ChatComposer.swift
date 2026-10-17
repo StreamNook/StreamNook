@@ -215,6 +215,8 @@ private struct ComposerBar: View {
                     }
                     .accessibilityLabel("Chat commands")
                 }
+                // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
+                if !session.isKick { WalletButton(session: session) { model.panel = .none } }
             }
             .padding(.leading, 4)
             .padding(.trailing, 5)

@@ -8,6 +8,11 @@ public final class FakeRewards: Sendable {
     private struct State {
         var connected = true
         var claims: [String] = []
+        var redeems: [String] = []
+        var chestClaims = 0
+        var balance: Int64 = 12_850
+        var chest = false
+        var gainSeq = 0
     }
 
     private let state = Mutex(State())
@@ -49,9 +54,61 @@ public final class FakeRewards: Sendable {
         case "claim_drop":
             state.withLock { $0.claims.append(args["dropId"] as? String ?? "") }
             return "null"
+        case "get_channel_state":
+            return try FakeCore.json(FakeWallet.state(balance: walletBalance, chest: chestWaiting))
+        case "get_channel_rewards", "get_cached_channel_rewards":
+            return try FakeCore.json(FakeWallet.rewards(balance: walletBalance))
+        case "get_modifiable_emotes":
+            return try FakeCore.json(FakeWallet.emotes)
+        case "refresh_channel_state":
+            return "null"
+        case "redeem_reward":
+            let id = args["rewardId"] as? String ?? ""
+            state.withLock { $0.redeems.append(id) }
+            return try FakeCore.json(FakeWallet.redeem(id, text: args["text"] as? String, emoteName: args["emoteName"] as? String))
+        case "claim_channel_points":
+            state.withLock { $0.chestClaims += 1; $0.chest = false; $0.balance += 50 }
+            return "null"
         default:
             return nil
         }
+    }
+
+    // MARK: The wallet (FakeWallet answers; writes are only recorded)
+
+    /// Reward ids handed to `redeem_reward`, oldest first.
+    public var redeems: [String] { state.withLock { $0.redeems } }
+    /// Chests collected through `claim_channel_points`.
+    public var chestClaims: Int { state.withLock { $0.chestClaims } }
+    /// The fake channel's points balance.
+    public var walletBalance: Int64 {
+        get { state.withLock { $0.balance } }
+        set { state.withLock { $0.balance = newValue } }
+    }
+    /// A bonus chest waits on the button.
+    public var chestWaiting: Bool {
+        get { state.withLock { $0.chest } }
+        set { state.withLock { $0.chest = newValue } }
+    }
+
+    /// A gain as the core announces it: the balance rises and a `channel-state` points push
+    /// carries the new `last_gain`.
+    public func gainPush(login: String, amount: Int, chest: Bool) -> String {
+        let (balance, seq, waiting) = state.withLock { s -> (Int64, Int, Bool) in
+            s.balance += Int64(amount)
+            s.gainSeq += 1
+            return (s.balance, s.gainSeq, s.chest)
+        }
+        let push = FakeWallet.pointsPush(login: login, balance: balance, chest: waiting, gain: (seq: seq, amount: amount, chest: chest))
+        return (try? FakeCore.json(push)) ?? "{}"
+    }
+
+    /// The points push for the current balance and chest, with no new gain.
+    public func statePush(login: String) -> String {
+        let (balance, waiting, seq) = state.withLock { ($0.balance, $0.chest, $0.gainSeq) }
+        let push = FakeWallet.pointsPush(login: login, balance: balance, chest: waiting,
+                                         gain: seq > 0 ? (seq: seq, amount: 0, chest: false) : nil)
+        return (try? FakeCore.json(push)) ?? "{}"
     }
 
     private static let art = "https://static-cdn.jtvnw.net/ttv-boxart/"
@@ -137,7 +194,7 @@ public final class FakeRewards: Sendable {
                      "random_note": NSNull(), "time_left": "3d left"],
                     ["key": "mouse/1", "title": "Mouse Pad", "image": badgeCDN + "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a/3",
                      "chips": [chip("subscribe", "Sub", "Subscribe or gift a subscription"), chip("watch", "30 min", "Watch 30 min")],
-                     "icons_only": false, "random_note": "1 of 3 at random", "time_left": "5h left", "urgent": true],
+                     "icons_only": false, "random_note": "1 of 3 at random", "channels_note": "Only on shroud, hjune", "time_left": "5h left", "urgent": true],
                 ],
             ] as [String: Any],
         ]
