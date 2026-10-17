@@ -71,6 +71,12 @@ public struct ChatRoomBuffer: Sendable {
     }
 
     /// Applies a batch of frames for this room and trims.
+    /// Whether a `ROW_MEMBER` frame's id names the author of `message`.
+    static func member(_ id: String, wrote message: ChatMessage) -> Bool {
+        let twitch = message.provider.isEmpty || message.provider == "twitch"
+        return twitch ? message.userID == id : "\(message.provider):\(message.userID)" == id
+    }
+
     public mutating func apply(_ frames: [ChatSocketFrame]) -> ChatBufferChange {
         var change = ChatBufferChange()
         var updated: [String: ChatRowModel] = [:]
@@ -112,7 +118,10 @@ public struct ChatRoomBuffer: Sendable {
                     updated[next.id] = next
                 }
             case .member(let userID, let atmosphere, let cologne, let badge):
-                for (offset, row) in rows.enumerated() where row.message.userID == userID {
+                // A member is named by their Twitch id on Twitch rows, and by the claimed account
+                // (`kick:<id>`) on another platform's; a Kick chatter with the same bare number
+                // as a member is someone else.
+                for (offset, row) in rows.enumerated() where Self.member(userID, wrote: row.message) {
                     guard var view = row.message.metadata.view else { continue }
                     let before = view
                     view.atmosphere = atmosphere

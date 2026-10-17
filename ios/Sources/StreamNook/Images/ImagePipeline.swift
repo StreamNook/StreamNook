@@ -62,8 +62,17 @@ final class ImagePipeline: @unchecked Sendable {
         }
     }
 
+    /// Posted (from any thread) the first time an image fails to load, with its URL as
+    /// `userInfo["url"]`, so surfaces that kept room for it can give that room back.
+    static let failedNotification = Notification.Name("app.streamnook.image.failed")
+
     var memoryCost: Int { memory.totalCost }
     var memoryCount: Int { memory.count }
+
+    /// True once `url` failed to load or decode; it is not tried again this run.
+    func hasFailed(_ url: String) -> Bool {
+        lock.withLock { failed.contains(url) }
+    }
 
     private static func key(_ url: String, _ pixelHeight: Int, _ animated: Bool) -> String {
         "\(pixelHeight)|\(animated ? "a" : "s")|\(url)"
@@ -109,17 +118,26 @@ final class ImagePipeline: @unchecked Sendable {
                 }
             }
             if let image { self.memory.insert(image, for: key, cost: image.cost) }
-            let waiters = self.lock.withLock { () -> [@Sendable (DecodedImage?) -> Void] in
-                if image == nil { self.failed.insert(url) } else { self.newest[url] = key }
-                return self.inFlight.removeValue(forKey: key) ?? []
+            let (waiters, newlyFailed) = self.lock.withLock { () -> ([@Sendable (DecodedImage?) -> Void], Bool) in
+                var newlyFailed = false
+                if image == nil { newlyFailed = self.failed.insert(url).inserted } else { self.newest[url] = key }
+                return (self.inFlight.removeValue(forKey: key) ?? [], newlyFailed)
             }
             waiters.forEach { $0(image) }
+            if newlyFailed {
+                NotificationCenter.default.post(name: Self.failedNotification, object: nil, userInfo: ["url": url])
+            }
         }
     }
 
     /// The original file: from disk when cached there, else fetched once and kept.
     private func bytes(_ url: String) async -> Data? {
         if let bundled = HouseArt.data(url) { return bundled }
+        // A picture the core finished itself (a badge painted onto its colour) carries its bytes.
+        if url.hasPrefix("data:") {
+            guard let comma = url.firstIndex(of: ","), url[..<comma].hasSuffix(";base64") else { return nil }
+            return Data(base64Encoded: String(url[url.index(after: comma)...]))
+        }
         let file = disk.appending(path: ImageCacheKey.fileName(for: url))
         if let data = try? Data(contentsOf: file), !data.isEmpty { return data }
         guard let remote = URL(string: url) else { return nil }

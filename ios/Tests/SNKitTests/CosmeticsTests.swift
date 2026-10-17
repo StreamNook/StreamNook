@@ -69,12 +69,25 @@ import Testing
 }
 
 @Suite struct MemberFrameTests {
-    private func row(_ id: String, user: String) throws -> ChatSocketFrame {
+    private func row(_ id: String, user: String, provider: String = "twitch") throws -> ChatSocketFrame {
         .row(try JSONDecoder().decode(ChatMessage.self, from: Data("""
         {"id":"\(id)","user_id":"\(user)","username":"u\(user)","display_name":"U\(user)","badges":[],"timestamp":"0",
-         "content":"hi","provider":"twitch","channel":"room","tags":{},"segments":[],
+         "content":"hi","provider":"\(provider)","channel":"room","tags":{},"segments":[],
          "metadata":{"view":{"name_color":"#ffffff","badges":[{"url":"x","provider":"twitch"},{"url":"old","provider":"streamnook"}],"spans":[]}}}
         """.utf8)))
+    }
+
+    @Test func aMemberNeverDressesAKickChatterWithTheSameNumber() throws {
+        var buffer = ChatRoomBuffer(cap: 50)
+        _ = buffer.apply([try row("k", user: "7", provider: "kick")])
+        let member = ChatSocketFrame.decode(#"{"type":"ROW_MEMBER","user_id":"7","atmosphere":"aurora","badge":{"url":"new","provider":"streamnook"}}"#)
+        let change = buffer.apply([member])
+        #expect(change.updated.isEmpty)
+        #expect(buffer.row("k")?.message.metadata.view?.atmosphere == nil)
+        // The member who claimed that Kick account is named by it.
+        let claimed = ChatSocketFrame.decode(#"{"type":"ROW_MEMBER","user_id":"kick:7","atmosphere":"aurora","badge":{"url":"new","provider":"streamnook"}}"#)
+        #expect(buffer.apply([claimed]).updated.count == 1)
+        #expect(buffer.row("k")?.message.metadata.view?.atmosphere == "aurora")
     }
 
     @Test func aMemberFrameDecodes() {

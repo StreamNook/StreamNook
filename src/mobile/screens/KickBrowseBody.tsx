@@ -43,6 +43,7 @@ export const KickBrowseBody: React.FC<{
   onClearCategory: () => void;
 }> = ({ mode, query, view, category, onPickCategory, onClearCategory }) => {
   const startStream = useAppStore((s) => s.startStream);
+  const openKick = (row: TwitchStream) => void startStream(row.user_login, { ...row, provider: 'kick' });
   const [streams, setStreams] = useState<TwitchStream[] | null>(null);
   const [categories, setCategories] = useState<ProviderCategory[] | null>(kickCategoriesCache);
   const [loading, setLoading] = useState(false);
@@ -108,7 +109,10 @@ export const KickBrowseBody: React.FC<{
   const shownCategories = (categories ?? []).filter(
     (c) => !trimmed || c.name.toLowerCase().includes(trimmed.toLowerCase()),
   );
-  const shownStreams = streams ?? [];
+  // A search can find a channel that is not streaming (Rust settles it from
+  // Kick's own live answer): it goes in the offline list, never a live card.
+  const shownStreams = (streams ?? []).filter((s) => s.is_live !== false);
+  const offlineStreams = (streams ?? []).filter((s) => s.is_live === false);
 
   const streamsSettled = useSettleIn(
     !loading && shownStreams.length > 0,
@@ -134,8 +138,10 @@ export const KickBrowseBody: React.FC<{
               </span>
             </div>
           )}
-          {streams === null || (loading && shownStreams.length === 0) ? (
+          {streams === null || (loading && shownStreams.length === 0 && offlineStreams.length === 0) ? (
             <SkeletonCards />
+          ) : shownStreams.length === 0 && offlineStreams.length > 0 ? (
+            <OfflineChannels channels={offlineStreams} onOpen={openKick} />
           ) : shownStreams.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 gap-1">
               <div className="text-sm text-textMuted">
@@ -153,13 +159,16 @@ export const KickBrowseBody: React.FC<{
                 <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
                   <MobileStreamCard
                     stream={s}
-                    onPress={(row) => void startStream(row.user_login, { ...row, provider: 'kick' })}
+                    onPress={openKick}
                     variant={view === 'list' ? 'row' : 'card'}
                     showPlatform={false}
                   />
                 </SettleIn>
               ))}
             </AdaptiveGrid>
+          )}
+          {shownStreams.length > 0 && offlineStreams.length > 0 && (
+            <OfflineChannels channels={offlineStreams} onOpen={openKick} />
           )}
         </>
       ) : categories === null || (loading && shownCategories.length === 0) ? (
@@ -185,3 +194,35 @@ export const KickBrowseBody: React.FC<{
     </PullToRefresh>
   );
 };
+
+/** Channels a search found that are not streaming: a plain list (no preview,
+ *  no viewers, nothing to play), tapped to open the channel. */
+const OfflineChannels: React.FC<{ channels: TwitchStream[]; onOpen: (row: TwitchStream) => void }> = ({
+  channels,
+  onOpen,
+}) => (
+  <div className="px-4 pt-1 sn-tabbar-clearance">
+    <div className="px-1 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">Offline channels</div>
+    <div className="glass-panel media-card overflow-hidden">
+      {channels.map((c, i) => (
+        <button
+          key={streamKey(c)}
+          onClick={() => onOpen(c)}
+          className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left active:opacity-70 ${i > 0 ? 'border-t border-borderSubtle' : ''}`}
+        >
+          {c.profile_image_url ? (
+            <img src={c.profile_image_url} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" draggable={false} />
+          ) : (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface text-[14px] font-semibold text-textSecondary">
+              {(c.user_name || c.user_login).charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-[15px] font-semibold text-textPrimary">{c.user_name || c.user_login}</div>
+            <div className="truncate text-[12.5px] text-textSecondary">{c.game_name || 'Offline'}</div>
+          </div>
+        </button>
+      ))}
+    </div>
+  </div>
+);

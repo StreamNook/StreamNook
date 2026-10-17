@@ -176,21 +176,27 @@ private struct ComposerBar: View {
                 if !session.style.hideEmoteButton {
                     emoteButton
                         // It inserts nothing that could be sent while a mode other than
-                        // emote-only blocks the room.
-                        .opacity(model.fieldDisabled && session.modes?.blocked != "emote_only" ? 0.4 : 1)
+                        // emote-only blocks the room, or before a Kick sign-in.
+                        .opacity(model.needsKickSignIn || (model.fieldDisabled && session.modes?.blocked != "emote_only") ? 0.4 : 1)
                 }
-                TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
-                    .font(.sn(15))
-                    .foregroundStyle(Color(ChatTheme.textPrimary))
-                    .padding(.vertical, 8)
-                    .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
-                    .submitLabel(.send)
-                    .onSubmit { Task { await model.send() } }
-                    .focused($focused)
-                    .disabled(model.fieldDisabled)
-                    .autocorrectionDisabled(!session.style.spellcheck)
-                    .textInputAutocapitalization(.sentences)
-                if model.draft.count >= ChatComposerModel.counterFrom {
+                if model.needsKickSignIn {
+                    kickSignIn
+                } else {
+                    TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
+                        .font(.sn(15))
+                        .foregroundStyle(Color(ChatTheme.textPrimary))
+                        .padding(.vertical, 8)
+                        .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
+                        .submitLabel(.send)
+                        .onSubmit { Task { await model.send() } }
+                        .focused($focused)
+                        .disabled(model.fieldDisabled)
+                        .autocorrectionDisabled(!session.style.spellcheck)
+                        .textInputAutocapitalization(.sentences)
+                }
+                if model.needsKickSignIn {
+                    EmptyView()
+                } else if model.draft.count >= ChatComposerModel.counterFrom {
                     counter
                 } else if let modes = model.shownModes, !model.fieldDisabled {
                     RoomModeIndicator(modes: modes) {
@@ -198,7 +204,7 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if !session.style.hideCommandButton {
+                if !session.style.hideCommandButton, !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {
@@ -246,6 +252,32 @@ private struct ComposerBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
+    }
+
+    /// A Kick room without a Kick sign-in: one accent button where the text would go, which runs
+    /// the same Kick sign-in as the You tab.
+    private var kickSignIn: some View {
+        Button { model.signInToKick() } label: {
+            HStack(spacing: 6) {
+                Text(model.kickSigningIn ? "Waiting for you to sign in" : "Sign in to Kick to chat")
+                    .font(.sn(15, 600))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if !model.kickSigningIn {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(ComposerSymbol.font)
+                        .frame(width: 32, height: 36)
+                }
+            }
+            .foregroundStyle(Color(ChatTheme.accent))
+            .padding(.vertical, 2)
+            .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.kickSigningIn)
+        .opacity(model.kickSigningIn ? 0.6 : 1)
     }
 
     /// "N/500" once a message nears Twitch's limit: quiet, orange in the last 20, red past it.

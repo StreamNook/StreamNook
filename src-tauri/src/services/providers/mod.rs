@@ -271,6 +271,8 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
         crate::services::irc_service::run_message_side_effects(evaluated);
         return;
     }
+    // A native shell draws the row Rust laid out, as on the Twitch lane.
+    crate::services::chat_row_view::stamp(&mut evaluated);
     let msg = &evaluated;
     if let Ok(json) = serde_json::to_string(msg) {
         let frame = crate::services::chat_bridge_route::BridgeFrame::row(

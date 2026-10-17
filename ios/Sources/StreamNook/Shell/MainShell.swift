@@ -8,6 +8,8 @@ struct MainShell: View {
     @Bindable var model: AppModel
     @State private var landscape = false
     @State private var insets = EdgeInsets()
+    /// The You tab's icon: your picture once it is drawn.
+    @State private var youAvatar = YouTabAvatar()
 
     private var nav: Navigator { model.nav }
 
@@ -26,8 +28,10 @@ struct MainShell: View {
                 Tab(MobileTab.rewards.title, systemImage: Symbol.rewards, value: MobileTab.rewards) {
                     stack(.rewards) { RewardsScreen(model: model) }
                 }
-                Tab(MobileTab.you.title, systemImage: Symbol.you, value: MobileTab.you) {
+                Tab(value: MobileTab.you) {
                     stack(.you) { YouScreen(model: model) }
+                } label: {
+                    YouTabLabel(avatar: youAvatar, selected: nav.tab == .you)
                 }
             }
             .tint(SN.accent)
@@ -47,6 +51,11 @@ struct MainShell: View {
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
         .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
+        // selected ring's color).
+        .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
+            await youAvatar.refresh(model: model)
+        }
         .sheet(item: $cosmetics.profile) { target in
             ProfileSheet(model: ProfileSheetModel(target: target, core: model.core))
         }
@@ -67,6 +76,17 @@ struct MainShell: View {
                     destination(route)
                 }
         }
+        .overlay {
+            if showsTabBar(tab) { TabBarFloor() }
+        }
+    }
+
+    /// Whether the tab's screen keeps the tab bar: a category's streams and Edit profile hide it.
+    private func showsTabBar(_ tab: MobileTab) -> Bool {
+        switch nav.paths[tab]?.last {
+        case .category, .cosmetics: false
+        default: true
+        }
     }
 
     @ViewBuilder
@@ -85,6 +105,36 @@ struct MainShell: View {
 extension EnvironmentValues {
     /// The full player covers the tabs: looping decorations in them stop.
     @Entry var shellCovered = false
+}
+
+/// The floor under the floating tab bar: the page's own background rising from clear on an eased
+/// curve, so content scrolling down fades out under the bar instead of showing through it, with no
+/// hard edge and no bare strip below it. It never takes a touch.
+private struct TabBarFloor: View {
+    /// How far above the bar's top edge the fade starts. Inside a tab the bottom safe area already
+    /// spans the bar and the home indicator, so the floor covers that inset plus this lead-in and
+    /// nothing higher: content above the bar stays at full strength.
+    static let lead: CGFloat = 28
+
+    var body: some View {
+        GeometryReader { proxy in
+            LinearGradient(stops: Self.easedStops(SN.background), startPoint: .top, endPoint: .bottom)
+                .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// An ease-in curve sampled as gradient stops (opacity grows as t squared, smoothed), so the
+    /// floor has no visible start line.
+    static func easedStops(_ color: Color) -> [Gradient.Stop] {
+        [0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1].map { t in
+            let eased = t * t * (3 - 2 * t)
+            return Gradient.Stop(color: color.opacity(0.92 * eased), location: t)
+        }
+    }
 }
 
 #if DEBUG

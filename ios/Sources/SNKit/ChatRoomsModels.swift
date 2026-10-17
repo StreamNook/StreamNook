@@ -113,7 +113,7 @@ public struct ChatRoomRow: Codable, Sendable, Equatable, Hashable, Identifiable 
     /// A followed live stream as a row (the sheet's "Live now" list). Rust stamps `is_live` on
     /// these; a follow without it counts as live, as the phone always read them.
     public init(followed s: TwitchStream) {
-        self.init(key: s.userLogin.lowercased(), userLogin: s.userLogin.lowercased(), userID: s.userID ?? "",
+        self.init(provider: s.platform, key: s.rowKey, userLogin: s.userLogin.lowercased(), userID: s.userID ?? "",
                   userName: s.userName.isEmpty ? s.userLogin : s.userName, profileImageURL: s.profileImageURL,
                   isLive: s.isLive ?? true, viewerCount: s.viewerCount, gameName: s.gameName)
     }

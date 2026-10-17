@@ -19,7 +19,10 @@ final class ChatSession {
         case fixture(ChatFixture, rate: Double)
     }
 
+    /// The room's key: the bare lowercased login on Twitch, `kick:slug` on Kick.
     let channel: String
+    /// `twitch` or `kick`.
+    let provider: String
     let core: CoreBridge
     let source: Source
     @ObservationIgnored let pipeline: ChatPipeline
@@ -44,8 +47,9 @@ final class ChatSession {
     @ObservationIgnored private var reader: Task<Void, Never>?
     @ObservationIgnored private var settingsTask: Task<Void, Never>?
 
-    init(channel: String, core: CoreBridge, source: Source, roomID: String? = nil) {
+    init(channel: String, core: CoreBridge, source: Source, roomID: String? = nil, provider: String = "twitch") {
         self.channel = channel.lowercased()
+        self.provider = provider
         self.core = core
         self.source = source
         let box = WeakBox<ChatSession>()
@@ -56,6 +60,15 @@ final class ChatSession {
         })
         box.value = self
         self.roomID = roomID.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// A Kick room: its rows come from Kick's adapter, and nothing Twitch-backed applies.
+    var isKick: Bool { provider == "kick" }
+
+    /// The channel the platform knows: the Twitch login, or the Kick slug.
+    var login: String {
+        guard provider != "twitch", let colon = channel.firstIndex(of: ":") else { return channel }
+        return String(channel[channel.index(after: colon)...])
     }
 
     func start() {
@@ -156,6 +169,8 @@ final class ChatSession {
 
     /// Whether the viewer moderates this room, from the core's send budget (USERSTATE badges).
     private func loadRole() {
+        // The send budget reads Twitch's USERSTATE; Kick rooms carry no Twitch role.
+        guard !isKick else { return }
         let core = core
         let channel = channel
         Task { [weak self] in
@@ -177,6 +192,17 @@ final class ChatSession {
     /// After the connection was down or rebuilt: the rows missed meanwhile (within the window the
     /// core names, else the recent history), in time order among the rows held.
     func backfillGap(afterMs: Int64? = nil, beforeMs: Int64? = nil) {
+        if isKick {
+            let core = core
+            let login = login
+            let pipeline = pipeline
+            Task {
+                guard let json = try? await core.invoke("kick_chat_history", args: ["channel": login]),
+                      let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
+                pipeline.backfill(rows)
+            }
+            return
+        }
         let core = core
         let channel = channel
         let pipeline = pipeline
@@ -191,9 +217,21 @@ final class ChatSession {
 
     /// The join backfill: recent history above the live rows, then the room's badge art.
     private func loadHistory() async {
-        _ = try? await core.invoke("get_cached_global_badges", "{}")
+        if isKick {
+            // Kick's own scrollback, laid out by Rust like live rows; Kick badges ride the rows.
+            if let json = try? await core.invoke("kick_chat_history", args: ["channel": login]),
+               let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
+                pipeline.prepend(rows)
+                chatLog.notice("kick history for \(self.login, privacy: .public): \(rows.count) rows")
+            }
+            return
+        }
+        // Cached when fresh, else fetched: moderator, VIP, partner and event badges come from here.
+        _ = try? await core.invoke("fetch_global_badges", "{}")
+        let asked = Date()
         if let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
            let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
+            chatLog.notice("history for \(self.channel, privacy: .public): \(rows.count) rows in \(Int(Date().timeIntervalSince(asked) * 1000)) ms")
             pipeline.prepend(rows)
             if roomID == nil { roomID = rows.first?.tags["room-id"] }
         }

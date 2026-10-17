@@ -6,12 +6,14 @@ struct Segment<Value: Hashable>: Identifiable {
     let label: String
     var symbol: String?
     var accessibility: String?
+    /// A platform's own mark before the label, instead of a symbol.
+    var mark: PlatformMark.Platform?
 
     var id: Value { value }
 }
 
-/// Segments in a glass capsule, the chosen one a darker pill set into the glass that glides
-/// between them (the look of the desktop Home tab strip). With `allowsNone`, tapping the chosen
+/// Segments in a capsule on the theme's raised surface, the chosen one a darker pill set into it
+/// that glides between them (the look of the desktop Home tab strip). With `allowsNone`, tapping the chosen
 /// segment again chooses nothing.
 struct GlazeSegments<Value: Hashable>: View {
     let segments: [Segment<Value>]
@@ -39,12 +41,16 @@ struct GlazeSegments<Value: Hashable>: View {
                     withAnimation(still ? SNMotion.run(.easeOut(duration: 0.15)) : SNMotion.run(SNMotion.glide)) { selection = next }
                 } label: {
                     HStack(spacing: 6) {
-                        if let symbol = segment.symbol {
+                        if let mark = segment.mark {
+                            PlatformMark(platform: mark, size: 15)
+                        } else if let symbol = segment.symbol {
                             Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
                         }
                         Text(segment.label).font(on ? .snLabelStrong : .snLabel)
                     }
-                    .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
+                    // Unselected labels sit on the track's raised surface, where muted text falls
+                    // under 4.5:1, so they use secondary text.
+                    .foregroundStyle(on ? SN.textPrimary : SN.textSecondary)
                     .padding(.horizontal, fill ? 4 : 14)
                     .padding(.vertical, 7)
                     .frame(maxWidth: fill ? .infinity : nil)
@@ -59,7 +65,32 @@ struct GlazeSegments<Value: Hashable>: View {
             }
         }
         .padding(4)
-        .snGlass(Capsule())
+        .background { SegmentTrack() }
+    }
+}
+
+/// The segment track: the theme's own raised surface (its surface over its background), the very
+/// pair the core's text floors are measured on (theme_palette::floor_secondary), so the labels'
+/// 4.5:1 holds on the track the phone draws. Liquid Glass would lighten it past that surface by an
+/// amount no palette knows. Opaque, so content scrolling under it never shows through. It keeps the
+/// glass family's edge, measured off the Liquid Glass capsule it replaced: a lit rim all the way
+/// round that fades inward over about four points, and a dark hairline just outside. The rim stays
+/// at the edge, clear of the labels, so their contrast is the surface's.
+private struct SegmentTrack: View {
+    /// Nested inner strokes (width in points, white opacity) that add up to the glass rim's falloff:
+    /// about 0.26 at the outer pixel, 0.18, 0.12, then a faint glow.
+    private static let rim: [(CGFloat, Double)] = [(1.0 / 3, 0.08), (2.0 / 3, 0.08), (1, 0.08), (2, 0.02), (4, 0.025)]
+
+    var body: some View {
+        ZStack {
+            Capsule().fill(SN.background)
+            Capsule().fill(SN.surface)
+            ForEach(Self.rim.indices, id: \.self) { i in
+                Capsule().strokeBorder(Color.white.opacity(Self.rim[i].1), lineWidth: Self.rim[i].0)
+            }
+        }
+        // Wholly outside the track, so it never dims the rim's brightest pixel.
+        .overlay { Capsule().inset(by: -0.25).stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
     }
 }
 

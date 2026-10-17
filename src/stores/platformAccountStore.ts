@@ -3,9 +3,6 @@ import * as platformAccounts from '../services/platformAccountService';
 import type { PlatformId } from '../services/platformAccountService';
 import { useAppStore } from './AppStore';
 import { useFollowsStore } from './followsStore';
-import { clearLinkedAccount, recordLinkedAccount } from '../services/supabaseService';
-import { invalidateMemberAliases } from '../services/memberAliasService';
-import { setMemberAliases } from '../utils/memberIdentity';
 import { Logger } from '../utils/logger';
 import { useAccountRosterStore, type AccountRoster, type RosterAccount } from './accountRosterStore';
 
@@ -115,92 +112,9 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     }, STEP_CLEAR_MS);
   };
 
-  /**
-   * What we last told the backend about each platform. `null` means "nothing
-   * reported yet", which is also what a report that could not be sent falls
-   * back to, so the next read retries it.
-   */
-  const reported: Record<PlatformId, string | null> = { kick: null, youtube: null, tiktok: null };
-
-  /**
-   * When a claim lost to somebody else's, the earliest we may ask again.
-   *
-   * The server protects a fresh claim for a short cooldown so two clients cannot
-   * trade an account back and forth. Without this, losing once would mark the
-   * claim as reported and it would never be retried until the app restarted —
-   * which is the real owner of an account being unable to take it back.
-   */
-  const retryNotBefore: Record<PlatformId, number> = { kick: 0, youtube: 0, tiktok: 0 };
-
-  /** Default wait when the server did not say how long, matching its cooldown. */
-  const CONFLICT_RETRY_MINUTES = 15;
-
-  /** Wait before retrying a claim that never reached the server. */
-  const UNREACHABLE_RETRY_MINUTES = 5;
-
-  /**
-   * Tell the account database that a platform was connected or disconnected.
-   *
-   * Reports CHANGES, never a heartbeat. `refreshOne` runs on every window focus
-   * and on the five-minute session check, and "still connected" is not news; the
-   * row's own `last_seen` moves whenever something real happens.
-   *
-   * Connecting Kick while signed out of Twitch records nothing, because the
-   * record is keyed on the Twitch identity. Leaving `reported` unset in that
-   * case means the next refresh tries again, so signing into Twitch afterwards
-   * backfills it with no extra wiring.
-   */
-  const report = (provider: PlatformId, connected: boolean, state: PlatformAccountState) => {
-    // TikTok's sign-in unlocks age-restricted LIVEs and claims nothing about who
-    // you are in its chat, so there is no linked account to record for it.
-    if (provider === 'tiktok') return;
-    // The account id is part of what we report, so a brand-channel switch has to
-    // count as news even though "connected" did not change.
-    const key = connected ? `on:${state.id ?? ''}` : 'off';
-    if (reported[provider] === key) return;
-    // A connected report that has LOST its id must never overwrite one we already
-    // sent. The id resolves lazily, and an account with no channel never has one,
-    // while this runs on every window focus and on a 30-second backstop. Treating
-    // an absent id as a change would release and re-take the claim twice a minute.
-    // Only an explicit disconnect releases it.
-    if (connected && !state.id && reported[provider]?.startsWith('on:')) return;
-    // Lost a claim recently: wait out the server's cooldown rather than asking
-    // on every focus and backstop tick, which it would only refuse again.
-    if (Date.now() < retryNotBefore[provider]) return;
-    const twitchUserId = useAppStore.getState().currentUser?.user_id;
-    if (!twitchUserId) return;
-    reported[provider] = key;
-    void (connected
-      ? recordLinkedAccount(twitchUserId, provider, state.name, state.avatarUrl, state.id)
-      : clearLinkedAccount(twitchUserId, provider)
-    ).then((result) => {
-      if (result.kind === 'conflict') {
-        // Somebody else claimed this account moments ago. Forget that we
-        // reported, so the next refresh after the cooldown takes it back.
-        reported[provider] = null;
-        const minutes = result.retryAfterMinutes ?? CONFLICT_RETRY_MINUTES;
-        retryNotBefore[provider] = Date.now() + minutes * 60_000;
-        Logger.info(`[platform] ${provider} claim is held by someone else; retrying in ${minutes} min`);
-        return;
-      }
-      if (result.kind === 'unavailable' || result.kind === 'failed') {
-        // Nothing was recorded — we were offline, the endpoint was not there
-        // yet, or the server failed. Marking it reported would mean it is never
-        // tried again until the app restarts, so forget it and let a refresh
-        // after a short wait try once more. Short enough to heal a blip, long
-        // enough that a missing endpoint is not asked every focus.
-        reported[provider] = null;
-        retryNotBefore[provider] = Date.now() + UNREACHABLE_RETRY_MINUTES * 60_000;
-        return;
-      }
-      // OUR OWN claim just moved, so every cached answer about it is stale —
-      // including the "nobody" that would have been cached for our own account
-      // before we connected it. Clearing both sides is what makes the badge
-      // appear on our own messages now rather than after a restart.
-      setMemberAliases(new Map());
-      void invalidateMemberAliases();
-    });
-  };
+  // Telling StreamNook's account database which Kick and YouTube accounts are
+  // connected (so member cosmetics follow into those chats) is Rust's, on every
+  // roster it builds (services/linked_accounts.rs).
 
   /** Take one platform's row from the roster Rust built. */
   const applyRow = (provider: PlatformId, row: RosterAccount | undefined) => {
@@ -218,7 +132,6 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
       // user-facing "your session expired" signal is the dedicated
       // platform-session-expired event, not a vanished sidebar.
       if (wasConnected) void useFollowsStore.getState().hydrate();
-      report(provider, false, get()[provider]);
       return;
     }
     patch(provider, {
@@ -228,7 +141,6 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
       id: row.account_id,
       handle: row.handle,
     });
-    report(provider, true, get()[provider]);
   };
 
   /** The roster carries every platform at once, so one read serves all three

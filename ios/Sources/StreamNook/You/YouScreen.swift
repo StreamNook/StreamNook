@@ -129,9 +129,9 @@ struct Avatar: View {
     }
 }
 
-/// One row per account: Twitch (the account the whole app runs on) and 7TV (what lets you wear a
-/// paint and a 7TV badge). Each row is the platform's mark, its name, one line of state, and its own
-/// sign in or out.
+/// One row per account: Twitch (the account the whole app runs on), 7TV (what lets you wear a
+/// paint and a 7TV badge) and Kick. Each row is the platform's mark, its name, one line of state,
+/// and its own sign in or out.
 struct AccountsCard: View {
     let model: AppModel
     let picks: CosmeticsScreenModel?
@@ -139,6 +139,7 @@ struct AccountsCard: View {
     let sevenTvPicture: AvatarPick?
     @State private var twitchArmed = false
     @State private var sevenTvArmed = false
+    @State private var kickArmed = false
 
     private var user: TwitchUser? { model.signIn.user }
     private var sevenTvSignedIn: Bool { picks?.ext?.sevenTvSignedIn ?? false }
@@ -178,9 +179,45 @@ struct AccountsCard: View {
                     }
                 }
             }
-            // Kick gets its row when Kick comes to the iPhone; a sign-in that leads nowhere is not shown.
+            divider
+            kickRow
         }
         .snPanel()
+    }
+
+    /// Kick: one "Sign in with Kick" brings both the kick.com session (your follows) and Kick's
+    /// own authorization (chat). Signed in, the follows can be read again and it signs out.
+    private var kickRow: some View {
+        let kick = model.kick
+        return row(picture: AnyView(AccountAvatar(url: kick.avatarURL, platform: .kick)),
+                   title: kick.name ?? "Kick", detail: kick.detail) {
+            if kick.connected {
+                HStack(spacing: 0) {
+                    Button { Task { await kick.resync() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(SN.textMuted)
+                            .symbolEffect(.rotate, options: .repeat(.continuous), isActive: kick.syncing)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(kick.syncing || kick.busy)
+                    .opacity(kick.syncing || kick.busy ? 0.5 : 1)
+                    .accessibilityLabel("Update your Kick follows")
+                    ArmedPill(label: "Sign out", enabled: !kick.busy, armed: $kickArmed) {
+                        Task { await kick.disconnect() }
+                    }
+                }
+                // The buttons keep their words; a long name gives way instead.
+                .fixedSize()
+            } else {
+                BrandPill(label: kick.busy ? "Signing in" : "Sign in with Kick", fill: SN.kick, text: .black,
+                          enabled: model.started && !kick.busy) {
+                    Task { await kick.connect() }
+                }
+            }
+        }
     }
 
     private var divider: some View {

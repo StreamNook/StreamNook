@@ -108,9 +108,17 @@ struct PlayerChrome: View {
                             .foregroundStyle(.white)
                             .lineLimit(1)
                         if stream.isPartner { PartnerMark(size: 12) }
-                        AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
+                        // Live alerts are Twitch's (the notify worker watches Twitch logins).
+                        if stream.isTwitch {
+                            AlertBell(store: model.settingsStore, login: stream.userLogin, name: stream.userName)
+                        }
                     }
                     .layoutPriority(1)
+                    // Twitch and Kick only (every row here is one of the two); it drops out
+                    // whole before the name gives way.
+                    if !watch.roomVod {
+                        SubscribePill(model: model, stream: stream)
+                    }
                     Spacer(minLength: 8)
                     // When room runs out the Together chip keeps only its faces, then the uptime
                     // goes; the name never gives way to the counts.
@@ -171,7 +179,7 @@ struct PlayerChrome: View {
     /// home lists know (a Shared Chat session included).
     private func group(_ stream: TwitchStream) -> ChannelGroup? {
         if let group = watch.group { return group }
-        guard let id = stream.userID, !id.isEmpty else { return nil }
+        guard let id = stream.twitchID, !id.isEmpty else { return nil }
         let lists = model.home.lists
         return lists.collaborations[id] ?? lists.sharedChats[id]
     }
@@ -229,18 +237,23 @@ struct PlayerChrome: View {
                 .accessibilityHidden(watch.error != nil)
             }
             Spacer(minLength: 8)
+            // The speaker is short and wide, so centered in its box it ends higher than the
+            // taller symbols beside it; set down to share their bottom edge.
             IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
                        size: Self.barIcon, weight: .medium, tint: .white) {
                 watch.toggleMute()
                 onTouch()
             }
-            // The system's AirPlay picker: an Apple TV, a HomePod, AirPods.
+            .offset(y: 2)
+            // The system's AirPlay picker: an Apple TV, a HomePod, AirPods. UIKit draws its glyph
+            // a point high in its box, so it is set down to the row's bottom edge too.
             RoutePicker()
                 .frame(width: 44, height: 44)
+                .offset(y: 1.5)
                 .accessibilityLabel("Watch on a TV")
             if let stream {
                 let title = watch.live?.title ?? stream.title
-                ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
+                ShareLink(item: stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
                           subject: Text(title.isEmpty ? stream.userName : title),
                           message: Text("\(stream.userName) is live")) {
                     Image(systemName: Symbol.share)

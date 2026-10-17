@@ -402,6 +402,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.enable_low_latency_engine_once();
     settings.scope_blend_header_marks_once();
     settings.adopt_first_run_look_once();
+    settings.lift_custom_theme_muted();
     Ok(settings)
 }
 
@@ -1990,6 +1991,7 @@ pub fn run() {
             delete_custom_sound,
             get_theme_catalog,
             get_active_theme,
+            lift_custom_theme,
             search_settings,
             get_changed_settings,
             list_settings_backups,
@@ -2333,6 +2335,7 @@ pub fn run() {
             get_home_snapshot,
             set_home_mounted,
             refresh_home_section,
+            refresh_following,
             set_home_extra_channels,
             // The phones' resume refresh (desktop windows reload on mount).
             #[cfg(mobile)]

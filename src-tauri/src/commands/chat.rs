@@ -469,6 +469,7 @@ pub async fn kick_chat_history(
                 None
             } else {
                 m.metadata.from_backfill = true;
+                crate::services::chat_row_view::stamp(&mut m);
                 Some(m)
             }
         })
@@ -577,7 +578,10 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
 /// `account-roster-changed`; this is the first read.
 #[tauri::command]
 pub async fn get_account_roster() -> crate::services::account_roster::AccountRoster {
-    crate::services::account_roster::build().await
+    let roster = crate::services::account_roster::build().await;
+    // Every read reports what changed (linked accounts dedupe on their own).
+    crate::services::linked_accounts::on_roster(&roster);
+    roster
 }
 
 /// Which StreamNook member, if any, is behind each of these chat identities.
@@ -998,7 +1002,11 @@ pub async fn load_channel_history(
     // providers answer. It shows now and is re-stamped when the table lands
     // (`spawn_history_restamp`), rather than waiting for a slow provider.
     let restamp_lines = (!seeded).then(|| raw.clone());
-    let parsed = IrcService::parse_historical_messages(raw).await;
+    let parsed = IrcService::parse_historical_messages(raw.clone()).await;
+    // A native shell draws each row from its stamped view and only has these
+    // rows once this answer returns, so the backlog waits briefly for its
+    // authors' cosmetics and patches in the rest (`history_cosmetics`).
+    let parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }

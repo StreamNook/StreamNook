@@ -7,6 +7,7 @@ import { providerLabel, type ProviderId } from '../types/providers';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { Logger } from '../utils/logger';
 import type { AccountRoster } from '../stores/accountRosterStore';
+import { setMemberAliases } from '../utils/memberIdentity';
 
 /**
  * Keeps `platformAccountStore` current without polling.
@@ -100,6 +101,17 @@ export function usePlatformAccountSync(): void {
       else unlistenExpired = fn;
     });
 
+    // Rust told StreamNook's account database about one of our own linked
+    // accounts: every member alias this page cached (including a "nobody" for
+    // our own Kick or YouTube account) is stale now.
+    let unlistenAliases: (() => void) | undefined;
+    void listen<string>('member-aliases-invalidated', () => {
+      setMemberAliases(new Map());
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenAliases = fn;
+    });
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refresh();
     };
@@ -111,6 +123,7 @@ export function usePlatformAccountSync(): void {
       unlisten?.();
       unlistenExpired?.();
       unlistenRoster?.();
+      unlistenAliases?.();
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
