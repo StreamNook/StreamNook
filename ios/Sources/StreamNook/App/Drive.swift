@@ -189,6 +189,10 @@ enum Drive {
                 log.notice("sign-in state: signed in \(model.signedIn) user \(model.signIn.user?.login ?? "none", privacy: .public) busy \(model.signIn.busy)")
             case "quality": model.watch.requestedQuality = value.isEmpty ? "best" : value
             case "view": UserDefaults.standard.set(StreamView.stored(value).rawValue, forKey: StreamView.key)
+            case "chooser":
+                let style = PlatformChooserStyle(rawValue: value) ?? .row
+                UserDefaults.standard.set(style.rawValue, forKey: PlatformChooserStyle.key)
+                log.notice("drive chooser \(style.rawValue, privacy: .public)")
             case "resume":
                 model.lifecycle("background")
                 try? await Task.sleep(for: .seconds(1))

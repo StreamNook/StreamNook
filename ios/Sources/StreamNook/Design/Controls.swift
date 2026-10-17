@@ -21,18 +21,29 @@ struct GlazeSegments<Value: Hashable>: View {
     var allowsNone = false
     /// Segments share the full width instead of hugging their labels.
     var fill = false
+    /// A control set into the track ahead of the segments (a platform menu), split off by a hairline.
+    var accessory: AnyView?
     @Namespace private var pill
     @Environment(\.snStill) private var still
 
-    init(_ segments: [Segment<Value>], selection: Binding<Value?>, allowsNone: Bool = false, fill: Bool = false) {
+    init(_ segments: [Segment<Value>], selection: Binding<Value?>, allowsNone: Bool = false, fill: Bool = false,
+         accessory: AnyView? = nil) {
         self.segments = segments
         _selection = selection
         self.allowsNone = allowsNone
         self.fill = fill
+        self.accessory = accessory
     }
 
     var body: some View {
         HStack(spacing: 4) {
+            if let accessory {
+                accessory
+                Rectangle()
+                    .fill(SN.textMuted.opacity(0.35))
+                    .frame(width: 1, height: 18)
+                    .padding(.trailing, 2)
+            }
             ForEach(segments) { segment in
                 let on = selection == segment.value
                 Button {

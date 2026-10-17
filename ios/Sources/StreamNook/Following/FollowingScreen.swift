@@ -9,6 +9,7 @@ struct FollowingScreen: View {
     @AppStorage(StreamView.key) private var view = StreamView.cards
     /// `twitch`, `kick`, or empty for everything.
     @AppStorage("sn-following-platform") private var platform = ""
+    @AppStorage(PlatformChooserStyle.key) private var chooser = PlatformChooserStyle.row
     @State private var latch = SettleLatch()
 
     private var home: HomeStore { model.home }
@@ -39,15 +40,27 @@ struct FollowingScreen: View {
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {
             if model.signedIn {
+                // Every style but the row puts the filter in the title row, so it costs no row.
+                if chooser != .row && home.lists.following.followsKick {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        PlatformMenu(options: [.all, .twitch, .kick], selection: menuBinding)
+                    }
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
                 ToolbarItem(placement: .topBarTrailing) { StreamViewButtons(view: $view) }
             }
         }
     }
 
+    /// The menu's choice: everything, or one platform.
+    private var menuBinding: Binding<String> {
+        Binding(get: { filter ?? "" }, set: { platform = $0 })
+    }
+
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if home.lists.following.followsKick {
+                if home.lists.following.followsKick && chooser == .row {
                     GlazeSegments([Segment(value: "twitch", label: "Twitch", accessibility: "Show Twitch channels", mark: .twitch),
                                    Segment(value: "kick", label: "Kick", accessibility: "Show Kick channels", mark: .kick)],
                                   selection: filterBinding, allowsNone: true)
