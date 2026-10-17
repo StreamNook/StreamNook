@@ -7,7 +7,8 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { Logger } from './logger';
 import { isStreamerModeActive } from './streamerMode';
 
-export type SoundId = 'boop' | 'tick' | 'soft' | 'whisper' | 'gentle';
+type RetroId = 'morse' | 'pager' | 'flip' | 'arcade' | 'gadget' | 'ringtone' | 'granvals';
+export type SoundId = 'boop' | 'tick' | 'soft' | 'whisper' | 'gentle' | RetroId;
 
 export const SOUND_LABELS: Record<SoundId, string> = {
   boop: 'Subtle Boop',
@@ -15,7 +16,110 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   soft: 'Fireplace Crackle',
   whisper: 'Raindrop',
   gentle: 'Wind Chime',
+  morse: 'Morse SMS',
+  pager: 'Pager',
+  flip: 'Flip Phone',
+  arcade: 'Arcade',
+  gadget: 'Spy Gadget',
+  ringtone: 'Old Ringtone',
+  granvals: 'Gran Vals',
 };
+
+/** Every built-in tone, in picker order: the soft set, then the retro set.
+ *  Rust's `VALID_SOUND_IDS` (chat_rules.rs) lists the same ids. */
+export const BUILT_IN_SOUNDS: SoundId[] = [
+  'boop', 'tick', 'soft', 'whisper', 'gentle',
+  'morse', 'pager', 'flip', 'arcade', 'gadget', 'ringtone', 'granvals',
+];
+
+/** One note of a retro tone: pitch in Hz, start and length in seconds. */
+type Note = [hz: number, at: number, len: number];
+
+/** The retro set: short phone and handheld style beeps, each a run of plain
+ *  notes on one waveform. */
+const RETRO: Record<RetroId, { wave: OscillatorType; notes: Note[] }> = {
+  // "SMS" in Morse: ... -- ...
+  morse: (() => {
+    const u = 0.065;
+    const notes: Note[] = [];
+    let at = 0;
+    for (const letter of ['...', '--', '...']) {
+      for (const mark of letter) {
+        const len = mark === '.' ? u : 3 * u;
+        notes.push([1760, at, len]);
+        at += len + u;
+      }
+      at += 2 * u;
+    }
+    return { wave: 'square' as OscillatorType, notes };
+  })(),
+  pager: {
+    wave: 'square',
+    notes: [
+      [1568, 0, 0.06], [1568, 0.1, 0.06], [1568, 0.2, 0.06],
+      [1568, 0.42, 0.06], [1568, 0.52, 0.06], [1568, 0.62, 0.06],
+    ],
+  },
+  flip: { wave: 'triangle', notes: [[1319, 0, 0.07], [1568, 0.08, 0.07], [2093, 0.16, 0.18]] },
+  arcade: {
+    wave: 'square',
+    notes: [[1047, 0, 0.05], [1319, 0.06, 0.05], [1568, 0.12, 0.05], [2093, 0.18, 0.2]],
+  },
+  gadget: {
+    wave: 'square',
+    notes: [[1480, 0, 0.07], [1480, 0.13, 0.07], [1480, 0.26, 0.05], [1865, 0.33, 0.16]],
+  },
+  ringtone: {
+    wave: 'square',
+    notes: [
+      [784, 0, 0.09], [988, 0.1, 0.09], [1175, 0.2, 0.09],
+      [1568, 0.3, 0.15], [1175, 0.48, 0.09], [1568, 0.58, 0.2],
+    ],
+  },
+  // The opening phrase of Tarrega's Gran Vals (1902), the waltz the classic
+  // phone ringtone came from: three short-short-long-long figures and a
+  // closing note.
+  granvals: (() => {
+    const e = 0.12;
+    const bars: [number, number][][] = [
+      [[1319, 1], [1175, 1], [740, 2], [831, 2]],
+      [[1109, 1], [988, 1], [587, 2], [659, 2]],
+      [[988, 1], [880, 1], [554, 2], [659, 2]],
+      [[880, 4]],
+    ];
+    const notes: Note[] = [];
+    let at = 0;
+    for (const [hz, beats] of bars.flat()) {
+      notes.push([hz, at, beats * e - 0.02]);
+      at += beats * e;
+    }
+    return { wave: 'square' as OscillatorType, notes };
+  })(),
+};
+
+/** Peak level per waveform, so a square beep sits as loud as a soft tone. */
+const RETRO_PEAK: Partial<Record<OscillatorType, number>> = { square: 0.035, triangle: 0.08 };
+
+function playRetro(ctx: AudioContext, out: AudioNode, id: RetroId): void {
+  const { wave, notes } = RETRO[id];
+  const peak = RETRO_PEAK[wave] ?? 0.08;
+  const t0 = ctx.currentTime;
+  for (const [hz, at, len] of notes) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = wave;
+    osc.frequency.setValueAtTime(hz, t0 + at);
+    // A few milliseconds of ramp at each end keeps the edges from clicking.
+    gain.gain.setValueAtTime(0, t0 + at);
+    gain.gain.linearRampToValueAtTime(peak, t0 + at + 0.005);
+    gain.gain.setValueAtTime(peak, t0 + at + len - 0.012);
+    gain.gain.linearRampToValueAtTime(0, t0 + at + len);
+    osc.connect(gain);
+    gain.connect(out);
+    osc.start(t0 + at);
+    osc.stop(t0 + at + len + 0.01);
+  }
+}
 
 let globalAudioContext: AudioContext | null = null;
 
@@ -82,6 +186,18 @@ export function playSound(soundId: SoundRef | undefined | null, volume?: number 
   }
   const ctx = getSharedAudioContext();
   if (!ctx) return;
+
+  if (Object.hasOwn(RETRO, soundId)) {
+    try {
+      const volumeNode = ctx.createGain();
+      volumeNode.gain.value = scale;
+      volumeNode.connect(ctx.destination);
+      playRetro(ctx, volumeNode, soundId as RetroId);
+    } catch (error) {
+      Logger.warn('Could not play notification sound:', error);
+    }
+    return;
+  }
 
   try {
     const oscillator = ctx.createOscillator();

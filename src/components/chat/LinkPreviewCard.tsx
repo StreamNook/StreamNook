@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, memo } from 'react';
-import { Play, ExternalLink, Eye, ShieldCheck, Instagram } from 'lucide-react';
+import { Play, ExternalLink, Eye, ShieldCheck } from 'lucide-react';
 import { Tooltip, type TooltipChildProps } from '../ui/Tooltip';
 import { DiscordGlyph } from '../ui/DiscordGlyph';
+import { SocialLogo } from '../ui/SocialLogo';
 import { useAppStore, type MediaInfo } from '../../stores/AppStore';
 import { playTwitchMediaInMain } from '../../utils/playTwitchMediaInMain';
 // Shared helper, not a local copy. The local copy this replaced used
@@ -147,21 +148,24 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   url,
   showChip = true,
   trusted = true,
+  resolved,
 }: {
   url: string;
   showChip?: boolean;
   trusted?: boolean;
+  /** An already-fetched preview. The card renders it and fetches nothing. */
+  resolved?: LinkPreview;
 }) {
   // undefined = unresolved, null = no preview, object = card. Nothing is cached
   // (chat links are ephemeral), so every card starts unresolved and fetches once.
-  const [preview, setPreview] = useState<LinkPreview | null | undefined>(undefined);
+  const [preview, setPreview] = useState<LinkPreview | null | undefined>(resolved);
   const [imageFailed, setImageFailed] = useState(false);
   // Trusted links fetch automatically; untrusted links wait for an explicit
   // click (the click-to-load chip below) so an arbitrary pasted link is never
   // fetched passively — that would reveal the user's IP to the linked host.
   const [loadRequested, setLoadRequested] = useState(trusted);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const requested = useRef(false);
+  const requested = useRef(resolved !== undefined);
 
   useEffect(() => {
     // Untrusted links don't auto-fetch; loadPreview() drives them on click.
@@ -461,7 +465,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
           )}
           <div className="min-w-0 flex-1 leading-tight">
             <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-textSecondary">
-              <Instagram size={13} />
+              <SocialLogo platform="instagram" size={13} />
               <span className="font-semibold">Instagram</span>
               {typeof preview.member_count === 'number' && (
                 <span className="text-textSecondary/70">· {formatViews(preview.member_count)} followers</span>

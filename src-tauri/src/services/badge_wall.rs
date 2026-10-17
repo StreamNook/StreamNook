@@ -136,6 +136,8 @@ pub struct MissingRow {
     pub icons_only: bool,
     /// "1 of 3 at random".
     pub random_note: Option<String>,
+    /// "Only on a, b" or "Only on 5 channels": the campaign counts only there.
+    pub channels_note: Option<String>,
     /// "3d left", "5h left", "ends soon", "ending", or empty.
     pub time_left: String,
     /// It closes within a day: the time left is drawn as a warning.
@@ -325,8 +327,18 @@ pub fn catch_up_view(totals: &CatchUp) -> Option<CatchUpView> {
     })
 }
 
+/// Where a campaign with an allow-list counts: up to three channels by name,
+/// else how many.
+fn channels_note(channels: &[String]) -> Option<String> {
+    match channels.len() {
+        0 => None,
+        1..=3 => Some(format!("Only on {}", channels.join(", "))),
+        n => Some(format!("Only on {n} channels")),
+    }
+}
+
 fn missing_row(badge: &MissingBadge, icons: &HashMap<String, String>, now: i64) -> MissingRow {
-    let EarnPath { steps, random_of, .. } = &badge.earn;
+    let EarnPath { steps, random_of, channels, .. } = &badge.earn;
     MissingRow {
         key: badge.key.clone(),
         title: badge.title.clone(),
@@ -343,6 +355,7 @@ fn missing_row(badge: &MissingBadge, icons: &HashMap<String, String>, now: i64) 
             .collect(),
         icons_only: steps.len() >= 3,
         random_note: random_of.filter(|n| *n > 1).map(|n| format!("1 of {n} at random")),
+        channels_note: channels.as_deref().and_then(channels_note),
         time_left: time_left(badge.ends_ms, now),
         urgent: badge.ends_ms.is_some_and(|end| end - now < 24 * 3_600_000),
     }

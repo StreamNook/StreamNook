@@ -49,6 +49,49 @@ export function overlayTwitchBadgeUrl(
   return (twitchOwn && twitchBadgeUrl(twitchOwn)) || own;
 }
 
+type RowTags = Readonly<Record<string, string | undefined>> | undefined;
+
+/**
+ * The channel whose badge set a Twitch row's badges come from, as the chat
+ * reads it: the channel a shared-chat row was sent in, else the row's own
+ * channel, else the channel the feed knows the row belongs to. A row looked up
+ * with no channel draws its subscriber badge from the global set, Twitch's
+ * default star, instead of the channel's own art.
+ */
+export function badgeRoomOf(tags: RowTags, fallbackRoomId?: string | null): string | undefined {
+  return tags?.['source-room-id'] || tags?.['room-id'] || fallbackRoomId || undefined;
+}
+
+/** `parseBadges` from the chat's badge cache: channel set first, then global. */
+export type TwitchBadgeLookup = (
+  badgeString: string,
+  channelId?: string,
+) => Array<{ key: string; info: (BadgeInfo & { title?: string }) | null }>;
+
+/**
+ * A Twitch row's badges as the overlay draws them, resolved against the row's
+ * channel (see `badgeRoomOf`). Null when none resolve, so the caller keeps the
+ * row's own badges.
+ */
+export function overlayTwitchBadges(
+  raw: ReadonlyArray<{ name: string; version: string }>,
+  tags: RowTags,
+  lookup: TwitchBadgeLookup,
+  roleArt: RoomRoleArt | null | undefined,
+  fallbackRoomId?: string | null,
+): Array<{ name: string; version: string; image_url_4x: string | undefined; title: string | undefined }> | null {
+  if (raw.length === 0) return null;
+  const room = badgeRoomOf(tags, fallbackRoomId);
+  const resolved = lookup(raw.map((b) => `${b.name}/${b.version}`).join(','), room).flatMap((r) => {
+    const info = r.info;
+    if (!info) return [];
+    const [name, version] = r.key.split('/');
+    const url = overlayTwitchBadgeUrl(name, info, roleArt, () => lookup(r.key)[0]?.info);
+    return [{ name, version, image_url_4x: url, title: info.title }];
+  });
+  return resolved.length > 0 ? resolved : null;
+}
+
 /** The overlay row for a 7TV emote set change the chat noted, or null for any
  *  other system row: those are this app's own notices (command replies,
  *  connection lines, room mode changes), which the OBS overlay never shows. */

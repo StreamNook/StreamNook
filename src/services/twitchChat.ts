@@ -102,6 +102,8 @@ export interface HighlightStamp {
   color: string;
   sound_id?: string | null;
   cooldown_ms: number;
+  /** Keep tinted: hold the rule's color while the row is on screen. */
+  hold?: boolean;
 }
 
 /** A built-in event highlight, stamped by the Rust rule engine. */

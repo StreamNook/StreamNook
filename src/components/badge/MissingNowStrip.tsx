@@ -9,7 +9,7 @@ import {
   type MissingBadge,
 } from '../../services/badgeStanding';
 import { CatchUpPanel } from './CatchUpPanel';
-import { EarnChips, RandomDrawNote } from './EarnChips';
+import { ChannelsOnlyNote, EarnChips, RandomDrawNote } from './EarnChips';
 
 // Every card is the same height, so a collapsed list always ends on a row
 // boundary instead of slicing a card in half.
@@ -179,6 +179,7 @@ const MissingCard = ({
         <div className="flex items-center gap-2 mt-1">
           {left && <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-success">{left}</span>}
           {badge.earn.random_of && <RandomDrawNote of={badge.earn.random_of} />}
+          {badge.earn.channels && <ChannelsOnlyNote channels={badge.earn.channels} />}
           {category && (
             <button
               onClick={openCategory}

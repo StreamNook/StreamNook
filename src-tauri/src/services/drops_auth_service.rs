@@ -10,12 +10,17 @@ use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
 
 // Twitch Android App credentials
 const DROPS_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
 const DROPS_TOKEN_FILE_NAME: &str = ".twitch_drops_token";
+
+/// Bumped every time the stored drops token is written or removed, so holders
+/// of a copy (plugins, via the watch tick) know to ask for it again.
+static TOKEN_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 struct DeviceCodeResponse {
@@ -80,6 +85,7 @@ impl DropsAuthService {
     fn store_token_to_file(token: &StorableDropsToken) -> Result<()> {
         let path = Self::get_token_file_path()?;
         token_vault::store_json(&path, token)?;
+        TOKEN_EPOCH.fetch_add(1, Ordering::SeqCst);
         debug!("[DROPS_AUTH] Token sealed to {:?}", path);
         crate::services::account_roster::notify();
         Ok(())
@@ -87,8 +93,14 @@ impl DropsAuthService {
 
     fn delete_token_file() -> Result<()> {
         let result = token_vault::remove(&Self::get_token_file_path()?);
+        TOKEN_EPOCH.fetch_add(1, Ordering::SeqCst);
         crate::services::account_roster::notify();
         result
+    }
+
+    /// Changes whenever the stored drops token is replaced or removed.
+    pub fn token_epoch() -> u64 {
+        TOKEN_EPOCH.load(Ordering::SeqCst)
     }
 
     fn load_token() -> Result<StorableDropsToken> {

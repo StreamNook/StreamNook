@@ -1,11 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, useId } from 'react';
-import { createPortal, flushSync } from 'react-dom';
+import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
-import { Pickaxe, Zap, BarChart3, Filter, SquareSlash } from 'lucide-react';
+import { Zap, Filter } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
@@ -14,13 +14,6 @@ import { resolveUploadTarget, encodeExtraFields } from '../utils/imageUploadHost
 import { registerChatSearchController } from '../keybindings/chatSearchController';
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
 
-// Channel Points Icon (Twitch style)
-const ChannelPointsIcon = ({ className = "", size = 14 }: { className?: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="currentColor">
-    <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
-    <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
-  </svg>
-);
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
 import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
@@ -76,8 +69,12 @@ import { isCachedModerator, setCachedModerator, loadModeratedChannelIds, subscri
 import type { ModRoomMember } from '../services/modRoomService';
 import { ensureRoom, releaseRoom } from '../services/modRoomManager';
 import { useModRoomStore } from '../stores/modRoomStore';
-import ChannelPointsMenu from './ChannelPointsMenu';
-import ModeratorMenu from './chat/ModeratorMenu';
+import { WalletFace, WalletMenu, type WalletPoints } from './chat/ChannelWallet';
+import { walletHasAny } from '../utils/wallet';
+import ChannelToolsMenu, { type DropsTool } from './chat/ChannelToolsMenu';
+import { CheerBar } from './chat/CheerBar';
+import { useCheerDraft } from '../stores/cheerPromptStore';
+import { channelToolSections } from '../utils/channelTools';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
 import { EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
@@ -91,7 +88,6 @@ import { useChatUserStore } from '../stores/chatUserStore';
 import { forceRefreshCosmetics } from '../services/cosmeticsCache';
 import MentionAutocomplete from './MentionAutocomplete';
 import CommandAutocomplete from './chat/CommandAutocomplete';
-import CommandMenu from './chat/CommandMenu';
 import EmoteAutocomplete from './chat/EmoteAutocomplete';
 import EmoteSearchList from './chat/EmoteSearchList';
 import SendAsPicker from './SendAsPicker';
@@ -127,7 +123,6 @@ import { BackendChatMessage } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
-import { roomModesFieldStyle } from './chat/roomModeLayout';
 
 interface ParsedMessage {
   username: string;
@@ -149,99 +144,9 @@ import { Logger } from '../utils/logger';
 // Unsent composer text per channel key, for the per-channel draft restore.
 const chatDrafts = new Map<string, string>();
 import { useVisibleInterval } from '../utils/useVisibleInterval';
-import { formatShortCount, formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
+import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { lastLiveLabel } from '../utils/lastLive';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
-
-// Channel Points hover tooltip — portalled to document.body to escape overflow-hidden
-const ChannelPointsTooltip = ({ anchorRef, customPointsIconUrl, customPointsName, isLoadingChannelPoints, channelPoints }: {
-  anchorRef: React.RefObject<HTMLDivElement | null>;
-  customPointsIconUrl: string | null;
-  customPointsName: string | null;
-  isLoadingChannelPoints: boolean;
-  channelPoints: number | null;
-}) => {
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  // Horizontal offset applied to the bubble after viewport-edge clamping.
-  // The arrow stays pinned to the anchor center, so when we shift the bubble
-  // to keep it on-screen (e.g. inside the narrow MultiChat popout where the
-  // anchor sits close to the right edge), the arrow's `left` is recomputed
-  // separately so it still points at the icon below.
-  const [bubbleShift, setBubbleShift] = useState(0);
-  const bubbleRef = useRef<HTMLDivElement>(null);
-
-  // Step 1: measure the anchor and stage the centered position. The bubble
-  // isn't rendered yet on this pass (we early-return below when `pos` is null),
-  // so we can't measure its width here.
-  useLayoutEffect(() => {
-    const el = anchorRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setPos({ left: rect.left + rect.width / 2, top: rect.top - 8 });
-  }, [anchorRef]);
-
-  // Step 2: now that the bubble is in the DOM (pos is set), measure its
-  // natural width and clamp horizontally so it never escapes the viewport.
-  // 8px margin keeps a breathing buffer at each edge. Re-runs whenever the
-  // bubble's content can change width (custom points name, points number,
-  // loading state) since those swap the rendered text.
-  useLayoutEffect(() => {
-    if (!pos) return;
-    const bubble = bubbleRef.current;
-    if (!bubble) return;
-    const margin = 8;
-    const bubbleRect = bubble.getBoundingClientRect();
-    const half = bubbleRect.width / 2;
-    const minLeft = margin + half;
-    const maxLeft = window.innerWidth - margin - half;
-    const clamped = Math.max(minLeft, Math.min(pos.left, maxLeft));
-    setBubbleShift(clamped - pos.left);
-  }, [pos, customPointsName, channelPoints, isLoadingChannelPoints]);
-
-  if (!pos) return null;
-
-  return createPortal(
-    <div
-      ref={bubbleRef}
-      className="fixed px-3 py-1.5 bg-black/95 border border-border rounded-lg shadow-lg z-[9999] min-w-max pointer-events-none"
-      style={{
-        left: pos.left + bubbleShift,
-        top: pos.top,
-        transform: 'translate(-50%, -100%)',
-      }}
-    >
-      <div className="flex items-center gap-1.5">
-        {customPointsIconUrl ? (
-          <img
-            src={customPointsIconUrl}
-            alt={customPointsName || "Channel Points"}
-            className="w-[14px] h-[14px] flex-shrink-0"
-          />
-        ) : (
-          <ChannelPointsIcon size={14} className="text-accent-neon flex-shrink-0" />
-        )}
-        {isLoadingChannelPoints ? (
-          <span className="text-sm text-textSecondary">Loading...</span>
-        ) : channelPoints !== null ? (
-          <span className="text-sm font-bold text-accent-neon">{channelPoints.toLocaleString()}</span>
-        ) : (
-          <span className="text-sm text-textSecondary">--</span>
-        )}
-        {customPointsName && channelPoints !== null && (
-          <span className="text-xs text-textSecondary">{customPointsName}</span>
-        )}
-      </div>
-      {/* Arrow still points at the anchor center even when the bubble has
-          been shifted to stay on-screen — its `left` is the anchor center
-          relative to the (shifted) bubble's left edge. */}
-      <div
-        className="absolute top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-black/95"
-        style={{ left: `calc(50% - ${bubbleShift}px)`, transform: 'translateX(-50%)' }}
-      />
-    </div>,
-    document.body
-  );
-};
 
 /** Lets ChatWidget render against a caller-supplied channel instead of the
  *  AppStore's currentStream — same pattern as the MultiNook synthesis branch
@@ -1078,6 +983,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   
   // UI state
   const [messageInput, setMessageInput] = useState('');
+  // Put text in the box and the caret at its end (the cheer bar's remove and
+  // a refused cheer coming back).
+  const setComposerText = useCallback((text: string) => {
+    setMessageInput(text);
+    inputRef.current?.focus({ preventScroll: true });
+    setTimeout(() => inputRef.current?.setSelectionRange(text.length, text.length), 0);
+  }, []);
   // Per-channel drafts: switching channels parks the unsent text and brings
   // back whatever was typed there before (module-level, survives remounts).
   const draftKeyRef = useRef<string | null>(null);
@@ -1218,10 +1130,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     if (activeView === 'modroom' && !modRoomEligible) setActiveView('chat');
   }, [activeView, modRoomEligible, isTwitch]);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
-  // Browsable command menu (button left of the emote picker). Mutually
-  // exclusive with the emote picker: they share the space above the box.
-  const [showCommandMenu, setShowCommandMenu] = useState(false);
-  const commandMenuButtonRef = useRef<HTMLButtonElement>(null);
   // While the picker is open, fill the emote disk cache aggressively (the user is
   // actively waiting on these); the matching cleanup drops back to the polite
   // background trickle on close. Ref-counted in the service so split panes /
@@ -1331,7 +1239,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const smiley = useSwappingSmiley();
   const [isLoadingEmotes, setIsLoadingEmotes] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const channelPointsRef = useRef<HTMLDivElement>(null);
   // Always-latest reference to handleUsernameClick so window-event listeners
   // (the /usercard and /user slash commands) open the card with current channel
   // context instead of a stale mount-time closure.
@@ -1786,10 +1693,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   // Channel points state
   const [channelPoints, setChannelPoints] = useState<number | null>(null);
-  // Mirror of the balance so the claim callback can compute a true earned
-  // amount (balance delta) as a fallback, without depending on render state.
-  const channelPointsBalanceRef = useRef<number | null>(null);
-  const [channelPointsHovered, setChannelPointsHovered] = useState(false);
   // Bonus-chest claim for the actively watched channel. When auto-claim is on
   // Rust collects it silently; when off a clickable chest surfaces on the
   // points button. Background automation of channels you are not watching is a
@@ -1797,12 +1700,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [availableClaim, setAvailableClaim] = useState<{ id: string; channelId: string } | null>(null);
   const [claimingChest, setClaimingChest] = useState(false);
   const claimingChestRef = useRef(false);
-  // Brief "+N" feedback on the points button after a chest is collected,
-  // whether the user clicked it or auto-claim grabbed it.
-  const [claimCelebration, setClaimCelebration] = useState<number | null>(null);
-  const claimCelebrationTimer = useRef<number | null>(null);
   const autoClaimWatching = useAppStore((s) => s.settings.auto_claim_points_watching ?? true);
   const [showChannelPointsMenu, setShowChannelPointsMenu] = useState(false);
+  const pointsButtonRef = useRef<HTMLButtonElement>(null);
   const [isLoadingChannelPoints, setIsLoadingChannelPoints] = useState(false);
   const [customPointsName, setCustomPointsName] = useState<string | null>(null);
   const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
@@ -1877,13 +1777,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const isInputDisabled =
     !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
   // The room's chat modes, worded by Rust (services/room_modes.rs) and shipped
-  // on the ROOMSTATE frame, for every platform that reports them. While the
-  // setting is on, the prompt names them and their icons sit at the end of
-  // the field, where they stay while you type.
+  // on the ROOMSTATE frame, for every platform that reports them. One place
+  // shows them, the viewer's pick: a chip at the field's end that stays while
+  // you type (the default), or the prompt in place of "Send a message".
   const roomModes =
     (settings.chat_input?.show_room_modes ?? true) && roomState?.modes && roomState.modes.modes.length > 0
       ? roomState.modes
       : null;
+  const roomModesAsPrompt = settings.chat_input?.room_modes_style !== 'chip';
+  const roomModePrompt = roomModesAsPrompt ? (roomModes?.prompt ?? null) : null;
+  const roomModePromptShort = roomModesAsPrompt ? (roomModes?.prompt_short ?? null) : null;
   const chatPlaceholder = isReplayReadOnly
     ? 'Viewing chat replay (read-only)'
     : !canSendHere
@@ -1898,7 +1801,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in again to chat'
     : isWatchStreakMode
     ? "Add a message (optional)..."
-    : roomModes?.prompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
+    : roomModePrompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
   // placeholder. utils/composerNarrow.ts swaps between the two.
@@ -1912,7 +1815,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in'
     : isWatchStreakMode
     ? 'Message'
-    : roomModes?.prompt_short ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
+    : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
   // saying something the user can act on (read-only, connect your account,
@@ -1922,8 +1825,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const showEmoteButton = !chatInputPrefs?.hide_emote_button;
   const showPointsBalance = !chatInputPrefs?.hide_points_balance;
   const pointsBalanceInline = !!chatInputPrefs?.show_points_balance_inline;
+  const walletGains = chatInputPrefs?.wallet_gains === 'chest' ? 'chest' : 'all';
+  // The box's text cheers (Rust's live check): Send becomes the cheer.
+  const composerCheer = useCheerDraft(isTwitch ? (channelOverride?.user_login ?? currentStream?.user_login) : null, messageInput);
   const visiblePlaceholder =
-    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModes?.prompt
+    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModePrompt
       ? ''
       : chatPlaceholder;
   const visiblePlaceholderNarrow = visiblePlaceholder ? chatPlaceholderNarrow : '';
@@ -1937,11 +1843,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // 36px clears the inset emote button; 12px is the plain input inset once it's
   // hidden. The /remind highlight backdrop reuses this so its text stays
   // pixel-aligned with the real textarea underneath it.
-  const showCommandButton = !chatInputPrefs?.hide_command_button;
-  // Each inset button is 28px wide; the command button sits first, so
-  // everything to its right (emote button, send-as picker, text) shifts.
-  const commandInset = showCommandButton ? 28 : 0;
-  const composerPaddingLeft = `${(showSendAsPicker ? 74 : showEmoteButton ? 36 : 12) + commandInset}px`;
+  const composerPaddingLeft = `${showSendAsPicker ? 74 : showEmoteButton ? 36 : 12}px`;
 
   // Dry run of the /nuke being typed, so you see the blast radius before you
   // commit to it. Deliberately a count in ChatWidget's own state rendered above
@@ -2548,10 +2450,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setIsLoadingChannelPoints(isTwitch && !!currentStream?.user_login);
   }, [isTwitch, currentStream?.user_login]);
 
-  // Keep the balance mirror current for the claim callback's delta fallback.
-  useEffect(() => {
-    channelPointsBalanceRef.current = channelPoints;
-  }, [channelPoints]);
+  // The wallet's points: present while the first answer is on its way and
+  // while the channel has points on; null where it has them off.
+  const walletPoints: WalletPoints | null = isTwitch && (isLoadingChannelPoints || channelState?.points?.enabled)
+    ? {
+        balance: channelPoints,
+        name: customPointsName,
+        iconUrl: customPointsIconUrl,
+        loading: isLoadingChannelPoints,
+        lastGain: channelState?.points?.last_gain ?? null,
+      }
+    : null;
+  const chestWaiting = !!availableClaim && !autoClaimWatching;
 
   // A click on the chest button (auto-claim off). Rust claims it and reports
   // the claim; the `watched-chest-claimed` listener below shows the "+N".
@@ -2575,8 +2485,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [isTwitch, currentStream?.user_login]);
 
   // Every chest Rust collects on this channel, automatic or clicked: clear the
-  // chest, take the new balance, pop the credited amount (multipliers
-  // included; the balance delta only when Twitch did not say).
+  // chest. The new balance and the "+N" arrive through channel_state.
   useEffect(() => {
     const channelId = currentStream?.user_id;
     if (!isTwitch || !channelId) return;
@@ -2585,24 +2494,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       (event) => {
         if (event.payload.channel_id !== channelId) return;
         setAvailableClaim(null);
-        const { points_earned, new_balance } = event.payload;
-        const prevBalance = channelPointsBalanceRef.current;
-        const earned = points_earned > 0
-          ? points_earned
-          : (prevBalance !== null && new_balance > prevBalance ? new_balance - prevBalance : 0);
-        if (new_balance > 0) setChannelPoints(new_balance);
-        if (earned > 0) {
-          setClaimCelebration(earned);
-          if (claimCelebrationTimer.current) window.clearTimeout(claimCelebrationTimer.current);
-          claimCelebrationTimer.current = window.setTimeout(() => setClaimCelebration(null), 1800);
-        }
-        void fetchChannelPoints();
       },
     );
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [isTwitch, currentStream?.user_id, fetchChannelPoints]);
+  }, [isTwitch, currentStream?.user_id]);
 
   // Instant chest detection: PubSub pushes claim-available the moment Twitch
   // offers the bonus. Detection only — sets availableClaim; the auto-claim
@@ -2712,36 +2609,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const pin = providerMeta.pinnedMessage;
     setPinnedMessages(pin ? [pin] : []);
   }, [isTwitch, providerMeta.pinnedMessage]);
-
-  // Listen for channel points updates from backend events. Twitch-only: points
-  // do not exist on other platforms, and without this the handlers compared a
-  // Twitch channel id against a Kick slug / YouTube UC id on every event.
-  useEffect(() => {
-    if (!isTwitch || !currentStream?.user_id) return;
-    
-    const unlistenSpent = listen<{ channel_id?: string | null; points: number; balance: number }>('channel-points-spent', (event) => {
-      Logger.debug('[ChatWidget] Points spent event:', event.payload, 'currentChannel:', currentStream.user_id);
-      // Update if channel matches OR if no channel_id in event (prediction bets sometimes don't include it)
-      if (!event.payload.channel_id || event.payload.channel_id === currentStream.user_id) {
-        Logger.debug('[ChatWidget] Updating channel points to:', event.payload.balance);
-        setChannelPoints(event.payload.balance);
-      }
-    });
-
-    const unlistenEarned = listen<{ channel_id?: string | null; points: number; balance: number }>('channel-points-earned', (event) => {
-      Logger.debug('[ChatWidget] Points earned event:', event.payload, 'currentChannel:', currentStream.user_id);
-      // Update if channel matches OR if no channel_id in event
-      if (!event.payload.channel_id || event.payload.channel_id === currentStream.user_id) {
-        Logger.debug('[ChatWidget] Updating channel points to:', event.payload.balance);
-        setChannelPoints(event.payload.balance);
-      }
-    });
-
-    return () => {
-      unlistenSpent.then(fn => fn());
-      unlistenEarned.then(fn => fn());
-    };
-  }, [currentStream?.user_id]);
 
   // Load drops data when stream changes to check if game has active drops
   useEffect(() => {
@@ -2858,6 +2725,27 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
     }
   };
+
+  // The Tools button's sections (chat/ChannelToolsMenu). Polls are Twitch's
+  // broadcaster-only create endpoints; drops need the drops plugin, since core
+  // earns natively on the watched channel with no automation control; the
+  // moderation rows are all Helix calls, so Twitch only.
+  const toolSections = channelToolSections({
+    isTwitch,
+    isModerator: !!isModerator,
+    isBroadcaster: !!isBroadcaster,
+    isVodReplay: !!isVodReplay,
+    hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
+  });
+  const dropsTool: DropsTool | null =
+    toolSections.drops && dropsCampaign
+      ? {
+          gameName: dropsCampaign.game_name,
+          collecting: isDropProgressing,
+          busy: isLoadingDrops,
+          onToggle: () => void handleToggleAutomation(),
+        }
+      : null;
 
   const getMessageId = useCallback((message: string | BackendChatMessage): string | null => {
     if (typeof message !== 'string') {
@@ -3600,7 +3488,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             return;
           }
 
-          // Unhandled slash commands (like /mods, /vips, /me) get sent directly
+          // /me is a chat line: it takes the normal send, whose own row Rust
+          // builds as an action. IRC never echoes your own line, so without
+          // that row it never showed.
+          if (messageToSend.startsWith('/me ') && currentUser) {
+            await sendMessage(messageToSend, {
+              username: currentUser.login || currentUser.username,
+              displayName: currentUser.display_name || currentUser.username,
+              userId: currentUser.user_id,
+              color: undefined,
+              badges: ''
+            });
+            return;
+          }
+
+          // Other unhandled slash commands (like /mods, /vips) get sent directly
           // through IRC without optimistic rendering. Twitch IRC responds with
           // a NOTICE message which the frontend already handles inline.
           await invoke('send_chat_message', {
@@ -5588,31 +5490,39 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       }
                     : undefined
                 }
+                // The menu's Commands section: every command, with the ones
+                // this channel does not allow you dimmed and locked.
+                commands={{
+                  commands: browsableCommands,
+                  isModerator,
+                  isBroadcaster: !!isBroadcaster,
+                  onPick: (cmd) => {
+                    setShowEmotePicker(false);
+                    insertCommand(cmd);
+                  },
+                  onInsertText: (text) => {
+                    setShowEmotePicker(false);
+                    setShowCommandAutocomplete(false);
+                    flowReplaceFromRef.current = null;
+                    setMessageInput(text);
+                    inputRef.current?.focus({ preventScroll: true });
+                    setTimeout(() => inputRef.current?.setSelectionRange(text.length, text.length), 0);
+                  },
+                }}
               />
 
-              {/* / Command Autocomplete (Dominated Width) */}
-              <CommandMenu
-                open={showCommandMenu}
-                onClose={() => setShowCommandMenu(false)}
-                commands={browsableCommands}
-                isModerator={isModerator}
-                isBroadcaster={!!isBroadcaster}
-                ignoreRef={commandMenuButtonRef}
-                onPick={(cmd) => {
-                  setShowCommandMenu(false);
-                  insertCommand(cmd);
-                }}
-                onInsertText={(text) => {
-                  setShowCommandMenu(false);
-                  setShowCommandAutocomplete(false);
-                  flowReplaceFromRef.current = null;
-                  setMessageInput(text);
-                  inputRef.current?.focus({ preventScroll: true });
-                  setTimeout(() => inputRef.current?.setSelectionRange(text.length, text.length), 0);
-                }}
-              />
+              {/* While the message cheers: what Send will spend, live, and a
+                  way to take the cheer out. Send is the yes. */}
+              {isTwitch && (
+                <CheerBar
+                  channelLogin={channelOverride?.user_login ?? currentStream?.user_login}
+                  channelId={channelOverride?.user_id ?? currentStream?.user_id}
+                  text={messageInput}
+                  onSetText={setComposerText}
+                />
+              )}
               <AnimatePresence>
-                {showCommandAutocomplete && !showCommandMenu && (
+                {showCommandAutocomplete && (
                   <CommandAutocomplete
                     commands={matchingCommands}
                     selectedIndex={commandSelectedIndex}
@@ -5629,18 +5539,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   onClose={() => setComposerKind(null)}
                 />
               )}
-              {showChannelPointsMenu && currentStream && (
-                <ChannelPointsMenu
-                  channelLogin={currentStream.user_login}
-                  channelId={currentStream.user_id}
-                  currentBalance={channelPoints}
-                  customPointsName={customPointsName}
-                  customPointsIconUrl={customPointsIconUrl}
-                  onClose={() => setShowChannelPointsMenu(false)}
-                  onBalanceUpdate={fetchChannelPoints}
-                  onEmotesChange={() => loadEmotes(currentStream.user_login, currentStream.user_id)}
-                />
-              )}
+              <AnimatePresence>
+                {showChannelPointsMenu && currentStream && walletHasAny(walletPoints, channelState?.bits) && (
+                  <WalletMenu
+                    channelLogin={currentStream.user_login}
+                    channelId={currentStream.user_id}
+                    points={walletPoints}
+                    bits={channelState?.bits}
+                    onClose={() => setShowChannelPointsMenu(false)}
+                    ignoreRef={pointsButtonRef}
+                    onPointsRefresh={fetchChannelPoints}
+                    onEmotesChange={() => loadEmotes(currentStream.user_login, currentStream.user_id)}
+                    onInsert={insertEmote}
+                  />
+                )}
+              </AnimatePresence>
               {/* Resub Notification Banner - shows when user has a shareable resub */}
               {resubNotification && !resubDismissed && currentStream && (
                 <ResubNotificationBanner
@@ -5759,161 +5672,55 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {/* In a narrow chat column the tools compress in place so the
                   field keeps a usable width (utils/composerNarrow.ts). */}
               <div ref={trackComposerWidth} className="sn-composer-row flex items-center gap-2 min-w-0">
-                {/* Channel Points button. Opens the rewards menu, balance on
-                    hover. While the watched channel has a bonus chest ready
-                    and auto-claim is off, it becomes the claim control.
-                    Stays visible while a chest is waiting even if the balance
-                    is hidden, so hiding the number never costs you points. */}
-                {(showPointsBalance || (availableClaim && !autoClaimWatching)) && (
-                <div
-                  ref={channelPointsRef}
-                  className="relative flex-shrink-0 self-center flex items-center"
-                  onMouseEnter={() => setChannelPointsHovered(true)}
-                  onMouseLeave={() => setChannelPointsHovered(false)}
-                >
-                  {availableClaim && !autoClaimWatching ? (
-                    <Tooltip content="Claim bonus points" side="top">
-                      <button
-                        onClick={() => claimWatchedChest(availableClaim.id, availableClaim.channelId)}
-                        disabled={claimingChest}
-                        aria-label="Claim channel points bonus"
-                        className="sn-composer-tool chest-attention flex items-center justify-center w-9 h-9 text-accent-neon transition-opacity duration-200 disabled:opacity-50"
-                      >
-                        <svg width={18} height={18} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                          <path fillRule="evenodd" clipRule="evenodd" d="M2 22v-9l2.417-4.029A2 2 0 0 1 6.132 8h11.736a2 2 0 0 1 1.715.971L22 13v9H2Zm18-2v-5h-7v2h-2v-2H4v5h16Zm-2.132-10 1.8 3H4.332l1.8-3h11.736Z" />
-                        </svg>
-                      </button>
-                    </Tooltip>
-                  ) : (
-                    <button
-                      onClick={() => setShowChannelPointsMenu(!showChannelPointsMenu)}
-                      className={`sn-composer-tool group flex items-center justify-center h-9 gap-1.5 transition-all duration-200 ${pointsBalanceInline && channelPoints !== null ? 'px-1.5' : 'w-9'} ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
-                    >
-                      {customPointsIconUrl ? (
-                        <img
-                          src={customPointsIconUrl}
-                          alt={customPointsName || "Channel Points"}
-                          className="w-[18px] h-[18px] transition-all duration-200 group-hover:drop-shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent-neon)_85%,transparent)]"
-                        />
-                      ) : (
-                        <ChannelPointsIcon size={18} className="transition-all duration-200 group-hover:drop-shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent-neon)_85%,transparent)]" />
-                      )}
-                      {/* Short form beside the icon; the hover bubble keeps the exact number. */}
-                      {pointsBalanceInline && channelPoints !== null && (
-                        <span className="sn-composer-points-count text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap">
-                          {formatShortCount(channelPoints)}
-                        </span>
-                      )}
-                    </button>
-                  )}
-                  {/* "+N" pop after a chest collect, manual or auto */}
-                  <AnimatePresence>
-                    {claimCelebration !== null && (
-                      <motion.span
-                        initial={{ opacity: 0, x: '-50%', y: 4, scale: 0.85 }}
-                        animate={{ opacity: 1, x: '-50%', y: -16, scale: 1 }}
-                        exit={{ opacity: 0, x: '-50%', y: -24 }}
-                        transition={{ duration: 0.8, ease: 'easeOut' }}
-                        className="absolute left-1/2 top-0 text-[11px] font-semibold text-accent-neon pointer-events-none whitespace-nowrap select-none"
-                      >
-                        +{claimCelebration.toLocaleString()}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                  {/* Points tooltip - fixed position to escape overflow-hidden parents */}
-                  {channelPointsHovered && !showChannelPointsMenu && !(availableClaim && !autoClaimWatching) && (
-                    <ChannelPointsTooltip
-                      anchorRef={channelPointsRef}
-                      customPointsIconUrl={customPointsIconUrl}
-                      customPointsName={customPointsName}
-                      isLoadingChannelPoints={isLoadingChannelPoints}
-                      channelPoints={channelPoints}
-                    />
-                  )}
-                </div>
+                {/* The channel wallet: points and bits, balances on the
+                    button or on hover. While the watched channel has a bonus
+                    chest ready and auto-collect is off, it becomes the claim
+                    control. Stays visible while a chest is waiting even if the
+                    balance is hidden, so hiding the number never costs you
+                    points. */}
+                {currentStream && (walletHasAny(walletPoints, channelState?.bits) || chestWaiting) && (showPointsBalance || chestWaiting) && (
+                  <WalletFace
+                    key={currentStream.user_login}
+                    points={walletPoints}
+                    bits={channelState?.bits}
+                    mode={pointsBalanceInline ? 'always' : 'hover'}
+                    gains={walletGains}
+                    open={showChannelPointsMenu}
+                    onToggle={() => setShowChannelPointsMenu(!showChannelPointsMenu)}
+                    chest={
+                      availableClaim && chestWaiting
+                        ? { onClaim: () => claimWatchedChest(availableClaim.id, availableClaim.channelId), claiming: claimingChest }
+                        : null
+                    }
+                    buttonRef={pointsButtonRef}
+                  />
                 )}
-                {/* Poll / prediction builder. Twitch scopes both create
-                    endpoints to the channel owner, so this only appears on
-                    your own channel. */}
-                {isBroadcaster && isTwitch && !isVodReplay && (
-                  <Tooltip content="Start a poll or prediction" side="top">
-                    <button
-                      onClick={() => setComposerKind((k) => (k ? null : 'poll'))}
-                      className={`sn-composer-tool flex items-center justify-center w-9 h-9 flex-shrink-0 self-center transition-colors duration-200 ${
-                        composerKind ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'
-                      }`}
-                      aria-label="Start a poll or prediction"
-                    >
-                      <BarChart3 size={18} />
-                    </button>
-                  </Tooltip>
-                )}
-                {/* Drops automation button: only when a drops automation plugin is installed
-                    and the current game has active drops. Without the plugin, core
-                    earns natively on the watched channel with no automation control. */}
-                {dropsCampaign && externalDropsProvider && (
-                  <Tooltip content={isDropProgressing ? `Stop collecting drops for ${dropsCampaign.game_name}` : `Start collecting drops for ${dropsCampaign.game_name}`} side="top">
-                  <button
-                    onClick={handleToggleAutomation}
-                    disabled={isLoadingDrops}
-                    className={`sn-composer-tool group flex-shrink-0 flex items-center justify-center self-center w-9 h-9 transition-all duration-200 ${isDropProgressing
-                      ? 'text-green-400 hover:text-red-400'
-                      : 'text-textSecondary hover:text-accent'
-                      }`}
-                  >
-                    <Pickaxe size={18} className={`transition-all duration-200 group-hover:drop-shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent-neon)_85%,transparent)] ${isDropProgressing ? 'animate-pulse' : ''}`} />
-                  </button>
-                  </Tooltip>
-                )}
-                {/* Moderator Dashboard */}
-                {isModerator && currentStream && (
-                  <div className="sn-composer-tool-wrap flex-shrink-0 self-center z-20">
-                    {/* currentStream is synthesized from channelOverride in a
-                        MultiChat pane, so these are this pane's channel, not
-                        the main window's. */}
-                    <ModeratorMenu
-                      broadcasterId={currentStream.user_id}
-                      channelLogin={currentStream.user_login}
-                      isBroadcaster={!!isBroadcaster}
-                      roomState={roomState}
-                    />
-                  </div>
+                {/* Tools: what you can do to the channel (drops, polls and
+                    predictions, chat modes, moderation) behind one button that
+                    shows only when something applies here. currentStream is
+                    synthesized from channelOverride in a MultiChat pane, so the
+                    ids are this pane's channel, not the main window's. */}
+                {currentStream && toolSections.any && (
+                  <ChannelToolsMenu
+                    broadcasterId={currentStream.user_id}
+                    channelLogin={currentStream.user_login}
+                    isBroadcaster={!!isBroadcaster}
+                    canModerate={toolSections.moderate}
+                    canRunPolls={toolSections.polls}
+                    onStartPoll={setComposerKind}
+                    pollBuilderOpen={!!composerKind}
+                    drops={dropsTool}
+                    roomState={roomState}
+                  />
                 )}
                 {/* Input container with emoji button inset on the left and
-                    the room's chat modes inset on the right. */}
-                <div
-                  className="sn-composer-field relative flex-1 min-w-0 flex items-center"
-                  data-room-modes={roomModes ? '' : undefined}
-                  style={roomModesFieldStyle(roomModes)}
-                >
-                  {/* Command menu button, first inset on the left */}
-                  {showCommandButton && (
-                  <Tooltip content={showCommandMenu ? 'Close commands' : 'Commands'} side="top">
-                  <button
-                    ref={commandMenuButtonRef}
-                    type="button"
-                    aria-label="Chat commands"
-                    aria-expanded={showCommandMenu}
-                    onClick={() => {
-                      const next = !showCommandMenu;
-                      if (next) setShowEmotePicker(false);
-                      setShowCommandMenu(next);
-                    }}
-                    className="group absolute left-1 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-7 h-7 text-textSecondary hover:text-textPrimary transition-colors duration-200"
-                  >
-                    <SquareSlash
-                      size={16}
-                      className={`transition-all duration-200 group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)] ${showCommandMenu ? 'text-accent' : ''}`}
-                    />
-                  </button>
-                  </Tooltip>
-                  )}
+                    the room's chat-mode chip inset on the right. */}
+                <div className="sn-composer-field relative flex-1 min-w-0 flex items-center">
                   {/* Emoji button — inset left inside the input */}
                   {showEmoteButton && (
-                  <Tooltip content={showEmotePicker ? "Close Emotes" : "Emotes"} side="top">
+                  <Tooltip content={showEmotePicker ? 'Close' : isTwitch ? 'Emotes, GIFs and commands' : 'Emotes and commands'} side="top">
                   <button
                     onClick={() => {
-                      if (!showEmotePicker) setShowCommandMenu(false);
                       // Twitch only. A non-Twitch pane legitimately has an empty
                       // `twitch` slot, so without this gate every picker open on
                       // a Kick or YouTube pane refetched the MAIN window's Twitch
@@ -5928,7 +5735,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setShowEmotePicker(!showEmotePicker);
                     }}
                     onMouseLeave={smiley.cycleEmoteSmiley}
-                    className={`group absolute ${showCommandButton ? 'left-8' : 'left-1'} top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-7 h-7 text-textSecondary hover:text-textPrimary transition-colors duration-200`}
+                    className={`group absolute left-1 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-7 h-7 text-textSecondary hover:text-textPrimary transition-colors duration-200`}
                   >
                     {showEmotePicker ? (
                       <svg className="w-4 h-4 transition-all duration-200 text-accent group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -5949,7 +5756,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   )}
                   {/* Send-as account picker, just right of the emote button */}
                   {showSendAsPicker && (
-                    <div className={`absolute ${showCommandButton ? 'left-[60px]' : 'left-8'} top-1/2 -translate-y-1/2 z-10`}>
+                    <div className="absolute left-8 top-1/2 -translate-y-1/2 z-10">
                       <SendAsPicker />
                     </div>
                   )}
@@ -6112,9 +5919,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       if (emoteList) closeEmoteList();
                     }}
                   />
-                  {/* The room's chat modes, at the field's right edge. */}
-                  {roomModes && <RoomModeIndicator view={roomModes} />}
-                  {/* Length label, bottom-right of the field, clear of the mode icons. */}
+                  {/* The room's chat modes as one chip at the field's right edge. */}
+                  {roomModes && !roomModesAsPrompt && <RoomModeIndicator view={roomModes} />}
+                  {/* Length label, bottom-right of the field, clear of the chip. */}
                   {messageInput.length > 0 && (
                     <span
                       className="pointer-events-none absolute bottom-1 z-10 flex items-center text-[10px] tabular-nums text-textSecondary/70"
@@ -6147,13 +5954,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       ? "Share Watch Streak"
                       : slowRemaining > 0
                         ? `Slow mode: you can send again in ${slowRemaining}s`
-                        : "Send message"
+                        : composerCheer
+                          ? `Cheer ${composerCheer.total.toLocaleString()} ${composerCheer.total === 1 ? 'bit' : 'bits'}`
+                          : "Send message"
                   }
                   side="top"
                 >
                 <button
                   onClick={() => handleSendMessage()}
-                  disabled={(!messageInput.trim() && !isWatchStreakMode && !isResubMode) || isInputDisabled} 
+                  aria-label={composerCheer ? `Cheer ${composerCheer.total.toLocaleString()} bits` : undefined}
+                  disabled={(!messageInput.trim() && !isWatchStreakMode && !isResubMode) || isInputDisabled || (!!composerCheer && composerCheer.problems.length > 0)} 
                   className={`sn-composer-tool flex-shrink-0 flex items-center justify-center self-center w-9 h-9 text-white rounded transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                     isWatchStreakMode 
                       ? 'bg-amber-500 hover:bg-amber-400 shadow-[0_0_12px_color-mix(in_srgb,var(--color-warning)_30%,transparent)]'
@@ -6166,6 +5976,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     <span className="text-[13px] font-semibold tabular-nums leading-none text-textPrimary" aria-label={`Send again in ${slowRemaining} seconds`}>
                       {slowRemaining}
                     </span>
+                  ) : composerCheer?.icon_url && !isWatchStreakMode ? (
+                    // The message cheers: Send spends, so it wears the gem.
+                    <img src={composerCheer.icon_url} alt="" className="h-5 w-5 object-contain" />
                   ) : (
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                   )}

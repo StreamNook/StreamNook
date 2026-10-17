@@ -2633,15 +2633,11 @@ impl TwitchService {
         Ok(())
     }
 
-    /// Fetch pinned chat messages for a channel via Twitch GQL (GetPinnedChat)
-    /// Hash captured live from Twitch web client on 2026-03-25
+    /// Fetch pinned chat messages for a channel via Twitch GQL (GetPinnedChat).
+    /// Pins are public: the read goes out anonymously, so they show for a
+    /// viewer without the Drops sign-in, live or offline.
     pub async fn get_pinned_chat_messages(channel_id: &str) -> Result<Vec<serde_json::Value>> {
-        use crate::services::drops_auth_service::DropsAuthService;
-
-        let token = DropsAuthService::get_token().await?;
         let client = crate::services::http::client().clone();
-
-        const GQL_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
 
         let payload = serde_json::json!({
             "operationName": "GetPinnedChat",
@@ -2662,30 +2658,7 @@ impl TwitchService {
             channel_id
         );
 
-        let response = client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-Id", GQL_CLIENT_ID)
-            .header(AUTHORIZATION, format!("OAuth {}", token))
-            .header(ACCEPT, "*/*")
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!(
-                "GQL GetPinnedChat failed (HTTP {}): {}",
-                status,
-                error_text
-            ));
-        }
-
-        let body: serde_json::Value = response.json().await?;
-
-        if let Some(errors) = body.get("errors") {
-            return Err(anyhow::anyhow!("GQL GetPinnedChat errors: {:?}", errors));
-        }
+        let body = Self::gql_public_read(payload).await?;
 
         // Parse pinned messages and collect unique user IDs for avatar lookup
         let mut raw_pins = Vec::new();
@@ -3862,7 +3835,7 @@ impl TwitchService {
     /// through it), so pagination works without minting a Client-Integrity token.
     /// The device/session ids keep us out of the harsh anonymous rate-limit
     /// bucket.
-    async fn gql_public_read(body: serde_json::Value) -> Result<serde_json::Value> {
+    pub(crate) async fn gql_public_read(body: serde_json::Value) -> Result<serde_json::Value> {
         let client = crate::services::http::client().clone();
         let device_id = uuid::Uuid::new_v4().to_string().replace('-', "");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "");
@@ -4740,12 +4713,7 @@ impl TwitchService {
                 .join(", ");
             let selections = (0..chunk.len())
                 .map(|i| {
-                    format!(
-                        "v{i}: video(id: $i{i}) {{ id title lengthSeconds status \
-                         previewThumbnailURL(width: 440, height: 248) \
-                         game {{ displayName }} \
-                         owner {{ id displayName profileImageURL(width: 70) roles {{ isPartner }} }} }}"
-                    )
+                    format!("v{i}: video(id: $i{i}) {{ {VOD_CARD_FIELDS} }}")
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -4769,52 +4737,7 @@ impl TwitchService {
                 let node = resp.pointer(&format!("/data/v{i}"));
                 match node.filter(|v| !v.is_null()) {
                     None => gone.push(id.clone()),
-                    Some(v) => {
-                        let status = v
-                            .get("status")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        found.push(crate::services::vod_progress_service::VodRefresh {
-                            video_id: id.clone(),
-                            title: v
-                                .get("title")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            channel_name: v
-                                .pointer("/owner/displayName")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            thumbnail_url: v
-                                .get("previewThumbnailURL")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            length_secs: v
-                                .get("lengthSeconds")
-                                .and_then(|n| n.as_f64())
-                                .unwrap_or(0.0),
-                            finished: status.eq_ignore_ascii_case("RECORDED"),
-                            profile_image_url: v
-                                .pointer("/owner/profileImageURL")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
-                            game_name: v
-                                .pointer("/game/displayName")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            channel_id: v
-                                .pointer("/owner/id")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                        });
-                    }
+                    Some(v) => found.push(vod_refresh_from_node(id, v)),
                 }
             }
         }
@@ -6780,6 +6703,41 @@ impl TwitchService {
         }
 
         Ok(())
+    }
+}
+
+/// The `Video` fields a Continue Watching card is built from. Shared by the
+/// by-id hydrate and the viewing-history sync so both read cards one way.
+pub(crate) const VOD_CARD_FIELDS: &str = "id title lengthSeconds status \
+     previewThumbnailURL(width: 440, height: 248) \
+     game { displayName } \
+     owner { id login displayName profileImageURL(width: 70) roles { isPartner } }";
+
+/// One `Video` node selected with `VOD_CARD_FIELDS`, as a card refresh.
+pub(crate) fn vod_refresh_from_node(
+    id: &str,
+    v: &serde_json::Value,
+) -> crate::services::vod_progress_service::VodRefresh {
+    let text = |ptr: &str| {
+        v.pointer(ptr)
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    crate::services::vod_progress_service::VodRefresh {
+        video_id: id.to_string(),
+        title: text("/title"),
+        channel_name: text("/owner/displayName"),
+        thumbnail_url: text("/previewThumbnailURL"),
+        length_secs: v
+            .get("lengthSeconds")
+            .and_then(|n| n.as_f64())
+            .unwrap_or(0.0),
+        finished: text("/status").eq_ignore_ascii_case("RECORDED"),
+        profile_image_url: text("/owner/profileImageURL"),
+        partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
+        game_name: text("/game/displayName"),
+        channel_id: text("/owner/id"),
     }
 }
 

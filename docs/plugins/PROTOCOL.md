@@ -93,7 +93,7 @@ Shared shape, the channel object:
 | `on_stream_start` | `{ "channel": <channel> }` | The user started playback of a channel in the app |
 | `on_stream_stop` | `{ "channel_id": "12345" }` | Playback of that channel stopped |
 | `on_channel_change` | `{ "channel_id": "12345", "login": "somechannel" }` | The active on-screen channel changed (channel switch, or focus change in the multi-stream grid) |
-| `on_watch_tick` | `{ "active_channel_id": "12345", "ts": "<RFC 3339>" }` | Periodic tick, nominally every 60 seconds while the app runs. `active_channel_id` is null when nothing is playing. Plugins must not assume exact cadence |
+| `on_watch_tick` | `{ "active_channel_id": "12345", "ts": "<RFC 3339>", "credential_epoch": 3 }` | Periodic tick, nominally every 60 seconds while the app runs. `active_channel_id` is null when nothing is playing. `credential_epoch` changes whenever the viewer signs in or out of drops: a plugin holding a credential from `get_credential` drops it and asks again (absent on older hosts). Plugins must not assume exact cadence |
 | `on_followed_live` | `{ "channels": [<channel>...] }` | The set of live followed channels, sent after startup and whenever the host refreshes it |
 | `on_chat_message` | `{ "channel": "somechannel", "message": <chat message> }` | A chat line arrived in a channel the app has open, or was sent from the app. One event per message; delivery starts once the plugin is running and a chat connection exists, with no history replay |
 | `on_settings_change` | `{ "keys": ["..."] }` | Reserved. Host settings keys the host chooses to expose changed. No keys are guaranteed in v1 |

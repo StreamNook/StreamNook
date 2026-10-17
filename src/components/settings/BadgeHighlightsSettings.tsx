@@ -129,6 +129,18 @@ const BadgeHighlightsSettings = () => {
                 <Trash2 size={14} />
               </button>
             </div>
+
+            <div className="flex items-center gap-4 pl-11 pt-2 text-xs text-textSecondary">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={b.hold === true}
+                  onChange={(e) => patchBadge(b.id, { hold: e.target.checked })}
+                  className="accent-accent"
+                />
+                Keep tinted
+              </label>
+            </div>
           </div>
         ))}
 

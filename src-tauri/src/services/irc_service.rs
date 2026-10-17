@@ -115,21 +115,35 @@ static PROCESS_EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
 pub static TIMESTAMP_24H: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LAST_IRC_READ_ELAPSED_MS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+// Wall-clock twin of the last read, used only to spot suspension: across a
+// sleep the wall clock jumps ahead of the monotonic one.
+static LAST_IRC_READ_WALL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 // Ring of recent connection-lifecycle events, pullable from a packaged build
 // (which has no stderr) via the get_chat_lifecycle_log command.
 static LIFECYCLE_LOG: OnceLock<std::sync::Mutex<VecDeque<String>>> = OnceLock::new();
 const LIFECYCLE_LOG_CAP: usize = 100;
 
-// We PING every 30s and the server answers, so a healthy link never goes 75s
-// without a completed read. Reference clients ping every 5s, so Twitch has
-// ample tolerance for this cadence.
-const IRC_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-const IRC_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+// We PING only when the link has been quiet for IRC_PING_IDLE_MS (a busy chat
+// proves itself), checked every IRC_PING_CHECK. The server answers, so a
+// healthy link never goes IRC_READ_TIMEOUT without a completed read, and a
+// network that silently cuts the connection costs about 30 s of chat, which
+// the reconnect backfill then fills. Reference clients ping every 5s, so
+// Twitch has ample tolerance for this cadence.
+const IRC_PING_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
+const IRC_PING_IDLE_MS: u64 = 15_000;
+const IRC_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const HANDSHAKE_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 // Read timeout plus slack: past this the frontend must be allowed to see
 // silence so its own watchdog can act.
-const HEARTBEAT_SUPPRESS_AFTER_MS: u64 = 90_000;
+const HEARTBEAT_SUPPRESS_AFTER_MS: u64 = 45_000;
+// A session that ends with nothing read for this long went silent before it
+// ended: at least one idle PING went unanswered. That is evidence against the
+// transport (see irc_transport's stall rule), unless the machine slept.
+const STALL_READ_AGE_MS: u64 = 20_000;
+// How far the read clock may lag the timer or the wall clock before the gap is
+// put down to suspension (laptop sleep, a phone freezing the app) instead.
+const SUSPEND_SLACK_MS: u64 = 5_000;
 // After a clean drop, reconnect almost immediately: a read-liveness timeout is
 // our own local detection (no server pressure, so zero wait; on a phone this
 // fires the moment the app resumes from suspension and the user is staring at
@@ -327,6 +341,8 @@ async fn confirm_join(key: &str) {
     let mut t = get_join_tracker().lock().await;
     if t.confirm(key) {
         record_lifecycle(&format!("JOIN #{} confirmed", key));
+        // A reward that asks for text reaches chat with only its id.
+        crate::services::channel_rewards::note_chat_joined(key);
     }
     refresh_join_hint(&t);
 }
@@ -525,12 +541,76 @@ fn mono_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn mark_irc_read() {
     LAST_IRC_READ_ELAPSED_MS.store(mono_ms(), std::sync::atomic::Ordering::Relaxed);
+    LAST_IRC_READ_WALL_MS.store(wall_ms(), std::sync::atomic::Ordering::Relaxed);
 }
 
 fn irc_read_age_ms() -> u64 {
     mono_ms().saturating_sub(LAST_IRC_READ_ELAPSED_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn irc_read_wall_age_ms() -> u64 {
+    wall_ms().saturating_sub(LAST_IRC_READ_WALL_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Did a signed-in session go silent before it ended, with the machine awake?
+/// `read_age_ms` is the monotonic time since the last read, `wall_age_ms` the
+/// wall-clock time. A timer can only see more silence than the read timeout if
+/// it fired late, and the wall clock only runs ahead of the monotonic one
+/// across a sleep: either way the gap is suspension, not the network.
+fn is_silent_session_end(reason: &str, read_age_ms: u64, wall_age_ms: u64) -> bool {
+    if matches!(reason, "server RECONNECT" | "handler stall") {
+        return false;
+    }
+    if read_age_ms < STALL_READ_AGE_MS {
+        return false;
+    }
+    let timeout_ms = IRC_READ_TIMEOUT.as_millis() as u64;
+    if read_age_ms > timeout_ms + SUSPEND_SLACK_MS {
+        return false;
+    }
+    wall_age_ms <= read_age_ms + SUSPEND_SLACK_MS
+}
+
+/// Development-only fault injection for the stall path:
+/// `STREAMNOOK_IRC_FAULT=deafen:<secs>[:irc|websocket]` makes every session
+/// (on that transport, or any) throw away everything it reads from `<secs>`
+/// after sign-in, the way a network that blackholes a connection would.
+/// Compiled out of release builds.
+fn fault_deafen_after(transport: IrcTransport) -> Option<std::time::Duration> {
+    #[cfg(debug_assertions)]
+    {
+        let spec = std::env::var("STREAMNOOK_IRC_FAULT").ok()?;
+        parse_deafen_fault(&spec, transport)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = transport;
+        None
+    }
+}
+
+#[cfg(debug_assertions)]
+fn parse_deafen_fault(spec: &str, transport: IrcTransport) -> Option<std::time::Duration> {
+    let mut parts = spec.trim().split(':');
+    if parts.next()? != "deafen" {
+        return None;
+    }
+    let secs: u64 = parts.next()?.parse().ok()?;
+    match parts.next() {
+        None => {}
+        Some(t) if t == transport.label() => {}
+        Some(_) => return None,
+    }
+    Some(std::time::Duration::from_secs(secs))
 }
 
 // 2s, 4s, 8s, 16s, 32s, 60s cap for transient failures; flat 300s when
@@ -594,6 +674,12 @@ pub fn lifecycle_snapshot() -> Vec<String> {
 enum SessionError {
     Auth(anyhow::Error),
     Transient(anyhow::Error),
+}
+
+/// How an established session ended.
+struct SessionEnd {
+    reason: &'static str,
+    transport: IrcTransport,
 }
 
 impl From<std::io::Error> for SessionError {
@@ -1182,12 +1268,55 @@ struct ParseCtx<'a> {
     no_cheermotes: bool,
 }
 
-/// One cheermote tier from Helix: bits threshold, hex color, animated dark art.
-#[derive(Debug, Clone)]
+/// One cheermote tier from Helix: bits threshold, hex color, animated dark art,
+/// plus what the bits picker needs about its cheermote.
+#[derive(Debug, Clone, Default)]
 pub struct CheermoteTier {
     pub min_bits: u32,
     pub color: String,
     pub url: String,
+    /// The cheermote's prefix as Twitch writes it ("Cheer", "Corgo"); the set
+    /// is keyed by the lowercase form.
+    pub prefix: String,
+    /// The signed-in viewer can cheer with this tier. False for a tier Twitch
+    /// marks `can_cheer: false` and for every tier of a `display_only`
+    /// cheermote: those still render when someone with access used them.
+    pub can_cheer: bool,
+    /// Twitch's display order for the cheermote.
+    pub order: u32,
+    /// The channel's own cheermote rather than a global one.
+    pub custom: bool,
+}
+
+/// The channel's cached cheermote set (`key` = lowercase login), if Helix has
+/// answered for it since the channel was joined.
+pub fn channel_cheermote_set(key: &str) -> Option<Arc<CheermoteSet>> {
+    get_channel_cheermotes().read().ok()?.get(key).cloned()
+}
+
+/// A word that is a cheer in `set`: the longest prefix followed only by
+/// digits, with a nonzero amount. Returns the matched tiers and the amount.
+pub fn match_cheermote<'a>(word: &str, set: &'a CheermoteSet) -> Option<(&'a str, u32, &'a [CheermoteTier])> {
+    if !word.ends_with(|c: char| c.is_ascii_digit()) || !word.chars().any(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let word_lower = word.to_lowercase();
+    let mut best: Option<(&str, &Vec<CheermoteTier>)> = None;
+    for (prefix, tiers) in set {
+        if !word_lower.starts_with(prefix.as_str()) {
+            continue;
+        }
+        let rest = &word_lower[prefix.len()..];
+        if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if best.is_none_or(|(b, _)| prefix.len() > b.len()) {
+            best = Some((prefix, tiers));
+        }
+    }
+    let (prefix, tiers) = best?;
+    let bits: u32 = word_lower[prefix.len()..].parse().ok()?;
+    (bits > 0).then_some((prefix, bits, tiers.as_slice()))
 }
 
 /// Lowercase prefix -> tiers ascending by `min_bits`.
@@ -1610,6 +1739,21 @@ pub async fn wait_for_channel_emotes(channel: &str, budget: std::time::Duration)
 /// 25 s budget.
 const HISTORY_RESTAMP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// A reward that asks for text reaches chat as an ordinary message tagged only
+/// with its id. Name it: `sn-redeemed-title` and `sn-redeemed-cost` give the
+/// row "Redeemed <title>" and the cost. These are not the `sn-reward-*` tags of
+/// a no-text redemption row, which the stream overlay draws as an event card
+/// with no message.
+fn stamp_reward_name(tags: &mut HashMap<String, String>, raw: &str) {
+    let Some(reward_id) = tags.get("custom-reward-id").filter(|id| !id.is_empty()).cloned() else { return };
+    let Some(channel) = extract_channel_from_irc_line(raw) else { return };
+    let Some(name) = crate::services::channel_rewards::reward_name(&channel, &reward_id) else { return };
+    tags.insert("sn-redeemed-title".into(), name.title);
+    if name.cost > 0 {
+        tags.insert("sn-redeemed-cost".into(), name.cost.to_string());
+    }
+}
+
 // Extract the channel name (lowercase, no leading #) from a raw IRC line.
 // Used by ROOMSTATE/USERSTATE/CLEARMSG/CLEARCHAT parsing to key per-channel
 // caches and tag synthetic WS messages.
@@ -1844,6 +1988,7 @@ impl IrcService {
             let token = match TwitchService::get_token().await {
                 Ok(t) => t,
                 Err(e) => {
+                    irc_transport::note_connect_failed();
                     consecutive_failures = consecutive_failures.saturating_add(1);
                     let d = reconnect_delay(consecutive_failures, false);
                     record_lifecycle(&format!(
@@ -1873,6 +2018,10 @@ impl IrcService {
             )
             .await;
             let session_lived_ms = mono_ms().saturating_sub(session_started);
+            // Read before any await below, while they still describe how the
+            // session ended.
+            let read_age_ms = irc_read_age_ms();
+            let read_wall_age_ms = irc_read_wall_age_ms();
 
             // Between sessions: fail sends/JOINs fast instead of writing into
             // a dead socket, retire this session's keepalive tasks, and drop
@@ -1883,13 +2032,13 @@ impl IrcService {
             tracker_clear().await;
 
             let delay = match outcome {
-                Ok(reason) => {
+                Ok(SessionEnd { reason, transport }) => {
                     // An Ok return proves IRC_CONNECTED went out this attempt
                     // (irc_session's contract), so this loss is a real one.
                     EVER_ESTABLISHED.store(true, std::sync::atomic::Ordering::Relaxed);
                     send_to_bridge("IRC_RECONNECTING".to_string(), false).await;
                     crate::services::chat_outage::lost();
-                    if session_lived_ms < SESSION_FLAP_THRESHOLD_MS {
+                    let delay = if session_lived_ms < SESSION_FLAP_THRESHOLD_MS {
                         consecutive_failures = consecutive_failures.saturating_add(1);
                         let d = reconnect_delay(consecutive_failures, false);
                         record_lifecycle(&format!(
@@ -1907,14 +2056,20 @@ impl IrcService {
                             RECONNECT_DELAY_AFTER_DROP
                         };
                         record_lifecycle(&format!(
-                            "session ended: {}; reconnecting in {}s",
+                            "session ended: {} ({}s since the last read); reconnecting in {}s",
                             reason,
+                            read_age_ms / 1000,
                             d.as_secs()
                         ));
                         d
+                    };
+                    if is_silent_session_end(reason, read_age_ms, read_wall_age_ms) {
+                        irc_transport::note_session_deaf(transport);
                     }
+                    delay
                 }
                 Err(SessionError::Transient(e)) => {
+                    irc_transport::note_connect_failed();
                     consecutive_failures = consecutive_failures.saturating_add(1);
                     let d = reconnect_delay(consecutive_failures, false);
                     record_lifecycle(&format!(
@@ -1955,7 +2110,7 @@ impl IrcService {
         initial_channel: &str,
         layout_service: &Arc<LayoutService>,
         emote_service: &Arc<tokio::sync::RwLock<EmoteService>>,
-    ) -> std::result::Result<&'static str, SessionError> {
+    ) -> std::result::Result<SessionEnd, SessionError> {
         debug!("[IRC Chat] Connecting to Twitch IRC...");
 
         let connect_started = std::time::Instant::now();
@@ -1963,17 +2118,7 @@ impl IrcService {
             .await
             .map_err(|reason| SessionError::Transient(anyhow::anyhow!("{}", reason)))?;
         let transport = connected.transport;
-        if transport == IrcTransport::WebSocket {
-            record_lifecycle(&format!(
-                "connected via websocket in {}ms{}",
-                connect_started.elapsed().as_millis(),
-                connected
-                    .tcp_failed
-                    .as_deref()
-                    .map(|e| format!(" (tcp 6667 failed: {})", e))
-                    .unwrap_or_default()
-            ));
-        }
+        let other_failed = connected.other_failed;
         let mut reader = connected.reader;
         // The global IRC_WRITER is published only after auth succeeds, so
         // ensure_joined/send_message can never write into an unauthenticated
@@ -2075,7 +2220,16 @@ impl IrcService {
 
         *get_irc_writer().lock().await = Some(writer.clone());
         mark_irc_read();
-        record_lifecycle("authenticated");
+        record_lifecycle(&format!(
+            "authenticated via {} in {}ms{}",
+            transport.describe(),
+            connect_started.elapsed().as_millis(),
+            other_failed
+                .as_deref()
+                .map(|e| format!(" ({} failed: {})", transport.other().describe(), e))
+                .unwrap_or_default()
+        ));
+        let authenticated_at = tokio::time::Instant::now();
 
         // Re-JOIN every tracked channel, not just the initial one. `join_channel`
         // will not re-issue a JOIN while a channel's refcount is above zero, so
@@ -2205,14 +2359,22 @@ impl IrcService {
             }
         }
 
-        // Start ping task to keep IRC connection alive. The cadence also
-        // bounds dead-connection detection: every PING elicits a PONG read,
-        // so the read timeout can sit just above this interval.
+        // Start ping task to keep IRC connection alive. It PINGs only once the
+        // link has been quiet for IRC_PING_IDLE_MS, and every PING elicits a
+        // PONG read, so the read timeout bounds dead-connection detection.
         let writer_clone = writer.clone();
         let ping_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(IRC_PING_INTERVAL);
+            let mut interval = tokio::time::interval(IRC_PING_CHECK);
+            let mut last_ping_ms: Option<u64> = None;
             loop {
                 interval.tick().await;
+                let now = mono_ms();
+                let pinged_recently =
+                    last_ping_ms.is_some_and(|t| now.saturating_sub(t) < IRC_PING_IDLE_MS);
+                if irc_read_age_ms() < IRC_PING_IDLE_MS || pinged_recently {
+                    continue;
+                }
+                last_ping_ms = Some(now);
                 let mut w = writer_clone.lock().await;
                 if w.send_line("PING :tmi.twitch.tv\r\n").await.is_err() {
                     break;
@@ -2308,13 +2470,20 @@ impl IrcService {
         *get_irc_heartbeat_abort().lock().await = Some(heartbeat_handle.abort_handle());
         *get_irc_joinwatch_abort().lock().await = Some(joinwatch_handle.abort_handle());
 
-        // Listen for messages. The timeout is the half-open detector: we PING
-        // every 30s and the server answers, so 75s without a completed read
-        // means the socket is dead even if the OS never reports it.
+        // Listen for messages. The deadline is the half-open detector: we PING
+        // a quiet link and the server answers, so IRC_READ_TIMEOUT without a
+        // completed read means the socket is dead even if the OS never reports
+        // it. It runs from the last ACCEPTED read, so the fault injection's
+        // discarded lines count as silence, exactly like a blackhole.
+        let deafen_after = fault_deafen_after(transport);
+        let mut deafened = false;
+        let mut last_accepted = tokio::time::Instant::now();
         loop {
             line.clear();
+            let deadline = last_accepted + IRC_READ_TIMEOUT;
+            let deaf = deafen_after.is_some_and(|d| authenticated_at.elapsed() >= d);
             let end_reason: Option<&'static str> =
-                match tokio::time::timeout(IRC_READ_TIMEOUT, reader.read_line(&mut line)).await {
+                match tokio::time::timeout_at(deadline, reader.read_line(&mut line)).await {
                     Err(_) => {
                         warn!(
                             "[IRC Chat] no IRC traffic for {}s, connection presumed dead",
@@ -2323,7 +2492,18 @@ impl IrcService {
                         Some("read liveness timeout")
                     }
                     Ok(Ok(0)) => Some("closed by server"),
+                    Ok(Ok(_)) if deaf => {
+                        if !deafened {
+                            deafened = true;
+                            record_lifecycle(&format!(
+                                "fault injection: discarding everything read on {} from now on",
+                                transport.describe()
+                            ));
+                        }
+                        None
+                    }
                     Ok(Ok(_)) => {
+                        last_accepted = tokio::time::Instant::now();
                         mark_irc_read();
                         if is_server_reconnect(&line) {
                             Some("server RECONNECT")
@@ -2369,7 +2549,7 @@ impl IrcService {
                 };
 
             if let Some(reason) = end_reason {
-                return Ok(reason);
+                return Ok(SessionEnd { reason, transport });
             }
         }
     }
@@ -2464,6 +2644,12 @@ impl IrcService {
                         verdict.reply_to_me,
                     );
                     crate::services::chat_row_view::stamp(&mut chat_msg);
+                    #[cfg(desktop)]
+                    crate::services::mention_notify::on_live_message(
+                        &chat_msg,
+                        verdict.mentioned,
+                        verdict.reply_to_me,
+                    );
                 }
 
                 // Deliver to the frontend FIRST (wire order is the only order
@@ -2861,7 +3047,7 @@ impl IrcService {
     /// prefixes) from Helix and cache it. Session-cached: a hit is a no-op, a
     /// PART evicts, so a re-JOIN refreshes. On any failure nothing is cached
     /// and parse_cheermote falls back to its static global list.
-    async fn fetch_and_store_cheermotes(key: String, broadcaster_id: String) {
+    pub(crate) async fn fetch_and_store_cheermotes(key: String, broadcaster_id: String) {
         if get_channel_cheermotes().read().is_ok_and(|g| g.contains_key(&key)) {
             return;
         }
@@ -2932,6 +3118,10 @@ impl IrcService {
             let Some(tiers) = entry.get("tiers").and_then(|t| t.as_array()) else {
                 continue;
             };
+            let kind = entry.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+            let display_only = kind == "display_only";
+            let custom = kind == "channel_custom";
+            let order = entry.get("order").and_then(|o| o.as_u64()).unwrap_or(u64::from(u32::MAX)) as u32;
             let mut parsed: Vec<CheermoteTier> = tiers
                 .iter()
                 .filter_map(|t| {
@@ -2942,10 +3132,15 @@ impl IrcService {
                         .iter()
                         .find_map(|(kind, size)| dark.get(kind)?.get(size)?.as_str())?
                         .to_string();
+                    let can_cheer = !display_only && t.get("can_cheer").and_then(|c| c.as_bool()).unwrap_or(false);
                     Some(CheermoteTier {
                         min_bits,
                         color,
                         url,
+                        prefix: prefix.to_string(),
+                        can_cheer,
+                        order,
+                        custom,
                     })
                 })
                 .collect();
@@ -4319,24 +4514,7 @@ impl IrcService {
         let word_lower = word.to_lowercase();
 
         if let Some(set) = channel_set {
-            let mut best: Option<(&str, &Vec<CheermoteTier>)> = None;
-            for (prefix, tiers) in set {
-                if !word_lower.starts_with(prefix.as_str()) {
-                    continue;
-                }
-                let rest = &word_lower[prefix.len()..];
-                if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
-                    continue;
-                }
-                if best.is_none_or(|(b, _)| prefix.len() > b.len()) {
-                    best = Some((prefix, tiers));
-                }
-            }
-            let (prefix, tiers) = best?;
-            let bits: u32 = word_lower[prefix.len()..].parse().ok()?;
-            if bits == 0 {
-                return None;
-            }
+            let (prefix, bits, tiers) = match_cheermote(word, set)?;
             // Highest tier whose threshold the amount clears; below the lowest
             // threshold (shouldn't happen: globals start at 1) use the first.
             let tier = tiers
@@ -4509,10 +4687,11 @@ impl IrcService {
             .map(|s| s.to_string())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let tags_owned: HashMap<String, String> = tag_map
+        let mut tags_owned: HashMap<String, String> = tag_map
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        stamp_reward_name(&mut tags_owned, raw);
 
         let display_name = tag_map
             .get("display-name")
@@ -4701,8 +4880,12 @@ impl IrcService {
         // Parse message content into segments (using stripped content).
         // Snapshots gathered once; parsing is fully synchronous.
         let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id);
-        let segments =
-            Self::parse_message_segments(&content_for_segments, &emotes_adjusted, &snapshots.ctx());
+        // Cheermotes draw only in a message that carries bits, as on Twitch: a
+        // "Cheer100" that spent nothing (typed as text, or the composer's own
+        // copy before the echo) is plain text.
+        let mut ctx = snapshots.ctx();
+        ctx.no_cheermotes = !tag_map.get("bits").and_then(|b| b.parse::<u32>().ok()).is_some_and(|b| b > 0);
+        let segments = Self::parse_message_segments(&content_for_segments, &emotes_adjusted, &ctx);
         let reply_info = reply_info.map(|mut reply| {
             if !reply.parent_msg_body.is_empty() {
                 reply.parent_segments = Some(Self::quoted_segments(&reply.parent_msg_body, &snapshots));
@@ -5550,6 +5733,11 @@ fn native_emote_positions(text: &str, twitch: &[Emote]) -> Vec<EmotePos> {
 /// The `emotes` tag Twitch would attach to `text`: the native emote positions
 /// grouped by emote id in first-seen order. A sent row built without it would
 /// show its Twitch emotes as text until the echo arrives.
+/// `text` wrapped as the IRC ACTION a `/me` becomes.
+fn irc_action(text: &str) -> String {
+    format!("\u{1}ACTION {text}\u{1}")
+}
+
 fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
     let mut order: Vec<&str> = Vec::new();
     let mut ranges: HashMap<&str, Vec<String>> = HashMap::new();
@@ -5573,6 +5761,11 @@ fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
 pub struct RedemptionRow {
     /// The channel's bare login.
     pub channel: String,
+    /// The channel's Twitch id. It rides the row as `room-id`, which every
+    /// renderer reads to draw badges from the channel's own set: without it a
+    /// subscriber badge falls back to Twitch's global art (the default star)
+    /// instead of the channel's custom one.
+    pub room_id: String,
     /// Twitch's redemption id; the row id derives from it so the same
     /// redemption reported twice is one row.
     pub redemption_id: String,
@@ -5608,6 +5801,9 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
 
     let mut tags: HashMap<String, String> = HashMap::new();
     tags.insert("user-id".into(), r.user_id.clone());
+    if !r.room_id.is_empty() {
+        tags.insert("room-id".into(), r.room_id.clone());
+    }
     tags.insert("id".into(), id.clone());
     tags.insert("display-name".into(), name.clone());
     tags.insert("custom-reward-id".into(), reward_id.to_string());
@@ -5743,10 +5939,17 @@ impl IrcService {
             .unwrap_or(false);
         let cached = get_user_badges_cache().lock().await.get(&key).cloned();
         m.badges = own_row_badges(&m.badges, cached.as_deref(), is_primary);
+        // A `/me` goes out as an IRC ACTION, so the row is one too. Emote
+        // positions count from the action's own words, as Twitch's do.
+        let action_body = m.text.strip_prefix("/me ").map(str::to_string);
         let emotes_tag = {
             let map = get_channel_emotes().lock().await;
-            map.get(&key).map(|set| own_emotes_tag(&m.text, &set.twitch)).unwrap_or_default()
+            let body = action_body.as_deref().unwrap_or(&m.text);
+            map.get(&key).map(|set| own_emotes_tag(body, &set.twitch)).unwrap_or_default()
         };
+        if let Some(body) = action_body {
+            m.text = irc_action(&body);
+        }
         let line = own_message_line(&m, &emotes_tag, chrono::Utc::now().timestamp_millis());
         let mut msg = Self::parse_privmsg(&line)?;
         msg.layout = LayoutResult {
@@ -5773,7 +5976,7 @@ impl IrcService {
         let key = channel.trim_start_matches('#').to_lowercase();
         let badges = get_user_badges_cache().lock().await.get(&key).cloned().unwrap_or_default();
         let text = match message.strip_prefix("/me ") {
-            Some(rest) => format!("\u{1}ACTION {rest}\u{1}"),
+            Some(rest) => irc_action(rest),
             None => message.to_string(),
         };
         let own = OwnMessage {
@@ -5917,6 +6120,22 @@ mod own_message_tests {
     const LOGIN_ONLY_WATCH_STREAK: &str = "@badge-info=;badges=subscriber/3;color=#FF69B4;display-name=mochi_panda;emotes=;id=a2;login=mochi_panda;msg-id=viewermilestone;msg-param-category=watch-streak;msg-param-copoReward=350;msg-param-value=3;room-id=1;system-msg=mochi_panda\\swatched\\s3\\sconsecutive\\sstreams\\sand\\ssparked\\sa\\swatch\\sstreak!;tmi-sent-ts=2000;user-id=700700 :tmi.twitch.tv USERNOTICE #chan :yay";
 
     #[test]
+    fn a_text_reward_message_is_named_from_the_channels_rewards() {
+        crate::services::channel_rewards::note_reward_name("rewardnamechan", "rw-1", "Билет на Розыгрыш Ножа", 4999);
+        let line = |reward: &str| {
+            format!("@badges=;color=;display-name=Bob;emotes=;id=r{reward};custom-reward-id={reward};room-id=1;tmi-sent-ts=1;user-id=2 :bob!bob@bob.tmi.twitch.tv PRIVMSG #rewardnamechan :https://example.com/trade")
+        };
+        let named = IrcService::parse_privmsg(&line("rw-1")).expect("parses");
+        assert_eq!(named.tags["sn-redeemed-title"], "Билет на Розыгрыш Ножа");
+        assert_eq!(named.tags["sn-redeemed-cost"], "4999");
+        assert!(!named.tags.contains_key("sn-reward-title"), "not drawn as a no-text redemption");
+        let unknown = IrcService::parse_privmsg(&line("rw-unknown")).expect("parses");
+        assert!(!unknown.tags.contains_key("sn-redeemed-title"));
+        let plain = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
+        assert!(!plain.tags.contains_key("sn-redeemed-title"));
+    }
+
+    #[test]
     fn a_privmsg_username_is_the_login_not_the_display_name() {
         let msg = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
         assert_eq!(msg.username, "mochi_panda");
@@ -5939,6 +6158,7 @@ mod own_message_tests {
     fn redemption(title: &str) -> RedemptionRow {
         RedemptionRow {
             channel: "chan".into(),
+            room_id: "7".into(),
             redemption_id: "r-1".into(),
             user_id: "42".into(),
             user_login: "viewer".into(),
@@ -6002,6 +6222,9 @@ mod own_message_tests {
         assert!(badges.contains(&"vip") && badges.contains(&"subscriber"));
 
         let mut bare = redemption("Hydrate");
+        bare.room_id.clear();
+        assert!(!redemption_message(&bare, Vec::new(), 1000).tags.contains_key("room-id"));
+        let mut bare = redemption("Hydrate");
         bare.reward_id.clear();
         bare.reward_cost = 0;
         bare.points_icon_url = None;
@@ -6011,6 +6234,20 @@ mod own_message_tests {
         for absent in ["sn-reward-cost", "sn-points-icon", "sn-reward-image"] {
             assert!(!msg.tags.contains_key(absent), "{absent}");
         }
+    }
+
+    #[test]
+    fn a_redemption_row_names_its_channel_so_badges_resolve_against_the_channel_set() {
+        // The renderers look a Twitch badge up in the set of the row's
+        // `room-id`; a row without one draws a subscriber badge from the global
+        // set, the default star, instead of the channel's custom art.
+        let msg = redemption_message(&redemption("Hydrate"), Vec::new(), 1000);
+        assert_eq!(msg.tags.get("room-id").map(String::as_str), Some("7"));
+        let sub = msg.badges.iter().find(|b| b.name == "subscriber").expect("subscriber badge");
+        assert_eq!(sub.version, "12");
+        // The page reads the row's tags as a plain object, so the id must survive JSON.
+        let json: Value = serde_json::to_value(&msg).expect("serializes");
+        assert_eq!(json["tags"]["room-id"], "7");
     }
 }
 
@@ -6191,6 +6428,52 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn silent_session_end_needs_real_silence_while_awake() {
+        // A network that cuts the connection mid-session: it ends by our read
+        // timeout (or a server FIN) about 30 s after the last read.
+        let timeout = "read liveness timeout";
+        assert!(is_silent_session_end(timeout, 30_000, 30_200));
+        assert!(is_silent_session_end("closed by server", 25_000, 25_000));
+        assert!(is_silent_session_end("read error", 20_000, 20_000));
+        // A healthy idle link never gets this far without an answered PING.
+        assert!(!is_silent_session_end("closed by server", 12_000, 12_000));
+        // Twitch asked us to reconnect, or our own handler stalled: not the
+        // transport's fault however long the silence.
+        assert!(!is_silent_session_end("server RECONNECT", 30_000, 30_000));
+        assert!(!is_silent_session_end("handler stall", 30_000, 30_000));
+        // The timer fired late: the process was frozen or the machine slept.
+        assert!(!is_silent_session_end(timeout, 600_000, 600_000));
+        // The wall clock ran ahead of the monotonic one: a sleep the monotonic
+        // clock did not count.
+        assert!(!is_silent_session_end("read error", 21_000, 900_000));
+    }
+
+    #[test]
+    fn liveness_constants_keep_their_order() {
+        let timeout = IRC_READ_TIMEOUT.as_millis() as u64;
+        // An idle PING goes out (worst case one check tick late) with time
+        // left for the PONG before the read deadline.
+        assert!(IRC_PING_IDLE_MS + IRC_PING_CHECK.as_millis() as u64 + 5_000 <= timeout);
+        // A session counted silent has missed at least one PING.
+        assert!(STALL_READ_AGE_MS > IRC_PING_IDLE_MS && STALL_READ_AGE_MS < timeout);
+        // The heartbeat must never vouch past the read deadline.
+        assert!(HEARTBEAT_SUPPRESS_AFTER_MS > timeout);
+    }
+
+    #[test]
+    fn deafen_fault_spec_parses() {
+        use IrcTransport::{Irc, WebSocket as Ws};
+        let s = std::time::Duration::from_secs;
+        assert_eq!(parse_deafen_fault("deafen:40", Irc), Some(s(40)));
+        assert_eq!(parse_deafen_fault("deafen:40:websocket", Ws), Some(s(40)));
+        assert_eq!(parse_deafen_fault("deafen:40:websocket", Irc), None);
+        assert_eq!(parse_deafen_fault("deafen:soon", Irc), None);
+        assert_eq!(parse_deafen_fault("mute:40", Irc), None);
+        assert_eq!(parse_deafen_fault("", Irc), None);
+        assert_eq!(parse_deafen_fault("deafen:40:irc", Irc), Some(s(40)));
+    }
 
     #[test]
     fn outage_frame_picks_lost_vs_pre() {
@@ -6380,6 +6663,7 @@ mod tests {
                 min_bits: *min_bits,
                 color: color.to_string(),
                 url: format!("https://example.test/{}.gif", min_bits),
+                ..Default::default()
             })
             .collect()
     }
@@ -6511,6 +6795,7 @@ mod tests {
                     min_bits: t["minBits"].as_u64().unwrap() as u32,
                     color: t["color"].as_str().unwrap().to_string(),
                     url: t["url"].as_str().unwrap().to_string(),
+                    ..Default::default()
                 })
                 .collect();
             set.insert(prefix.clone(), parsed);
@@ -6698,6 +6983,29 @@ mod native_emote_priority_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn twitch_history_rows_get_twitch_and_seventv_emotes() {
+        let chan = "twitch_history_7tv";
+        channel_with_seventv_xqcl(chan);
+        let answer = serde_json::json!({ "data": { "channel": { "id": "71092938", "recentChatMessages": [{
+            "id": "h1", "deletedAt": null, "sentAt": "2026-10-13T17:45:08Z",
+            "content": { "text": "xqcL RainTime gg", "fragments": [
+                { "text": "xqcL", "content": { "emoteID": "1035663" } },
+                { "text": " RainTime gg", "content": null }
+            ] },
+            "parentMessage": null,
+            "sender": { "id": "237719657", "login": "fossabot", "displayName": "Fossabot" },
+            "senderBadges": [], "senderChatColor": null, "sourceChannel": null
+        }] } } });
+        let lines = crate::services::twitch_chat_history::lines_from(&answer, chan).unwrap();
+        let rows = IrcService::parse_historical_messages(lines).await;
+        assert_eq!(rows.len(), 1);
+        let found = emotes(&rows[0].segments);
+        assert_eq!(found.len(), 2, "{:?}", rows[0].segments);
+        assert_eq!(found[0], ("xqcL".to_string(), "1035663".to_string(), false), "Twitch's emote from its fragment");
+        assert_eq!(found[1].0, "RainTime", "the 7TV word from the channel's table");
     }
 
     #[test]

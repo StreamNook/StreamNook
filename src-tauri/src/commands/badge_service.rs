@@ -369,6 +369,44 @@ pub async fn get_badge_drop_campaign(
     set_id: String,
     version: String,
 ) -> Result<Option<crate::models::drops::DropCampaign>, String> {
+    Ok(live_badge_campaign(&state, &set_id, &version).await.map(|(c, _)| c))
+}
+
+/// How one badge is earned and where: what to do, for how long, on which
+/// channels and in which category, plus a sentence saying all of it. The
+/// viewer's live Drops list answers first; the relay's campaign requirement
+/// covers anyone not signed in to Drops.
+#[tauri::command]
+pub async fn get_badge_earn_guide(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    set_id: String,
+    version: String,
+) -> Result<crate::services::badge_earn::EarnGuide, String> {
+    use crate::services::universal_cache_service::{get_cached_item, CacheType};
+
+    let live = live_badge_campaign(&state, &set_id, &version)
+        .await
+        .and_then(|(c, title)| crate::services::badge_earn::campaign_requirement(&c, title.as_deref()));
+    let meta = get_cached_item(CacheType::Badge, &format!("metadata:{set_id}-v{version}"))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| {
+            serde_json::from_value::<crate::commands::badge_metadata::BadgeMetadataCached>(c.data).ok()
+        });
+    Ok(crate::services::badge_earn::earn_guide(
+        meta.as_ref().and_then(|m| m.enrichment.as_ref()),
+        meta.as_ref().and_then(|m| m.more_info.as_deref()),
+        live,
+    ))
+}
+
+/// The live Drops campaign awarding a badge, with the badge's title.
+async fn live_badge_campaign(
+    state: &crate::models::settings::AppState,
+    set_id: &str,
+    version: &str,
+) -> Option<(crate::models::drops::DropCampaign, Option<String>)> {
     let title = crate::commands::badges::get_cached_global_badges()
         .await
         .ok()
@@ -393,17 +431,17 @@ pub async fn get_badge_drop_campaign(
                 Ok(c) => c,
                 Err(e) => {
                     debug!("[Badges] No Drops list for {set_id}: {e}");
-                    return Ok(None);
+                    return None;
                 }
             },
         }
     };
     let now = chrono::Utc::now();
     campaigns.retain(|c| c.end_at > now);
-    Ok(
-        crate::services::drops_overview::campaign_for_badge(&campaigns, &set_id, title.as_deref())
-            .cloned(),
-    )
+    let campaign =
+        crate::services::drops_overview::campaign_for_badge(&campaigns, set_id, title.as_deref())
+            .cloned()?;
+    Some((campaign, title))
 }
 
 /// Whether a badge's earn window is open right now. Prefers the enrichment's

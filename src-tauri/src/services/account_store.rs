@@ -109,6 +109,7 @@ impl AccountStore {
         // sign_out_active, reset_all), so invalidating here cannot be missed by
         // a future path the way three separate call sites could.
         crate::services::vod_progress_service::invalidate_owner();
+        crate::services::vod_sync::reset();
         Ok(())
     }
 

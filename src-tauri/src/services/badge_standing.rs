@@ -961,6 +961,7 @@ mod tests {
                     random_of,
                     inferred: false,
                     detail: None,
+                    channels: None,
                 },
                 category: cat.map(Into::into),
             }

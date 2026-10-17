@@ -1,7 +1,8 @@
 // Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs):
 // the live broadcast (viewer count, start, title, category), Shared Viewership (who the channel is streaming with and the
 // combined count), channel points (balance, custom name/icon, an available
-// bonus claim) and pinned messages for every Twitch channel some window has chat
+// bonus claim, the last gain), the wallet's bits face and pinned messages for
+// every Twitch channel some window has chat
 // open on. A window registers a watch per channel; Rust polls each section on
 // its own cadence (viewers as one Helix batch for every watched channel) and
 // emits `channel-state` only when the content changed. This store is the
@@ -42,6 +43,10 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
         next.points = update.points;
         next.points_at = update.at;
         break;
+      case 'bits':
+        next.bits = update.bits;
+        next.bits_at = update.at;
+        break;
       case 'pinned':
         next.pinned = update.pinned;
         next.pinned_at = update.at;
@@ -81,6 +86,8 @@ function emptyState(login: string): ChannelState {
     viewers_at: null,
     points: null,
     points_at: null,
+    bits: null,
+    bits_at: null,
     pinned: [],
     pinned_at: null,
     collab: null,
@@ -103,6 +110,10 @@ export function newestSections(prev: ChannelState, incoming: ChannelState): Chan
   if (isNewer(prev.points_at, incoming.points_at)) {
     out.points = prev.points;
     out.points_at = prev.points_at;
+  }
+  if (isNewer(prev.bits_at, incoming.bits_at)) {
+    out.bits = prev.bits;
+    out.bits_at = prev.bits_at;
   }
   if (isNewer(prev.pinned_at, incoming.pinned_at)) {
     out.pinned = prev.pinned;
@@ -164,7 +175,7 @@ export async function unwatchChannel(login: string, liveOnly = false): Promise<v
 }
 
 /** Ask Rust to refresh one section now (after a pin, a claim, a spend). */
-export function refreshChannelState(login: string, section: 'viewers' | 'points' | 'pinned'): Promise<void> {
+export function refreshChannelState(login: string, section: 'viewers' | 'points' | 'bits' | 'pinned'): Promise<void> {
   return invoke<void>('refresh_channel_state', { login: login.toLowerCase(), section }).catch((e: unknown) => {
     Logger.debug('[ChannelState] refresh failed:', e);
   });

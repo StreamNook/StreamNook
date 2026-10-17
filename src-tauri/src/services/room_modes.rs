@@ -7,9 +7,10 @@
 //!
 //! What it produces: each active mode with a label, a short form for a narrow
 //! box and one sentence of detail; whether each mode holds the viewer back when
-//! that is known; the prompt that replaces "Send a message"; a "you can chat"
-//! line when every mode spares the viewer; and the slow-mode wait that applies
-//! to them.
+//! that is known; the two ways the message box can show them (a chip at its
+//! edge, or a prompt in place of "Send a message", the viewer's choice); a
+//! "you can chat" line when every mode spares the viewer; and the slow-mode
+//! wait that applies to them.
 //!
 //! Followers-only chat is decided by the account's own follow of the channel
 //! when the caller knows it (`OwnFollow`): a long enough follow spares the
@@ -92,8 +93,15 @@ pub struct RoomMode {
 pub struct RoomModeView {
     /// Active modes, the most limiting first. Empty when the room is open.
     pub modes: Vec<RoomMode>,
-    /// Replaces "Send a message" while a mode may hold the viewer back: the
-    /// most limiting such mode, in words.
+    /// The chip style: the most limiting mode that may hold the viewer back
+    /// in a word or two ("Slow 30s"), else the most limiting mode. `None`
+    /// when the room is open.
+    pub chip: Option<String>,
+    /// Every active mode spares the viewer (a moderator, say): the chip is
+    /// drawn a shade quieter.
+    pub exempt: bool,
+    /// The prompt style: replaces "Send a message" while a mode may hold the
+    /// viewer back, naming the most limiting such mode.
     pub prompt: Option<String>,
     /// The same in a word or two, for a narrow message box.
     pub prompt_short: Option<String>,
@@ -259,11 +267,15 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
         ));
     }
 
-    // The prompt names the most limiting mode that holds the viewer back; the
-    // icons beside it show every mode, so a second one never crowds the box.
-    // Its full label when it is the only one and short enough to fit a chat
-    // column, else its compact form.
+    // The chip names one mode: the most limiting that may hold the viewer
+    // back, or, when none does, the most limiting there is. Hovering it lists
+    // the rest.
     let binding: Vec<&RoomMode> = modes.iter().filter(|r| r.applies_to_you != Some(false)).collect();
+    let exempt = !modes.is_empty() && binding.is_empty();
+    let chip = binding.first().copied().or(modes.first()).map(|top| top.short.clone());
+    // The prompt names only a mode that holds the viewer back: its full label
+    // when it is the only one and short enough for a chat column, else its
+    // compact form. A viewer every mode spares keeps "Send a message".
     let (prompt, prompt_short) = match binding.first() {
         None => (None, None),
         // A followers-only room the viewer cannot chat in yet says what it
@@ -285,7 +297,7 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
             (Some(words), Some(top.short.clone()))
         }
     };
-    let standing_line = if !modes.is_empty() && binding.is_empty() {
+    let standing_line = if exempt {
         let as_what = match standing {
             Standing::Broadcaster => "the broadcaster",
             Standing::Moderator => "a moderator",
@@ -318,7 +330,7 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
             None => "Follow to chat".to_string(),
         },
     });
-    RoomModeView { modes, prompt, prompt_short, standing: standing_line, slow_seconds, blocked, reason }
+    RoomModeView { modes, chip, exempt, prompt, prompt_short, standing: standing_line, slow_seconds, blocked, reason }
 }
 
 #[cfg(test)]
@@ -333,6 +345,8 @@ mod tests {
     fn an_open_room_says_nothing() {
         let v = describe(&ModesIn { followers_only_minutes: -1, ..Default::default() }, viewer());
         assert!(v.modes.is_empty());
+        assert_eq!(v.chip, None);
+        assert!(!v.exempt);
         assert_eq!(v.prompt, None);
         assert_eq!(v.prompt_short, None);
         assert_eq!(v.standing, None);
@@ -361,10 +375,12 @@ mod tests {
     }
 
     #[test]
-    fn one_mode_prompts_with_its_full_label() {
+    fn one_mode_names_the_chip() {
         let v = describe(&ModesIn { emote_only: true, followers_only_minutes: -1, ..Default::default() }, viewer());
         assert_eq!(v.modes.len(), 1);
         assert_eq!(v.modes[0].kind, ModeKind::EmoteOnly);
+        assert_eq!(v.chip.as_deref(), Some("Emote-only"));
+        assert!(!v.exempt);
         assert_eq!(v.prompt.as_deref(), Some("Emote-only chat"));
         assert_eq!(v.prompt_short.as_deref(), Some("Emote-only"));
         assert_eq!(v.modes[0].applies_to_you, Some(true));
@@ -381,11 +397,20 @@ mod tests {
         assert_eq!(v.modes[0].label, "Followers-only chat (10 minutes)");
         assert_eq!(v.modes[0].detail, "Only accounts that have followed for 10 minutes can chat.");
         assert_eq!(v.modes[1].label, "Slow mode (30 seconds)");
-        assert_eq!(v.prompt.as_deref(), Some("Followers-only (10m)"), "the most limiting one; the icons show the rest");
+        assert_eq!(v.chip.as_deref(), Some("Followers 10m"), "the most limiting one; hovering lists the rest");
+        assert_eq!(v.prompt.as_deref(), Some("Followers-only (10m)"));
         assert_eq!(v.prompt_short.as_deref(), Some("Followers 10m"));
         assert_eq!(v.slow_seconds, 30);
         // Follow age is the platform's call, never assumed.
         assert_eq!(v.modes[0].applies_to_you, None);
+    }
+
+    #[test]
+    fn the_chip_uses_the_short_form() {
+        let slow = describe(&ModesIn { slow_seconds: 30, followers_only_minutes: -1, ..Default::default() }, viewer());
+        assert_eq!(slow.chip.as_deref(), Some("Slow 30s"));
+        let any = describe(&ModesIn { followers_only_minutes: 0, ..Default::default() }, viewer());
+        assert_eq!(any.chip.as_deref(), Some("Followers-only"));
     }
 
     #[test]
@@ -411,7 +436,7 @@ mod tests {
         );
         let shorts: Vec<_> = v.modes.iter().map(|m| m.short.as_str()).collect();
         assert_eq!(shorts, vec!["Sub-only", "Emote-only", "Followers-only", "Slow 2m", "Unique"]);
-        assert_eq!(v.prompt_short.as_deref(), Some("Sub-only"));
+        assert_eq!(v.chip.as_deref(), Some("Sub-only"));
     }
 
     #[test]
@@ -425,6 +450,8 @@ mod tests {
             let v = describe(&modes, standing);
             assert_eq!(v.modes.len(), 3, "the modes still show");
             assert!(v.modes.iter().all(|m| m.applies_to_you == Some(false)));
+            assert!(v.exempt);
+            assert_eq!(v.chip.as_deref(), Some("Emote-only"), "the chip still shows, quieter");
             assert_eq!(v.prompt, None, "the box keeps its usual prompt");
             assert_eq!(v.standing.as_deref(), Some(line));
             assert_eq!(v.slow_seconds, 0, "no countdown for a privileged sender");
@@ -437,10 +464,13 @@ mod tests {
         let sub = describe(&modes, Standing::Viewer { is_sub: true });
         assert_eq!(sub.modes[0].applies_to_you, Some(false));
         assert_eq!(sub.standing.as_deref(), Some("You can chat as a subscriber"));
+        assert!(sub.exempt);
         assert_eq!(sub.prompt, None);
 
         let not_sub = describe(&modes, viewer());
         assert_eq!(not_sub.modes[0].applies_to_you, Some(true));
+        assert_eq!(not_sub.chip.as_deref(), Some("Sub-only"));
+        assert!(!not_sub.exempt);
         assert_eq!(not_sub.prompt.as_deref(), Some("Subscriber-only chat"));
         assert_eq!(not_sub.standing, None);
     }
@@ -449,6 +479,7 @@ mod tests {
     fn an_unknown_standing_claims_nothing() {
         let v = describe(&ModesIn { slow_seconds: 5, emote_only: true, followers_only_minutes: -1, ..Default::default() }, Standing::Unknown);
         assert!(v.modes.iter().all(|m| m.applies_to_you.is_none()));
+        assert_eq!(v.chip.as_deref(), Some("Emote-only"));
         assert_eq!(v.prompt.as_deref(), Some("Emote-only"));
         assert_eq!(v.standing, None);
         assert_eq!(v.slow_seconds, 5, "the wait still counts down");
@@ -540,5 +571,54 @@ mod tests {
         for standing in [Standing::Broadcaster, Standing::Moderator, Standing::Vip] {
             assert_eq!(describe_with(&all, standing, OwnFollow::NotFollowing).blocked, None);
         }
+    }
+
+    #[test]
+    fn a_long_enough_follow_spares_the_viewer() {
+        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
+        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(3 * 86_400));
+        assert_eq!(v.modes[0].applies_to_you, Some(false));
+        assert!(v.exempt);
+        assert_eq!(v.prompt, None, "the box keeps Send a message");
+        assert_eq!(v.standing.as_deref(), Some("You can chat as a follower"));
+    }
+
+    #[test]
+    fn a_viewer_who_does_not_follow_is_told_to() {
+        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
+        let v = describe_with(&modes, viewer(), OwnFollow::NotFollowing);
+        assert_eq!(v.modes[0].applies_to_you, Some(true));
+        assert_eq!(v.prompt.as_deref(), Some("Follow to chat"));
+        assert_eq!(v.prompt_short.as_deref(), Some("Follow to chat"));
+        assert!(!v.exempt);
+    }
+
+    #[test]
+    fn a_recent_follow_counts_down_in_whole_minutes() {
+        let modes = ModesIn { followers_only_minutes: 10, ..Default::default() };
+        // 6 minutes 30 seconds in: 3.5 minutes left, said as 4.
+        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(390));
+        assert_eq!(v.prompt.as_deref(), Some("You can chat in 4 minutes"));
+        assert_eq!(v.prompt_short.as_deref(), Some("Chat in 4m"));
+        // Seconds from the end it still says a minute, never zero.
+        let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(599));
+        assert_eq!(v.prompt.as_deref(), Some("You can chat in 1 minute"));
+    }
+
+    #[test]
+    fn a_follow_is_ignored_where_it_does_not_decide() {
+        // Any-follower room: following at all is enough.
+        let any = ModesIn { followers_only_minutes: 0, ..Default::default() };
+        let v = describe_with(&any, viewer(), OwnFollow::ForSecs(0));
+        assert!(v.exempt);
+        // A moderator is spared whatever their follow.
+        let ten = ModesIn { followers_only_minutes: 10, ..Default::default() };
+        let v = describe_with(&ten, Standing::Moderator, OwnFollow::NotFollowing);
+        assert_eq!(v.prompt, None);
+        assert_eq!(v.standing.as_deref(), Some("You can chat as a moderator"));
+        // A followed viewer in slow mode is still told about slow mode.
+        let slow = ModesIn { followers_only_minutes: 10, slow_seconds: 30, ..Default::default() };
+        let v = describe_with(&slow, viewer(), OwnFollow::ForSecs(86_400));
+        assert_eq!(v.prompt.as_deref(), Some("Slow mode (30 seconds)"));
     }
 }

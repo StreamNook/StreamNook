@@ -1,12 +1,21 @@
-// The shared emote picker, lifted out of ChatWidget so the main chat composer
-// and the mod-room composer render the SAME picker (provider tabs, favorites,
-// emoji, lazy-mounted grids) plus the swapping-smiley trigger. The host owns the
-// open state and provides a `relative` ancestor for the popover to anchor to.
+// The chat box's insert menu, lifted out of ChatWidget so every composer
+// renders the SAME menu (provider tabs, favorites, emoji, lazy-mounted grids)
+// plus the swapping-smiley trigger. The host owns the open state and provides
+// a `relative` ancestor for the popover to anchor to.
+//
+// Everything that goes INTO a message lives here, as sections picked from a
+// switcher along the BOTTOM, right above the message box and the smiley that
+// opened it (where phone keyboards keep theirs): Emotes (the source tabs),
+// GIFs (Twitch, once Twitch says whether this channel allows them) and
+// Commands (the browsable list, where the host passes one). Bits is not here:
+// spending lives in the channel wallet (chat/ChannelWallet). A host with only
+// Emotes gets no switcher at all. The menu grows upward, so a short window
+// shrinks it from the top (useFitAbove) and the switcher never gets cut off.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { ExternalLink, Lock, Settings } from 'lucide-react';
+import { ExternalLink, Lock, Settings, Smile, SquareSlash } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
 import { invoke } from '@tauri-apps/api/core';
@@ -47,6 +56,9 @@ import { Logger } from '../../utils/logger';
 import { MOD_PREFIX, staticModifierStyle } from '../../utils/emoteModifiers';
 import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
+import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
+import { useFitAbove } from '../../hooks/useFitAbove';
+import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
@@ -100,6 +112,11 @@ export function useSwappingSmiley() {
 }
 
 // ── grid item ────────────────────────────────────────────────────────────────
+/** Emotes found to have no first-frame file (`provider:id`). The CDNs publish
+ *  one only for emotes that animate, so an emote whose animation is unknown
+ *  answers 404 for it; once seen, it is drawn live and never asked again. */
+const noStillFrame = new Set<string>();
+
 const EmoteGridItem = memo(
   ({
     emote,
@@ -133,12 +150,14 @@ const EmoteGridItem = memo(
     const emoteTier = inlineEmoteTier();
     const liveLocal = getCachedEmoteUrl(emote.id, emote.provider, emoteTier);
     // An emote known to be still has no frames to save: it keeps its disk copy.
-    const showStill = still && !hovered && emote.animated !== false;
+    const stillKey = `${emote.provider}:${emote.id}`;
+    const showStill = still && !hovered && emote.animated !== false && !noStillFrame.has(stillKey);
+    const liveSrc = is7tv
+      ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
+      : liveLocal || emote.localUrl || emote.url;
     const gridSrc = showStill
       ? staticEmoteUrl(is7tv ? sevenTvTierUrl(emote.id, emoteTier) : emote.url)
-      : is7tv
-        ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
-        : liveLocal || emote.localUrl || emote.url;
+      : liveSrc;
     const hoverPreviewSize = useAppStore((s) => s.settings.chat_design?.emote_hover_size) ?? 96;
 
     return (
@@ -239,8 +258,21 @@ const EmoteGridItem = memo(
                     ? 'drop-shadow-[0_0_3px_color-mix(in_srgb,var(--color-warning)_60%,transparent)]'
                     : ''
               }`}
+              onLoad={(e) => {
+                // A good load ends any fallback run, so failures from earlier
+                // scrolls never add up to a faded emote.
+                const t = e.currentTarget;
+                delete t.dataset.fb;
+                t.style.opacity = '';
+              }}
               onError={(e) => {
                 const t = e.currentTarget;
+                if (showStill && t.src !== liveSrc) {
+                  // No first frame published: the emote does not animate.
+                  noStillFrame.add(stillKey);
+                  t.src = liveSrc;
+                  return;
+                }
                 if (is7tv) {
                   t.srcset = '';
                   const ladder = ['2x', '1x', '3x', '4x'].flatMap((s) => [
@@ -397,10 +429,24 @@ export interface EmotePickerPanelProps {
   onPopOut?: () => void;
   /** Positioning for the popover (defaults to full-width above the composer). */
   className?: string;
+  /** The Commands section. Absent where the host has no command list to
+   *  offer (the mod room, the pop-out palette, the phone's own sheet). */
+  commands?: Omit<CommandBrowserProps, 'onClose'>;
+  /** The GIFs section. Off where there is no channel to post into (the mod
+   *  room); on Twitch it still waits for Twitch's eligibility answer. */
+  gifs?: boolean;
 }
 
+/** The popover's height when the room above the message box allows it. */
+const PANEL_MAX_PX = 520;
+// The same frosted surface as the Tools menu and the command list's dialog
+// (`.sn-popover`: blur plus a tint that rides the Glassiness slider and goes
+// solid at 0%), so every menu over the message box reads as one family.
 const DEFAULT_PANEL_CLASS =
-  'absolute bottom-full left-0 right-0 mb-2 h-[520px] max-h-[calc(100vh-120px)] border border-borderSubtle rounded-lg shadow-lg flex flex-col overflow-hidden origin-bottom';
+  'sn-popover absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom';
+/** A host that places the menu itself (the phone) keeps the plain fill. */
+const HOST_PANEL_FILL =
+  'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)';
 
 export function EmotePickerPanel({
   open,
@@ -416,24 +462,36 @@ export function EmotePickerPanel({
   onManageEmotes,
   onPopOut,
   className,
+  commands,
+  gifs: gifsSection = true,
 }: EmotePickerPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [fullyClosed, setFullyClosed] = useState(!open);
   // Opening mounts the panel and cancels "fully closed" during render
   // (adjust-state-on-prop-change), so the first open frame already has it.
   const [seenOpen, setSeenOpen] = useState(open);
+  // Commands is a detour: every open starts back on the emotes.
+  const [detour, setDetour] = useState<'commands' | null>(null);
   if (open !== seenOpen) {
     setSeenOpen(open);
     if (open) {
       setMounted(true);
       setFullyClosed(false);
+      setDetour(null);
     }
   }
+
   const [selectedProvider, setSelectedProvider] = useState<ProviderTab>(
     isTwitch ? 'twitch' : isKick ? 'kick' : isYouTube ? 'youtube' : 'emoji',
   );
+  // The emote tab to come back to from GIFs.
+  const [lastEmoteTab, setLastEmoteTab] = useState<ProviderTab>(selectedProvider);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Fit the default popover into the room above the message box. A host that
+  // positions the menu itself (the pop-out window) sizes it itself.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFitAbove(panelRef, open && !className, PANEL_MAX_PX);
   // Emotes animate only while the list is at rest, like the chat's own
   // "Animate emotes" setting allows: during a scroll every cell going past
   // draws its first frame, so a fling never decodes hundreds of animations.
@@ -472,7 +530,7 @@ export function EmotePickerPanel({
   const [gifNotice, setGifNotice] = useState('');
   const [sendingGifId, setSendingGifId] = useState<string | null>(null);
 
-  const gifStatus = gifStatusFor && gifStatusFor.key === channelId ? gifStatusFor.status : null;
+  const gifStatus = gifsSection && gifStatusFor && gifStatusFor.key === channelId ? gifStatusFor.status : null;
   const gifQueryKey = `${channelId ?? ''}|${searchQuery}`;
   // null means "no results for THIS key yet", which is what renders the
   // loading state; an empty array means the search genuinely returned nothing.
@@ -481,13 +539,13 @@ export function EmotePickerPanel({
   // Ask once per channel, and only where GIFs can exist: Twitch, with an id,
   // while the picker is actually open. Nothing runs for a closed picker.
   useEffect(() => {
-    if (!open || !isTwitch || !channelId) return;
+    if (!open || !isTwitch || !channelId || !gifsSection) return;
     let cancelled = false;
     void getGifPickerStatus(channelId)
       .then((status) => { if (!cancelled) setGifStatusFor({ key: channelId, status }); })
       .catch(() => { if (!cancelled) setGifStatusFor(null); });
     return () => { cancelled = true; };
-  }, [open, isTwitch, channelId]);
+  }, [open, isTwitch, channelId, gifsSection]);
 
   // Trending on open, debounced search as you type.
   useEffect(() => {
@@ -683,8 +741,6 @@ export function EmotePickerPanel({
     '7tv': '#29b6f6',
     bttv: '#d50014',
     ffz: '#ffffff',
-    // GIPHY's brand green, so the tab reads as the GIF source at a glance.
-    gifs: '#00ff99',
   };
   const tabClass = (active: boolean) =>
     `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
@@ -693,6 +749,52 @@ export function EmotePickerPanel({
     borderRadius: '8px',
     ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
   });
+
+  type Section = 'emotes' | 'gifs' | 'commands';
+  const section: Section =
+    detour === 'commands' && commands
+      ? 'commands'
+      : selectedProvider === 'gifs'
+        ? 'gifs'
+        : 'emotes';
+  const pickSection = (next: Section) => {
+    setDetour(next === 'commands' ? next : null);
+    if (next === 'gifs' && selectedProvider !== 'gifs') {
+      setLastEmoteTab(selectedProvider);
+      setSelectedProvider('gifs');
+    } else if (next === 'emotes' && selectedProvider === 'gifs') {
+      setSelectedProvider(lastEmoteTab === 'gifs' ? 'emoji' : lastEmoteTab);
+    }
+  };
+  // GIFs shows whenever Twitch ANSWERED the eligibility query, not only when
+  // the answer is yes. Hiding it on a no made "this channel has GIFs off" and
+  // "the feature is broken" look identical, with no tab, no error and nothing
+  // to check. The pane below names which it is. A failed query (signed out,
+  // offline) still hides it, because then we genuinely do not know.
+  const sections: MenuSwitcherTab<Section>[] = [
+    { key: 'emotes', label: 'Emotes', icon: <Smile size={15} className="flex-shrink-0" aria-hidden /> },
+    ...(gifStatus
+      ? [{
+          key: 'gifs' as const,
+          label: 'GIFs',
+          icon: (
+            <span className="flex-shrink-0 rounded border border-current px-[3px] text-[8.5px] font-extrabold leading-[12px] tracking-wide" aria-hidden>
+              GIF
+            </span>
+          ),
+          // Only GIFs has more to say than its label: whether the channel
+          // turned them off or they need Tier 2 or 3.
+          hint: gifStatus.can_use
+            ? undefined
+            : !gifStatus.is_enabled
+              ? 'GIFs (turned off in this channel)'
+              : 'GIFs (Tier 2 or Tier 3 subscribers)',
+        }]
+      : []),
+    ...(commands
+      ? [{ key: 'commands' as const, label: 'Commands', icon: <SquareSlash size={15} className="flex-shrink-0" aria-hidden /> }]
+      : []),
+  ];
 
   return (
     <motion.div
@@ -703,13 +805,21 @@ export function EmotePickerPanel({
       onAnimationComplete={(def) => {
         if (def === 'closed') setFullyClosed(true);
       }}
+      ref={panelRef}
       className={className || DEFAULT_PANEL_CLASS}
       style={{
-        backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)',
+        backgroundColor: className ? HOST_PANEL_FILL : undefined,
         display: !open && fullyClosed ? 'none' : undefined,
         pointerEvents: open ? 'auto' : 'none',
       }}
     >
+      {section === 'commands' && commands && <CommandBrowser {...commands} onClose={onClose} />}
+      {/* Kept mounted (only hidden) under Commands, so the grid's scroll
+          listener and lazy blocks survive a trip there and back. */}
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        style={section === 'commands' ? { display: 'none' } : undefined}
+      >
       <div className="p-2 border-b border-borderSubtle">
         <div className="flex items-center gap-1.5">
           <input
@@ -746,6 +856,7 @@ export function EmotePickerPanel({
             </Tooltip>
           )}
         </div>
+        {section === 'emotes' && (
         <div className="flex gap-1 mt-2">
           <Tooltip content={`Favorites (${tabCount('favorites')})`} side="top">
             <button onClick={() => setSelectedProvider('favorites')} className={tabClass(selectedProvider === 'favorites')} style={{ borderRadius: '8px' }}>
@@ -758,28 +869,6 @@ export function EmotePickerPanel({
               <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
             </button>
           </Tooltip>
-          {/* Shown whenever Twitch ANSWERED the eligibility query, not only when
-              the answer is yes. Hiding it on a no made "this channel has GIFs
-              off" and "the feature is broken" look identical, with no tab, no
-              error and nothing to check. The pane below names which it is. A
-              failed query (signed out, offline) still hides the tab, because
-              then we genuinely do not know. */}
-          {gifStatus && (
-            <Tooltip
-              content={
-                gifStatus.can_use
-                  ? 'GIFs'
-                  : !gifStatus.is_enabled
-                    ? 'GIFs (turned off in this channel)'
-                    : 'GIFs (Tier 2 or Tier 3 subscribers)'
-              }
-              side="top"
-            >
-              <button onClick={() => setSelectedProvider('gifs')} className={tabClass(selectedProvider === 'gifs')} style={tabStyle(selectedProvider === 'gifs', 'gifs')}>
-                <span className="text-[10px] font-extrabold tracking-wide">GIF</span>
-              </button>
-            </Tooltip>
-          )}
           {isTwitch && (
             <Tooltip content={`Twitch (${tabCount('twitch')})`} side="top">
               <button onClick={() => setSelectedProvider('twitch')} className={tabClass(selectedProvider === 'twitch')} style={tabStyle(selectedProvider === 'twitch', 'twitch')}>
@@ -839,6 +928,7 @@ export function EmotePickerPanel({
             </Tooltip>
           )}
         </div>
+        )}
       </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
         {selectedProvider === 'gifs' ? (
@@ -992,7 +1082,9 @@ export function EmotePickerPanel({
                       {(still) =>
                         block.map((emote, idx) => {
                           const isFavorited = isFavoriteEmote(emote.id);
-                          const liveSrc = still && emote.animated !== false
+                          const stillKey = `${emote.provider}:${emote.id}`;
+                          const drawStill = still && emote.animated !== false && !noStillFrame.has(stillKey);
+                          const liveSrc = drawStill
                             ? staticEmoteUrl(emote.url)
                             : getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
                           return (
@@ -1009,6 +1101,7 @@ export function EmotePickerPanel({
                                     className="w-8 h-8 object-contain"
                                     onError={(e) => {
                                       const target = e.currentTarget;
+                                      if (drawStill) noStillFrame.add(stillKey);
                                       if (target.src !== emote.url) target.src = emote.url;
                                       else target.style.display = 'none';
                                     }}
@@ -1086,6 +1179,8 @@ export function EmotePickerPanel({
           </div>
         )}
       </div>
+      </div>
+      {sections.length > 1 && <MenuSwitcher label="Insert" tabs={sections} value={section} onChange={pickSection} />}
     </motion.div>
   );
 }

@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../stores/AppStore';
-import { SOUND_LABELS, type SoundId } from '../utils/notificationSound';
+import { BUILT_IN_SOUNDS, SOUND_LABELS, type SoundId } from '../utils/notificationSound';
 import type { CustomSound } from '../types';
 
-const BUILT_INS: SoundId[] = ['boop', 'tick', 'soft', 'whisper', 'gentle'];
 const NO_CUSTOM: CustomSound[] = [];
 
 /** A sound picker's choices: the built-in tones, then the viewer's own sounds,
@@ -14,7 +13,7 @@ export function useSoundOptions({ defaultId, noneLabel }: { defaultId?: SoundId;
   return useMemo(
     () => [
       ...(noneLabel ? [{ value: '', label: noneLabel }] : []),
-      ...BUILT_INS.map((id) => ({ value: id, label: id === defaultId ? `${SOUND_LABELS[id]} (Default)` : SOUND_LABELS[id] })),
+      ...BUILT_IN_SOUNDS.map((id) => ({ value: id, label: id === defaultId ? `${SOUND_LABELS[id]} (Default)` : SOUND_LABELS[id] })),
       ...custom.map((c) => ({ value: c.id, label: c.name || 'Custom sound' })),
     ],
     [custom, defaultId, noneLabel],

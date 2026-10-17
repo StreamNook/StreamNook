@@ -1,6 +1,6 @@
 [package]
 name = "StreamNook"
-version = "8.8.9"
+version = "8.8.12"
 description = "StreamNook"
 authors = ["Brandon Winters"]
 license = "PolyForm-Noncommercial-1.0.0"
@@ -224,6 +224,9 @@ webp-animation = "0.10"
 # tables pin the same version so the lockfile carries ONE copy of each crate;
 # resolver v2 only activates the table for the target being built.
 tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
+# Chat's second route, raw IRC over TLS (services/irc_transport.rs), on the
+# same OS TLS the WebSocket uses. Already in the tree under tokio-tungstenite.
+tokio-native-tls = "0.3.1"
 
 # reqwest on Windows and macOS: the default feature set (native-tls = schannel /
 # Security.framework, charset, http2, system-proxy) plus rustls for the one
@@ -239,6 +242,11 @@ reqwest = { version = "0.12.24", features = ["json", "gzip", "cookies", "multipa
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+# Chat's second route, raw IRC over TLS (services/irc_transport.rs), on the
+# same rustls + bundled roots the WebSocket uses. Both already in the tree
+# under tokio-tungstenite; default-features = false keeps aws-lc-rs out.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+webpki-roots = "1.0.6"
 # http2 is load-bearing for Kick: its edge answers rustls over h1 with a 403
 # and rustls over h2 with a 200 (see HTTP_RESOLVE in providers/kick.rs).
 # default-features = false drops it, so it is named here.
@@ -296,7 +304,21 @@ windows = { version = "0.61", features = [
     # of correcting the window after the drag has already committed a size.
     "Win32_UI_Shell",
     "Win32_UI_HiDpi",
+    # services/system_notify.rs registers the app's toast identity (name and
+    # icon) under HKCU, which an unpackaged exe with no Start Menu shortcut
+    # needs before Windows will attribute a toast to it.
+    "Win32_System_Registry",
+    # services/system_notify.rs writes its own toast XML (a reply box, protocol
+    # links) and reads what was typed into it.
+    "UI_Notifications",
+    "Data_Xml_Dom",
+    "Foundation",
+    "Foundation_Collections",
 ] }
+# Updates for the NSIS install (services/installer_update.rs): signed
+# installer download, then the installer runs and replaces the app. Windows
+# only; macOS and Linux keep the updater in commands/components.rs.
+tauri-plugin-updater = "2"
 
 # macOS-only. WebKit's cookie store is read through these (see
 # src/platform/cookies.rs) instead of Tauri's `cookies_for_url`, which on

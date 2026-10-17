@@ -88,6 +88,7 @@ use crate::services::providers::source::StreamSource;
 use crate::services::twitch_service::TwitchService;
 use crate::services::unified_discover::{self, DiscoverRow, Surface, UnifiedDiscover, View};
 use crate::services::unified_following::{self, Following};
+use crate::services::favorite_categories::{self, FavoriteCategoryRow};
 use crate::services::{favorite_live_service, provider_categories, provider_live_service};
 
 /// Event name for section updates. Payload: `HomeUpdate`.
@@ -135,6 +136,9 @@ const DISCOVER_TICK: Duration = Duration::from_secs(60);
 const DIRECTORY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Categories each other platform contributes to the unified Categories tab.
 const OTHER_CATEGORIES_PER_PROVIDER: u32 = 20;
+/// How often the favorite categories' viewer counts refresh while a Home is
+/// on screen, and how old they may be when one mounts.
+const FAVORITE_CATEGORIES_PERIOD: Duration = Duration::from_secs(120);
 
 #[derive(Serialize, Clone, Default)]
 pub struct HomeSnapshot {
@@ -182,6 +186,10 @@ pub struct HomeSnapshot {
     /// platform's own categories, from `provider_categories`' cache.
     pub other_categories: Vec<ProviderCategory>,
     pub other_categories_at: Option<u64>,
+    /// The Categories tab's favorites row: the starred categories in the order
+    /// they were starred, with live viewer counts (`favorite_categories`).
+    pub favorite_categories: Vec<FavoriteCategoryRow>,
+    pub favorite_categories_at: Option<u64>,
 }
 
 /// One card in Home's Continue Watching row. Built entirely from the local
@@ -274,6 +282,11 @@ pub enum HomeUpdate {
     /// The unified Categories tab's "On other platforms" row.
     OtherCategories {
         categories: Vec<ProviderCategory>,
+        at: u64,
+    },
+    /// The Categories tab's favorites row.
+    FavoriteCategories {
+        categories: Vec<FavoriteCategoryRow>,
         at: u64,
     },
 }
@@ -556,6 +569,18 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
         }
     });
 
+    // Favorite categories: their viewer counts while a Home is up. A mount
+    // and a star refresh them at once.
+    let favorites = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(FAVORITE_CATEGORIES_PERIOD).await;
+            if favorites.home_mounted() && main_window_shown(&favorites.app) {
+                refresh_favorite_categories(&favorites).await;
+            }
+        }
+    });
+
     // Drops: hourly while any window exists, once signed in. First load is
     // chained off the first followed poll like the offline roster.
     let drops = inner;
@@ -642,6 +667,8 @@ pub async fn load_more_recommended() -> Result<(), String> {
         stamp_drops_with(&s.drops_campaigns, &mut streams);
         let followed: HashSet<String> = s.followed_live.iter().map(|x| x.user_id.clone()).collect();
         let mut seen: HashSet<String> = s.recommended.iter().map(|x| x.user_id.clone()).collect();
+        let mut streams = streams;
+        crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
         for st in streams {
             if !followed.contains(&st.user_id) && seen.insert(st.user_id.clone()) {
                 s.recommended.push(st);
@@ -783,7 +810,7 @@ async fn rebuild_following(inner: &Inner) {
         return;
     }
     *last = Some(following.clone());
-    let Following { favorites, live, offline, followed_live, platforms } = following;
+    let Following { favorites, live, offline, followed_live, platforms } = following_shown(following);
     emit(&inner.app, HomeUpdate::Following { favorites, live, offline, followed_live, platforms, at: now_secs() });
 }
 
@@ -795,6 +822,104 @@ fn other_categories_now() -> Vec<ProviderCategory> {
         .filter(|provider| **provider != "twitch")
         .flat_map(|provider| provider_categories::cached(provider, OTHER_CATEGORIES_PER_PROVIDER))
         .collect()
+}
+
+/// The hidden list changed: the recommended list loses a newly hidden channel
+/// at once, and every Discover list is rebuilt and sent again, since a list
+/// that did not change underneath (only its filter did) would not be.
+pub fn note_hidden_channels_changed() {
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        let (streams, cursor, at) = {
+            let mut s = inner.snap.write().await;
+            crate::services::hidden_channels::retain_twitch(&mut s.recommended, crate::services::hidden_channels::Realm::Browse);
+            (s.recommended.clone(), s.recommended_cursor.clone(), now_secs())
+        };
+        emit(&inner.app, HomeUpdate::Recommended { streams, cursor, at });
+        let (live, offline, last_broadcasts) = {
+            let s = inner.snap.read().await;
+            (s.followed_live.clone(), s.offline_follows.clone(), s.last_broadcasts.clone())
+        };
+        emit(&inner.app, HomeUpdate::FollowedLive { streams: follows_shown(live), at });
+        emit(&inner.app, HomeUpdate::Offline { channels: follows_shown(offline), last_broadcasts, at });
+        {
+            let mut discover = inner.discover.lock().await;
+            discover.forget(Surface::Home);
+            discover.forget(Surface::Sidebar);
+        }
+        *inner.following.lock().await = None;
+        rebuild_discover(&inner).await;
+        rebuild_following(&inner).await;
+        provider_live_service::resend(&inner.app).await;
+    });
+}
+
+/// The Following lists as the windows get them: without channels hidden from
+/// follows. Rust keeps the whole lists, so a channel shown again is back at once.
+fn following_shown(mut f: Following) -> Following {
+    use crate::services::hidden_channels::{retain_discover, Realm};
+    retain_discover(&mut f.favorites, Realm::Follows);
+    retain_discover(&mut f.live, Realm::Follows);
+    retain_discover(&mut f.offline, Realm::Follows);
+    retain_discover(&mut f.followed_live, Realm::Follows);
+    f
+}
+
+/// A Twitch follow list as the windows get it.
+fn follows_shown(mut rows: Vec<TwitchStream>) -> Vec<TwitchStream> {
+    crate::services::hidden_channels::retain_twitch(&mut rows, crate::services::hidden_channels::Realm::Follows);
+    rows
+}
+
+/// The starred categories as settings hold them.
+fn favorite_category_list(app: &AppHandle) -> Vec<crate::models::settings::FavoriteCategory> {
+    app_state(app)
+        .and_then(|state| state.settings.lock().ok().map(|s| s.favorite_categories.clone()))
+        .unwrap_or_default()
+}
+
+/// Store and emit the favorites row if it changed. `live` is this round's
+/// answer; a category it lacks keeps its last count.
+async fn publish_favorite_categories(
+    inner: &Inner,
+    live: &std::collections::HashMap<String, favorite_categories::Live>,
+) {
+    let list = favorite_category_list(&inner.app);
+    let at = now_secs();
+    let row = {
+        let mut snap = inner.snap.write().await;
+        let row = favorite_categories::rows(&list, live, &snap.favorite_categories);
+        let changed = snap.favorite_categories_at.is_none() || !same(&snap.favorite_categories, &row);
+        snap.favorite_categories = row.clone();
+        snap.favorite_categories_at = Some(at);
+        changed.then_some(row)
+    };
+    if let Some(categories) = row {
+        emit(&inner.app, HomeUpdate::FavoriteCategories { categories, at });
+    }
+}
+
+/// Fetch the favorite categories' live numbers and publish the row.
+async fn refresh_favorite_categories(inner: &Inner) {
+    let list = favorite_category_list(&inner.app);
+    let live = if list.is_empty() {
+        Default::default()
+    } else {
+        favorite_categories::fetch_live(&list).await
+    };
+    publish_favorite_categories(inner, &live).await;
+}
+
+/// The starred list changed: the row shows the change at once from what is
+/// known, then fetches the numbers for a newly starred category.
+pub fn note_favorite_categories_changed() {
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        publish_favorite_categories(&inner, &Default::default()).await;
+        refresh_favorite_categories(&inner).await;
+    });
 }
 
 /// Emit the "On other platforms" row if it changed.
@@ -865,10 +990,12 @@ async fn rebuild_discover(inner: &Inner) {
         (home_list, sidebar_list)
     };
     let at = now_secs();
-    if let Some(streams) = home_list {
+    if let Some(mut streams) = home_list {
+        crate::services::hidden_channels::retain_discover(&mut streams, crate::services::hidden_channels::Realm::Browse);
         emit(&inner.app, HomeUpdate::UnifiedDiscover { streams, at });
     }
-    if let Some((scope, streams)) = sidebar_list {
+    if let Some((scope, mut streams)) = sidebar_list {
+        crate::services::hidden_channels::retain_discover(&mut streams, crate::services::hidden_channels::Realm::Browse);
         emit(&inner.app, HomeUpdate::SidebarDiscover { scope, streams, at });
     }
 }
@@ -1028,6 +1155,15 @@ async fn refresh_continue_watching(inner: &Inner) {
     };
     if changed {
         emit(&inner.app, HomeUpdate::ContinueWatching { items, at });
+    }
+}
+
+/// Fold in positions the viewer saved on other devices (their Twitch viewing
+/// history) and rebuild the row when any arrived. `vod_sync` floors how often
+/// this reaches Twitch.
+async fn pull_continue_watching(inner: &Inner) {
+    if crate::services::vod_sync::pull().await {
+        refresh_continue_watching(inner).await;
     }
 }
 
@@ -1226,6 +1362,7 @@ pub async fn snapshot() -> HomeSnapshot {
         View::home(),
     );
     snap.unified_discover = unified;
+    crate::services::hidden_channels::retain_discover(&mut snap.unified_discover, crate::services::hidden_channels::Realm::Browse);
     snap.unified_discover_at = Some(now_secs());
     drop(discover);
     let (provider_follows, favorite_channels) = follow_settings(&inner.app);
@@ -1238,6 +1375,9 @@ pub async fn snapshot() -> HomeSnapshot {
         favorite_ids: &favorite_ids,
         favorite_channels: &favorite_channels,
     });
+    snap.following = following_shown(snap.following);
+    snap.followed_live = follows_shown(snap.followed_live);
+    snap.offline_follows = follows_shown(snap.offline_follows);
     snap.following_at = Some(now_secs());
     snap.other_categories = other_categories_now();
     snap.other_categories_at = Some(now_secs());
@@ -1262,7 +1402,7 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
                 refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
             });
         }
-        let (offline_stale, recommended_stale, drops_stale, continue_stale, collab_stale) = {
+        let (offline_stale, recommended_stale, drops_stale, continue_stale, collab_stale, favorites_stale) = {
             let s = inner.snap.read().await;
             (
                 is_stale(s.offline_at, OFFLINE_PERIOD),
@@ -1270,6 +1410,7 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
                 is_stale(s.drops_at, DROPS_PERIOD),
                 is_stale(s.continue_watching_at, CONTINUE_MOUNT_STALE),
                 is_stale(s.collab_at, COLLAB_MOUNT_STALE),
+                is_stale(s.favorite_categories_at, FAVORITE_CATEGORIES_PERIOD),
             )
         };
         let inner = inner.clone();
@@ -1277,6 +1418,10 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
             // First: the row is local-only, so it paints before any network.
             if continue_stale {
                 refresh_continue_watching(&inner).await;
+            }
+            // Public numbers: no sign-in needed.
+            if favorites_stale {
+                refresh_favorite_categories(&inner).await;
             }
             // A stale recommended refresh brings collaborations with it.
             if recommended_stale {
@@ -1292,7 +1437,9 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
                 refresh_drops(&inner).await;
             }
             // Last: reconciling the row against Twitch is the least urgent
-            // work here, and it needs the rebuild above to have run.
+            // work here, and it needs the rebuild above to have run. Positions
+            // saved on the viewer's other devices first, then card metadata.
+            pull_continue_watching(&inner).await;
             hydrate_continue_watching(&inner).await;
         });
     }
@@ -1358,6 +1505,7 @@ pub async fn refresh(
         // trains instead, with no error, for any key added above but not here.
         "continue_watching" => {
             refresh_continue_watching(inner).await;
+            pull_continue_watching(inner).await;
             hydrate_continue_watching(inner).await;
         }
         // The directories the Discover lists on screen read, where due. The
@@ -1419,7 +1567,7 @@ async fn refresh_followed(inner: &Inner) {
                 emit(
                     &inner.app,
                     HomeUpdate::FollowedLive {
-                        streams: streams.clone(),
+                        streams: follows_shown(streams.clone()),
                         at,
                     },
                 );
@@ -1502,7 +1650,7 @@ async fn refresh_offline(inner: &Inner) {
         emit(
             &inner.app,
             HomeUpdate::Offline {
-                channels: offline,
+                channels: follows_shown(offline),
                 last_broadcasts,
                 at,
             },
@@ -1556,6 +1704,7 @@ async fn refresh_recommended_with(
         .into_iter()
         .filter(|s| !followed_ids.contains(&s.user_id))
         .collect();
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
     let at = now_secs();
     let changed = {
         let mut s = inner.snap.write().await;

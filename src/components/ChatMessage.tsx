@@ -6,6 +6,7 @@ import { parseMessage, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
+import { mentionHoldBackground } from './chat/mentionHold';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
 import { ModerationTag } from './chat/ModerationTag';
 import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
@@ -378,6 +379,7 @@ import { SevenTvAvatar } from './SevenTvAvatar';
 
 import { Logger } from '../utils/logger';
 import { kickTimeoutMinutes } from '../utils/kickTimeout';
+import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
 interface ChatMessageProps {
   message: string | BackendChatMessage; // Raw IRC message or Backend Message Object
@@ -1229,6 +1231,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       color: hl.color,
       sound_id: (hl.sound_id ?? null) as HighlightMatch['sound_id'],
       cooldown_ms: hl.cooldown_ms,
+      hold: hl.hold === true,
     };
   }, [stamped, parsed.metadata]);
 
@@ -1357,6 +1360,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     </span>
   ) : null;
   const bodyDragEnabled = canModerateThisRow && (modActionStyle === 'drag' || modActionStyle === 'both');
+  // The grab hand covers the whole row unless the viewer keeps it to the edge
+  // strip; the pickup itself works anywhere on the row either way.
+  const rowGrabCursor = bodyDragEnabled && chatDesign?.mod_drag_cursor !== 'edge';
   const showModButtons = modActionStyle === 'buttons' || modActionStyle === 'both';
   // The inline Pin button is ALWAYS available to moderators so a pin can never go
   // missing. The Pin Action setting only controls whether a Pin tile ALSO shows
@@ -2179,6 +2185,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // "<reward name> <points glyph> <amount>" instead of a plain "(N)" in the text.
   const redemptionCost = parsed.tags.get('sn-reward-cost');
   const redemptionPointsIcon = parsed.tags.get('sn-points-icon');
+  // A reward that asks for text arrives as a chat message tagged only with its
+  // id; Rust names it from the channel's rewards (irc_service stamp_reward_name).
+  const redeemedTitle = parsed.tags.get('sn-redeemed-title');
+  const redeemedCost = parsed.tags.get('sn-redeemed-cost');
+  // A reward with no text, which Rust builds as its own row (body = the
+  // reward's title): one line, "<name> redeemed <title> <cost>", like Twitch.
+  const isRewardEventRow = !!parsed.tags.get('sn-reward-title');
   const isGigantifiedEmote =
     msgId === 'gigantified-emote-message' || sourceMsgId === 'gigantified-emote-message';
   const isAnimatedMessage =
@@ -2194,7 +2207,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         : isSubModeBypass
           ? 'Sent a Message in Sub-Only Mode'
           : hasCustomReward
-            ? 'Redeemed a channel points reward'
+            ? (redeemedTitle ? `Redeemed ${redeemedTitle}` : 'Redeemed a channel points reward')
             : null;
   const isRedemption = redemptionLabel !== null;
 
@@ -2371,12 +2384,27 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Format bits count with commas for readability
     const formattedBits = bitsCount.toLocaleString();
 
+    // The row leads with the cheermote actually used (the one carrying the
+    // most bits), so it comes out of the message below; any others stay
+    // inline. No cheermote segment (an odd payload) falls back to Twitch's
+    // own gem for the amount.
+    const leadIdx = contentWithEmotes.reduce(
+      (best, seg, i) =>
+        seg.type === 'cheermote' && (best < 0 || (seg.bits ?? 0) > (contentWithEmotes[best].bits ?? 0)) ? i : best,
+      -1,
+    );
+    const leadCheermote = leadIdx >= 0 ? contentWithEmotes[leadIdx] : null;
+    const bodySegments = (leadIdx >= 0 ? contentWithEmotes.filter((_, i) => i !== leadIdx) : contentWithEmotes).map(
+      (seg, i) => (i === 0 && seg.type === 'text' ? { ...seg, content: seg.content.trimStart() } : seg),
+    );
+    const bodyHasContent = bodySegments.some((seg) => seg.type !== 'text' || seg.content.trim() !== '');
+
     // Defensive: EventSub shows gigantified messages arrive with cheer:null,
     // but `bits` is a plain IRC tag; if both ever co-occur, the giant must
     // not be silently dropped by this early return.
     const giantPluckCheer =
       isGigantifiedEmote && chatDesign?.giant_emotes !== false
-        ? pluckGiantEmote(contentWithEmotes)
+        ? pluckGiantEmote(bodySegments)
         : null;
 
     // Determine bits tier color based on amount (matching Twitch's color scheme)
@@ -2454,15 +2482,29 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('bits-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
-            {/* Twitch's animated bits gem for the tier */}
-            <img
-              src={bitsAnimUrl}
-              alt=""
-              className="w-5 h-5 object-contain"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
+            {leadCheermote?.cheermoteUrl ? (
+              // The cheermote they cheered with, at its own tier.
+              <Tooltip content={leadCheermote.content} side="top">
+                <img
+                  src={leadCheermote.cheermoteUrl}
+                  alt={leadCheermote.content}
+                  className="w-7 h-7 object-contain"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => { e.currentTarget.src = bitsAnimUrl; }}
+                />
+              </Tooltip>
+            ) : (
+              // Twitch's animated bits gem for the tier
+              <img
+                src={bitsAnimUrl}
+                alt=""
+                className="w-7 h-7 object-contain"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              />
+            )}
           </div>
           <div
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
@@ -2476,13 +2518,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               ) : (
                 <>
                   {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
-                  <span style={{ color: bitsTierColor }} className="font-bold"> cheered {formattedBits} bits</span>
+                  <span className="font-normal text-textSecondary"> cheered </span>
+                  <span
+                    className="inline-flex items-center rounded-full px-1.5 align-[1px] text-[0.86em] font-bold leading-[1.45] tabular-nums"
+                    style={{ color: bitsTierColor, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${bitsTierColor} 45%, transparent)` }}
+                  >
+                    {formattedBits} {bitsCount === 1 ? 'bit' : 'bits'}
+                  </span>
                 </>
               )}
             </p>
-            {parsed.content && (
-              <p className="text-textSecondary mt-1 leading-relaxed break-words">
-                {giantPluckCheer ? giantPluckCheer.inline : renderContent(contentWithEmotes)}
+            {bodyHasContent && (
+              <p className="text-textSecondary mt-0.5 leading-relaxed break-words">
+                {giantPluckCheer ? giantPluckCheer.inline : renderContent(bodySegments)}
               </p>
             )}
             {giantPluckCheer?.giant && (
@@ -2752,10 +2800,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('watchstreak-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
-            {/* Fire/Watch Streak icon from Twitch */}
-            <svg className="w-5 h-5 text-highlight-orange" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M11 4.5 9 2 4.8 6.9A7.48 7.48 0 0 0 3 11.77C3 15.2 5.8 18 9.23 18h1.65A6.12 6.12 0 0 0 17 11.88c0-1.86-.65-3.66-1.84-5.1L12 3l-1 1.5ZM6.32 8.2 9 5l2 2.5L12 6l1.62 2.07A5.96 5.96 0 0 1 15 11.88c0 2.08-1.55 3.8-3.56 4.08.36-.47.56-1.05.56-1.66 0-.52-.18-1.02-.5-1.43L10 11l-1.5 1.87c-.32.4-.5.91-.5 1.43 0 .6.2 1.18.54 1.64A4.23 4.23 0 0 1 5 11.77c0-1.31.47-2.58 1.32-3.57Z" clipRule="evenodd" />
-            </svg>
+            <WatchStreakFlame size={20} className="text-highlight-orange" />
           </div>
           <div
             className="flex-1 min-w-0 flex flex-col"
@@ -3233,6 +3278,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     .padStart(2, '0');
   const showHighlightBg = displayStyle === 'standard';
   const showHighlightBorder = displayStyle !== 'none';
+  // Keep tinted: a mention or reply to you holds its color while on screen,
+  // and so does a phrase/user/badge match whose rule asks for it. The rule's
+  // own choice wins over the Highlight Appearance display style.
+  const mentionHoldBg =
+    (isMentioned || isReplyToMe) && chatDesign?.mention_hold === true && borderLeftColor
+      ? mentionHoldBackground(borderLeftColor, tintOpacityPct)
+      : phraseMatch?.hold && !isMentioned && !isReplyToMe
+        ? mentionHoldBackground(phraseMatch.color, tintOpacityPct)
+        : undefined;
 
   // Compose built-in event tint styles inline. The configurable color drives
   // a gradient (alpha controlled by tintOpacityPct). Phrase/mention/reply
@@ -3259,10 +3313,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
         } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
-        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
+        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none' : ''} ${rowGrabCursor ? 'cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
       style={{
         ...messageStyle,
-        ...(builtInEventBg ? { backgroundImage: builtInEventBg } : {}),
+        ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
         ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)
           ? borderLeftColor
@@ -3329,15 +3383,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         </>
       )}
 
-      {/* "Grab to drag" hint: an accent bar down the left edge that fades in on
-          hover whenever whole-message drag is enabled (pairs with the grab
-          cursor). Full-height accent + soft shadow so it pops over the Atmosphere
-          and on any theme. */}
+      {/* The grab handle: an accent bar down the left edge that fades in on
+          hover whenever whole-message drag is enabled, over a slightly wider
+          strip that wears the grab cursor. With the Edge only grab cursor the
+          rest of the row keeps the normal cursor; a press anywhere on it still
+          lifts the chatter, as the pointerdown reaches the row either way.
+          Full-height accent + soft shadow so it pops over the Atmosphere and
+          on any theme. */}
       {bodyDragEnabled && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-1 left-0 z-20 w-1.5 rounded-r-md bg-accent shadow-[1px_0_4px_rgba(0,0,0,0.45)] opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-        />
+        <div aria-hidden="true" className="absolute inset-y-0 left-0 z-20 w-3 cursor-grab">
+          <div className="pointer-events-none absolute inset-y-1 left-0 w-1.5 rounded-r-md bg-accent shadow-[1px_0_4px_rgba(0,0,0,0.45)] opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+        </div>
       )}
 
       {/* Built-in event label (first-time chatter, returning, self, raid) */}
@@ -3352,13 +3408,28 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         </div>
       )}
       {/* Channel points redemption indicator (highlight, gigantify, animate, skip-subs-mode, custom reward) */}
-      {redemptionLabel && (
-        <div className="flex items-center justify-end gap-1">
-          <svg className="w-3 h-3 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
+      {redemptionLabel && !isRewardEventRow && (
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          <svg className="w-3 h-3 flex-shrink-0 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z" />
             <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-2 0a6 6 0 11-12 0 6 6 0 0112 0z" clipRule="evenodd" />
           </svg>
-          <span className="text-xs text-highlight-cyan font-normal opacity-60">{redemptionLabel}</span>
+          <span className="min-w-0 truncate text-xs text-highlight-cyan font-normal opacity-60">{redemptionLabel}</span>
+          {redeemedTitle && redeemedCost && (
+            <span className="inline-flex flex-shrink-0 items-center gap-0.5 text-xs text-highlight-cyan/80 font-medium tabular-nums">
+              {redemptionPointsIcon ? (
+                <img
+                  src={redemptionPointsIcon}
+                  alt=""
+                  className="w-3 h-3 inline-block rounded-full object-cover"
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
+              ) : (
+                <ChannelPointsIcon size={12} className="text-highlight-cyan/80" />
+              )}
+              {Number(redeemedCost).toLocaleString()}
+            </span>
+          )}
         </div>
       )}
       {/* Reply indicator */}
@@ -3574,7 +3645,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   name={renderedName}
                   nameTextStyle={usernameStyle}
                   nameStyle={nameStyle}
-                  separator={nameSeparator}
+                  separator={isRewardEventRow ? 'none' : nameSeparator}
                   accentColor={prefixAccentColor}
                   interactive
                   onClick={(e) => {
@@ -3618,7 +3689,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 />
                 <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
                   <span style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
-                    {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
+                    {' '}{isRewardEventRow && <span className="text-textSecondary">redeemed </span>}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>
                   {redemptionCost && (
                     <span className="inline-flex items-center gap-0.5 ml-1 align-middle text-highlight-cyan/90 font-medium">

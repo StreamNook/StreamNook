@@ -14,6 +14,15 @@ import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
 import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
+import { IS_MOBILE } from '../utils/platform';
+import {
+    MIRRORED_NOTIFICATION_ACTIVATE_EVENT,
+    type MirroredNotice,
+    type MirroredNoticeKind,
+    NOTICE_ACTION_PENDING_EVENT,
+    type NoticeAction,
+    type NoticeReply,
+} from '../utils/notificationMirror';
 import { Tooltip } from './ui/Tooltip';
 import { ProviderIcon } from './overlay/ProviderIcon';
 import { SevenTvAvatar } from './SevenTvAvatar';
@@ -41,6 +50,8 @@ const CACHE_EXPIRY_DAYS = 7;
 // center before it auto-removes, so previews don't pile up with real ones.
 // Kept >= the live preview hold (8s) so the entry outlasts its own preview.
 const TEST_NOTIFICATION_TTL_MS = 8000;
+// Click actions kept for notifications shown in a MultiChat window.
+const MAX_MIRRORED_ACTIONS = 12;
 
 
 interface TwitchRewardFromBackend {
@@ -501,10 +512,106 @@ const DynamicIsland = () => {
         playGatedNotificationSound(settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume);
     }, [settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume]);
 
-    // Send native Windows desktop notification (disabled - plugin not installed)
-    const sendNativeNotification = useCallback(async (_title: string, _body: string) => {
-        // Native notifications are disabled - the tauri-plugin-notification is not installed
-        // To re-enable, add the plugin to Cargo.toml and re-import the functions
+    // Every notification below is announced here once, in plain words, after
+    // its settings gates passed. Rust shows it in a MultiChat window while this
+    // window is hidden or minimized, and drops it otherwise; the sound stays
+    // ours. A click on that card comes back as an activate event with the id,
+    // and the action runs here, the window that can perform it.
+    const mirroredActionsRef = useRef(new Map<string, () => void>());
+    const mirrorNotification = useCallback((notice: {
+        kind: MirroredNoticeKind;
+        title: string;
+        body?: string;
+        imageUrl?: string | null;
+        roundImage?: boolean;
+        action?: { label: string; run: () => void };
+        /** The action as data, for a Windows notification used after a restart. */
+        target?: NoticeAction;
+        /** A reply box on the Windows notification. */
+        reply?: NoticeReply;
+    }) => {
+        if (IS_MOBILE) return;
+        const id = `mirror-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const actions = mirroredActionsRef.current;
+        if (notice.action) {
+            actions.set(id, notice.action.run);
+            // Only cards still on screen can be clicked, so a handful is plenty.
+            while (actions.size > MAX_MIRRORED_ACTIONS) {
+                actions.delete(actions.keys().next().value as string);
+            }
+        }
+        const payload: MirroredNotice = {
+            id,
+            kind: notice.kind,
+            title: notice.title,
+            body: notice.body ?? '',
+            imageUrl: notice.imageUrl || null,
+            roundImage: !!notice.roundImage,
+            actionLabel: notice.action?.label ?? null,
+            action: notice.target ?? null,
+            reply: notice.reply ?? null,
+        };
+        invoke<string | null>('mirror_notification', { notice: payload })
+            .then((target) => { if (!target) actions.delete(id); })
+            .catch((e) => {
+                actions.delete(id);
+                Logger.debug('[DynamicIsland] mirror_notification failed:', e);
+            });
+    }, []);
+
+    // A notification used after a restart (or one Rust raised itself, like a
+    // chat mention) leaves its action in Rust. It is taken once, on the event
+    // or on mount when the click started the app, and run here.
+    useEffect(() => {
+        if (IS_MOBILE) return;
+        const run = (action: NoticeAction) => {
+            const store = useAppStore.getState();
+            switch (action.type) {
+                case 'watch': {
+                    const go = () => { void useAppStore.getState().startStream(action.channel); };
+                    if (!store.isBooting) { go(); return; }
+                    const stop = useAppStore.subscribe((s) => {
+                        if (!s.isBooting) { stop(); go(); }
+                    });
+                    return;
+                }
+                case 'whisper':
+                    store.openWhisperWithUser({
+                        id: action.userId,
+                        login: action.login,
+                        display_name: action.name,
+                        profile_image_url: action.avatar ?? undefined,
+                    });
+                    return;
+                case 'drops':
+                    store.setShowDropsOverlay(true);
+                    return;
+                case 'badges':
+                    store.setShowBadgesOverlay(true);
+                    return;
+                case 'changelog':
+                    requestChangelog(action.version ?? undefined);
+                    return;
+            }
+        };
+        const take = () => {
+            invoke<NoticeAction | null>('take_notice_action')
+                .then((action) => { if (action) run(action); })
+                .catch((e) => Logger.debug('[DynamicIsland] take_notice_action failed:', e));
+        };
+        take();
+        const unlisten = listen(NOTICE_ACTION_PENDING_EVENT, take);
+        return () => { unlisten.then((fn) => fn()); };
+    }, []);
+
+    useEffect(() => {
+        const unlisten = listen<string>(MIRRORED_NOTIFICATION_ACTIVATE_EVENT, (event) => {
+            const actions = mirroredActionsRef.current;
+            const run = actions.get(event.payload);
+            actions.delete(event.payload);
+            run?.();
+        });
+        return () => { unlisten.then((fn) => fn()); };
     }, []);
 
     // Add notification
@@ -583,12 +690,18 @@ const DynamicIsland = () => {
             if (soundEnabled) {
                 playNotificationSound();
             }
-            sendNativeNotification('Update Available', `StreamNook v${status.latest_version} is ready to download`);
+            mirrorNotification({
+                kind: 'update',
+                title: 'Update available',
+                body: `StreamNook v${status.latest_version} is ready to download`,
+                action: { label: 'See what\'s new', run: () => requestChangelog(status.latest_version) },
+                target: { type: 'changelog', version: status.latest_version },
+            });
         });
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [notificationsEnabled, showUpdateNotifications, addNotification, soundEnabled, playNotificationSound, useDynamicIsland, sendNativeNotification]);
+    }, [notificationsEnabled, showUpdateNotifications, addNotification, soundEnabled, playNotificationSound, useDynamicIsland, mirrorNotification]);
 
     // Listen for live notifications
     useEffect(() => {
@@ -694,17 +807,25 @@ const DynamicIsland = () => {
                 playNotificationSound();
             }
 
-            // Send native notification (note: backend also sends one, but this ensures frontend settings are respected)
-            sendNativeNotification(
-                `${data.streamer_name} is now live!`,
-                liveActivityText(data.game_name) || data.stream_title || 'Streaming now'
-            );
+            // Another platform's go-live for an entry already announced is not
+            // news; the card for the first one said it.
+            if (!data.merge_into) {
+                mirrorNotification({
+                    kind: 'live',
+                    title: `${data.streamer_name} is live`,
+                    body: liveActivityText(data.game_name) || data.stream_title || '',
+                    imageUrl: data.streamer_avatar,
+                    roundImage: true,
+                    action: { label: 'Watch', run: () => { void startStream(data.streamer_login); } },
+                    target: { type: 'watch', channel: data.streamer_login },
+                });
+            }
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, notificationsEnabled, showLiveNotifications, showFavoriteLiveNotifications, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, sendNativeNotification]);
+    }, [addNotification, notificationsEnabled, showLiveNotifications, showFavoriteLiveNotifications, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
 
     // Listen for whisper notifications
     useEffect(() => {
@@ -771,17 +892,42 @@ const DynamicIsland = () => {
                 );
             }
 
-            // Send native notification for whispers
-            sendNativeNotification(
-                `Whisper from ${data.from_user_name}`,
-                data.text.length > 100 ? `${data.text.substring(0, 100)}...` : data.text
-            );
+            mirrorNotification({
+                kind: 'whisper',
+                title: `Whisper from ${data.from_user_name}`,
+                body: data.text,
+                imageUrl: profileImageUrl,
+                roundImage: true,
+                action: {
+                    label: 'Open',
+                    run: () => openWhisperWithUser({
+                        id: data.from_user_id,
+                        login: data.from_user_login,
+                        display_name: data.from_user_name,
+                        profile_image_url: profileImageUrl,
+                    }),
+                },
+                target: {
+                    type: 'whisper',
+                    userId: data.from_user_id,
+                    login: data.from_user_login,
+                    name: data.from_user_name,
+                    avatar: profileImageUrl ?? null,
+                },
+                reply: {
+                    type: 'whisper',
+                    userId: data.from_user_id,
+                    login: data.from_user_login,
+                    name: data.from_user_name,
+                    avatar: profileImageUrl ?? null,
+                },
+            });
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, showWhisperNotifications, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, sendNativeNotification]);
+    }, [addNotification, playNotificationSound, notificationsEnabled, showWhisperNotifications, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
 
     // Rewards Twitch names for your account (a badge earned, a drop reward
     // waiting), off its own notification feed, polled and classified in Rust.
@@ -824,13 +970,23 @@ const DynamicIsland = () => {
                 addToast(data.body_plain, 'success', undefined, { skipIsland: true });
             }
 
-            sendNativeNotification(title, data.body_plain);
+            mirrorNotification({
+                kind: 'twitch_reward',
+                title,
+                body: data.body_plain,
+                imageUrl: data.thumbnail_url,
+                action: {
+                    label: 'View',
+                    run: () => (data.kind === 'badge' ? setShowBadgesOverlay(true) : setShowDropsOverlay(true)),
+                },
+                target: { type: data.kind === 'badge' ? 'badges' : 'drops' },
+            });
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, showTwitchRewardNotifications, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
+    }, [addNotification, playNotificationSound, notificationsEnabled, showTwitchRewardNotifications, soundEnabled, useDynamicIsland, useToast, addToast, setShowBadgesOverlay, setShowDropsOverlay, mirrorNotification]);
 
     // Gift subs you received. The only source for these is Twitch's own
     // notification feed, polled in Rust; the event arrives already filtered to
@@ -873,13 +1029,25 @@ const DynamicIsland = () => {
                 addToast(data.body_plain, 'success', undefined, { skipIsland: true });
             }
 
-            sendNativeNotification('Gift subscription', data.body_plain);
+            const giftChannel = data.channel_login;
+            mirrorNotification({
+                kind: 'gift_sub',
+                title: 'Gift subscription',
+                body: data.body_plain,
+                // The thumbnail is the gifter's avatar.
+                imageUrl: data.thumbnail_url,
+                roundImage: true,
+                action: giftChannel
+                    ? { label: 'Open channel', run: () => { void startStream(giftChannel); } }
+                    : undefined,
+                target: giftChannel ? { type: 'watch', channel: giftChannel } : undefined,
+            });
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, showGiftSubNotifications, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
+    }, [addNotification, playNotificationSound, notificationsEnabled, showGiftSubNotifications, soundEnabled, useDynamicIsland, useToast, addToast, startStream, mirrorNotification]);
 
     // Somebody gave this member a StreamNook membership. Raised by Rust's
     // gift poll (services/membership_gifts.rs), once per gift, already worded.
@@ -916,16 +1084,18 @@ const DynamicIsland = () => {
                     );
                 }
 
-                sendNativeNotification(
-                    'StreamNook membership',
-                    data.bodyPlain ?? 'Somebody gave you a membership. Your perks are already active.',
-                );
+                mirrorNotification({
+                    kind: 'membership_gift',
+                    title: 'You were given a StreamNook membership',
+                    body: data.bodyPlain ?? 'Your perks are already active.',
+                    action: { label: 'View', run: () => openSettings('Profile') },
+                });
             },
         );
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
+    }, [addNotification, playNotificationSound, notificationsEnabled, soundEnabled, useDynamicIsland, useToast, addToast, openSettings, mirrorNotification]);
 
     // Listen for drop claimed notifications
     useEffect(() => {
@@ -974,17 +1144,20 @@ const DynamicIsland = () => {
                 );
             }
 
-            // Send native notification for drops
-            sendNativeNotification(
-                'Drop Claimed',
-                data.game_name ? `${data.drop_name} - ${data.game_name}` : data.drop_name
-            );
+            mirrorNotification({
+                kind: 'drops',
+                title: 'Drop claimed',
+                body: data.game_name ? `${data.drop_name} (${data.game_name})` : data.drop_name,
+                imageUrl: data.benefit_image_url,
+                action: { label: 'View', run: () => setShowDropsOverlay(true) },
+                target: { type: 'drops' },
+            });
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, notificationsEnabled, showDropsNotifications, useDynamicIsland, useToast, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, sendNativeNotification]);
+    }, [addNotification, notificationsEnabled, showDropsNotifications, useDynamicIsland, useToast, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, mirrorNotification]);
 
     // Channel points: Rust gathers a burst of earns and announces it once
     // (services/channel_points_summary.rs); this presents the summary.
@@ -1120,18 +1293,18 @@ const DynamicIsland = () => {
             addToast(toastContent, 'channel_points');
         }
 
-        // Send native notification for channel points
         const channelInfo = uniqueChannels.length === 1 && uniqueChannels[0]
             ? uniqueChannels[0]
             : uniqueChannels.length > 1
                 ? (channelListDisplay ?? `${uniqueChannels.length} channels`)
                 : firstReason;
-        sendNativeNotification(
-            `+${totalPoints.toLocaleString()} Channel Points`,
-            channelInfo
-        );
+        mirrorNotification({
+            kind: 'channel_points',
+            title: `+${totalPoints.toLocaleString()} Channel Points`,
+            body: channelInfo,
+        });
 
-    }, [useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, sendNativeNotification]);
+    }, [useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, mirrorNotification]);
 
     useEffect(() => {
         const unlisten = listen<ChannelPointsSummary>('channel-points-summary', (event) => {
@@ -1216,13 +1389,16 @@ const DynamicIsland = () => {
                     );
                 }
 
-                // Send native notification for badges
-                const nativeStatusText = effectiveStatus === 'new' ? 'New badge available' :
+                const statusLine = effectiveStatus === 'new' ? 'New badge available' :
                     effectiveStatus === 'available' ? 'Badge available now' : 'Badge coming soon';
-                sendNativeNotification(
-                    badge.badge_name,
-                    `${nativeStatusText}${when ? ` - ${when}` : ''}`
-                );
+                mirrorNotification({
+                    kind: 'badge',
+                    title: badge.badge_name,
+                    body: `${statusLine}${when ? ` (${when})` : ''}`,
+                    imageUrl: badge.badge_image_url,
+                    action: { label: 'View', run: () => setShowBadgesOverlay(true) },
+                    target: { type: 'badges' },
+                });
 
                 if (soundEnabled) {
                     playNotificationSound();
@@ -1233,7 +1409,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [notificationsEnabled, showBadgeNotifications, useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, setShowBadgesOverlay, sendNativeNotification]);
+    }, [notificationsEnabled, showBadgeNotifications, useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, setShowBadgesOverlay, mirrorNotification]);
 
     // Listen for new drops in favorited categories (on app startup)
     useEffect(() => {
@@ -1284,13 +1460,16 @@ const DynamicIsland = () => {
                 );
             }
 
-            // Send native notification
-            sendNativeNotification(
-                `New drops for ${data.game_name}!`,
-                data.new_count === 1 
-                    ? data.campaign_names[0] 
-                    : `${data.new_count} new campaigns available`
-            );
+            mirrorNotification({
+                kind: 'drops',
+                title: `New drops for ${data.game_name}`,
+                body: data.new_count === 1
+                    ? data.campaign_names[0]
+                    : `${data.new_count} new campaigns available`,
+                imageUrl: data.game_image,
+                action: { label: 'View', run: () => setShowDropsOverlay(true) },
+                target: { type: 'drops' },
+            });
 
             if (soundEnabled) {
                 playNotificationSound();
@@ -1300,7 +1479,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [notificationsEnabled, showFavoriteDropsNotifications, useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, sendNativeNotification]);
+    }, [notificationsEnabled, showFavoriteDropsNotifications, useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, mirrorNotification]);
 
     // Click outside, or Esc, to close
     useEffect(() => {

@@ -8,6 +8,7 @@ import { formatShortCount } from '../utils/streamStats';
 import { earnOfflineAccolade, PERFECT_CORNER_ACCOLADE_ID, SHINY_ACCOLADE_ID } from '../utils/offlineAccolades';
 import type { OfflineRoom, TwitchStream } from '../types';
 import { agoLabel, durationLabel, lastLiveLabel, nextStreamLabel } from '../utils/lastLive';
+import { formatVodTime } from '../utils/vodProgress';
 import { SevenTvAvatar } from './SevenTvAvatar';
 
 /** Until a room answers (or for a channel with no room, like a Kick tile):
@@ -254,13 +255,25 @@ export function OfflineCard({
             onClick={onPlayVod}
             disabled={vodBusy}
             title={vod.title || undefined}
-            className="glass-button flex h-9 items-center gap-2 rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
+            className="glass-button relative flex h-9 items-center gap-2 overflow-hidden rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
           >
             <Play size={13} fill="currentColor" className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Watch the {vod.category ? `${vod.category} ` : ''}stream from {agoLabel(vod.created_at) ?? 'last time'}
+              {vod.resume_secs != null ? 'Resume' : 'Watch'} the {vod.category ? `${vod.category} ` : ''}stream from{' '}
+              {agoLabel(vod.created_at) ?? 'last time'}
             </span>
-            <span className="shrink-0 tabular-nums text-textSecondary">{durationLabel(vod.length_seconds)}</span>
+            <span className="shrink-0 tabular-nums text-textSecondary">
+              {vod.resume_secs != null ? `at ${formatVodTime(vod.resume_secs)}` : durationLabel(vod.length_seconds)}
+            </span>
+            {/* How far in, the same bar a VOD card carries. Rust picked the
+                position; the room starts the VOD there. */}
+            {vod.resume_secs != null && vod.length_seconds > 0 && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-accent"
+                style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
+              />
+            )}
           </button>
         )}
 

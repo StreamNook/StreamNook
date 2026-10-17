@@ -76,6 +76,9 @@ const ModerationSettings = () => {
   const modDragLayout: 'column' | 'bar' = cd?.mod_drag_layout === 'bar' ? 'bar' : 'column';
   const setModDragLayout = (v: 'column' | 'bar') =>
     updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_drag_layout: v } });
+  const modDragCursor: 'row' | 'edge' = cd?.mod_drag_cursor === 'edge' ? 'edge' : 'row';
+  const setModDragCursor = (v: 'row' | 'edge') =>
+    updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_drag_cursor: v } });
   // The inline Pin button is always on for mods; this only toggles the extra
   // drag-gesture Pin tile. Legacy 'drag' maps to 'both' (button + drag tile).
   const modPinStyle: 'inline' | 'both' = cd?.mod_pin_style === 'inline' ? 'inline' : 'both';
@@ -141,7 +144,7 @@ const ModerationSettings = () => {
           title="Method"
           onReset={resetFor('chat_design.mod_action_style')}
           description="How you act on a message: Buttons show delete, timeout, and ban when you hover it; Drag lets you pick it up and drop it on a color-coded action bucket; Both gives you both."
-          help="Buttons keep message text selectable. In Drag mode text selection is off, so use Copy instead. Everyone gets profile and whisper buckets; delete, timeout, and ban buckets only appear where you are a mod or the broadcaster. Bucket position: Beside chat is a column of bigger tiles left of chat, clear of the player controls; Above chat is a compact cluster right above the message. Pin bucket adds a Pin tile to the buckets; mods always get a Pin button beside Copy."
+          help="Buttons keep message text selectable. In Drag mode text selection is off, so use Copy instead. Everyone gets profile and whisper buckets; delete, timeout, and ban buckets only appear where you are a mod or the broadcaster. Bucket position: Beside chat is a column of bigger tiles left of chat, clear of the player controls; Above chat is a compact cluster right above the message. Grab cursor: Whole message shows the hand anywhere on a message, Edge only shows it on the strip at the left edge (you can pick a message up from anywhere either way). Pin bucket adds a Pin tile to the buckets; mods always get a Pin button beside Copy."
         >
           <SegmentedSelect<'buttons' | 'drag' | 'both'>
             value={modActionStyle}
@@ -164,6 +167,20 @@ const ModerationSettings = () => {
                     options={[
                       { value: 'column', label: 'Beside chat' },
                       { value: 'bar', label: 'Above chat' },
+                    ]}
+                  />
+                }
+              />
+              <SubControl
+                title="Grab cursor"
+                onReset={resetFor('chat_design.mod_drag_cursor')}
+                control={
+                  <SegmentedSelect<'row' | 'edge'>
+                    value={modDragCursor}
+                    onChange={setModDragCursor}
+                    options={[
+                      { value: 'row', label: 'Whole message' },
+                      { value: 'edge', label: 'Edge only' },
                     ]}
                   />
                 }

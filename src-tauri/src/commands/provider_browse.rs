@@ -41,20 +41,24 @@ pub async fn provider_directory(
     cursor: Option<String>,
     limit: Option<u32>,
 ) -> Result<StreamPage, String> {
-    source_for(&provider)
+    let mut page = source_for(&provider)
         .await?
         .directory(category.as_deref(), cursor.as_deref(), limit.unwrap_or(30))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_provider(&mut page.streams, crate::services::hidden_channels::Realm::Browse);
+    Ok(page)
 }
 
 #[tauri::command]
 pub async fn provider_search(provider: String, query: String) -> Result<StreamPage, String> {
-    source_for(&provider)
+    let mut page = source_for(&provider)
         .await?
         .search(&query)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_provider(&mut page.streams, crate::services::hidden_channels::Realm::Search);
+    Ok(page)
 }
 
 /// One platform's search results, sent the moment that platform answers.
@@ -84,14 +88,20 @@ pub async fn search_platforms(
             crate::services::twitch_service::TwitchService::search_channels(state, query)
                 .await
                 .map_err(|e| e.to_string())
-                .and_then(|rows| serde_json::to_value(rows).map_err(|e| e.to_string()))
+                .and_then(|mut rows| {
+                    crate::services::hidden_channels::retain_twitch(&mut rows, crate::services::hidden_channels::Realm::Search);
+                    serde_json::to_value(rows).map_err(|e| e.to_string())
+                })
         } else {
             match source_for(&provider).await {
                 Ok(src) => src
                     .search(query)
                     .await
                     .map_err(|e| e.to_string())
-                    .and_then(|page| serde_json::to_value(page.streams).map_err(|e| e.to_string())),
+                    .and_then(|mut page| {
+                        crate::services::hidden_channels::retain_provider(&mut page.streams, crate::services::hidden_channels::Realm::Search);
+                        serde_json::to_value(page.streams).map_err(|e| e.to_string())
+                    }),
                 Err(e) => Err(e),
             }
         };
@@ -132,7 +142,9 @@ pub async fn provider_channel_meta(
 /// paint. Steady-state updates arrive on the `provider-live-update` event.
 #[tauri::command]
 pub async fn get_provider_followed_live() -> Result<Vec<ProviderStream>, String> {
-    Ok(crate::services::provider_live_service::snapshot().await)
+    let mut rows = crate::services::provider_live_service::snapshot().await;
+    crate::services::hidden_channels::retain_provider(&mut rows, crate::services::hidden_channels::Realm::Follows);
+    Ok(rows)
 }
 
 /// The current who's-live snapshot for FAVOURITED channels, across every

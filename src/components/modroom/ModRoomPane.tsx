@@ -934,6 +934,9 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
                 }
               : undefined
           }
+          // A GIF posts straight to the channel's public chat, which is not
+          // where a mod-room message goes.
+          gifs={false}
         />
         {mentionOpen && (
           <div

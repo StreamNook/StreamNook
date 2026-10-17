@@ -6,6 +6,11 @@ import { Logger } from '../utils/logger';
  *  fields Rust keeps so a future "continue watching" row needs no lookup. */
 export interface VodProgressTarget {
   videoId: string;
+  /** Rust's stamp for this VOD start (`VodStartInfo.play_id`), sent back with
+   *  every report: Rust decides from it whether the report is a VOD the viewer
+   *  opened or a live session looking back. Required: a report without it
+   *  records nothing, which once silently dropped the popout VOD player. */
+  playId: number;
   channelLogin?: string;
   /** Display name, so a Continue Watching card is not stuck with a bare
    *  lowercase login. */
@@ -25,13 +30,15 @@ const CHECKPOINT_MS = 5000;
  * and immediately on pause, seek, end and teardown so the last position is
  * never more than a checkpoint stale.
  *
- * Passing `null` (live, clip, idle) attaches nothing.
+ * Passing `null` (live, clip, idle) attaches nothing. What a report may write
+ * is Rust's call, not this hook's.
  */
 export function useVodProgressReporter(
   videoRef: RefObject<HTMLVideoElement | null>,
   target: VodProgressTarget | null,
 ): void {
   const videoId = target?.videoId ?? null;
+  const playId = target?.playId;
   const channelLogin = target?.channelLogin;
   const channelName = target?.channelName;
   const title = target?.title;
@@ -55,6 +62,7 @@ export function useVodProgressReporter(
       const duration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
       invoke('report_vod_position', {
         videoId,
+        playId,
         positionSecs: position,
         durationSecs: duration,
         channelLogin,
@@ -86,5 +94,5 @@ export function useVodProgressReporter(
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('ended', onEnded);
     };
-  }, [videoRef, videoId, channelLogin, channelName, title, thumbnailUrl]);
+  }, [videoRef, videoId, playId, channelLogin, channelName, title, thumbnailUrl]);
 }

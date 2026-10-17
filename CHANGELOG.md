@@ -1,3 +1,75 @@
+## [8.8.12] - 2026-10-15
+
+### ✨ Features
+- StreamNook for Windows now comes as an installer. It installs for your account only with no admin prompt, adds StreamNook to the Start Menu, and uninstalls cleanly from Windows settings. If you use the portable copy, your next update moves you onto the installed app, keeping your settings and sign-ins.
+- Cheer with bits from the chat box. Type a cheer like `Cheer100`, or open the Bits tab, pick an amount (never below the channel's minimum) and a cheermote. A card shows what Send will spend before any bits leave your balance, and Get Bits opens Twitch's bits page inside StreamNook. Cheers in chat show the cheermote they were sent with.
+- The channel points button is now a wallet with Points and Bits tabs. A "+N" rises off it for every points gain, chest or otherwise, and hovering it shows what the points were for. To see it only for chests, change Settings > Chat > Chat Input > Wallet balance > Show gains.
+- One Tools button in the chat box holds chat modes, moderation, polls, predictions and drops, replacing the separate chart, pickaxe and shield buttons. It only appears when something in it applies to you.
+- The emote menu holds Emotes, GIFs and Commands, with a switcher along its bottom, and it fits short windows instead of running off the top. The separate commands button is gone.
+- Chat modes stay out of the way until they stop you. In a followers-only chat the message box says "Follow to chat" or "You can chat in 4 minutes", and says nothing once your follow is old enough. To keep a chip on screen whenever a mode is on, pick Always under Settings > Chat > Chat Input > Chat modes > Style.
+- While StreamNook is minimized, in the tray or behind another app, notifications can also appear as system notifications. On Windows they carry the streamer's picture and a button to act on them, whispers have a box to reply right from the notification, and clicking one opens StreamNook even after it closed. macOS and Linux show the title and text. Turn them on under Settings > Notifications > Display > System notifications, where Try one shows an example.
+- A notification when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background. On Windows you can answer from the notification, and it posts as a reply in that chat. It's under Settings > Notifications > Mentions and replies.
+- With the main window minimized or in the tray, notifications show in your MultiChat window, and clicking one opens StreamNook on it.
+- Continue Watching follows you between computers. A VOD you leave in one StreamNook picks up at the same spot in another where you're signed in, dismissing a card removes it everywhere, and your place is shared with Twitch's own apps. It's on by default under Settings > Player > Playback > Resume VODs > Device sync.
+- Come back to a Twitch stream you left while it was live, and the offline room offers to resume its recording where you stopped. Reopening that broadcast marks your spot on the timeline with a ring; click near it to jump there.
+- Social links in a streamer's About panel show as branded buttons, and links with a rich preview (Discord invites, YouTube channels, X and Instagram profiles) show as cards that open in your browser.
+- Share links work for YouTube, Kick and TikTok streams. A link opens the stream in StreamNook when it's installed and the platform's own page when it isn't, and a YouTube link points at the live video.
+- Phrase, user and badge highlights can keep their color while on screen, the way mentions can. Tick Keep tinted on any rule.
+
+### 🐛 Bug Fixes
+- Kick chat shows new messages again. Kick retired the connection key StreamNook used, so chats loaded their history and then froze.
+- Twitch chat no longer freezes every minute or so on networks that cut unencrypted connections. Chat connects encrypted the way twitch.tv does, falls back to a second encrypted route, and notices a dead connection in about 30 seconds (it took 75).
+- A YouTube streamer dropping for a moment no longer sends you back to Home. StreamNook waits for them to reconnect, picks the stream back up in place, and leaves only once the broadcast has ended. Kick and TikTok streams get the same check, and a stalled Twitch player whose stream is still live reloads.
+- On Windows, the window no longer stays black after an update. StreamNook waits for the previous version to finish closing before it starts, and if the window's browser process crashes, StreamNook restarts once. Pop-out and MultiChat windows are covered too.
+- Drops plugins notice when you sign in to or out of Drops without being turned off and on, and no longer ask for access while you're signed out.
+- A message that only types a cheer, like "Cheer100" with no bits sent, no longer shows a cheermote.
+- The stream overlay says "cheered 1 bit" instead of "1 bits".
+- The mod room's emote menu no longer offers GIFs, which would have posted in the channel's public chat.
+
+### 🔧 Maintenance
+- Removed an old update path that downloaded StreamNook without checking its signature. Every update is verified.
+
+## [8.8.11] - 2026-10-13
+
+### ✨ Features
+- A new channel points menu. Rewards show their art without boxes, your balance sits up top with a search for channels with lots of rewards, and a colored dot says why a reward is unavailable: red when you can't afford it (with how close you are), amber while it's on cooldown, grey when it's paused or sold out. The menu eases open and closed, and closes when you click outside it.
+- Replies to you can have their own sound. Pick one under Settings > Chat > Mentions & Replies > Reply sound, or keep Same as mentions.
+- Seven retro sounds join the built-in tones for mentions, replies and highlights: Morse SMS, Gran Vals, Pager, Flip Phone, Arcade, Spy Gadget and Old Ringtone.
+- Mentions and replies to you can stay tinted the whole time they're on screen instead of only flashing as they land. Turn on Keep tinted under Settings > Chat > Mentions & Replies > Highlight.
+- Moderators who drag messages can choose where the grab hand shows: anywhere on the message, or only on the strip at its left edge. You can pick a message up from anywhere either way. Settings > Moderation > Method > Grab cursor.
+- Offline channels on Home show which platform they're on when you follow channels on more than one.
+
+### 🐛 Bug Fixes
+- Drop progress counts again while you watch a stream in the app or on your phone.
+- The channel points menu lists a channel's rewards and your balance without the Drops sign-in.
+- Chats show recent messages when you join. A chat first opened from the chat dock or MultiChat could stay empty until someone talked, and history now comes straight from Twitch, 7TV, BTTV and FFZ emotes included.
+- Static 7TV emotes in Favorites no longer blink or fade when you scroll the emote menu.
+- The Channel button on a search profile opens the channel inside StreamNook: Watch when they're live, Open chat when they're not.
+- Links to outside pages from About panels, badge pages and profile cards open in your browser every time.
+- Redemptions that don't ask for text read on one line, like "Supibot redeemed Hydrate".
+
+## [8.8.10] - 2026-10-13
+
+### ✨ Features
+- Hide channels. Right-click any stream and pick Hide channel to keep it out of Discover, categories and Recommended, and, if you like, out of chat, search and your follows too. Twitch channels can be blocked on Twitch in the same step. Settings > Interface > Hidden channels sets what a hide covers and lists everything you hid.
+- Chat modes take up less room: one small chip at the end of the message box names the mode that limits you, like "Slow 30s", and hovering it lists the rest. To see the mode in the message box itself, pick Placeholder under Settings > Chat > Chat Input > Chat modes > Style.
+- Favorite categories. Click the heart on any category to keep it in a Favorites row at the top of the Categories tab, with live viewer counts.
+- Profiles show a chatter's sub in the channel: months, tier, founder, Prime or gift, the channel's badge for their tenure and how close the next one is. Anyone not subscribed gets a Gift a sub button.
+- Badge pages say in one sentence how to earn the badge, like "Watch 30 minutes on dnd's channel while it streams Dungeons & Dragons." Badges limited to certain channels list them, and on the phone each one is a tap from watching.
+- `/lurk` picks one of 40 lurk lines each time. `/lurk making dinner` still adds your note.
+- On the phone, channel point rewards open in their own sheet: a grid with each reward's art and cost, and a full-size box for rewards that ask for text.
+
+### 🐛 Bug Fixes
+- Rewards that ask for text show their name in chat instead of "Redeemed a channel points reward".
+- Pinned messages show in every chat, offline chats included, without the Drops sign-in.
+- `/me` messages, `/lurk` included, show as actions in your own chat instead of starting with "/me".
+- Profiles and `/followage` no longer say "Not following" for people who follow. Twitch stopped sharing follows, so StreamNook asks Twitch directly where it can and says when it can't tell.
+- Channel point redemptions and shared chat show the channel's own sub badges, in chat and on the stream overlay.
+- Animated profile pictures pause while something covers them, like Settings or the full-screen player, and no longer blink when they pause or resume.
+
+### ⚡ Performance
+- The rewards menu opens straight away with the last list it read and refreshes in the background.
+
 ## [8.8.9] - 2026-10-12
 
 ### ✨ Features

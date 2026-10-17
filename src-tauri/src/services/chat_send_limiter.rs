@@ -961,6 +961,8 @@ mod tests {
         assert_eq!(f["slow"], 30);
         assert_eq!(f["r9k"], false);
         let modes = &f["modes"];
+        assert_eq!(modes["chip"], "Followers 10m");
+        assert_eq!(modes["exempt"], false);
         assert_eq!(modes["prompt"], "Followers-only (10m)");
         assert_eq!(modes["prompt_short"], "Followers 10m");
         assert_eq!(modes["modes"][0]["kind"], "followers_only");

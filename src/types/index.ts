@@ -84,6 +84,10 @@ export interface VideoPlayerSettings {
   wheel_volume_step?: number;
   /** Reopen a VOD where you left off. Default true. Typed in Rust. */
   resume_vod_playback?: boolean;
+  /** Keep Continue Watching and VOD positions the same across your
+   *  StreamNook installs (and your place in Twitch's apps). Only applies while
+   *  resume_vod_playback is on. Default true. */
+  sync_vod_progress?: boolean;
 }
 
 export interface CacheSettings {
@@ -205,6 +209,9 @@ export interface ChatDesignSettings {
   mention_color: string; // Hex color for @ mentions
   reply_color: string; // Hex color for reply threads
   mention_animation: boolean; // Enable red-shift animation for mentions
+  // Keep a mention or reply to you tinted the whole time it is on screen.
+  // Typed in Rust (ChatDesignSettings), which owns the default: off.
+  mention_hold?: boolean;
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
   timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
@@ -286,8 +293,12 @@ export interface ChatDesignSettings {
   mention_sound?: string;
   /** Mention sound volume, percent of the sound's own level (0-200, default 100). */
   mention_sound_volume?: number;
-  /** A reply to one of your messages also plays the mention sound (default true). */
+  /** A reply to one of your messages also plays the mention sound (default true), while `reply_sound` follows it. */
   mention_sound_replies?: boolean;
+  /** Sound for a reply to you: absent or empty follows the mention sound, 'none' is silent, else a tone id or `file:<id>`. */
+  reply_sound?: string;
+  /** Volume of a reply sound of its own, percent (0-200, default 100). */
+  reply_sound_volume?: number;
   /** @mention text weight in message bodies (default medium). */
   mention_weight?: 'regular' | 'medium' | 'bold';
   /** @mention slant: inherit (italic inside /me messages, the default), never, or always. */
@@ -362,6 +373,10 @@ export interface ChatDesignSettings {
   // Default 'both'. Profile/whisper buckets are available to everyone whenever
   // the grip is shown; delete/timeout/ban are mod-only either way.
   mod_action_style?: 'buttons' | 'drag' | 'both';
+  // Where the grab cursor shows while drag is on: 'row' = anywhere on the
+  // message, 'edge' = only the accent strip at its left edge. A press anywhere
+  // lifts the chatter either way. Default 'row'.
+  mod_drag_cursor?: 'row' | 'edge';
   // Style of the drag-to-moderate controls: 'column' = vertical bucket column
   // docked beside chat; 'bar' = horizontal bucket row above the chat. Default
   // 'column'. (A legacy 'slider' value may persist from older builds; it is
@@ -387,6 +402,9 @@ export interface HighlightPhrase {
   sound_id?: string | null;
   // Per-phrase cooldown for the sound, in seconds. Default 3.
   cooldown_seconds?: number;
+  // Keep tinted: hold the color behind the row while it is on screen, like
+  // chat_design.mention_hold does for mentions. Stamped by Rust. Default off.
+  hold?: boolean;
 }
 
 // A user-supplied audio file usable as a highlight sound. `id` is
@@ -430,6 +448,7 @@ export interface HighlightUser {
   color: string;
   sound_id?: string | null;
   cooldown_seconds?: number;
+  hold?: boolean; // Keep tinted, as on HighlightPhrase
 }
 
 // Highlight all messages from users carrying a specific badge. badge_key is
@@ -444,6 +463,7 @@ export interface HighlightBadge {
   color: string;
   sound_id?: string | null;
   cooldown_seconds?: number;
+  hold?: boolean; // Keep tinted, as on HighlightPhrase
 }
 
 // Built-in (flag-driven) message highlights. Each event is OFF by default to
@@ -661,17 +681,23 @@ export interface ChatInputSettings {
   // possible. All default to showing.
   hide_placeholder?: boolean;
   hide_emote_button?: boolean;
-  // Hide the command menu button (the slash-in-a-box left of the emote
-  // button). Typing / still opens the autocomplete.
-  hide_command_button?: boolean;
   hide_points_balance?: boolean;
-  // Show the channel points balance beside the points button instead of only
-  // on hover. Ignored while hide_points_balance is on.
+  // Show the wallet's balances (channel points, bits) beside its button
+  // instead of only on hover. Ignored while hide_points_balance is on.
   show_points_balance_inline?: boolean;
+  // Which gains rise off the wallet button as a "+N": every gain (the
+  // default) or only the bonus chest.
+  wallet_gains?: 'all' | 'chest';
   // Show the channel's chat modes (emote-only, followers-only, slow mode...)
   // in the message box while they are on. Typed in Rust
   // (models/settings.rs ChatInputSettings), which owns the default: on.
   show_room_modes?: boolean;
+  // How the modes show: named in place of "Send a message" only while one
+  // holds you back (the default), or one chip at the box's edge whenever a
+  // mode is on. Typed in Rust beside show_room_modes.
+  room_modes_style?: 'chip' | 'prompt';
+  // Backend-owned: set once the install moved from the chip to the prompt.
+  room_modes_prompt_adopted?: boolean;
 }
 
 // Screen anchor a toast popup appears at. Mirrors the Rust `toast_position`
@@ -706,7 +732,7 @@ export interface FavoriteChannel {
 export interface LiveNotificationSettings {
   enabled: boolean;
   play_sound: boolean;
-  sound_type?: string; // 'boop' | 'tick' | 'gentle' | 'soft' | 'whisper'
+  sound_type?: string; // a built-in tone id (BUILT_IN_SOUNDS) or `file:<id>`
   /** Notification sound volume, percent of the sound's own level (0-200, default 100). */
   sound_volume?: number;
   // Notification type toggles
@@ -728,11 +754,17 @@ export interface LiveNotificationSettings {
   // Rewards Twitch names for your account, off the same feed: a badge you
   // earned, a drop reward waiting to be claimed.
   show_twitch_reward_notifications?: boolean;
+  // Someone mentions you, or replies to you, in a Twitch chat you joined,
+  // while StreamNook is not the window in use (Rust: services/mention_notify.rs).
+  show_mention_notifications?: boolean;
   // Notification method toggles (Dynamic Island vs Toast)
   use_dynamic_island?: boolean;
   use_toast?: boolean;
-  // Native OS notifications (Windows/macOS)
+  // System notifications: Windows / macOS / Linux desktop notifications while
+  // StreamNook is not the window in use (Rust services/system_notify.rs); the
+  // phone keeps it on, the system shade being its delivery surface.
   use_native_notifications?: boolean;
+  // Left from an earlier desktop attempt; nothing reads it.
   native_only_when_unfocused?: boolean;
   // Quick update: clicking update toast immediately starts update
   quick_update_on_toast?: boolean;
@@ -1149,6 +1181,17 @@ export interface Settings {
   // Display identity for the entries in favorite_streamers. A sidecar, not a
   // replacement: favorite_streamers stays the answer to "is this favorited".
   favorite_channels?: FavoriteChannel[];
+  // Starred Twitch categories, in the order they were starred. Typed in Rust
+  // (models/settings.rs FavoriteCategory); edited only through the
+  // set_favorite_category command, never a page-built write.
+  favorite_categories?: FavoriteCategory[];
+  // Channels hidden from browsing (Discover, the sidebar's suggestions,
+  // categories, directories), keyed like favorite_streamers. Typed in Rust;
+  // edited only through set_channel_hidden and set_hidden_channel_blocked.
+  hidden_channels?: HiddenChannel[];
+  // What a newly hidden channel is hidden from besides browsing. Typed in Rust
+  // (HiddenRealms), which owns the default: everything.
+  hidden_channel_defaults?: HiddenRealms;
   chat_design?: ChatDesignSettings;
   chat_highlights?: ChatHighlightSettings;
   chat_customization?: ChatCustomizationSettings;
@@ -1474,6 +1517,18 @@ export interface AndroidRelease {
   changes: { title: string; body: string; topic: AndroidChangeTopic }[];
 }
 
+/** A rise in one of the viewer's balances on a channel (Rust `WalletGain`),
+ *  for the wallet button's "+N". */
+export interface WalletGain {
+  /** Grows with every gain: a new number means a new "+N". */
+  seq: number;
+  amount: number;
+  /** Why, in the viewer's words ("for watching"); null when Twitch did not say. */
+  reason: string | null;
+  /** A bonus chest. */
+  chest: boolean;
+}
+
 /** Channel points as the Rust channel-state service reports them. */
 export interface ChannelPoints {
   enabled: boolean;
@@ -1481,6 +1536,20 @@ export interface ChannelPoints {
   name: string | null;
   icon_url: string | null;
   available_claim_id: string | null;
+  last_gain: WalletGain | null;
+}
+
+/** What the wallet button needs about bits on a channel (Rust
+ *  `ChannelBitsFace`). The Bits tab reads `get_bits_state` when it opens. */
+export interface ChannelBitsFace {
+  enabled: boolean;
+  /** The smallest single cheer here. */
+  pick_min: number;
+  /** null when the twitch.tv session could not be read. */
+  balance: number | null;
+  /** Twitch's still Cheer gem for the balance; null until known. */
+  gem_url: string | null;
+  last_gain: WalletGain | null;
 }
 
 /** One channel in a Twitch collaboration, as Rust reports it. */
@@ -1528,6 +1597,8 @@ export interface ChannelState {
   viewers_at: number | null;
   points: ChannelPoints | null;
   points_at: number | null;
+  bits: ChannelBitsFace | null;
+  bits_at: number | null;
   pinned: unknown[];
   pinned_at: number | null;
   collab: Collaboration | null;
@@ -1546,6 +1617,7 @@ export type ChannelStateUpdate =
       at: number;
     }
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
+  | { section: 'bits'; login: string; bits: ChannelBitsFace | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
   | { section: 'collab'; login: string; collab: Collaboration | null; at: number };
 
@@ -1600,6 +1672,34 @@ export interface HomeSnapshot {
    *  each platform's cached categories. */
   other_categories: ProviderCategory[];
   other_categories_at: number | null;
+  /** The Categories tab's favorites row, built in Rust with live viewer
+   *  counts, in the order the categories were starred. */
+  favorite_categories?: TwitchCategory[];
+  favorite_categories_at?: number | null;
+}
+
+/** A channel hidden from browsing, and whether StreamNook also blocked it on
+ *  Twitch. Mirrors Rust `models::settings::HiddenChannel`. */
+export interface HiddenChannel extends FavoriteChannel, Partial<HiddenRealms> {
+  blocked?: boolean;
+}
+
+/** Where a hidden channel is hidden besides browsing lists. Mirrors Rust
+ *  `models::settings::HiddenRealms`; absent means true. */
+export interface HiddenRealms {
+  /** Their messages, in every chat room. */
+  chat: boolean;
+  /** Search results. */
+  search: boolean;
+  /** Following, favorites, the sidebar and live notifications. */
+  follows: boolean;
+}
+
+/** A starred Twitch category. Mirrors Rust `models::settings::FavoriteCategory`. */
+export interface FavoriteCategory {
+  id: string;
+  name: string;
+  box_art_url: string;
 }
 
 /** Live favourites, the other live follows (ranked by viewers across every
@@ -1662,7 +1762,8 @@ export type HomeSnapshotUpdate =
       platforms?: string[];
       at: number;
     }
-  | { section: 'other_categories'; categories: ProviderCategory[]; at: number };
+  | { section: 'other_categories'; categories: ProviderCategory[]; at: number }
+  | { section: 'favorite_categories'; categories: TwitchCategory[]; at: number };
 
 /**
  * A live stream row. The name is historical: rows may now come from any
@@ -1721,6 +1822,8 @@ export interface OfflineRoom {
     length_seconds: number;
     thumbnail_url: string;
     category: string | null;
+    /** Where the viewer left this broadcast, when worth resuming. */
+    resume_secs: number | null;
   } | null;
   next_stream: {
     start_at: string;
@@ -1814,6 +1917,9 @@ export interface VodStartInfo {
   start_position_secs?: number;
   /** The viewer rewound a live broadcast into this recording. */
   rewound_from_live: boolean;
+  /** Rust's stamp for this start. Every position report carries it back, and
+   *  Rust decides from it what the report may write. Always sent. */
+  play_id: number;
   /** Audio ranges Twitch muted, merged and clamped by Rust. Absent or empty
    *  when none are known: on a `recording` VOD that means Twitch has not
    *  determined them yet, NOT that there are none. */
@@ -1866,6 +1972,10 @@ export interface LiveRewindInfo {
   available: boolean;
   video_id?: string;
   recorded_at?: string;
+  /** Where the viewer left this broadcast before this playback, for the
+   *  timeline's "you left here" mark. Absent when there is nothing to go
+   *  back to. */
+  left_off_secs?: number;
 }
 
 export interface TwitchUser {

@@ -3,7 +3,7 @@
 // come ready from Rust (`get_badge_wall`, services/badge_wall.rs); this only
 // lays it out at phone density.
 import { Fragment, useState } from 'react';
-import { Clapperboard, Coins, Dices, Eye, MapPin, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Coins, Dices, Eye, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { CardChip } from '../../components/ui/CardChip';
 import type { EarnChip, MissingNow } from './rewardsModel';
 
@@ -120,12 +120,20 @@ export function MobileMissingNow({ missing, onOpen }: { missing: MissingNow; onO
                   <span className="min-w-[3.5rem] flex-1 text-[13px] font-medium text-textPrimary truncate">{row.title}</span>
                   <EarnPill chips={row.chips} iconsOnly={row.icons_only} />
                 </div>
-                {row.random_note && (
-                  <div className="mt-0.5">
-                    <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
-                      <Dices size={11} className="shrink-0" />
-                      {row.random_note}
-                    </span>
+                {(row.random_note || row.channels_note) && (
+                  <div className="mt-0.5 flex items-center gap-2 min-w-0">
+                    {row.random_note && (
+                      <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
+                        <Dices size={11} className="shrink-0" />
+                        {row.random_note}
+                      </span>
+                    )}
+                    {row.channels_note && (
+                      <span className="inline-flex items-center gap-1 min-w-0 whitespace-nowrap text-[11px] text-textMuted">
+                        <Radio size={11} className="shrink-0" />
+                        <span className="truncate">{row.channels_note}</span>
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

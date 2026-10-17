@@ -30,11 +30,8 @@ use tauri::State;
 use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;
-use crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID;
 use crate::services::twitch_auth_service::TwitchAuthService;
-use crate::services::twitch_service::gql_device_id;
 
-const GQL_URL: &str = "https://gql.twitch.tv/gql";
 const GIPHY_BASE: &str = "https://api.giphy.com/v1/gifs";
 /// Eligibility changes when a sub starts or lapses, not minute to minute.
 const CONFIG_TTL: Duration = Duration::from_secs(600);
@@ -105,43 +102,15 @@ pub async fn clear_config_cache() {
     config_cache().write().await.clear();
 }
 
-/// Bound on reading the web session. On a phone it waits on the UI thread, and
-/// a backgrounded webview must not hang a picker or a send.
-const TOKEN_BUDGET: Duration = Duration::from_secs(30);
-
 /// The twitch.tv session token, or the same "not signed in" error the picker
 /// has always shown. Never prompts: the session comes from the app's sign-in.
 async fn web_session_token(auth: &TwitchAuthService) -> Result<String, String> {
-    match tokio::time::timeout(TOKEN_BUDGET, auth.get_token()).await {
-        Ok(Ok(token)) => Ok(token),
-        _ => Err("not signed in to Twitch".to_string()),
-    }
+    crate::services::twitch_web_gql::web_session_token(auth).await
 }
 
 /// POST an inline GQL operation with the viewer's web session token.
 async fn gql(token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let resp = crate::services::http::client()
-        .post(GQL_URL)
-        .header("Client-ID", TWITCH_WEB_CLIENT_ID)
-        .header("Authorization", format!("OAuth {}", token))
-        .header("X-Device-ID", gql_device_id())
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("GQL request failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("GQL answered {}", resp.status()));
-    }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("GQL response was not JSON: {e}"))?;
-    if let Some(errors) = json.get("errors") {
-        // Surfaced rather than swallowed: a schema drift here is exactly the
-        // failure mode that made the 7TV trending query silently dead for weeks.
-        log::warn!("[GIFs] GQL errors: {}", errors);
-    }
-    Ok(json)
+    crate::services::twitch_web_gql::post(Some(token), body, "GIFs").await
 }
 
 const CONFIG_QUERY: &str = r#"query getGifPickerConfig($channelID: ID!) {

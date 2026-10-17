@@ -78,6 +78,13 @@ export function sevenTvIdForStream(stream: { provider?: string | null; user_id?:
 export const isAnimatedPicture = (picture: SevenTvPicture | null | undefined): boolean =>
   !!picture && picture.animated.length > 0;
 
+/** Whether `url` is one of this picture's renditions, still or moving. */
+export const isPictureRendition = (
+  picture: SevenTvPicture | null | undefined,
+  url: string | null | undefined,
+): boolean =>
+  !!picture && !!url && (picture.still.some((i) => i.url === url) || picture.animated.some((i) => i.url === url));
+
 /**
  * How much a surface may move by its own nature:
  * - `animate`: the moving picture (one person, a focal surface: profile card,
@@ -152,9 +159,11 @@ export function picturePlan(
 
 /**
  * Whether the animated rendition is drawn right now. A `moving` picture
- * pauses (draws its still) while it is off screen or the window is hidden,
- * so a list of moving pictures only costs what is in view; one in view
- * always plays at its own frame rate.
+ * pauses (draws its still) while it is out of view or the window is hidden,
+ * so a list of moving pictures only costs what is seen; one in view always
+ * plays at its own frame rate. `onScreen` means actually in view: on screen,
+ * drawn, and not under an overlay or the full-screen player
+ * (utils/pictureVisibility).
  */
 export function pictureMovesNow(
   plan: PicturePlan,

@@ -438,6 +438,19 @@ const Home = () => {
 
     const [categoryStreams, setCategoryStreams] = useState<TwitchStream[]>([]);
     const [categoryStreamsCursor, setCategoryStreamsCursor] = useState<string | null>(null);
+    // A channel hidden from a card's menu leaves the grids on screen at once.
+    // Rust leaves it out of every list it answers from then on; these two
+    // came from answers given before the hide.
+    useEffect(() => {
+        const onHidden = (e: Event) => {
+            const id = (e as CustomEvent<string>).detail;
+            const keep = (s: TwitchStream) => favoriteIdOf(s) !== id;
+            setCategoryStreams((prev) => prev.filter(keep));
+            setProviderStreams((prev) => prev.filter(keep));
+        };
+        window.addEventListener('sn:channel-hidden', onHidden);
+        return () => window.removeEventListener('sn:channel-hidden', onHidden);
+    }, []);
     const [hasMoreCategoryStreams, setHasMoreCategoryStreams] = useState(true);
     const [isLoadingMoreCategoryStreams, setIsLoadingMoreCategoryStreams] = useState(false);
     const [isLoadingCategoryStreams, setIsLoadingCategoryStreams] = useState(false);
@@ -1637,6 +1650,11 @@ const Home = () => {
     // cached categories, each landing on its own; the Discover list likewise
     // arrives finished (`unifiedDiscover`).
     const unifiedCategories = useAppStore((s) => s.otherCategories);
+    // The favorites row above the Categories grid, built in Rust with live
+    // counts. It is also the answer to "is this one favorited": Rust updates
+    // it the moment a heart is clicked.
+    const favoriteCategories = useAppStore((s) => s.favoriteCategories);
+    const favoriteCategoryIds = useMemo(() => new Set(favoriteCategories.map((c) => c.id)), [favoriteCategories]);
 
     // The Categories tab shows category TILES until one is picked; every other
     // tab (and a drilled-into category) shows a stream grid.
@@ -2257,9 +2275,20 @@ const Home = () => {
                                                                 <h4 className="text-sm font-semibold text-textPrimary truncate transition-colors">
                                                                     {user.user_name}
                                                                 </h4>
-                                                                <p className="text-[10px] text-textSecondary truncate">
-                                                                    {lastLiveLabel(lastOnline)}
-                                                                </p>
+                                                                {/* The platform, as the live cards show it: a bare mark at
+                                                                    the end of the line, only while the list mixes platforms. */}
+                                                                <div className="flex items-center justify-between gap-1">
+                                                                    <p className="text-[10px] text-textSecondary truncate">
+                                                                        {lastLiveLabel(lastOnline)}
+                                                                    </p>
+                                                                    {isUnifiedView && (
+                                                                        <Tooltip content={providerLabel(streamProvider(user))} side="top">
+                                                                            <span className="flex flex-shrink-0 items-center opacity-80">
+                                                                                <ProviderLogo provider={streamProvider(user)} size={11} />
+                                                                            </span>
+                                                                        </Tooltip>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
 
@@ -2439,13 +2468,22 @@ const Home = () => {
         );
     };
 
-    const renderCategoryCard = (game: TwitchCategory) => {
+    const toggleFavoriteCategory = (e: React.MouseEvent, game: TwitchCategory, favorite: boolean) => {
+        e.stopPropagation();
+        invoke('set_favorite_category', {
+            category: { id: game.id, name: game.name, box_art_url: game.box_art_url },
+            favorite,
+        }).catch((err) => Logger.warn('[Home] Could not change the favorite category:', err));
+    };
+
+    const renderCategoryCard = (game: TwitchCategory, keyPrefix = '') => {
         const dropsCampaign = dropsGameIds.get(game.id);
         const hasDrops = !!dropsCampaign;
+        const isFavoriteCategory = favoriteCategoryIds.has(game.id);
 
         return (
             <div
-                key={game.id}
+                key={keyPrefix + game.id}
                 className={`glass-panel media-card cursor-pointer hover:bg-glass-hover transition-all duration-200 group overflow-hidden relative ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''} ${hasDrops ? 'ring-2 ring-accent shadow-accent/40' : ''}`}
                 style={hasDrops ? { boxShadow: '0 0 15px var(--color-accent-muted)' } : undefined}
                 onClick={() => handleCategoryClick(game)}
@@ -2496,11 +2534,30 @@ const Home = () => {
                     <Tooltip content={game.name} side="bottom"><h3 className="text-textPrimary font-medium text-sm line-clamp-2 group-hover:text-accent transition-colors">
                         {game.name}
                     </h3></Tooltip>
-                    {game.viewer_count !== undefined && (
-                        <p className="text-textSecondary text-xs mt-0.5">
-                            {game.viewer_count.toLocaleString()} viewers
-                        </p>
-                    )}
+                    {/* Viewers, and the favorite heart at the row's end: on the
+                        card, never over the artwork, like the stream cards. */}
+                    <div className="mt-0.5 flex items-center justify-between gap-1">
+                        <span className="text-textSecondary text-xs truncate">
+                            {game.viewer_count != null ? `${game.viewer_count.toLocaleString()} viewers` : ''}
+                        </span>
+                        <Tooltip content={isFavoriteCategory ? 'Remove from favorites' : 'Add to favorites'} side="top">
+                            <button
+                                type="button"
+                                onClick={(e) => toggleFavoriteCategory(e, game, !isFavoriteCategory)}
+                                aria-label={isFavoriteCategory ? `Remove ${game.name} from favorites` : `Add ${game.name} to favorites`}
+                                aria-pressed={isFavoriteCategory}
+                                className="-m-1 flex flex-shrink-0 items-center justify-center bg-transparent p-1 transition-transform duration-300 hover:scale-110 active:scale-95"
+                            >
+                                <Heart
+                                    size={14}
+                                    fill={isFavoriteCategory ? 'url(#glass-heart-fill)' : 'none'}
+                                    stroke={isFavoriteCategory ? 'url(#glass-heart-stroke)' : 'currentColor'}
+                                    strokeWidth={isFavoriteCategory ? 1.5 : 2}
+                                    className={`transition-all duration-300 ${isFavoriteCategory ? 'drop-shadow-[0_4px_8px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]' : 'text-textSecondary hover:text-textPrimary opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}`}
+                                />
+                            </button>
+                        </Tooltip>
+                    </div>
                 </div>
             </div>
         );
@@ -3190,6 +3247,16 @@ const Home = () => {
                     the platform's own category tiles render above instead. */}
                 {activeTab === 'browse' && !isProviderView && (
                     <>
+                        {/* Favorites first: the categories you hearted, in the
+                            order you hearted them, with live counts from Rust. */}
+                        {favoriteCategories.length > 0 && (
+                            <div className="mb-6 border-b border-borderSubtle/40 pb-4">
+                                <h3 className="mb-3 text-sm font-semibold text-textSecondary">Favorites</h3>
+                                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-3">
+                                    {favoriteCategories.map((game) => renderCategoryCard(game, 'fav-'))}
+                                </div>
+                            </div>
+                        )}
                         {isLoadingGames ? (
                             <div className="relative h-full min-h-[400px] flex items-center justify-center">
                                 <LoadingWidget useFunnyMessages={false} message="Loading categories..." fullScreen={false} />

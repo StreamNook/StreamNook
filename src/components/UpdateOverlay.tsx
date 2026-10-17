@@ -143,7 +143,9 @@ const UpdateOverlay = ({
               </div>
 
               <h2 className="text-lg font-bold text-textPrimary">Installing Update</h2>
-              {currentVersion && latestVersion && (
+              {/* Equal versions: a portable copy moving to the installed app,
+                  which is the same version installed properly, not an update. */}
+              {currentVersion && latestVersion && currentVersion !== latestVersion && (
                 <div className="flex items-center gap-2 text-xs mt-1.5">
                   <span className="text-textMuted">v{currentVersion}</span>
                   <span className="text-textMuted">→</span>

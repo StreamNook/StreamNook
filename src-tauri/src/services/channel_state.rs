@@ -1,7 +1,9 @@
 //! Rust-owned per-channel chat state: the live broadcast (viewer count, start,
 //! title, category), channel points (balance,
 //! custom name and icon, an available bonus claim) and pinned messages, for
-//! every Twitch channel some window has a chat open on.
+//! every Twitch channel some window has a chat open on, plus the wallet's bits
+//! face (bits on here, the viewer's balance, the gem) and the last rise in
+//! either currency, which the wallet button shows as a "+N".
 //!
 //! Before this, every mounted ChatWidget ran three JavaScript timers per
 //! channel (viewers 60 s, points 60 s, pinned 30 s), so two windows on one
@@ -17,6 +19,7 @@
 //! every watched live channel. It sleeps while no window is on screen.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -37,6 +40,55 @@ const VIEWERS_PERIOD: Duration = Duration::from_secs(60);
 const POINTS_PERIOD: Duration = Duration::from_secs(60);
 const PINNED_PERIOD: Duration = Duration::from_secs(30);
 
+/// A rise in one of the viewer's balances here, for the wallet's "+N".
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct WalletGain {
+    /// Grows with every gain, so two equal amounts in a row still show twice.
+    pub seq: u64,
+    pub amount: i64,
+    /// Why, in the viewer's words ("for watching"); None when Twitch did not
+    /// say (a rise only the poll saw).
+    pub reason: Option<String>,
+    /// A bonus chest, for viewers who only want the "+N" for chests.
+    pub chest: bool,
+}
+
+static GAIN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A new gain; `code` is Twitch's reason code when it gave one.
+fn gain(amount: i64, code: Option<&str>) -> WalletGain {
+    WalletGain {
+        seq: GAIN_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
+        amount,
+        reason: code.and_then(gain_reason),
+        chest: code.is_some_and(|c| c.eq_ignore_ascii_case("claim")),
+    }
+}
+
+/// Twitch's `point_gain.reason_code`, worded for the hover card. Codes not
+/// worded here stay unnamed rather than guessed.
+pub fn gain_reason(code: &str) -> Option<String> {
+    let code = code.to_ascii_uppercase();
+    let words = match code.as_str() {
+        "WATCH" => "for watching",
+        "CLAIM" => "from the bonus chest",
+        "WATCH_STREAK" => "for your watch streak",
+        "RAID" => "for joining a raid",
+        c if c.contains("PREDICTION") => "from a prediction",
+        _ => return None,
+    };
+    Some(words.to_string())
+}
+
+/// The rise a poll saw that nothing reported: only against a known earlier
+/// balance, never on a first read, never for a fall.
+fn poll_rise(before: Option<i64>, now: Option<i64>) -> Option<i64> {
+    match (before, now) {
+        (Some(b), Some(n)) if n > b => Some(n - b),
+        _ => None,
+    }
+}
+
 #[derive(Serialize, Clone, Default, PartialEq, Debug)]
 pub struct ChannelPoints {
     /// False when the channel has points off or the account cannot earn here.
@@ -46,6 +98,25 @@ pub struct ChannelPoints {
     pub icon_url: Option<String>,
     /// A bonus chest the viewer can claim right now.
     pub available_claim_id: Option<String>,
+    /// The last rise in the balance, from any source.
+    pub last_gain: Option<WalletGain>,
+}
+
+/// What the wallet button needs about bits on a channel. The Bits tab itself
+/// reads `get_bits_state` when it opens.
+#[derive(Serialize, Clone, Default, PartialEq, Debug)]
+pub struct ChannelBitsFace {
+    /// The channel has bits on.
+    pub enabled: bool,
+    /// The smallest single cheer here.
+    pub pick_min: u32,
+    /// The viewer's balance; None when the twitch.tv session could not be read.
+    pub balance: Option<i64>,
+    /// Twitch's still Cheer gem for that balance; None until the channel's
+    /// cheermotes are known.
+    pub gem_url: Option<String>,
+    /// The last rise in the balance (a Get Bits purchase).
+    pub last_gain: Option<WalletGain>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -63,6 +134,8 @@ pub struct ChannelState {
     pub viewers_at: Option<u64>,
     pub points: Option<ChannelPoints>,
     pub points_at: Option<u64>,
+    pub bits: Option<ChannelBitsFace>,
+    pub bits_at: Option<u64>,
     pub pinned: Vec<serde_json::Value>,
     pub pinned_at: Option<u64>,
     pub collab: Option<Collaboration>,
@@ -98,6 +171,11 @@ pub enum ChannelUpdate {
     Points {
         login: String,
         points: Option<ChannelPoints>,
+        at: u64,
+    },
+    Bits {
+        login: String,
+        bits: Option<ChannelBitsFace>,
         at: u64,
     },
     Pinned {
@@ -226,6 +304,7 @@ pub async fn watch(login: &str, channel_id: &str, live_only: bool) -> ChannelSta
             if first_full {
                 refresh_points(&inner, &l).await;
                 refresh_pinned(&inner, &l).await;
+                refresh_bits(&inner, &l).await;
             }
         });
     }
@@ -286,6 +365,7 @@ pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
         "viewers" => refresh_viewers(inner).await,
         "points" => refresh_points(inner, &login).await,
         "pinned" => refresh_pinned(inner, &login).await,
+        "bits" => refresh_bits(inner, &login).await,
         other => return Err(format!("unknown channel section: {other}")),
     }
     Ok(())
@@ -496,6 +576,7 @@ fn parse_points(v: &serde_json::Value) -> Option<ChannelPoints> {
             .pointer("/availableClaim/id")
             .and_then(|i| i.as_str())
             .map(String::from),
+        last_gain: None,
     })
 }
 
@@ -511,7 +592,7 @@ async fn refresh_points(inner: &Inner, login: &str) {
             return;
         }
     };
-    let Some(points) = parse_points(&raw) else {
+    let Some(mut points) = parse_points(&raw) else {
         debug!("[ChannelState] points for {login}: unrecognised payload shape");
         return;
     };
@@ -531,6 +612,14 @@ async fn refresh_points(inner: &Inner, login: &str) {
     let changed = {
         let mut state = inner.state.write().await;
         let Some(s) = state.get_mut(login) else { return };
+        // A rise nothing reported (the socket is down, or Twitch sent no
+        // earned message for it) is still a gain; one the socket or a claim
+        // already applied reads equal here and is not counted twice.
+        let before = s.points.as_ref().filter(|p| p.enabled);
+        points.last_gain = before.and_then(|p| p.last_gain.clone());
+        if let Some(rise) = poll_rise(before.and_then(|p| p.balance), points.balance) {
+            points.last_gain = Some(gain(rise, None));
+        }
         let changed = s.points.as_ref() != Some(&points);
         s.points = Some(points.clone());
         s.points_at = Some(at);
@@ -541,6 +630,145 @@ async fn refresh_points(inner: &Inner, login: &str) {
             &inner.app,
             ChannelUpdate::Points { login: login.to_string(), points: Some(points), at },
         );
+    }
+}
+
+/// The watched login for a channel id, when some window has it fully open.
+async fn login_for_id(inner: &Inner, channel_id: &str) -> Option<String> {
+    inner
+        .watched
+        .read()
+        .await
+        .iter()
+        .find(|(_, w)| w.channel_id == channel_id && w.full_refs > 0)
+        .map(|(login, _)| login.clone())
+}
+
+/// Points rose on `channel_id`: Twitch's earned message or a chest claim's
+/// answer. Sets the balance and, when it is higher than the one already
+/// known, records the gain, so the same rise reported twice (socket and
+/// claim, then the poll) shows once.
+pub async fn points_gained(channel_id: &str, amount: i64, reason_code: &str, balance: Option<i64>) {
+    let Some(inner) = SERVICE.get() else { return };
+    let Some(login) = login_for_id(inner, channel_id).await else { return };
+    if amount <= 0 {
+        return;
+    }
+    let balance = balance.filter(|b| *b > 0);
+    let at = now_secs();
+    let update = {
+        let mut state = inner.state.write().await;
+        let Some(s) = state.get_mut(&login) else { return };
+        let Some(points) = s.points.as_mut().filter(|p| p.enabled) else { return };
+        if let (Some(known), Some(b)) = (points.balance, balance) {
+            if b <= known {
+                return;
+            }
+        }
+        if balance.is_some() {
+            points.balance = balance;
+        }
+        points.last_gain = Some(gain(amount, Some(reason_code)));
+        s.points_at = Some(at);
+        s.points.clone()
+    };
+    emit(&inner.app, ChannelUpdate::Points { login, points: update, at });
+}
+
+/// Points were spent on `channel_id` (a redemption, a prediction bet): take
+/// the new balance so the next poll does not misread the difference.
+pub async fn points_spent(channel_id: &str, balance: i64) {
+    let Some(inner) = SERVICE.get() else { return };
+    let Some(login) = login_for_id(inner, channel_id).await else { return };
+    let at = now_secs();
+    let update = {
+        let mut state = inner.state.write().await;
+        let Some(s) = state.get_mut(&login) else { return };
+        let Some(points) = s.points.as_mut().filter(|p| p.enabled) else { return };
+        if balance < 0 || points.balance == Some(balance) {
+            return;
+        }
+        points.balance = Some(balance);
+        s.points_at = Some(at);
+        s.points.clone()
+    };
+    emit(&inner.app, ChannelUpdate::Points { login, points: update, at });
+}
+
+/// The wallet's bits face for one channel: bits on here (public, cached), the
+/// viewer's balance (read once per account), the gem for it.
+async fn refresh_bits(inner: &Inner, login: &str) {
+    let channel_id = match inner.watched.read().await.get(login) {
+        Some(w) => w.channel_id.clone(),
+        None => return,
+    };
+    let ch = match crate::services::bits::channel_bits(login).await {
+        Ok(ch) => ch,
+        Err(e) => {
+            debug!("[ChannelState] bits for {login}: {e}");
+            return;
+        }
+    };
+    let mut face = ChannelBitsFace { enabled: ch.enabled, pick_min: ch.smallest_single(), ..Default::default() };
+    if ch.enabled {
+        if crate::services::irc_service::channel_cheermote_set(login).is_none() && !channel_id.is_empty() {
+            crate::services::irc_service::IrcService::fetch_and_store_cheermotes(login.to_string(), channel_id).await;
+        }
+        if let Some(state) = inner.app.try_state::<AppState>() {
+            face.balance = crate::services::bits::known_balance(&state.twitch_auth).await;
+        }
+        face.gem_url = crate::services::bits::still_gem(login, face.balance);
+    }
+    store_bits(inner, login, face).await;
+}
+
+/// Keep `face` for `login` (carrying its last gain) and emit it if it changed.
+async fn store_bits(inner: &Inner, login: &str, mut face: ChannelBitsFace) {
+    let at = now_secs();
+    let changed = {
+        let mut state = inner.state.write().await;
+        let Some(s) = state.get_mut(login) else { return };
+        if face.last_gain.is_none() {
+            face.last_gain = s.bits.as_ref().and_then(|b| b.last_gain.clone());
+        }
+        let changed = s.bits.as_ref() != Some(&face);
+        s.bits = Some(face.clone());
+        s.bits_at = Some(at);
+        changed
+    };
+    if changed {
+        emit(&inner.app, ChannelUpdate::Bits { login: login.to_string(), bits: Some(face), at });
+    }
+}
+
+/// The viewer's bits balance changed (a cheer's answer, a Get Bits purchase):
+/// every watched channel with bits on shows the new number, and a rise
+/// becomes that channel's "+N".
+pub async fn bits_balance_changed(balance: i64, rise: Option<i64>) {
+    let Some(inner) = SERVICE.get() else { return };
+    let faces: Vec<(String, ChannelBitsFace)> = inner
+        .state
+        .read()
+        .await
+        .iter()
+        .filter_map(|(login, s)| s.bits.clone().filter(|b| b.enabled).map(|b| (login.clone(), b)))
+        .collect();
+    for (login, mut face) in faces {
+        face.balance = Some(balance);
+        face.gem_url = crate::services::bits::still_gem(&login, face.balance);
+        if let Some(r) = rise.filter(|r| *r > 0) {
+            face.last_gain = Some(gain(r, None));
+        }
+        store_bits(inner, &login, face).await;
+    }
+}
+
+/// The account changed: read every open channel's bits face again for the
+/// new viewer.
+pub async fn refresh_all_bits() {
+    let Some(inner) = SERVICE.get() else { return };
+    for login in fully_watched_logins(inner).await {
+        refresh_bits(inner, &login).await;
     }
 }
 
@@ -648,6 +876,33 @@ pub fn settle_pin(channel_id: &str, change: PinChange) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_poll_rise_needs_a_known_earlier_balance() {
+        assert_eq!(poll_rise(Some(100), Some(110)), Some(10));
+        assert_eq!(poll_rise(None, Some(110)), None);
+        assert_eq!(poll_rise(Some(110), Some(100)), None);
+        assert_eq!(poll_rise(Some(110), Some(110)), None);
+        assert_eq!(poll_rise(Some(110), None), None);
+    }
+
+    #[test]
+    fn known_reasons_are_worded_and_unknown_ones_stay_unnamed() {
+        assert_eq!(gain_reason("WATCH").as_deref(), Some("for watching"));
+        assert_eq!(gain_reason("claim").as_deref(), Some("from the bonus chest"));
+        assert_eq!(gain_reason("WATCH_STREAK").as_deref(), Some("for your watch streak"));
+        assert_eq!(gain_reason("PREDICTION_WIN").as_deref(), Some("from a prediction"));
+        assert_eq!(gain_reason("unknown"), None);
+    }
+
+    #[test]
+    fn every_gain_gets_a_new_number() {
+        let a = gain(10, None);
+        let b = gain(10, None);
+        assert!(b.seq > a.seq);
+        assert!(gain(50, Some("CLAIM")).chest);
+        assert!(!gain(10, Some("WATCH")).chest);
+    }
     use serde_json::json;
 
     #[test]

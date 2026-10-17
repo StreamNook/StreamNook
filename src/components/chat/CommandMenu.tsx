@@ -1,15 +1,17 @@
-// The browsable command menu: the button left of the emote picker opens it.
-// Where the slash autocomplete is a one-line-per-command completer for people
-// who already know what they want, this is the comfortable version for
-// finding out what exists. Every command shows its full description, the
-// selected one unfolds with a longer explanation, who can run it, and
-// ready-made examples you can click straight into the box.
+// The browsable command list: the Commands section of the chat box's insert
+// menu (EmotePickerPanel). Where the slash autocomplete is a
+// one-line-per-command completer for people who already know what they want,
+// this is the comfortable version for finding out what exists. Every command
+// shows its full description, the selected one unfolds with a longer
+// explanation, who can run it, and ready-made examples you can click straight
+// into the box.
 //
-// Two sizes, one state. Inline: a popover above the chat box with an icon
-// rail and a grouped list; the selected row unfolds in place. Expanded: the
-// same search, rail and list in a large centered dialog with a full detail
-// pane on the right, for when the chat column is too narrow to read
-// comfortably. "More room" in the header switches; the choice is remembered.
+// Two sizes, one state. Inline: it fills the insert menu below its section
+// row, with an icon rail and a grouped list; the selected row unfolds in
+// place. Expanded: the same search, rail and list in a large centered dialog
+// with a full detail pane on the right, for when the chat column is too
+// narrow to read comfortably. "More room" in the header switches; the choice
+// is remembered.
 //
 // Keyboard, from the search box in either size: arrows move, Enter inserts,
 // Left/Right change category, Escape closes.
@@ -17,7 +19,7 @@
 // Presenter only. The command list arrives already filtered by role from
 // ChatWidget, which is where the roles are known.
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -79,8 +81,8 @@ const EXPANDED_KEY = 'sn-command-menu-expanded';
 
 const KBD = 'rounded border border-white/10 bg-white/10 px-1.5 py-0.5 font-mono text-[9px] leading-none tracking-widest text-white shadow-sm';
 
-export interface CommandMenuProps {
-  open: boolean;
+export interface CommandBrowserProps {
+  /** Close the menu it sits in (Escape, or the dialog's close button). */
   onClose: () => void;
   /** Already filtered to what this person can run here, custom commands included. */
   commands: CommandDefinition[];
@@ -88,8 +90,6 @@ export interface CommandMenuProps {
   onPick: (command: CommandDefinition) => void;
   /** Insert a full example invocation as the message text. */
   onInsertText: (text: string) => void;
-  /** The toggle button: a click on it must not count as "outside". */
-  ignoreRef?: RefObject<HTMLElement | null>;
   /** Roles in this channel. Commands beyond them still show, dimmed and locked. */
   isModerator: boolean;
   isBroadcaster: boolean;
@@ -129,21 +129,16 @@ function writeExpanded(v: boolean) {
   }
 }
 
-const CommandMenu = ({ open, ...rest }: CommandMenuProps) => (
-  <AnimatePresence>{open && <CommandMenuPanel {...rest} />}</AnimatePresence>
-);
-
-// Mounted only while open, so every open starts with a clean query,
-// category and selection.
-const CommandMenuPanel = ({
+// Mounted only while its section is showing, so every visit starts with a
+// clean query, category and selection.
+export const CommandBrowser = ({
   onClose,
   commands,
   onPick,
   onInsertText,
-  ignoreRef,
   isModerator,
   isBroadcaster,
-}: Omit<CommandMenuProps, 'open'>) => {
+}: CommandBrowserProps) => {
   const [query, setQuery] = useState('');
   const [rail, setRail] = useState<RailKey>('all');
   const [selected, setSelected] = useState(0);
@@ -172,17 +167,6 @@ const CommandMenuPanel = ({
     const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 30);
     return () => clearTimeout(t);
   }, [expanded]);
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (panelRef.current?.contains(t)) return;
-      if (ignoreRef?.current?.contains(t)) return;
-      onClose();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [onClose, ignoreRef]);
 
   useEffect(() => {
     if (!scrollPendingRef.current) return;
@@ -550,8 +534,12 @@ const CommandMenuPanel = ({
   );
 
   if (expanded) {
+    // A click on the dimmed backdrop shrinks back into the menu.
     return createPortal(
       <motion.div
+        onMouseDown={(e) => {
+          if (!panelRef.current?.contains(e.target as Node)) toggleExpanded();
+        }}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -583,24 +571,13 @@ const CommandMenuPanel = ({
   }
 
   return (
-    <motion.div
-      ref={panelRef}
-      role="dialog"
-      aria-label="Chat commands"
-      initial={{ opacity: 0, y: 6, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 6, scale: 0.98 }}
-      transition={{ duration: 0.15, ease: 'easeOut' }}
-      className="sn-popover absolute bottom-full left-0 right-0 z-[60] mb-2 flex h-[560px] max-h-[calc(100vh-120px)] origin-bottom flex-col overflow-hidden"
-    >
+    <div ref={panelRef} role="region" aria-label="Chat commands" className="flex min-h-0 flex-1 flex-col">
       {searchBar}
       <div className="flex min-h-0 flex-1">
         {railColumn}
         {list}
       </div>
       {footer}
-    </motion.div>
+    </div>
   );
 };
-
-export default CommandMenu;

@@ -46,6 +46,10 @@ import { dragDivisor, dragSpeedLabel, nudgeFrac, wheelStepSecs } from '../utils/
  * the target by ten seconds (Shift a minute, Ctrl a second), applied in
  * seconds so it is the same step everywhere. A wheel nudge is shown at once
  * and lands when the wheel goes quiet.
+ *
+ * Reopening a broadcast the viewer left earlier marks where they left it
+ * (`leftOffSecs`, Rust's answer). A press or drop near the mark lands exactly
+ * on it, so going back is one click with no button of its own.
  */
 
 export interface BroadcastTimelineProps {
@@ -61,6 +65,8 @@ export interface BroadcastTimelineProps {
    *  forward by itself (55 s), inside the 30 s back buffer. */
   liveSeekWindowSecs: number;
   visible: boolean;
+  /** Where the viewer left this broadcast before (recording seconds). */
+  leftOffSecs?: number | null;
   onSeekLive: (sessionSeconds: number) => void;
   onGoLive: () => void;
   onRewindTo: (broadcastSeconds: number) => void;
@@ -89,6 +95,8 @@ const PENDING_SETTLE_SECS = 3;
 const PENDING_TIMEOUT_MS = 8000;
 /** A wheel nudge lands this long after the last notch. */
 const NUDGE_SETTLE_MS = 600;
+/** A press or drop this close to the "you left here" mark lands on it. */
+const MARK_SNAP_PX = 8;
 
 type BarProps = Omit<BroadcastTimelineProps, 'host'> & {
   pending: PendingSeek | null;
@@ -101,6 +109,7 @@ function BroadcastTimelineBar({
   rewound,
   liveSeekWindowSecs,
   visible,
+  leftOffSecs,
   onSeekLive,
   onGoLive,
   onRewindTo,
@@ -284,6 +293,20 @@ function BroadcastTimelineBar({
     setNudge(null);
   }, []);
 
+  // The "you left here" mark, as a fraction of the bar, when it is on it.
+  const markFracNow = () => {
+    const { total } = stateRef.current;
+    if (leftOffSecs == null || !(total > leftOffSecs)) return null;
+    return broadcastScale(total).toFrac(leftOffSecs);
+  };
+  /** Pulls a fraction onto the mark when it is within reach of it. */
+  const snapToMark = (frac: number) => {
+    const mark = markFracNow();
+    const width = rectRef.current?.width ?? barRef.current?.getBoundingClientRect().width ?? 0;
+    if (mark == null || width <= 0) return { frac, onMark: false };
+    return Math.abs(frac - mark) * width <= MARK_SNAP_PX ? { frac: mark, onMark: true } : { frac, onMark: false };
+  };
+
   const onPointerEnter = () => {
     rectRef.current = barRef.current?.getBoundingClientRect() ?? null;
   };
@@ -302,7 +325,7 @@ function BroadcastTimelineBar({
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     if (d == null) {
-      setHover(fracFromEvent(e));
+      setHover(snapToMark(fracFromEvent(e)).frac);
       return;
     }
     const r = rectRef.current;
@@ -320,7 +343,7 @@ function BroadcastTimelineBar({
     const d = dragRef.current;
     if (d == null) return;
     dragRef.current = null;
-    const f = d.frac;
+    const f = snapToMark(d.frac).frac;
     setDrag(null);
     setDragRate(1);
     const target = commit(f);
@@ -388,12 +411,21 @@ function BroadcastTimelineBar({
   const tailFrac = total > 0 ? scale.toFrac(tail) : 1;
   const shownFrac = drag ?? nudge ?? (pending ? pending.frac : posFrac);
   const tipFrac = drag ?? nudge ?? hover;
+  const markFrac = leftOffSecs != null && total > leftOffSecs ? scale.toFrac(leftOffSecs) : null;
   let tip: string | null = null;
   if (tipFrac != null && total > 0) {
-    const at = scale.toSecs(tipFrac);
+    // A snapped hover sits on the mark as it was a sample ago; the bar's clock
+    // has moved a hair since, so compare loosely (far under one pixel).
+    const onMark = markFrac != null && leftOffSecs != null && Math.abs(tipFrac - markFrac) < 1e-4;
+    const at = onMark ? leftOffSecs : scale.toSecs(tipFrac);
     const behind = total - at;
     const liveZone = rewound ? RECORDING_TAIL_GAP_SECS : LIVE_SNAP_SECS;
-    tip = behind <= liveZone ? 'LIVE' : `${formatVodTime(at)} · ${formatAgo(behind)}`;
+    tip =
+      behind <= liveZone
+        ? 'LIVE'
+        : onMark
+          ? `You left here · ${formatVodTime(at)}`
+          : `${formatVodTime(at)} · ${formatAgo(behind)}`;
     const speed = drag != null ? dragSpeedLabel(dragRate) : '';
     if (speed) tip = `${tip} · ${speed}`;
   }
@@ -436,6 +468,7 @@ function BroadcastTimelineBar({
             <span className="sn-timeline__tick-label">-{formatBehindShort(tick.behindSecs)}</span>
           </div>
         ))}
+      {markFrac != null && <div className="sn-timeline__mark" style={{ left: `${markFrac * 100}%` }} />}
       <div className="sn-timeline__thumb" style={{ left: `${shownFrac * 100}%` }} />
       {tip && (
         <div className="sn-timeline__tip" style={{ left: `${(tipFrac ?? 0) * 100}%` }}>

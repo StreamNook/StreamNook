@@ -23,6 +23,11 @@ import {
 } from '../../utils/notifAchievement';
 
 import { Logger } from '../../utils/logger';
+import { IS_LINUX, IS_MAC } from '../../utils/platform';
+
+// The operating system's name for its own notifications.
+const SYSTEM_NAME = IS_MAC ? 'macOS' : IS_LINUX ? 'desktop' : 'Windows';
+const IS_WINDOWS_DESKTOP = !IS_MAC && !IS_LINUX;
 
 // The six supported toast anchors, placed on a 3x3 grid that stands in for the
 // screen. The middle row's sides are intentionally inert (vertically-centered
@@ -128,6 +133,7 @@ const NotificationsSettings = () => {
     show_badge_notifications: true,
     show_gift_sub_notifications: true,
     show_twitch_reward_notifications: true,
+    show_mention_notifications: true,
     use_dynamic_island: true,
     use_toast: true,
     toast_position: DEFAULT_TOAST_POSITION,
@@ -165,6 +171,14 @@ const NotificationsSettings = () => {
     } catch (error) {
       Logger.error('Failed to preview reward notification:', error);
       addToast(`Reward preview failed: ${error}`, 'error');
+    }
+  };
+
+  const handleTestSystemNotification = async () => {
+    try {
+      await invoke('test_system_notification');
+    } catch (error) {
+      Logger.error('Failed to send test system notification:', error);
     }
   };
 
@@ -212,7 +226,7 @@ const NotificationsSettings = () => {
         <>
           <SettingsSection
             label="Display"
-            description="Where notifications show up: in the Dynamic Island at the top of the window, as toast popups, or both."
+            description={`Where notifications show up: in the Dynamic Island at the top of the window, as toast popups, and as ${SYSTEM_NAME} notifications while you are elsewhere.`}
           >
             <SettingsRow
               title="Dynamic Island"
@@ -274,6 +288,40 @@ const NotificationsSettings = () => {
                 </SubControls>
               )}
             </SettingsRow>
+
+            <SettingsRow
+              title="System notifications"
+              onReset={resetFor(['live_notifications.use_native_notifications', false])}
+              description={`While you are in another app, or StreamNook is minimized or in the tray, notifications also show as ${SYSTEM_NAME} notifications.`}
+              help={IS_WINDOWS_DESKTOP
+                ? 'Clicking one, or its button, opens StreamNook on what it is about. They stay silent, since StreamNook already plays your sound. While this is on they take the place of the cards in MultiChat.'
+                : 'They stay silent, since StreamNook already plays your sound. While this is on they take the place of the cards in MultiChat.'}
+              control={
+                <Toggle
+                  enabled={liveNotifications.use_native_notifications ?? false}
+                  onChange={() => updateLiveNotifications({
+                    use_native_notifications: !(liveNotifications.use_native_notifications ?? false)
+                  })}
+                />
+              }
+            >
+              {(liveNotifications.use_native_notifications ?? false) && (
+                <SubControls>
+                  <SubControl
+                    title="Try one"
+                    control={
+                      <button
+                        onClick={handleTestSystemNotification}
+                        className="glass-button flex items-center gap-2 px-3 py-1.5 rounded-lg text-textPrimary text-xs font-medium"
+                      >
+                        <Bell size={14} />
+                        Send
+                      </button>
+                    }
+                  />
+                </SubControls>
+              )}
+            </SettingsRow>
           </SettingsSection>
 
           <SettingsSection
@@ -317,6 +365,20 @@ const NotificationsSettings = () => {
                   enabled={liveNotifications.show_whisper_notifications ?? true}
                   onChange={() => updateLiveNotifications({
                     show_whisper_notifications: !(liveNotifications.show_whisper_notifications ?? true)
+                  })}
+                />
+              }
+            />
+
+            <SettingsRow
+              title="Mentions and replies"
+              onReset={resetFor(['live_notifications.show_mention_notifications', true])}
+              description="A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat."
+              control={
+                <Toggle
+                  enabled={liveNotifications.show_mention_notifications ?? true}
+                  onChange={() => updateLiveNotifications({
+                    show_mention_notifications: !(liveNotifications.show_mention_notifications ?? true)
                   })}
                 />
               }
@@ -554,7 +616,7 @@ const NotificationsSettings = () => {
                 About Notifications
               </p>
               <p className="text-xs text-textSecondary">
-                Notifications can show in the Dynamic Island (the notification center at the top), as toast popups at any corner or edge you like, or both. Clicking one takes action: a live notification starts the stream, a whisper opens the conversation, and an update takes you to the Updates page.
+                Notifications can show in the Dynamic Island (the notification center at the top), as toast popups at any corner or edge you like, or both, and as {SYSTEM_NAME} notifications while you are elsewhere. Clicking one takes action: a live notification starts the stream, a whisper opens the conversation, and an update takes you to the Updates page.
               </p>
             </div>
           </div>

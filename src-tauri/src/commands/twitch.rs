@@ -1183,6 +1183,10 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
         }
     }
     crate::services::ui_hang_watchdog::set_active_overlay(None);
+    // Back from Twitch's bits page: a purchase changed the balance.
+    if label.starts_with("bits-") {
+        crate::commands::bits::refresh_balance_after_purchase(app);
+    }
     let _ = app.emit("twitch-overlay-close", serde_json::json!({ "label": label }));
 }
 
@@ -1473,9 +1477,11 @@ pub async fn get_user_info(_state: State<'_, AppState>) -> Result<UserInfo, Stri
 pub async fn get_recommended_streams(
     state: State<'_, AppState>,
 ) -> Result<Vec<TwitchStream>, String> {
-    TwitchService::get_recommended_streams(&state)
+    let mut streams = TwitchService::get_recommended_streams(&state)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    Ok(streams)
 }
 
 #[tauri::command]
@@ -1486,7 +1492,7 @@ pub async fn get_recommended_streams_paginated(
     languages: Option<Vec<String>>,
     personalized: Option<bool>,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_recommended_streams_paginated(
+    let (mut streams, next) = TwitchService::get_recommended_streams_paginated(
         &state,
         cursor,
         limit,
@@ -1494,7 +1500,9 @@ pub async fn get_recommended_streams_paginated(
         personalized.unwrap_or(false),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    Ok((streams, next))
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -1564,11 +1572,12 @@ pub async fn get_streams_by_game(
     cursor: Option<String>,
     limit: u32,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    let (mut streams, cursor) = TwitchService::get_streams_by_game(&state, &game_id, cursor, limit)
+    let (mut streams, next) = TwitchService::get_streams_by_game(&state, &game_id, cursor, limit)
         .await
         .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
     crate::services::home_snapshot::stamp_drops(&mut streams).await;
-    Ok((streams, cursor))
+    Ok((streams, next))
 }
 
 #[tauri::command]
@@ -1579,6 +1588,7 @@ pub async fn search_channels(
     let mut streams = TwitchService::search_channels(&state, &query)
         .await
         .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Search);
     crate::services::home_snapshot::stamp_drops(&mut streams).await;
     Ok(streams)
 }
@@ -1591,9 +1601,11 @@ pub async fn get_streams_by_game_with_tags(
     cursor: Option<String>,
     limit: u32,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_streams_by_game_with_tags(&game_name, tags, cursor, limit)
+    let (mut streams, next) = TwitchService::get_streams_by_game_with_tags(&game_name, tags, cursor, limit)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    Ok((streams, next))
 }
 
 #[tauri::command]
@@ -1755,7 +1767,7 @@ pub async fn get_streams_by_game_name(
     cursor: Option<String>,
     limit: u32,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_streams_by_game_name(
+    let (mut streams, next) = TwitchService::get_streams_by_game_name(
         &state,
         &game_name,
         exclude_user_login.as_deref(),
@@ -1763,7 +1775,9 @@ pub async fn get_streams_by_game_name(
         limit,
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    Ok((streams, next))
 }
 
 /// Get streams by category id directly (no name→id resolution)
@@ -1776,7 +1790,7 @@ pub async fn get_streams_by_game_id(
     cursor: Option<String>,
     limit: u32,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_streams_by_game_id(
+    let (mut streams, next) = TwitchService::get_streams_by_game_id(
         &state,
         &game_id,
         exclude_user_login.as_deref(),
@@ -1784,7 +1798,9 @@ pub async fn get_streams_by_game_id(
         limit,
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    Ok((streams, next))
 }
 
 /// Send a whisper message to another user

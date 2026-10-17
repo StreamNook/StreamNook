@@ -37,6 +37,7 @@ pub mod emotes;
 pub mod eventsub;
 pub mod ffz;
 pub mod gifs;
+pub mod bits;
 pub mod home_snapshot;
 pub mod helix;
 pub mod hype_train;
@@ -50,6 +51,9 @@ pub mod mod_log_storage;
 pub mod modroom;
 #[cfg(desktop)]
 pub mod multi_nook;
+// Notifications shown in MultiChat while the main window is off screen.
+#[cfg(desktop)]
+pub mod notification_mirror;
 pub mod overlay_file;
 pub mod plugins;
 pub mod profile_cache;

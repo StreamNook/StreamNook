@@ -177,8 +177,11 @@ async fn check_notify_rate(host: &Arc<HostInner>, plugin_id: &str) -> Result<(),
     Ok(())
 }
 
-/// The credential broker: manifest grant, then consent state, then handover,
-/// then audit. The only path a token ever crosses the plugin boundary on.
+/// The credential broker: manifest grant, then the token itself, then consent
+/// state, then handover, then audit. The only path a token ever crosses the
+/// plugin boundary on. The token is resolved before consent so a plugin that
+/// asks while the viewer is signed out gets `credential_unavailable` without a
+/// prompt, and can safely ask again later.
 async fn get_credential(
     host: &Arc<HostInner>,
     record: &InstalledPlugin,
@@ -189,6 +192,17 @@ async fn get_credential(
             "credential kind '{kind}' is not granted"
         )));
     }
+
+    let token = match kind {
+        "twitch.android" => DropsAuthService::get_token()
+            .await
+            .map_err(|e| RpcErr::credential_unavailable(&e.to_string()))?,
+        other => {
+            return Err(RpcErr::credential_unavailable(&format!(
+                "unknown credential kind '{other}'"
+            )))
+        }
+    };
 
     // Consent state: ask (default), always, revoked.
     let consent_state = {
@@ -239,9 +253,6 @@ async fn get_credential(
 
     match kind {
         "twitch.android" => {
-            let token = DropsAuthService::get_token()
-                .await
-                .map_err(|e| RpcErr::credential_unavailable(&e.to_string()))?;
             registry::audit_append(
                 &record.id,
                 "credential handover kind=twitch.android",

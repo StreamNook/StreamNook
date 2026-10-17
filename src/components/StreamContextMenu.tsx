@@ -4,10 +4,10 @@ import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { useContextMenuStore } from '../stores/contextMenuStore';
 import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
-import { LayoutGrid, Heart, UserPlus, UserMinus, Loader2, Scissors, Copy, ClipboardPaste, Type, User, MessageSquarePlus, Share2, Check, SpellCheck, BookPlus } from 'lucide-react';
+import { LayoutGrid, Heart, UserPlus, UserMinus, Loader2, Scissors, Copy, ClipboardPaste, Type, User, MessageSquarePlus, Share2, Check, SpellCheck, BookPlus, EyeOff, Eye } from 'lucide-react';
 import { Logger } from '../utils/logger';
 import { invoke } from '@tauri-apps/api/core';
-import { buildShareUrl } from '../utils/shareLink';
+import { shareLinkFor } from '../utils/shareLink';
 import { replaceInputRange } from '../utils/chatInputWord';
 import { addToCustomDictionary } from '../utils/spellcheck';
 import { Tooltip } from './ui/Tooltip';
@@ -16,6 +16,7 @@ import { gridRefusal } from '../types/providers';
 export const StreamContextMenu: React.FC = () => {
     const { isOpen, x, y, stream, inputElement, selectionText, menuType, spellStatus, spell, isFollowing, isCheckingFollow, closeMenu, toggleFollow } = useContextMenuStore();
     const { toggleFavoriteStreamer, isFavoriteStreamer, setProfileModalUser } = useAppStore();
+    const hiddenChannels = useAppStore((s) => s.settings.hidden_channels);
     const { addSlot, slots } = usemultiNookStore();
     
     const menuRef = useRef<HTMLDivElement>(null);
@@ -278,6 +279,51 @@ export const StreamContextMenu: React.FC = () => {
         closeMenu();
     };
 
+    // Rust drops a hidden channel from every browse list it builds and
+    // answers; search, follows and favorites still show it, which is where
+    // the same item reads Show channel.
+    const hiddenEntry = favoriteId ? hiddenChannels?.find((c) => c.id === favoriteId) : undefined;
+    const name = stream.user_name || stream.user_login;
+    const handleHide = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        closeMenu();
+        if (!favoriteId) return;
+        const { addToast, openSettings } = useAppStore.getState();
+        if (hiddenEntry) {
+            // Showing undoes what hiding did, a Twitch block included.
+            const unblock = hiddenEntry.blocked
+                ? invoke('set_hidden_channel_blocked', { id: favoriteId, blocked: false })
+                : Promise.resolve();
+            unblock
+                .then(() => invoke('set_channel_hidden', { channel: hiddenEntry, hidden: false }))
+                .then(() => addToast(hiddenEntry.blocked ? `${name} shows again and is unblocked on Twitch.` : `${name} shows again.`, 'info'))
+                .catch((err) => addToast(typeof err === 'string' ? err : `Could not show ${name} again`, 'error'));
+            return;
+        }
+        invoke('set_channel_hidden', { channel: favoriteMetaOf(stream, favoriteId), hidden: true })
+            .then(() => {
+                // A grid already on screen came from an answer Rust cannot
+                // take back; it drops the card now (Home listens).
+                window.dispatchEvent(new CustomEvent('sn:channel-hidden', { detail: favoriteId }));
+                const isTwitch = streamProvider(stream) === 'twitch';
+                addToast(
+                    `${name} is hidden.`,
+                    'info',
+                    isTwitch
+                        ? {
+                              label: 'Also block on Twitch',
+                              onClick: () => {
+                                  invoke('set_hidden_channel_blocked', { id: favoriteId, blocked: true })
+                                      .then(() => addToast(`${name} is blocked on Twitch.`, 'success'))
+                                      .catch((err) => addToast(typeof err === 'string' ? err : `Could not block ${name}`, 'error'));
+                              },
+                          }
+                        : { label: 'Hidden channels', onClick: () => openSettings('Interface', 'settings-section-hidden-channels') },
+                );
+            })
+            .catch((err) => Logger.warn('[StreamContextMenu] Could not hide the channel:', err));
+    };
+
     const handleMultiNook = (e: React.MouseEvent) => {
         e.stopPropagation();
         if (!canAddToGrid) return;
@@ -309,12 +355,12 @@ export const StreamContextMenu: React.FC = () => {
     };
 
     // Copy the shareable web link. It resolves on streamnook.app, which opens the
-    // app when installed and falls back to Twitch otherwise. Shows an inline check
+    // app when installed and falls back to the platform's own page otherwise. Shows an inline check
     // confirmation, then dismisses so the menu isn't left hanging.
     const handleShare = async (e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            await navigator.clipboard.writeText(buildShareUrl(stream.user_login));
+            await navigator.clipboard.writeText(await shareLinkFor(stream));
             setCopied(true);
             window.setTimeout(() => { setCopied(false); closeMenu(); }, 1100);
         } catch (err) {
@@ -418,7 +464,7 @@ export const StreamContextMenu: React.FC = () => {
                     <span>Pop out chat</span>
                 </button>
 
-                {/* Share. Copies a streamnook.app/w/<channel> link. The icon and
+                {/* Share. Copies the stream's streamnook.app link. The icon and
                     label swap to a check + confirmation on copy, with a little pop. */}
                 <button
                     onClick={handleShare}
@@ -448,6 +494,17 @@ export const StreamContextMenu: React.FC = () => {
                         className={isFavorite ? 'drop-shadow-[0_4px_8px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]' : ''} 
                     />
                     <span>{isFavorite ? 'Unfavorite' : 'Favorite'}</span>
+                </button>
+                )}
+
+                {/* Hide from browsing */}
+                {favoriteId && (
+                <button
+                    onClick={handleHide}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-textPrimary hover:bg-glass-hover transition-all"
+                >
+                    {hiddenEntry ? <Eye size={16} /> : <EyeOff size={16} />}
+                    <span>{hiddenEntry ? 'Show channel' : 'Hide channel'}</span>
                 </button>
                 )}
 

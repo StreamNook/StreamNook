@@ -76,6 +76,7 @@ const PlayerSettings = () => {
   const middleClickMute = videoPlayer?.middle_click_mute ?? true;
   const middleClickMultiNook = videoPlayer?.middle_click_multinook ?? true;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
+  const syncVodProgress = videoPlayer?.sync_vod_progress ?? true;
   const wheelVolumeStep = videoPlayer?.wheel_volume_step ?? 0.05;
   // Both gestures want the wheel, so with both on the reveal moves to Shift.
   // The row description says so rather than leaving it to be discovered.
@@ -519,7 +520,7 @@ const PlayerSettings = () => {
               void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
             })}
             description="Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row."
-            help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching."
+            help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
             control={
               <Toggle
                 enabled={resumeVodPlayback}
@@ -532,7 +533,29 @@ const PlayerSettings = () => {
                 }}
               />
             }
-          />
+          >
+            {resumeVodPlayback && (
+              <SubControls>
+                <SubControl
+                  title="Device sync"
+                  onReset={thenRun(resetFor(['video_player.sync_vod_progress', true]), () => {
+                    void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                  })}
+                  control={
+                    <Toggle
+                      enabled={syncVodProgress}
+                      onChange={() => {
+                        setVideoPlayer({ sync_vod_progress: !syncVodProgress });
+                        // Turning it on pulls the positions saved elsewhere into
+                        // the row behind this dialog straight away.
+                        void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                      }}
+                    />
+                  }
+                />
+              </SubControls>
+            )}
+          </SettingsRow>
         )}
       </SettingsSection>
 

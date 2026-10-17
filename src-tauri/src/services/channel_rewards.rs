@@ -8,6 +8,12 @@
 //! state and the channel-state poll, keeps the last list it judged per channel,
 //! and re-judges it on a change, pushing the result as `channel-rewards`. No
 //! refetch from Twitch is needed for that.
+//!
+//! It also keeps every open chat's reward names (`reward_name`). A reward that
+//! asks for text arrives as an ordinary chat message tagged only with its id,
+//! so the chat row can name it only from here. The names come from the list
+//! the menu fetches, from the channel points feed as rewards are redeemed, and
+//! from one anonymous read when a chat is joined (`ensure_names`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -61,6 +67,123 @@ struct Judged {
 
 static ROOMS: OnceLock<Mutex<HashMap<String, Room>>> = OnceLock::new();
 static LISTS: OnceLock<Mutex<HashMap<String, Judged>>> = OnceLock::new();
+static NAMES: OnceLock<Mutex<HashMap<String, RewardNames>>> = OnceLock::new();
+
+/// A reward as a chat row names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewardName {
+    pub title: String,
+    pub cost: i64,
+}
+
+/// One channel's reward names, by reward id.
+#[derive(Default)]
+struct RewardNames {
+    by_id: HashMap<String, RewardName>,
+    /// When the whole list was last read from Twitch (Unix ms); 0 for never.
+    read_at_ms: i64,
+    /// When a read was last started, so a burst of unknown ids asks once.
+    asked_at_ms: i64,
+}
+
+/// A joined chat's names are read again once this old.
+const NAMES_FRESH_MS: i64 = 15 * 60 * 1000;
+/// An unknown reward id (one made after the last read) asks again at most this often.
+const NAMES_MISS_RETRY_MS: i64 = 60 * 1000;
+
+fn names() -> std::sync::MutexGuard<'static, HashMap<String, RewardNames>> {
+    NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Remember one reward's name, from a redemption the channel points feed saw.
+pub fn note_reward_name(login: &str, reward_id: &str, title: &str, cost: i64) {
+    if reward_id.is_empty() || title.is_empty() {
+        return;
+    }
+    names()
+        .entry(login.to_lowercase())
+        .or_default()
+        .by_id
+        .insert(reward_id.to_string(), RewardName { title: title.to_string(), cost });
+}
+
+/// Replace a channel's names with a full list just read from Twitch. Names
+/// noted from the feed since stay: a reward made after the read is still one.
+fn note_reward_list(login: &str, list: impl IntoIterator<Item = (String, RewardName)>, now_ms: i64) {
+    let mut all = names();
+    let entry = all.entry(login.to_lowercase()).or_default();
+    entry.by_id.extend(list);
+    entry.read_at_ms = now_ms;
+}
+
+/// The name of reward `reward_id` in `login`'s chat, when known. An unknown id
+/// reads the list again in the background (at most once a minute), so the next
+/// redemption of a reward made mid-stream is named.
+pub fn reward_name(login: &str, reward_id: &str) -> Option<RewardName> {
+    let login = login.to_lowercase();
+    if let Some(found) = names().get(&login).and_then(|n| n.by_id.get(reward_id).cloned()) {
+        return Some(found);
+    }
+    // Never from a unit test, which would reach Twitch.
+    #[cfg(not(test))]
+    tauri::async_runtime::spawn(async move { ensure_names(&login, NAMES_MISS_RETRY_MS).await });
+    None
+}
+
+/// The reward ids, titles and costs in a ChannelPointsContext answer.
+pub fn reward_names_in(body: &serde_json::Value) -> Vec<(String, RewardName)> {
+    let settings = ["/data/community/channel/communityPointsSettings", "/data/channel/communityPointsSettings"]
+        .iter()
+        .find_map(|p| body.pointer(p));
+    let Some(settings) = settings else { return Vec::new() };
+    let mut out = Vec::new();
+    if let Some(list) = settings.get("customRewards").and_then(|v| v.as_array()) {
+        for r in list {
+            let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            if id.is_empty() || title.is_empty() {
+                continue;
+            }
+            let cost = r.get("cost").and_then(|v| v.as_i64()).unwrap_or(0);
+            out.push((id.to_string(), RewardName { title: title.to_string(), cost }));
+        }
+    }
+    out
+}
+
+/// Read `login`'s reward names from Twitch unless they were read within
+/// `max_age_ms` or a read started that recently. Anonymous: a channel's
+/// rewards are public, so a viewer without the Drops sign-in gets names too.
+pub async fn ensure_names(login: &str, max_age_ms: i64) {
+    let login = login.to_lowercase();
+    let now = chrono::Utc::now().timestamp_millis();
+    {
+        let mut all = names();
+        let entry = all.entry(login.clone()).or_default();
+        if now - entry.read_at_ms < max_age_ms || now - entry.asked_at_ms < max_age_ms.min(NAMES_MISS_RETRY_MS) {
+            return;
+        }
+        entry.asked_at_ms = now;
+    }
+    let body = serde_json::json!({
+        "operationName": "ChannelPointsContext",
+        "variables": { "channelLogin": login, "includeGoalTypes": ["CREATOR", "BOOST"] },
+        "extensions": { "persistedQuery": { "version": 1, "sha256Hash": crate::commands::drops::CHANNEL_POINTS_CONTEXT_HASH } }
+    });
+    match crate::services::twitch_service::TwitchService::gql_public_read(body).await {
+        Ok(answer) => note_reward_list(&login, reward_names_in(&answer), chrono::Utc::now().timestamp_millis()),
+        Err(e) => debug!("[ChannelRewards] reward names for {login}: {e}"),
+    }
+}
+
+/// A chat for `login` was joined: make sure its reward names are known.
+pub fn note_chat_joined(login: &str) {
+    let login = login.to_lowercase();
+    tauri::async_runtime::spawn(async move { ensure_names(&login, NAMES_FRESH_MS).await });
+}
 
 fn rooms() -> std::sync::MutexGuard<'static, HashMap<String, Room>> {
     ROOMS
@@ -168,11 +291,29 @@ pub async fn judge_fetched(
     fetched_at_ms: i64,
 ) -> ChannelRewardsSnapshot {
     let login = login.to_lowercase();
+    note_reward_list(
+        &login,
+        rewards.iter().filter(|r| !r.title.is_empty()).map(|r| {
+            (r.id.clone(), RewardName { title: r.title.clone(), cost: r.cost as i64 })
+        }),
+        fetched_at_ms,
+    );
     let live = crate::services::channel_state::is_live(&login).await;
     let judged = Judged { rewards, balance, points_name, fetched_at_ms };
     lists().insert(login.clone(), judged.clone());
     let ctx = context(&judged, room_of(&login), live);
     snapshot(&login, judged.rewards, &ctx, fetched_at_ms, chrono::Utc::now().timestamp_millis())
+}
+
+/// The last list fetched for `login`, judged against the room and stream as
+/// they are now, so a menu opens on it at once while it fetches a fresh one.
+/// `None` for a channel whose rewards were never read.
+pub async fn cached(login: &str) -> Option<ChannelRewardsSnapshot> {
+    let login = login.to_lowercase();
+    let judged = lists().get(&login).cloned()?;
+    let live = crate::services::channel_state::is_live(&login).await;
+    let ctx = context(&judged, room_of(&login), live);
+    Some(snapshot(&login, judged.rewards, &ctx, judged.fetched_at_ms, chrono::Utc::now().timestamp_millis()))
 }
 
 /// Re-judge the last list for `login` against the current room and stream and
@@ -353,12 +494,11 @@ fn group(n: i64) -> String {
     out
 }
 
-/// A line for a built-in reward's detail view, only where it adds something
-/// its title does not say. Titles like "Gigantify an Emote" need none.
+/// A line for a built-in reward, only where it says something its title
+/// cannot: which effects "Modify a Single Emote" offers. Every other built-in
+/// title says what it does.
 pub fn built_in_description(reward_type: &str) -> Option<&'static str> {
     Some(match reward_type {
-        HIGHLIGHTED_MESSAGE_REWARD => "Everyone in chat sees it in a colored box",
-        SUB_MODE_BYPASS_REWARD => "Posts even though you're not subscribed",
         "CHOSEN_MODIFIED_SUB_EMOTE_UNLOCK" => "Effects include black and white, flipped and sunglasses",
         _ => return None,
     })
@@ -511,6 +651,32 @@ pub fn sub_mode_error_text(code: &str, points_name: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn reward_names_read_from_the_channel_points_answer() {
+        let body = serde_json::json!({ "data": { "community": { "channel": { "communityPointsSettings": { "customRewards": [
+            { "id": "r1", "title": "Билет на Розыгрыш Ножа", "cost": 4999, "isUserInputRequired": true },
+            { "id": "", "title": "no id", "cost": 1 },
+            { "id": "r2", "title": "Hydrate", "cost": 100 },
+        ] } } } } });
+        let names = reward_names_in(&body);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], ("r1".to_string(), RewardName { title: "Билет на Розыгрыш Ножа".into(), cost: 4999 }));
+        assert!(reward_names_in(&serde_json::json!({ "data": null })).is_empty());
+    }
+
+    #[test]
+    fn a_noted_reward_is_named_and_a_list_read_keeps_feed_names() {
+        note_reward_name("NameTestChan", "fresh", "Made mid-stream", 50);
+        note_reward_list("nametestchan", vec![("old".to_string(), RewardName { title: "Listed".into(), cost: 10 })], 1);
+        assert_eq!(reward_name("nametestchan", "fresh").map(|n| n.title), Some("Made mid-stream".into()));
+        assert_eq!(reward_name("NAMETESTCHAN", "old").map(|n| n.cost), Some(10));
+        assert_eq!(reward_name("nametestchan", "unknown"), None);
+        note_reward_name("nametestchan", "", "no id", 1);
+        note_reward_name("nametestchan", "blank", "", 1);
+        assert_eq!(reward_name("nametestchan", "blank"), None);
+    }
+
     use super::*;
 
     const NOW_MS: i64 = 1_700_000_000_000;

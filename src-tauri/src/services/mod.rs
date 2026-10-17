@@ -64,6 +64,7 @@ pub mod discord_service;
 // crate's Unix finder cannot locate Discord there.
 #[cfg(target_os = "macos")]
 pub mod discord_ipc_macos;
+pub mod drop_playback;
 pub mod drops_auth_service;
 pub mod drop_words;
 pub mod drops_overview;
@@ -83,6 +84,7 @@ pub mod emote_service;
 pub mod emote_set_cache;
 pub mod eventsub_moderation;
 pub mod eventsub_service;
+pub mod follow_lookup;
 pub mod ffz_room_badges;
 pub mod file_log;
 pub mod app_exit;
@@ -98,11 +100,14 @@ pub mod member_alias;
 pub mod modroom_auth_service;
 pub mod tiktok_auth_service;
 pub mod youtube_auth_service;
+pub mod favorite_categories;
+pub mod hidden_channels;
 pub mod favorite_live_service;
 // Reads the chat dock, which is desktop only.
 #[cfg(desktop)]
 pub mod chat_dock_live;
 pub mod live_announce;
+pub mod live_bookmark;
 pub mod live_notification_service;
 pub mod offline_room;
 pub mod onsite_notifications;
@@ -142,6 +147,7 @@ pub mod seventv_auth_service;
 pub mod seventv_cosmetics_resolver;
 pub mod seventv_eventapi;
 pub mod song_id;
+pub mod sub_standing;
 pub mod stream_server;
 pub mod sub_standing;
 pub mod follow_lookup;
@@ -158,9 +164,13 @@ pub mod youtube_dash;
 pub mod youtube_potoken;
 pub mod youtube_sabr;
 pub mod twitch_auth_service;
+pub mod twitch_web_gql;
+pub mod twitch_integrity;
+pub mod bits;
 pub mod twitch_resolver;
 pub mod twitch_limits;
 pub mod token_vault;
+pub mod twitch_chat_history;
 pub mod twitch_service;
 pub mod twitch_signin;
 pub mod twitch_profile_edit;
@@ -181,6 +191,7 @@ pub mod chat_recovery;
 pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
+pub mod share_link;
 pub mod slash_commands;
 pub mod slash_dispatch;
 pub mod nuke;
@@ -191,6 +202,7 @@ pub mod unified_following;
 pub mod muted_segments;
 pub mod vod_chapters;
 pub mod vod_progress_service;
+pub mod vod_sync;
 pub mod vod_storyboard;
 pub mod watch_heartbeat_service;
 pub mod whisper_history_service;
@@ -201,3 +213,12 @@ pub mod whisper_inbox;
 pub mod whisper_service;
 pub mod whisper_storage_service;
 pub mod window_visibility;
+// The operating system's own notifications (desktop).
+#[cfg(desktop)]
+pub mod system_notify;
+// Windows: the NSIS install, its updates, and the move from the portable exe.
+#[cfg(windows)]
+pub mod installer_update;
+// A notification when someone mentions you in a Twitch chat (desktop).
+#[cfg(desktop)]
+pub mod mention_notify;

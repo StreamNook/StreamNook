@@ -725,13 +725,15 @@ function App() {
   }, []);
 
   // streamnook:// deep links (the share links resolve here). The Rust handler
-  // emits `streamnook://watch` for links opened while we're running; the
+  // emits `streamnook:watch` for links opened while we're running; the
   // take_pending_watch_link command drains one the app was cold-started with.
-  // Either path plays the channel, deferring until boot finishes so startStream
-  // has settings/auth loaded.
+  // Either carries a startStream key Rust already cleaned: a bare Twitch login,
+  // or `provider:channel` (a YouTube video id in it is case-sensitive, so it is
+  // passed on as given). Playback defers until boot finishes so startStream has
+  // settings/auth loaded.
   useEffect(() => {
     const openChannel = (channel: string) => {
-      const login = channel.trim().toLowerCase();
+      const login = channel.trim();
       if (!login) return;
       if (useAppStore.getState().isBooting) {
         pendingWatchChannelRef.current = login;
