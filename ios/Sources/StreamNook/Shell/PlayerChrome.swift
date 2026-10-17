@@ -114,6 +114,11 @@ struct PlayerChrome: View {
                         }
                     }
                     .layoutPriority(1)
+                    // Twitch and Kick only (every row here is one of the two); it drops out
+                    // whole before the name gives way.
+                    if !watch.roomVod {
+                        SubscribePill(model: model, stream: stream)
+                    }
                     Spacer(minLength: 8)
                     // When room runs out the Together chip keeps only its faces, then the uptime
                     // goes; the name never gives way to the counts.
