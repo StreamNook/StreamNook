@@ -63,6 +63,8 @@ enum KickDrive {
             Task { await model.kick.connect() }
         case "kickfollowing":
             let lists = model.home.lists
+            let raw = (try? await model.core.invoke("get_provider_follows", args: [:])) ?? "failed"
+            log.notice("drive kickfollows raw \(String(raw.prefix(600)), privacy: .public)")
             let rows = lists.followingLive.filter { !$0.isTwitch }.map { "\($0.userLogin)(\($0.viewerCount))" }
             log.notice("drive kickfollowing platforms \(lists.following.platforms.joined(separator: ","), privacy: .public) kick live \(rows.joined(separator: ","), privacy: .public) all \(lists.followingLive.count)")
         case "kickchat":

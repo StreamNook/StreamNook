@@ -42,6 +42,9 @@ final class KickAccount {
                 switch event.name {
                 case "account-roster-changed", "platform-account-changed":
                     await self.refresh()
+                case "home-snapshot" where event.payloadJSON.contains("\"section\":\"following\""):
+                    // The follow list changed under the Following tab (an import, a sign-out).
+                    await self.refresh()
                 case "platform-session-expired":
                     if event.payloadJSON.contains("kick") { self.expired() }
                 default:
