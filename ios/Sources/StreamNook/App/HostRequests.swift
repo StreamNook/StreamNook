@@ -47,9 +47,11 @@ final class HostRequests {
         case "open_sheet":
             guard let next = try? JSONDecoder().decode(WebSheetRequest.self, from: Data(request.payloadJSON.utf8)) else { return }
             cookies?.setSheetOrigins(next.cookieOrigins)
-            if sheet != nil { sheetLoad += 1 }
+            let reload = sheet != nil
             closedByCore = false
+            // The request first, then the bump: an open sheet reloads on the new page.
             sheet = next
+            if reload { sheetLoad += 1 }
             await cookies?.push()
         case "close_sheet":
             guard sheet != nil else { return }
@@ -70,6 +72,13 @@ final class HostRequests {
         guard let core else { return }
         log.notice("web sheet stopped at \(url.host ?? "", privacy: .public)\(url.path, privacy: .public)")
         Task.detached { _ = try? await core.invoke("sheet_redirected", args: ["url": url.absoluteString]) }
+        Task { await cookies?.push() }
+    }
+
+    /// A page in the sheet finished loading: the core gets the sites' cookies now, not only when
+    /// WebKit's store says they changed, so a sign-in it polls for is seen at once.
+    func pageFinished(_ url: URL) {
+        log.notice("web sheet shows \(url.host ?? "", privacy: .public)\(url.path, privacy: .public)")
         Task { await cookies?.push() }
     }
 
