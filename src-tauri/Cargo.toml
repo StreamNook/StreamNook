@@ -263,6 +263,9 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 sn-tauri-headless = { path = "crates/tauri-headless" }
 uniffi = { version = "0.32.2", default-features = false }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+# Chat's raw IRC over TLS route, the same rustls + bundled roots as Android.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+webpki-roots = "1.0.6"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2"] }
 
 # webview2-com powers services/twitch_auth_service.rs (CookieManager).
