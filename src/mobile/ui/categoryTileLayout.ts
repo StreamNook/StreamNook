@@ -8,7 +8,13 @@ export const TILE_ART_CLASS = 'relative w-full aspect-[3/4] overflow-hidden roun
  *  without a count still lines up with its row. */
 export const CHIN_CLASS = 'mt-[5px] min-h-[33px]';
 
-const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+/** The box art width to ask for: the drawn width in device pixels, rounded up
+ *  to a 30 px step. The height follows at 3:4. */
+export function artPixelWidth(drawnCssWidth: number, devicePixelRatio: number): number {
+  return Math.ceil((Math.max(drawnCssWidth, 60) * devicePixelRatio) / 30) * 30;
+}
+
+const compact =new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 
 /** "No live streams", "1 viewer", "12.4K viewers"; null when nobody counted. */
 export function viewersLine(count: number | null | undefined): string | null {

@@ -1,31 +1,75 @@
 // A category in a grid: its box art filling the column, then a chin below it
 // with the name and how many watch it now. No card around it: the art is the
 // object, and a glass frame only shrank it. Names never sit on the art.
-import React from 'react';
-import { CHIN_CLASS, TILE_ART_CLASS, viewersLine } from './categoryTileLayout';
+import React, { useCallback, useState } from 'react';
+import { gameBoxArt } from '../../utils/boxArt';
+import { CHIN_CLASS, TILE_ART_CLASS, artPixelWidth, viewersLine } from './categoryTileLayout';
+
+// One observer for every tile on the page: a grid mounts dozens at once, and
+// one observer per tile would be dozens of observers doing a single job.
+const widthWatchers = new WeakMap<Element, (width: number) => void>();
+let sharedObserver: ResizeObserver | null = null;
+function observeWidth(el: Element, onWidth: (width: number) => void): () => void {
+  if (typeof ResizeObserver === 'undefined') {
+    onWidth(el.getBoundingClientRect().width);
+    return () => {};
+  }
+  sharedObserver ??= new ResizeObserver((entries) => {
+    for (const e of entries) widthWatchers.get(e.target)?.(e.contentRect.width);
+  });
+  widthWatchers.set(el, onWidth);
+  sharedObserver.observe(el);
+  return () => {
+    widthWatchers.delete(el);
+    sharedObserver?.unobserve(el);
+  };
+}
 
 export const CategoryTile: React.FC<{
   name: string;
-  art: string | null | undefined;
+  /** A finished picture URL (Kick's thumbnails come ready-made). */
+  art?: string | null;
+  /** Twitch box art, as a `{width}x{height}` template or a baked-size URL.
+   *  The tile asks for it at the size it is drawn, in device pixels, rather
+   *  than one fixed size that is too soft on a dense screen and too heavy on a
+   *  narrow column. */
+  boxArt?: string | null;
   /** Live viewers across the category, when the source counted them. */
   viewers?: number | null;
   /** Search results give the name two lines; browsing keeps one. */
   twoLineName?: boolean;
   onPress: () => void;
-}> = ({ name, art, viewers, twoLineName = false, onPress }) => {
+}> = ({ name, art, boxArt, viewers, twoLineName = false, onPress }) => {
   const line = viewersLine(viewers);
+  // Rounded up to 30 px steps (in artPixelWidth), so a fold, a rotation or a
+  // fractional column width lands on a handful of sizes the cache already
+  // holds instead of a new request per pixel.
+  const [pixelWidth, setPixelWidth] = useState<number | null>(null);
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    return observeWidth(el, (w) => {
+      if (w > 0) setPixelWidth(artPixelWidth(w, window.devicePixelRatio || 1));
+    });
+  }, []);
+  // No URL until the tile knows its size, so it never fetches a guess first
+  // and then the real one.
+  const src = boxArt
+    ? pixelWidth
+      ? gameBoxArt(boxArt, pixelWidth, Math.round((pixelWidth * 4) / 3))
+      : null
+    : art;
   return (
     <button
       onClick={onPress}
       className="w-full text-left active:opacity-80 transition-opacity"
       aria-label={[name, line].filter(Boolean).join(', ')}
     >
-      <div className={`${TILE_ART_CLASS} bg-surface`}>
-        {art && (
+      <div ref={measure} className={`${TILE_ART_CLASS} bg-surface`}>
+        {src && (
           <img
             loading="lazy"
             decoding="async"
-            src={art}
+            src={src}
             alt=""
             className="absolute inset-0 w-full h-full object-cover"
             draggable={false}

@@ -19,6 +19,8 @@ import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { Logger } from '../../utils/logger';
 import { streamKey } from '../../utils/streamProvider';
 import { bumpPreviewStamp } from '../followRefresh';
+import { EmptyNote } from '../ui/EmptyNote';
+import { OfflineChannelsGroup } from './OfflineChannelsGroup';
 import type { TwitchStream } from '../../types';
 import type { ProviderCategory } from '../../types/providers';
 import type { StreamViewMode } from './FollowingScreen';
@@ -141,42 +143,36 @@ export const KickBrowseBody: React.FC<{
           {streams === null || (loading && shownStreams.length === 0 && offlineStreams.length === 0) ? (
             <SkeletonCards />
           ) : shownStreams.length === 0 && offlineStreams.length > 0 ? (
-            <OfflineChannels channels={offlineStreams} onOpen={openKick} />
+            <OfflineChannelsGroup className="pt-1 sn-tabbar-clearance" channels={offlineStreams} onOpen={openKick} />
           ) : shownStreams.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-1">
-              <div className="text-sm text-textMuted">
-                {trimmed ? 'No Kick channels found.' : 'Nothing live on Kick right now.'}
-              </div>
-              <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
-            </div>
+            <EmptyNote text={trimmed ? 'No Kick channels found.' : 'Nothing live on Kick right now.'} />
           ) : (
-            <AdaptiveGrid
-              variant={view === 'list' ? 'row' : 'card'}
-              gap={view === 'list' ? 8 : 12}
-              className="px-4 sn-tabbar-clearance"
-            >
-              {shownStreams.map((s, i) => (
-                <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
-                  <MobileStreamCard
-                    stream={s}
-                    onPress={openKick}
-                    variant={view === 'list' ? 'row' : 'card'}
-                    showPlatform={false}
-                  />
-                </SettleIn>
-              ))}
-            </AdaptiveGrid>
-          )}
-          {shownStreams.length > 0 && offlineStreams.length > 0 && (
-            <OfflineChannels channels={offlineStreams} onOpen={openKick} />
+            // The clearance wraps both groups, as on Twitch, so offline
+            // channels follow the live cards instead of a tab bar's height
+            // further down.
+            <div className="sn-tabbar-clearance">
+              <AdaptiveGrid variant={view === 'list' ? 'row' : 'card'} gap={view === 'list' ? 8 : 12} className="px-4">
+                {shownStreams.map((s, i) => (
+                  <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
+                    <MobileStreamCard
+                      stream={s}
+                      onPress={openKick}
+                      variant={view === 'list' ? 'row' : 'card'}
+                      showPlatform={false}
+                    />
+                  </SettleIn>
+                ))}
+              </AdaptiveGrid>
+              {offlineStreams.length > 0 && (
+                <OfflineChannelsGroup className="mt-5" channels={offlineStreams} onOpen={openKick} />
+              )}
+            </div>
           )}
         </>
       ) : categories === null || (loading && shownCategories.length === 0) ? (
         <SkeletonTiles />
       ) : shownCategories.length === 0 ? (
-        <div className="flex items-center justify-center py-20 text-sm text-textMuted">
-          {trimmed ? 'No categories found.' : 'No categories yet, pull to refresh.'}
-        </div>
+        <EmptyNote text={trimmed ? 'No categories found.' : 'No categories yet, pull to refresh.'} hint={null} />
       ) : (
         <div className={`${TILE_GRID_CLASS} px-4 sn-tabbar-clearance`}>
           {shownCategories.map((c, i) => (
@@ -184,6 +180,7 @@ export const KickBrowseBody: React.FC<{
               <CategoryTile
                 name={c.name}
                 art={c.thumbnail}
+                viewers={c.viewer_count}
                 twoLineName={!!trimmed}
                 onPress={() => onPickCategory(c)}
               />
@@ -194,35 +191,3 @@ export const KickBrowseBody: React.FC<{
     </PullToRefresh>
   );
 };
-
-/** Channels a search found that are not streaming: a plain list (no preview,
- *  no viewers, nothing to play), tapped to open the channel. */
-const OfflineChannels: React.FC<{ channels: TwitchStream[]; onOpen: (row: TwitchStream) => void }> = ({
-  channels,
-  onOpen,
-}) => (
-  <div className="px-4 pt-1 sn-tabbar-clearance">
-    <div className="px-1 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">Offline channels</div>
-    <div className="glass-panel media-card overflow-hidden">
-      {channels.map((c, i) => (
-        <button
-          key={streamKey(c)}
-          onClick={() => onOpen(c)}
-          className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left active:opacity-70 ${i > 0 ? 'border-t border-borderSubtle' : ''}`}
-        >
-          {c.profile_image_url ? (
-            <img src={c.profile_image_url} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" draggable={false} />
-          ) : (
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface text-[14px] font-semibold text-textSecondary">
-              {(c.user_name || c.user_login).charAt(0).toUpperCase()}
-            </div>
-          )}
-          <div className="min-w-0">
-            <div className="truncate text-[15px] font-semibold text-textPrimary">{c.user_name || c.user_login}</div>
-            <div className="truncate text-[12.5px] text-textSecondary">{c.game_name || 'Offline'}</div>
-          </div>
-        </button>
-      ))}
-    </div>
-  </div>
-);
