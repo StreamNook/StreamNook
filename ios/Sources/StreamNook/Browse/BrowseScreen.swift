@@ -10,7 +10,6 @@ struct BrowseScreen: View {
     @AppStorage(StreamView.key) private var view = StreamView.cards
     /// `twitch` or `kick`; anything else reads as Twitch.
     @AppStorage("sn-browse-platform") private var platform = "twitch"
-    @AppStorage(PlatformChooserStyle.key) private var chooser = PlatformChooserStyle.row
     @State private var liveLatch = SettleLatch()
     @State private var categoryLatch = SettleLatch()
 
@@ -22,26 +21,11 @@ struct BrowseScreen: View {
         @Bindable var browse = model.browseState
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if chooser == .search {
-                    // Option B: this field stands where the system search bar stood.
-                    PlatformSearchField(options: [.twitch, .kick], platform: platformBinding, query: $browse.query,
-                                        prompt: searchPrompt)
-                        .padding(.horizontal, 16)
-                }
-                // The modes and the platform share one row, so nothing below moves.
-                HStack(spacing: 8) {
-                    GlazeSegments([Segment(value: BrowseModel.Mode.live, label: "Live"),
-                                   Segment(value: BrowseModel.Mode.categories, label: "Categories")],
-                                  selection: modeBinding,
-                                  accessory: chooser == .capsule
-                                      ? AnyView(PlatformMenu(options: [.twitch, .kick], selection: platformBinding, size: 16,
-                                                           minHeight: 30))
-                                      : nil)
-                    Spacer(minLength: 0)
-                    if chooser == .row { PlatformSwitch(platform: platformBinding) }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
+                GlazeSegments([Segment(value: BrowseModel.Mode.live, label: "Live"),
+                               Segment(value: BrowseModel.Mode.categories, label: "Categories")],
+                              selection: modeBinding)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
                 content
             }
         }
@@ -51,15 +35,17 @@ struct BrowseScreen: View {
         .background(SN.background)
         .navigationTitle("Browse")
         .toolbarTitleDisplayMode(.inlineLarge)
-        .modifier(SystemSearch(enabled: chooser != .search, query: $browse.query, prompt: searchPrompt))
+        .searchable(text: $browse.query, placement: .navigationBarDrawer(displayMode: .always), prompt: searchPrompt)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .submitLabel(.search)
         .toolbar {
-            if chooser == .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    PlatformMenu(options: [.twitch, .kick], selection: platformBinding)
-                }
-                if browse.mode == .live { ToolbarSpacer(.fixed, placement: .topBarTrailing) }
+            // The platform sits in the title row, so it spends no row of its own.
+            ToolbarItem(placement: .topBarTrailing) {
+                PlatformMenu(options: [.twitch, .kick], selection: platformBinding)
             }
             if browse.mode == .live {
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) { StreamViewButtons(view: $view) }
             }
         }
@@ -438,24 +424,5 @@ enum CategoryChin {
         }
         .hidden()
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The system search bar under the title, unless the screen draws its own field instead.
-private struct SystemSearch: ViewModifier {
-    let enabled: Bool
-    @Binding var query: String
-    let prompt: String
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: prompt)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-        } else {
-            content
-        }
     }
 }

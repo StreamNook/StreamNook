@@ -3,13 +3,12 @@ import SwiftUI
 
 /// The channels you follow that are live, as cards or rows, on every platform the iPhone plays
 /// (Twitch and Kick), ranked by viewers in Rust. With a Kick follow on the list, a platform filter
-/// shows above it. Signed out, it asks you to sign in.
+/// sits in the title row (it spends no row of its own). Signed out, it asks you to sign in.
 struct FollowingScreen: View {
     let model: AppModel
     @AppStorage(StreamView.key) private var view = StreamView.cards
     /// `twitch`, `kick`, or empty for everything.
     @AppStorage("sn-following-platform") private var platform = ""
-    @AppStorage(PlatformChooserStyle.key) private var chooser = PlatformChooserStyle.row
     @State private var latch = SettleLatch()
 
     private var home: HomeStore { model.home }
@@ -40,8 +39,7 @@ struct FollowingScreen: View {
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {
             if model.signedIn {
-                // Every style but the row puts the filter in the title row, so it costs no row.
-                if chooser != .row && home.lists.following.followsKick {
+                if home.lists.following.followsKick {
                     ToolbarItem(placement: .topBarTrailing) {
                         PlatformMenu(options: [.all, .twitch, .kick], selection: menuBinding)
                     }
@@ -60,13 +58,6 @@ struct FollowingScreen: View {
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if home.lists.following.followsKick && chooser == .row {
-                    GlazeSegments([Segment(value: "twitch", label: "Twitch", accessibility: "Show Twitch channels", mark: .twitch),
-                                   Segment(value: "kick", label: "Kick", accessibility: "Show Kick channels", mark: .kick)],
-                                  selection: filterBinding, allowsNone: true)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-                }
                 content
             }
         }
@@ -98,10 +89,5 @@ struct FollowingScreen: View {
         case "kick": return "No Kick channels you follow are live right now."
         default: return "No followed channels are live right now."
         }
-    }
-
-    /// Tap a platform to show only it; tap it again to show everything.
-    private var filterBinding: Binding<String?> {
-        Binding(get: { filter }, set: { platform = $0 ?? "" })
     }
 }

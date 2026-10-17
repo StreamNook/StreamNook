@@ -1,17 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Where a screen puts its platform choice. `row` is the original segmented row; the others spend
-/// no row of their own: `toolbar` is a logo button in the title row, `search` is the logo at the
-/// search field's leading edge (Browse), `capsule` is the logo as the first slot of the mode
-/// capsule (Browse). Following has no search field or mode capsule, so every style but `row` puts
-/// its filter in the title row.
-enum PlatformChooserStyle: String, CaseIterable {
-    case row, toolbar, search, capsule
-
-    static let key = "sn-platform-chooser"
-}
-
 /// One platform choice: a value the screen stores (`""` for every platform) and its marks.
 struct PlatformOption: Identifiable, Hashable {
     let value: String
@@ -56,17 +45,13 @@ struct PlatformMarks: View {
     }
 }
 
-/// The platform choice as a menu whose label is the chosen platform's logo, with a small chevron
-/// saying it opens. The menu lists every option with its logo and a check on the chosen one.
+/// The platform choice in a screen's title row, so it spends no row of its own: a menu whose label
+/// is the chosen platform's logo with a small chevron saying it opens. The menu lists every option
+/// with its logo and a check on the chosen one.
 struct PlatformMenu: View {
     let options: [PlatformOption]
     @Binding var selection: String
     var size: CGFloat = 18
-    /// The chevron after the logo; off where the surrounding control already reads as a menu.
-    var chevron = true
-    /// The tap target's least height. Inside another control (the mode capsule) it matches that
-    /// control's segments, so the control keeps its own height.
-    var minHeight: CGFloat = 36
 
     private var chosen: PlatformOption { options.first { $0.value == selection } ?? options[0] }
 
@@ -86,61 +71,14 @@ struct PlatformMenu: View {
         } label: {
             HStack(spacing: 4) {
                 PlatformMarks(marks: chosen.marks, size: size)
-                if chevron {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(SN.textSecondary)
-                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(SN.textSecondary)
             }
-            .frame(minWidth: 44, minHeight: minHeight)
+            .frame(minWidth: 44, minHeight: 36)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("Platform: \(chosen.name)")
         .accessibilityHint("Choose which platform to show")
-    }
-}
-
-/// Option B: a search field whose leading edge is the platform menu. It stands where the system
-/// search bar stood, so the choice costs no row.
-struct PlatformSearchField: View {
-    let options: [PlatformOption]
-    @Binding var platform: String
-    @Binding var query: String
-    let prompt: String
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        HStack(spacing: 0) {
-            PlatformMenu(options: options, selection: $platform, size: 17)
-                .padding(.leading, 6)
-            Rectangle()
-                .fill(SN.textMuted.opacity(0.35))
-                .frame(width: 1, height: 20)
-                .padding(.trailing, 10)
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(SN.textSecondary)
-                .padding(.trailing, 6)
-            TextField("", text: $query, prompt: Text(prompt).foregroundStyle(SN.textSecondary))
-                .font(.snRowTitle)
-                .foregroundStyle(SN.textPrimary)
-                .focused($focused)
-                .submitLabel(.search)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(SN.textSecondary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.trailing, 6)
-        .frame(height: 44)
-        .snGlass(Capsule())
     }
 }

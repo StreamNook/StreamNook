@@ -167,38 +167,3 @@ private struct CategoryChip: View {
         .accessibilityLabel("Show all of Kick, not just \(name)")
     }
 }
-
-/// Which platform Browse shows: Twitch's and Kick's own marks in one glass capsule, the chosen one
-/// set into a darker pill, the other quieter.
-struct PlatformSwitch: View {
-    @Binding var platform: String
-    @Namespace private var pill
-
-    var body: some View {
-        HStack(spacing: 0) {
-            choice("twitch", mark: .twitch, label: "Browse Twitch")
-            choice("kick", mark: .kick, label: "Browse Kick")
-        }
-        .padding(2)
-        .snGlass(Capsule())
-    }
-
-    private func choice(_ value: String, mark: PlatformMark.Platform, label: String) -> some View {
-        let on = platform == value
-        return Button {
-            guard !on else { return }
-            withAnimation(SNMotion.run(SNMotion.glide)) { platform = value }
-        } label: {
-            PlatformMark(platform: mark, size: 16, color: on ? nil : SN.textPrimary.opacity(0.55))
-                .frame(width: 40, height: 32)
-                .background {
-                    if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) }
-                }
-                .frame(width: 44, height: 36)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(on ? .isSelected : [])
-    }
-}
