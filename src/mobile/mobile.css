@@ -209,8 +209,11 @@ body:has(.sn-mobile) .glass-input:focus {
     var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength)) * 8%),
     transparent
   );
-  -webkit-backdrop-filter: blur(calc(24px * var(--glass-strength))) saturate(120%);
-  backdrop-filter: blur(calc(24px * var(--glass-strength))) saturate(120%);
+  /* 20px: at 92% fill the radius barely shows, and it keeps the menu out of
+     globals.css's one-blur-per-stack lists (light up to 16px, heavy from 24px),
+     which it never nests in anyway: it portals into <body>. */
+  -webkit-backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(120%);
+  backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(120%);
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
     0 0 0 0.5px rgba(0, 0, 0, 0.4),
