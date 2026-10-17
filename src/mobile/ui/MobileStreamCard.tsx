@@ -162,7 +162,9 @@ export const MobileStreamCard: React.FC<{
           <div className="flex items-center gap-1 text-textSecondary text-[13px] leading-4">
             <span className="truncate">{stream.user_name}</span>
             {collab && <TogetherTag collab={collab} compact />}
-            {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
+            {/* At the name's cap height: the Kick K fills its box, so 12 stood
+                taller than the letters beside it. */}
+            {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={10} />}
             {stream.broadcaster_type === 'partner' && (
               <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
                 <path
@@ -256,7 +258,7 @@ export const MobileStreamCard: React.FC<{
           )}
           <span className="truncate">{stream.user_name}</span>
           {collab && <TogetherTag collab={collab} />}
-          {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
+          {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={10} />}
           {stream.broadcaster_type === 'partner' && (
             <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
               <path

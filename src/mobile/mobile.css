@@ -36,10 +36,57 @@
 }
 
 /* Touch surfaces scroll with overlay scrolling; the 8px hover-styled desktop
-   scrollbar is noise on a phone. */
-.sn-mobile ::-webkit-scrollbar {
+   scrollbar is noise on a phone. Sheets and menus portal into <body>, outside
+   .sn-mobile, so the rule reaches them through `body:has(.sn-mobile)`: a sheet
+   showed a scrollbar the screens behind it did not. */
+.sn-mobile ::-webkit-scrollbar,
+body:has(.sn-mobile) ::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* Fields on the phone (search, the composer, the command box): the theme's
+   raised surface (its surface over its background), the pair the text floors
+   are measured on, with the glass family's edge, a lit rim fading inward and a
+   dark hairline outside. The desktop's field is a neumorphic trench (a 1px
+   border plus soft inner shadows) that read on a phone as a light bordered
+   box. Corners stay the field's own: the composer and text areas grow to
+   several lines, so only the search field (`ui/SearchField`) is a capsule. */
+body:has(.sn-mobile) .glass-input,
+body:has(.sn-mobile) .glass-input:focus {
+  border: none;
+  background: linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow:
+    inset 0 0 0 0.33px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 0.67px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.02),
+    0 0 0 0.5px rgba(0, 0, 0, 0.4);
+}
+/* The secondary button (`ui/Button`): a light glass capsule, about 10% white
+   over what is behind it with the rim's top light and a dark hairline, solid
+   tertiary at Glassiness 0. Unscoped, because buttons also live in sheets. */
+.sn-button-secondary {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%),
+    rgb(255 255 255 / 0.1)
+  );
+  box-shadow:
+    inset 0 0.5px 0 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 0 0 0.5px rgba(0, 0, 0, 0.4);
+}
+
+/* Focus is a brighter rim, not a trench. */
+body:has(.sn-mobile) .glass-input:focus-within,
+body:has(.sn-mobile) .glass-input:focus {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.03),
+    0 0 0 0.5px rgba(0, 0, 0, 0.4);
 }
 
 /* Screen container between the safe top and the tab bar. */
@@ -140,11 +187,54 @@
    The house popover blurs 64px of whatever is behind it, and behind these two
    is a chat that repaints on every message, so the blur was recomputed on
    every frame for the whole watch. A firmer tint carries the legibility the
-   blur was providing. */
+   blur was providing: at 90% the chat's words still showed through the card,
+   so it is 97%, and solid at Glassiness 0. */
 .sn-mobile .sn-popover--static {
-  --sn-popover-tint: calc(90% + (1 - var(--glass-strength)) * 10%);
+  --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+/* One menu for the phone: the platform menu, the badge sort and any other
+   short list hung from a control. Menus portal into <body>, outside
+   .sn-mobile, so these are not scoped under it. The surface is near-opaque
+   (92% of the tertiary floor, solid at Glassiness 0) over a light blur: the
+   house popover's thin tint went muddy over red box art. Rows are 44px, the
+   label 15px in the primary color for every option, the chosen one semibold
+   with an accent check, the way the iPhone's system menus read. */
+.sn-menu {
+  border-radius: 14px;
+  background-color: color-mix(
+    in srgb,
+    var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength)) * 8%),
+    transparent
+  );
+  -webkit-backdrop-filter: blur(calc(24px * var(--glass-strength))) saturate(120%);
+  backdrop-filter: blur(calc(24px * var(--glass-strength))) saturate(120%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 0 0 0.5px rgba(0, 0, 0, 0.4),
+    0 12px 32px -8px rgba(0, 0, 0, 0.6);
+  padding: 6px 0;
+}
+.sn-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px 0 14px;
+  text-align: left;
+  font-size: 15px;
+  color: var(--color-text-primary);
+  outline: none;
+}
+.sn-menu-row[aria-checked='true'] {
+  font-weight: 600;
+}
+.sn-menu-row:active,
+.sn-menu-row:focus-visible {
+  background-color: rgba(255, 255, 255, 0.06);
 }
 
 /* Chat floating over landscape video on a phone. The desktop overlay's
