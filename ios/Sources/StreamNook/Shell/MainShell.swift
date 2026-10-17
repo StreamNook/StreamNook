@@ -76,10 +76,8 @@ struct MainShell: View {
                     destination(route)
                 }
         }
-        .overlay(alignment: .bottom) {
-            if showsTabBar(tab) {
-                TabBarFloor(height: insets.bottom + TabBarFloor.reach)
-            }
+        .overlay {
+            if showsTabBar(tab) { TabBarFloor() }
         }
     }
 
@@ -113,17 +111,20 @@ extension EnvironmentValues {
 /// curve, so content scrolling down fades out under the bar instead of showing through it, with no
 /// hard edge and no bare strip below it. It never takes a touch.
 private struct TabBarFloor: View {
-    let height: CGFloat
-
-    /// How far above the bottom safe area the fade starts: the bar's height plus room to ease in.
-    static let reach: CGFloat = 104
+    /// How far above the bar's top edge the fade starts. Inside a tab the bottom safe area already
+    /// spans the bar and the home indicator, so the floor covers that inset plus this lead-in and
+    /// nothing higher: content above the bar stays at full strength.
+    static let lead: CGFloat = 28
 
     var body: some View {
-        LinearGradient(stops: Self.easedStops(SN.background), startPoint: .top, endPoint: .bottom)
-            .frame(height: height)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-            .ignoresSafeArea(edges: .bottom)
+        GeometryReader { proxy in
+            LinearGradient(stops: Self.easedStops(SN.background), startPoint: .top, endPoint: .bottom)
+                .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     /// An ease-in curve sampled as gradient stops (opacity grows as t squared, smoothed), so the
