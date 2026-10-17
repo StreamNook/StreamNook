@@ -193,7 +193,10 @@ async fn api_get<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Vec<T>> {
 
 fn row_from_channel(row: ChannelRow, avatar: Option<String>, name: Option<String>) -> ProviderStream {
     let slug = row.slug.to_lowercase();
-    let stream = row.stream;
+    // Kick's own live answer settles liveness. An ended stream's record lingers
+    // with its last viewer count and preview, which drew as a live card with
+    // stale numbers; an offline channel carries none of them.
+    let stream = row.stream.filter(|s| s.is_live);
     ProviderStream {
         provider: "kick".to_string(),
         key: make_key("kick", &slug),
@@ -218,7 +221,7 @@ fn row_from_channel(row: ChannelRow, avatar: Option<String>, name: Option<String
         thumbnail_url: stream.as_ref().and_then(|s| s.thumbnail.clone()).unwrap_or_default(),
         started_at: stream.as_ref().and_then(|s| s.start_time.clone()).unwrap_or_default(),
         profile_image_url: avatar,
-        is_live: stream.map(|s| s.is_live).unwrap_or(false),
+        is_live: stream.is_some(),
         watch_url: watch_url(&slug),
         tags: None,
     }
@@ -695,4 +698,51 @@ async fn v2_live_row(slug: &str) -> Option<ProviderStream> {
         watch_url: watch_url(slug),
         tags: None,
     })
+}
+
+#[cfg(test)]
+mod channel_row_tests {
+    use super::*;
+
+    fn channel(stream: serde_json::Value) -> ChannelRow {
+        serde_json::from_value(serde_json::json!({
+            "broadcaster_user_id": 7,
+            "slug": "Shroud",
+            "stream_title": "last title",
+            "stream": stream,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_ended_stream_is_an_offline_row_with_no_stale_numbers() {
+        let row = row_from_channel(
+            channel(serde_json::json!({ "is_live": false, "viewer_count": 812, "thumbnail": "old.webp", "start_time": "2026-10-16T10:00:00Z" })),
+            None,
+            None,
+        );
+        assert!(!row.is_live);
+        assert_eq!(row.viewer_count, 0);
+        assert_eq!(row.thumbnail_url, "");
+        assert_eq!(row.started_at, "");
+        assert_eq!(row.user_login, "shroud");
+    }
+
+    #[test]
+    fn a_live_stream_keeps_its_numbers() {
+        let row = row_from_channel(
+            channel(serde_json::json!({ "is_live": true, "viewer_count": 812, "thumbnail": "now.webp", "start_time": "2026-10-16T10:00:00Z" })),
+            None,
+            None,
+        );
+        assert!(row.is_live);
+        assert_eq!(row.viewer_count, 812);
+        assert_eq!(row.thumbnail_url, "now.webp");
+    }
+
+    #[test]
+    fn no_stream_record_is_offline() {
+        let row = row_from_channel(channel(serde_json::Value::Null), None, None);
+        assert!(!row.is_live);
+    }
 }

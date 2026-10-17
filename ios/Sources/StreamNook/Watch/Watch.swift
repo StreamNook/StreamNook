@@ -540,11 +540,17 @@ final class Watch {
     /// the band's failure line and a toast saying chat still works.
     private func failed(_ stream: TwitchStream, core: CoreBridge) async {
         guard stream.isTwitch else {
-            // Kick has no offline room: the band says so and chat keeps running.
-            error = "Playback unavailable. Chat keeps running."
-            status = "Failed"
+            // Kick has no offline room: the band says why and chat keeps running. A channel Kick
+            // already called offline (a search hit) is offline, not a playback failure.
             pip.eligible = false
-            onToast?("Playback unavailable - showing chat only")
+            if stream.isOffline {
+                error = "\(stream.userName) is offline. Chat keeps running."
+                status = "Offline"
+            } else {
+                error = "Playback unavailable. Chat keeps running."
+                status = "Failed"
+                onToast?("Playback unavailable - showing chat only")
+            }
             return
         }
         // An unanswerable check counts as live: the honest message is then about playback.
