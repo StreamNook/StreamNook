@@ -2335,6 +2335,7 @@ pub fn run() {
             get_home_snapshot,
             set_home_mounted,
             refresh_home_section,
+            refresh_following,
             set_home_extra_channels,
             // The phones' resume refresh (desktop windows reload on mount).
             #[cfg(mobile)]

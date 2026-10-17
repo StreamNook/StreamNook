@@ -93,6 +93,7 @@ pub mod ivr;
 pub mod irc_transport;
 pub mod kick_auth_service;
 pub mod layout_service;
+pub mod linked_accounts;
 pub mod member_alias;
 pub mod modroom_auth_service;
 pub mod tiktok_auth_service;

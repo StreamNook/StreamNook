@@ -58,6 +58,7 @@ hype-train://update
 main-closed
 main-hiding-to-tray
 mass-unban-progress
+member-aliases-invalidated
 member-theme-changed
 membership-gift-received
 membership-status-changed

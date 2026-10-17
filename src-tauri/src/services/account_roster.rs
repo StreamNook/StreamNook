@@ -102,6 +102,10 @@ pub fn twitch_user_id() -> Option<String> {
 pub fn set_twitch_identity(info: Option<UserInfo>) {
     let changed = match TWITCH_IDENTITY.lock() {
         Ok(mut cell) => {
+            // Another member (or none): their linked-account claims start over.
+            if cell.as_ref().map(|u| u.id.as_str()) != info.as_ref().map(|u| u.id.as_str()) {
+                crate::services::linked_accounts::reset();
+            }
             let same = match (cell.as_ref(), info.as_ref()) {
                 (Some(a), Some(b)) => {
                     a.id == b.id
@@ -279,6 +283,9 @@ pub fn notify() {
         use tauri::Emitter;
         let mut last = LAST_SENT.lock().await;
         let roster = build().await;
+        // Claims are reported from every build (they dedupe on their own), so a
+        // retry after a cooldown goes out even when the roster did not change.
+        crate::services::linked_accounts::on_roster(&roster);
         if last.as_ref() == Some(&roster) {
             return;
         }

@@ -11,7 +11,8 @@ import SNKit
 /// - `kicksearch:SLUG` runs Kick's exact channel search and logs the answer
 /// - `kickstate` logs the Kick account (signed in, name, follows, the row's words)
 /// - `kicksignin` starts "Sign in with Kick" (the sheet then needs a person)
-/// - `kickfollowing` logs the Following tab's Kick rows and the platforms you follow on
+/// - `kickfollowing` logs the Following tab's Kick rows and the platforms you follow on; `kickpull`
+///   pulls Following to refresh (the core re-checks Kick at once)
 /// - `kickchat` logs the room on screen (platform, rows, rows Rust laid out, badges with art)
 @MainActor
 enum KickDrive {
@@ -67,6 +68,11 @@ enum KickDrive {
             log.notice("drive kickfollows raw \(String(raw.prefix(600)), privacy: .public)")
             let rows = lists.followingLive.filter { !$0.isTwitch }.map { "\($0.userLogin)(\($0.viewerCount))" }
             log.notice("drive kickfollowing platforms \(lists.following.platforms.joined(separator: ","), privacy: .public) kick live \(rows.joined(separator: ","), privacy: .public) all \(lists.followingLive.count)")
+        case "kickpull":
+            // Pull to refresh on Following: the core re-checks Kick at once.
+            await model.home.loadFollowing(pulled: true)
+            let rows = model.home.lists.followingLive.filter { !$0.isTwitch }.count
+            log.notice("drive kickpull kick live \(rows) all \(model.home.lists.followingLive.count)")
         case "kickchat":
             guard let session = model.chat.activeSession else {
                 log.notice("drive kickchat: no room on screen")

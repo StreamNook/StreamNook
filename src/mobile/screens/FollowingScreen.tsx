@@ -10,7 +10,6 @@ import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import type { TwitchStream } from '../../types';
-import { useFollowsStore } from '../../stores/followsStore';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
 import { followsKick, phoneFollowedLive } from '../followingMerge';
 import { ProviderMark } from '../../components/ProviderLogo';
@@ -109,13 +108,11 @@ export const FollowingScreen: React.FC = () => {
   }, []);
 
   const refresh = async () => {
-    void useFollowsStore.getState().refreshLive();
-    await loadFollowedStreams();
-    // The load stamps Rust's freshness, which the resume path shares, so
-    // pulling to refresh and then switching away and back does not fetch the
-    // same thing twice.
+    // One Rust call: Twitch's followed list (stamping the freshness the resume
+    // path shares), a live re-check of Kick and the other platforms you follow,
+    // and hype trains. The lists arrive as home-snapshot pushes.
+    await invoke('refresh_following').catch(() => {});
     bumpPreviewStamp();
-    await invoke('refresh_home_section', { section: 'hype_trains' }).catch(() => {});
   };
 
   const onPress = (stream: TwitchStream) => {

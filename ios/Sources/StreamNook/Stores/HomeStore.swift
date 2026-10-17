@@ -36,9 +36,15 @@ final class HomeStore {
 
     /// The followed-live list, asked of Twitch through the core. `pulled` renews the previews.
     func loadFollowing(pulled: Bool = false) async {
-        if pulled { previewStamp += 1 }
-        _ = try? await core.invoke("refresh_home_section", args: ["section": "followed_live"])
-        _ = try? await core.invoke("refresh_home_section", args: ["section": "hype_trains"])
+        if pulled {
+            previewStamp += 1
+            // A pull also re-checks Kick (and any other platform you follow) right away, not at
+            // its next 60 s sweep; the core floors that at once every 15 s.
+            _ = try? await core.invoke("refresh_following", args: [:])
+        } else {
+            _ = try? await core.invoke("refresh_home_section", args: ["section": "followed_live"])
+            _ = try? await core.invoke("refresh_home_section", args: ["section": "hype_trains"])
+        }
         await readSnapshot()
         followedLoaded = true
     }

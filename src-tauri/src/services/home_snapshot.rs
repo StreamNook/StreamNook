@@ -1299,6 +1299,27 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
 }
 
 /// Manual refresh of one section, floored at `MIN_MANUAL_GAP` per section.
+/// Pull to refresh on a Following list: Twitch's followed list, a live re-check
+/// of every other platform you follow (at most once every 15 s each, so a run
+/// of pulls never hammers them), then hype trains. The lists arrive as the
+/// usual `home-snapshot` pushes, the cross-platform `following` section
+/// included.
+pub async fn refresh_following(app: AppHandle, state: crate::models::settings::AppState) -> Result<(), String> {
+    let now = std::time::Instant::now();
+    let providers: Vec<String> = provider_live_service::followed_providers(&state)
+        .into_iter()
+        .filter(|p| provider_live_service::manual_allowed(p, now))
+        .collect();
+    let others = async {
+        for provider in &providers {
+            provider_live_service::refresh_provider(app.clone(), state.clone(), provider).await;
+        }
+    };
+    let (twitch, ()) = tokio::join!(refresh("followed_live", None, None), others);
+    let _ = refresh("hype_trains", None, None).await;
+    twitch
+}
+
 pub async fn refresh(
     section: &str,
     languages: Option<Vec<String>>,

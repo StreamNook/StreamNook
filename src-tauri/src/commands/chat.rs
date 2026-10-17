@@ -578,7 +578,10 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
 /// `account-roster-changed`; this is the first read.
 #[tauri::command]
 pub async fn get_account_roster() -> crate::services::account_roster::AccountRoster {
-    crate::services::account_roster::build().await
+    let roster = crate::services::account_roster::build().await;
+    // Every read reports what changed (linked accounts dedupe on their own).
+    crate::services::linked_accounts::on_roster(&roster);
+    roster
 }
 
 /// Which StreamNook member, if any, is behind each of these chat identities.
