@@ -59,6 +59,9 @@ export interface RewardsDrops {
   available: DropsGroup[];
   earned: { id: string; name: string; image: string; game: string | null }[];
   in_progress_empty: string;
+  /** `Nothing matches "rust".` when a search left every list empty (no
+   *  sections are drawn then); empty otherwise. */
+  no_match: string;
 }
 
 /** `refresh` reads Twitch again; otherwise Rust re-filters its last read by `query`. */
@@ -104,13 +107,23 @@ export interface MissingRow {
   icons_only: boolean;
   random_note: string | null;
   time_left: string;
+  /** It closes within a day: the time left is drawn as a warning. */
+  urgent: boolean;
+}
+
+export interface CatchUp {
+  /** "To catch up" or "To catch up, at least". */
+  label: string;
+  stats: { value: string; label: string }[];
+  /** How the totals are counted, one line each. */
+  notes: string[];
 }
 
 export interface MissingNow {
   state: 'hidden' | 'loading' | 'failed' | 'none' | 'list';
   refreshing: boolean;
   closes: string;
-  catch_up: { label: string; stats: { value: string; label: string }[]; notes: string[] } | null;
+  catch_up: CatchUp | null;
   rows: MissingRow[];
 }
 

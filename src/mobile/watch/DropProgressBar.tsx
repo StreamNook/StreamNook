@@ -6,7 +6,8 @@
 // the inventory, a network read, is only asked when one does. The progress is
 // the inventory's own per-drop minutes; `get_drop_progress` and the
 // `drop-progress` events belong to the desktop automation and are empty here.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Gift } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -78,31 +79,45 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
     if (!twitch) return;
     void refresh();
     // Skipped while backgrounded rather than torn down: nobody is looking at
-    // the bar, and it re-reads on the next tick after resuming anyway.
+    // the bar.
     const t = setInterval(() => {
       if (isBackgrounded()) return;
       void refresh();
     }, POLL_MS);
-    return () => clearInterval(t);
+    // Coming back to the app reads at once. Minutes kept accruing while it was
+    // away (audio keeps playing), and the next tick can be most of a minute
+    // off, long enough to show a stale count or miss a drop now ready.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refresh, twitch]);
 
   // Derived rather than cleared from an effect, so moving to another channel
   // cannot leave the previous channel's bar on screen for a frame.
   const live = twitch && shown?.login === channelLogin ? shown.drop : null;
+  const showing = visible && !!live;
 
+  // Appearing is reported at once so the header makes room as the card fades
+  // in. Going away is reported from onExitComplete below, after the fade out
+  // has played, or the header would hide its slot under the leaving card.
+  // Hidden counts as gone, so the header never reserves space for a bar it is
+  // not drawing.
+  const showingNow = useRef(showing);
   useEffect(() => {
-    // Report inactive while hidden too, so the header does not reserve space
-    // for a bar that is not being drawn.
-    onActiveChange?.(visible && !!live);
-    return () => onActiveChange?.(false);
-  }, [live, visible, onActiveChange]);
-
-  if (!live || !visible) return null;
+    showingNow.current = showing;
+    if (showing) onActiveChange?.(true);
+  }, [showing, onActiveChange]);
+  useEffect(() => () => onActiveChange?.(false), [onActiveChange]);
 
   const claim = async (e: React.MouseEvent) => {
     // A claim stays on the player; only a tap on the card jumps to Rewards.
     e.stopPropagation();
-    if (claiming) return;
+    if (!live || claiming) return;
     setClaiming(true);
     try {
       await invoke('claim_drop', { dropId: live.drop_id, dropInstanceId: live.instance_id });
@@ -117,13 +132,51 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
   };
 
   return (
+    <AnimatePresence
+      onExitComplete={() => {
+        // A card that came back before this one finished leaving keeps its slot.
+        if (!showingNow.current) onActiveChange?.(false);
+      }}
+    >
+      {showing && live && (
+        // The fade and the short drop ride a wrapper, transform and opacity
+        // only: the card's own active:opacity press would lose to framer's
+        // inline opacity, and .sn-popover eases both properties in CSS, which
+        // would trail every frame framer writes. One key for every drop, so a
+        // new drop or a claim updates in place rather than replaying the entrance.
+        <motion.div
+          key="drop-bar"
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <DropCard
+            live={live}
+            claiming={claiming}
+            onClaim={(e) => void claim(e)}
+            onOpen={() => openDropCampaign(live.campaign_id)}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+const DropCard: React.FC<{
+  live: WatchDrop;
+  claiming: boolean;
+  onClaim: (e: React.MouseEvent) => void;
+  onOpen: () => void;
+}> = ({ live, claiming, onClaim, onOpen }) => {
+  return (
     // Tapping the bar shrinks the player to the mini window rather than closing
     // it: watching (and so earning) continues while you look at the campaign.
     <div
       role="button"
       tabIndex={0}
       aria-label={live.spoken}
-      onClick={() => openDropCampaign(live.campaign_id)}
+      onClick={onOpen}
       className="sn-popover sn-popover--static pointer-events-auto flex items-center gap-2.5 px-2.5 py-1.5 active:opacity-70"
     >
       {live.image ? (
@@ -154,7 +207,7 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
       </div>
       {live.complete && (
         <button
-          onClick={(e) => void claim(e)}
+          onClick={onClaim}
           disabled={claiming}
           className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-success/20 text-success disabled:opacity-60"
         >
