@@ -37,6 +37,8 @@ enum CosmeticsDrive {
             model.cosmetics.profile = nil
         case let scroll where scroll.hasPrefix("scroll:"):
             model.cosmetics.activeProfile?.scrollTarget = String(scroll.dropFirst("scroll:".count))
+        case let group where group.hasPrefix("open:"):
+            model.cosmetics.activeProfile?.open(String(group.dropFirst("open:".count)))
         case "row":
             guard let session, let message = session.pipeline.recentMessages(60).last(where: { !$0.isSystem }) else {
                 log.error("drive profile: no chat row")
