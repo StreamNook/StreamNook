@@ -24,7 +24,7 @@
 //! - `clear_local_chat`: `/clearmessages` empties this room's visible rows.
 //! - `open_poll_composer { channel, composer }`: desktop `/poll`, `/prediction`
 //!   (`composer` is "poll" or "prediction").
-//! - `create_clip`: `/clip` opens the clip editor on what is playing.
+//! - `create_clip`: `/clip [title]` clips the room it was typed in.
 //! - `identify_song`: `/song` listens to the player's audio.
 //! - `reload_stream`: `/reload` restarts the playing stream and its chat.
 //! - `reload_chat`: `/reconnect` empties and reconnects this room's chat.
@@ -99,7 +99,9 @@ pub enum Ui {
     OpenUserCard { user_id: String, login: String, display_name: String },
     ClearLocalChat,
     OpenPollComposer { channel: String, composer: String },
-    CreateClip,
+    /// Clip the room the line was typed in (`channel` is its login, `kick:slug` for Kick),
+    /// titled with the words after `/clip` (empty: the stream's title).
+    CreateClip { channel: String, channel_id: String, title: String },
     IdentifySong,
     ReloadStream,
     ReloadChat,
@@ -1454,7 +1456,13 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             b.invoke("send_whisper", json!({ "toUserId": to, "message": text })).await?;
             o.ok(format!("Whisper sent to {last_name}"));
         }
-        "clip" => o.ui = Some(Ui::CreateClip),
+        "clip" => {
+            o.ui = Some(Ui::CreateClip {
+                channel: login.to_string(),
+                channel_id: id.to_string(),
+                title: c.from(0).trim().to_string(),
+            })
+        }
         "chatters" => {
             if id.is_empty() || login.is_empty() {
                 o.say("No channel open.");
