@@ -11,95 +11,29 @@
 // when the process thaws before the network is back or during a Wi-Fi to mobile
 // handoff. An expired token ends it too: the token is read once when the task
 // starts, so every later reconnect re-sends that same one and eventually fails
-// to authenticate. Afterwards `start_chat` still sees a handle that looks
-// present, takes its "already running" path, and hands back the stale port, so
-// every soft reconnect reports success while nothing arrives.
+// to authenticate. Only a stop clears that state, and the fresh start reads the
+// token again.
 //
-// `stop_chat` is the only call that clears that handle, which is the real
-// reason restarting the stream was the one thing that ever worked. Doing it
-// directly is the whole fix, and it covers the expired-token case for free
-// because the fresh start reads the token again.
-import { invoke } from '@tauri-apps/api/core';
-import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
-import { useChatTabsStore } from './chatTabsStore';
+// The rebuild itself is Rust's (`rebuild_chat`, services/chat_recovery.rs): it
+// stops the Twitch side and brings it back with every room this window holds,
+// one cycle at a time and automatic ones at most once a minute, the same core
+// the iPhone uses. The page keeps every room and its rows through it, so the
+// chat on screen stays put while the connection behind it is replaced.
+import { rebuildTwitchChat } from '../../stores/chatConnectionStore';
 import { Logger } from '../../utils/logger';
 
-// Automatic triggers can overlap: resuming the app and the staleness watchdog
-// will often both fire for the same dead connection, and with several rooms
-// open every pane sees the same failure. One cycle settles all of them, so the
-// rest are noise. A manual reload passes `force` and is never throttled.
-const COOLDOWN_MS = 60_000;
-
-let cycling = false;
-let lastCycleAt = 0;
-
 /**
- * Tear the chat service down to nothing and bring it back with every open room.
+ * Rebuild the chat connection under every open room.
  *
  * Returns true when a cycle actually ran. Callers use that only for logging;
  * a false return means the connection was already being rebuilt, was rebuilt
- * moments ago, or there was nothing open to rebuild.
+ * moments ago, or there was nothing open to rebuild. A manual reload passes
+ * `force` and is never throttled.
  */
 export async function hardCycleChat(reason: string, force = false): Promise<boolean> {
-  if (cycling) return false;
-  if (!force && Date.now() - lastCycleAt < COOLDOWN_MS) return false;
-
-  // Twitch rooms only. Kick rooms ride their own adapters (and the player holds
-  // its own reference on the watched Kick slice), so this service cycle can
-  // neither fix nor fully release them; chatTabsStore.reload handles those.
-  const tabs = useChatTabsStore.getState().tabs.filter((t) => t.provider === 'twitch');
-  if (tabs.length === 0) return false;
-
-  cycling = true;
-  lastCycleAt = Date.now();
+  const ran = await rebuildTwitchChat(reason, force);
   // Deliberately warn, not debug: debug logging is off by default on device and
   // there is no way to turn it on from a phone.
-  Logger.warn(`[ChatRecovery] cycling ${tabs.length} room(s): ${reason}`);
-
-  try {
-    // Release first, stop second, re-acquire third. The order is load-bearing.
-    // Stopping first kills the bridge underneath a live socket, which fires the
-    // connection store's own reconnect and races this one. Releasing lets the
-    // store close that socket deliberately and forget its port, so the
-    // re-acquire below takes the full cold bring-up path rather than a JOIN.
-    //
-    // Each Twitch tab holds exactly one reference, because the tab store is the
-    // only thing on mobile that acquires a Twitch room, so one release per tab
-    // empties it exactly.
-    for (const tab of tabs) {
-      try {
-        await releaseChannel(tab.login, 'twitch');
-      } catch (err) {
-        Logger.warn(`[ChatRecovery] release ${tab.channel} failed:`, err);
-      }
-    }
-
-    try {
-      await invoke('stop_chat');
-    } catch (err) {
-      // Worth continuing anyway. If the service was already down the
-      // re-acquire below still rebuilds it.
-      Logger.warn('[ChatRecovery] stop_chat failed:', err);
-    }
-
-    for (const tab of tabs) {
-      try {
-        await acquireChannel(tab.login, tab.channelId, 'twitch');
-      } catch (err) {
-        Logger.warn(`[ChatRecovery] re-acquire ${tab.channel} failed:`, err);
-      }
-    }
-
-    // Panes keyed on the nonce rebuild their view of the room, matching what a
-    // per-room reload used to do.
-    useChatTabsStore.setState((s) => {
-      const next = { ...s.reloadNonce };
-      for (const tab of tabs) next[tab.channel] = (next[tab.channel] ?? 0) + 1;
-      return { reloadNonce: next };
-    });
-
-    return true;
-  } finally {
-    cycling = false;
-  }
+  if (ran) Logger.warn(`[ChatRecovery] rebuilt chat: ${reason}`);
+  return ran;
 }

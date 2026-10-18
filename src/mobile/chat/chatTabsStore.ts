@@ -291,11 +291,11 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
       // clears that state.
       //
       // Forced, because a deliberate tap must always act even if something else
-      // rebuilt the connection moments ago. hardCycleChat bumps the nonce for
-      // every room it touches, so this one gets refreshed along the way.
+      // rebuilt the connection moments ago. Every room keeps its rows through
+      // the rebuild, and its history load fills what the outage missed.
       //
-      // Imported here rather than at the top because chatRecovery reads this
-      // store, and a static import both ways is a cycle.
+      // Imported here rather than at the top to keep the recovery module out
+      // of this store's load.
       void (async () => {
         try {
           const { hardCycleChat } = await import('./chatRecovery');
