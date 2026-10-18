@@ -2474,23 +2474,13 @@ impl BadgeService {
         username: &str,
         channel_id: &str,
     ) -> Vec<UserBadge> {
-        let mut all_badge_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // 1. Use already-fetched channel-specific earned badges
-        for badge_id in channel_earned_ids {
-            all_badge_ids.insert(badge_id);
-        }
-
-        // 2. Fetch the global badge collection (signed-in user only)
-        match self
+        // 1. The already-fetched channel-specific earned badges, then
+        // 2. the global badge collection (signed-in user only).
+        let global_badge_ids = match self
             .fetch_current_user_global_collection(user_id, username)
             .await
         {
-            Ok(global_badge_ids) => {
-                for badge_id in global_badge_ids {
-                    all_badge_ids.insert(badge_id);
-                }
-            }
+            Ok(global_badge_ids) => global_badge_ids,
             Err(e) => {
                 // Expected for other users' profiles (not the token's user), so
                 // this stays at debug; a failure for the signed-in user is
@@ -2500,11 +2490,13 @@ impl BadgeService {
                     username,
                     e
                 );
+                Vec::new()
             }
-        }
+        };
 
-        // 3. Resolve all unique badge IDs to full badge info
-        let badge_ids: Vec<String> = all_badge_ids.into_iter().collect();
+        // 3. Resolve all unique badge IDs to full badge info, in the order
+        // Twitch gave them, so two answers for one person list the same way.
+        let badge_ids = earned_ids_in_order(channel_earned_ids, global_badge_ids);
         if badge_ids.is_empty() {
             return Vec::new();
         }
@@ -2949,6 +2941,30 @@ impl BadgeService {
     pub async fn clear_channel_cache(&self, channel_id: &str) {
         let mut cache = self.cache.write().await;
         cache.channel_badges.pop(channel_id);
+    }
+}
+
+/// The earned badge ids once each, channel ones first and then the global
+/// collection, each in the order Twitch gave it. (A set reshuffled them on
+/// every answer, so a profile's badges jumped between the cached and the fresh
+/// copy.)
+fn earned_ids_in_order(channel: Vec<String>, global: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    channel.into_iter().chain(global).filter(|id| seen.insert(id.clone())).collect()
+}
+
+#[cfg(test)]
+mod earned_order_tests {
+    use super::earned_ids_in_order;
+
+    #[test]
+    fn earned_ids_keep_twitchs_order_once_each() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            earned_ids_in_order(ids(&["sub/12", "glhf/1"]), ids(&["premium/1", "glhf/1", "turbo/1"])),
+            ids(&["sub/12", "glhf/1", "premium/1", "turbo/1"])
+        );
+        assert!(earned_ids_in_order(Vec::new(), Vec::new()).is_empty());
     }
 }
 
