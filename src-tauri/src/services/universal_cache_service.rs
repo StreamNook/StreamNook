@@ -175,6 +175,24 @@ pub enum CacheType {
     #[serde(rename = "thirdpartybadge")]
     ThirdPartyBadge,
     Cosmetic,
+    /// StreamNook's own cosmetic art (badges, relics, frames) from
+    /// cdn.streamnook.app, keyed by its full URL. A new upload ships under a new
+    /// URL, so these files never go stale by age.
+    #[serde(rename = "streamnookart")]
+    StreamNookArt,
+}
+
+impl CacheType {
+    /// The type's folder, on disk and in the hosted universal cache.
+    fn dir_name(&self) -> &'static str {
+        match self {
+            CacheType::Badge => "badges",
+            CacheType::Emote => "emotes",
+            CacheType::ThirdPartyBadge => "third-party-badges",
+            CacheType::Cosmetic => "cosmetics",
+            CacheType::StreamNookArt => "streamnook-art",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -413,12 +431,7 @@ pub async fn fetch_universal_cache_data(
     cache_type: &CacheType,
     id: &str,
 ) -> Result<Option<UniversalCacheEntry>> {
-    let type_str = match cache_type {
-        CacheType::Badge => "badges",
-        CacheType::Emote => "emotes",
-        CacheType::ThirdPartyBadge => "third-party-badges",
-        CacheType::Cosmetic => "cosmetics",
-    };
+    let type_str = cache_type.dir_name();
 
     // Try to fetch from universal cache repository
     let url = format!("{}/{}/{}.json", UNIVERSAL_CACHE_URL, type_str, id);
@@ -825,12 +838,7 @@ pub async fn sync_universal_cache(item_types: Vec<CacheType>) -> Result<usize> {
 
     // For each type, fetch the index file which lists available items
     for cache_type in item_types {
-        let type_str = match cache_type {
-            CacheType::Badge => "badges",
-            CacheType::Emote => "emotes",
-            CacheType::ThirdPartyBadge => "third-party-badges",
-            CacheType::Cosmetic => "cosmetics",
-        };
+        let type_str = cache_type.dir_name();
 
         let index_url = format!("{}/{}/index.json", UNIVERSAL_CACHE_URL, type_str);
 
@@ -919,12 +927,7 @@ pub fn get_universal_cache_stats() -> Result<UniversalCacheStats> {
     let mut entries_by_type: HashMap<String, usize> = HashMap::new();
 
     for entry in manifest.entries.values() {
-        let type_str = match entry.cache_type {
-            CacheType::Badge => "badges",
-            CacheType::Emote => "emotes",
-            CacheType::ThirdPartyBadge => "third-party-badges",
-            CacheType::Cosmetic => "cosmetics",
-        };
+        let type_str = entry.cache_type.dir_name();
 
         *entries_by_type.entry(type_str.to_string()).or_insert(0) += 1;
     }
@@ -1365,18 +1368,7 @@ pub async fn cache_file(
     url: String,
     expiry_days: u32,
 ) -> Result<String> {
-    let cache_dir = get_universal_cache_dir()?;
-    let type_str = match cache_type {
-        CacheType::Badge => "badges",
-        CacheType::Emote => "emotes",
-        CacheType::ThirdPartyBadge => "third-party-badges",
-        CacheType::Cosmetic => "cosmetics",
-    };
-
-    let type_dir = cache_dir.join(type_str);
-    if !type_dir.exists() {
-        fs::create_dir_all(&type_dir).context("Failed to create cache type directory")?;
-    }
+    let type_dir = file_type_dir(&cache_type)?;
 
     debug!(
         "[UniversalCache] Downloading and caching file: {} (type: {:?})",
@@ -1403,11 +1395,42 @@ pub async fn cache_file(
     let extension = detect_image_ext(&bytes, content_type.as_deref());
     let safe_id = id.replace(['/', '\\'], "_");
     let file_name = format!("{}.{}", safe_id, extension);
+    let (path_str, entry) =
+        write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
+    save_cached_item(entry).await?;
+
+    debug!("[UniversalCache] Successfully cached file: {}", path_str);
+    Ok(path_str)
+}
+
+/// The on-disk folder for a type's files, created on first use.
+fn file_type_dir(cache_type: &CacheType) -> Result<PathBuf> {
+    let type_dir = get_universal_cache_dir()?.join(cache_type.dir_name());
+    if !type_dir.exists() {
+        fs::create_dir_all(&type_dir).context("Failed to create cache type directory")?;
+    }
+    Ok(type_dir)
+}
+
+/// Write a downloaded file into its type folder and build its manifest entry,
+/// without saving the manifest. Returns the file's path with the entry.
+async fn write_file_entry<B>(
+    type_dir: &std::path::Path,
+    cache_type: CacheType,
+    id: String,
+    url: String,
+    file_name: String,
+    bytes: B,
+    expiry_days: u32,
+) -> Result<(String, UniversalCacheEntry)>
+where
+    B: AsRef<[u8]> + Send + 'static,
+{
     let file_path = type_dir.join(&file_name);
 
     // Write on the blocking pool: a channel join downloads many emotes/badges
     // and a sync write per file on the runtime saturates the worker threads
-    // (the join-time freeze). The HTTP fetch above is already async.
+    // (the join-time freeze). The HTTP fetch is already async.
     let write_path = file_path.clone();
     tokio::task::spawn_blocking(move || -> std::io::Result<()> {
         let mut file = fs::File::create(&write_path)?;
@@ -1418,9 +1441,8 @@ pub async fn cache_file(
     .context("cache_file write task panicked")??;
 
     let path_str = file_path.to_string_lossy().to_string();
-    let manifest_id = format!("file:{}", id);
     let entry = UniversalCacheEntry {
-        id: manifest_id,
+        id: format!("file:{}", id),
         cache_type,
         data: serde_json::json!({
             "local_path": path_str,
@@ -1435,9 +1457,186 @@ pub async fn cache_file(
         },
         position: None,
     };
-    save_cached_item(entry).await?;
+    Ok((path_str, entry))
+}
 
-    debug!("[UniversalCache] Successfully cached file: {}", path_str);
+/// The only host StreamNook art is fetched from.
+const STREAMNOOK_ART_ORIGIN: &str = "https://cdn.streamnook.app/";
+/// Largest StreamNook art file accepted. The biggest badge today is ~4 MB.
+const STREAMNOOK_ART_MAX_BYTES: usize = 24 * 1024 * 1024;
+/// Connections a resumable fetch may use for one file before it gives up.
+const RESUMABLE_ATTEMPTS: u32 = 8;
+
+// StreamNook's own art is a few large animated files, so it gets a client with
+// no total cap: at a slow link's speed the 20 s cap above never finishes one.
+// The read timeout still frees a stalled transfer, and the fetch resumes from
+// the bytes it already has.
+static LARGE_DOWNLOAD_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .user_agent("StreamNook/1.0")
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(20))
+        .build()
+        .expect("failed to build large-download HTTP client")
+});
+
+/// Whether `url` is StreamNook art this cache will fetch.
+pub fn is_streamnook_art_url(url: &str) -> bool {
+    url.starts_with(STREAMNOOK_ART_ORIGIN) && url.len() > STREAMNOOK_ART_ORIGIN.len()
+}
+
+/// The file name for a piece of StreamNook art: its readable name from the URL
+/// plus a short hash of the whole URL, so a re-upload under `?v=3` gets its own
+/// file beside the old one.
+fn streamnook_art_file_name(url: &str, extension: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let last = path.rsplit('/').next().unwrap_or("");
+    let stem = last.rsplit_once('.').map_or(last, |(stem, _)| stem);
+    let readable: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(48)
+        .collect();
+    let digest = Sha256::digest(url.as_bytes());
+    let hash: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    if readable.is_empty() {
+        format!("{hash}.{extension}")
+    } else {
+        format!("{readable}-{hash}.{extension}")
+    }
+}
+
+/// The first byte and the total size in a `Content-Range: bytes a-b/total`.
+fn content_range_start(value: &str) -> Option<(u64, Option<u64>)> {
+    let rest = value.trim().strip_prefix("bytes ")?;
+    let (range, total) = rest.split_once('/')?;
+    let start = range.split_once('-')?.0.trim().parse().ok()?;
+    Some((start, total.trim().parse().ok()))
+}
+
+/// GET `url` in full, resuming with a Range request after a dropped connection.
+/// Some networks cut a long transfer to a host part way through, so a plain GET
+/// of a multi-MB file can fail every time while a resumed one gets there.
+/// Returns the body and its Content-Type.
+async fn fetch_resumable(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    attempts: u32,
+    backoff: std::time::Duration,
+) -> Result<(Vec<u8>, Option<String>)> {
+    use reqwest::{header, StatusCode};
+
+    let mut body: Vec<u8> = Vec::new();
+    let mut content_type: Option<String> = None;
+    let mut last_error = anyhow::anyhow!("no attempt made");
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            tokio::time::sleep(backoff * 2u32.pow((attempt - 1).min(5))).await;
+        }
+        let mut request = client.get(url);
+        if !body.is_empty() {
+            request = request.header(header::RANGE, format!("bytes={}-", body.len()));
+        }
+        let mut response = match request.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                last_error = e.into();
+                continue;
+            }
+        };
+        let status = response.status();
+        let range = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(content_range_start);
+        if status == StatusCode::PARTIAL_CONTENT {
+            // Only a resume that starts where this copy stopped can be appended.
+            if range.map(|(start, _)| start) != Some(body.len() as u64) {
+                body.clear();
+                last_error = anyhow::anyhow!("resume answered from the wrong offset");
+                continue;
+            }
+        } else if status.is_success() {
+            // A server that ignores Range sends the whole file again.
+            body.clear();
+        } else if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+            last_error = anyhow::anyhow!("HTTP {status}");
+            continue;
+        } else {
+            return Err(anyhow::anyhow!("HTTP {status}"));
+        }
+        if content_type.is_none() {
+            content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+        }
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    body.extend_from_slice(&chunk);
+                    if body.len() > max_bytes {
+                        return Err(anyhow::anyhow!("larger than {max_bytes} bytes"));
+                    }
+                }
+                Ok(None) => {
+                    let total = range.and_then(|(_, total)| total);
+                    if total.is_none_or(|total| total == body.len() as u64) {
+                        return Ok((body, content_type));
+                    }
+                    last_error = anyhow::anyhow!("ended at {} of {:?} bytes", body.len(), total);
+                    break;
+                }
+                Err(e) => {
+                    last_error = e.into();
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_error.context(format!("gave up after {attempts} connections")))
+}
+
+/// Cache one piece of StreamNook art from cdn.streamnook.app. The URL is the
+/// manifest id. Only images are kept: a captive portal or a block page that
+/// answers 200 with HTML is never written as art.
+pub async fn cache_streamnook_art(url: String) -> Result<String> {
+    if !is_streamnook_art_url(&url) {
+        return Err(anyhow::anyhow!("not StreamNook art: {url}"));
+    }
+    let type_dir = file_type_dir(&CacheType::StreamNookArt)?;
+    let (bytes, content_type) = fetch_resumable(
+        &LARGE_DOWNLOAD_CLIENT,
+        &url,
+        STREAMNOOK_ART_MAX_BYTES,
+        RESUMABLE_ATTEMPTS,
+        std::time::Duration::from_secs(1),
+    )
+    .await?;
+    let extension = detect_image_ext(&bytes, content_type.as_deref());
+    if extension == "bin" {
+        return Err(anyhow::anyhow!(
+            "answer was not an image ({})",
+            content_type.as_deref().unwrap_or("no content type")
+        ));
+    }
+    let file_name = streamnook_art_file_name(&url, extension);
+    // Never expires: new art ships under a new URL.
+    let (path_str, entry) = write_file_entry(
+        &type_dir,
+        CacheType::StreamNookArt,
+        url.clone(),
+        url,
+        file_name,
+        bytes,
+        0,
+    )
+    .await?;
+    save_cached_item(entry).await?;
     Ok(path_str)
 }
 
@@ -1453,18 +1652,7 @@ pub async fn download_file_to_disk(
     url: String,
     expiry_days: u32,
 ) -> Result<UniversalCacheEntry> {
-    let cache_dir = get_universal_cache_dir()?;
-    let type_str = match cache_type {
-        CacheType::Badge => "badges",
-        CacheType::Emote => "emotes",
-        CacheType::ThirdPartyBadge => "third-party-badges",
-        CacheType::Cosmetic => "cosmetics",
-    };
-
-    let type_dir = cache_dir.join(type_str);
-    if !type_dir.exists() {
-        fs::create_dir_all(&type_dir).context("Failed to create cache type directory")?;
-    }
+    let type_dir = file_type_dir(&cache_type)?;
 
     let response = DOWNLOAD_CLIENT.get(&url).send().await?;
     if !response.status().is_success() {
@@ -1485,38 +1673,9 @@ pub async fn download_file_to_disk(
     let extension = detect_image_ext(&bytes, content_type.as_deref());
     let safe_id = id.replace(['/', '\\'], "_");
     let file_name = format!("{}.{}", safe_id, extension);
-    let file_path = type_dir.join(&file_name);
-
-    // Write on the blocking pool: a channel join downloads many emotes/badges
-    // and a sync write per file on the runtime saturates the worker threads
-    // (the join-time freeze). The HTTP fetch above is already async.
-    let write_path = file_path.clone();
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let mut file = fs::File::create(&write_path)?;
-        std::io::copy(&mut Cursor::new(bytes), &mut file)?;
-        Ok(())
-    })
-    .await
-    .context("cache_file write task panicked")??;
-
-    let path_str = file_path.to_string_lossy().to_string();
-    let manifest_id = format!("file:{}", id);
-    Ok(UniversalCacheEntry {
-        id: manifest_id,
-        cache_type,
-        data: serde_json::json!({
-            "local_path": path_str,
-            "url": url,
-            "file_name": file_name
-        }),
-        metadata: CacheMetadata {
-            timestamp: get_current_timestamp(),
-            expiry_days,
-            source: "universal_file".to_string(),
-            version: CACHE_VERSION,
-        },
-        position: None,
-    })
+    let (_, entry) =
+        write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
+    Ok(entry)
 }
 
 /// Get cached file path if exists and valid
@@ -1830,5 +1989,145 @@ mod tests {
     fn month_only_sorts_after_that_months_dated_days() {
         assert!(badge_date_key("1 March 2018") > badge_date_key("March 2018"));
         assert!(badge_date_key("March 2018") > badge_date_key("28 February 2018"));
+    }
+}
+
+#[cfg(test)]
+mod streamnook_art_tests {
+    use super::{content_range_start, fetch_resumable, is_streamnook_art_url, streamnook_art_file_name};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A one-file HTTP server that closes every connection after `cut_after`
+    /// body bytes, the way a throttled link drops a long transfer.
+    async fn serve(body: Vec<u8>, cut_after: usize, honor_range: bool, status: u16) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/badges/x.webp", listener.local_addr().unwrap());
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = connections.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                counter.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+                    let start = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("range: bytes="))
+                        .and_then(|r| r.trim_end_matches('-').trim().trim_end_matches('-').parse::<usize>().ok())
+                        .filter(|_| honor_range);
+                    let response_head = if status != 200 {
+                        format!("HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    } else if let Some(start) = start {
+                        format!(
+                            "HTTP/1.1 206 Partial Content\r\nContent-Type: image/webp\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                            body.len() - start,
+                            start,
+                            body.len() - 1,
+                            body.len()
+                        )
+                    } else {
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                    };
+                    let _ = socket.write_all(response_head.as_bytes()).await;
+                    if status == 200 {
+                        let from = start.unwrap_or(0);
+                        let to = (from + cut_after).min(body.len());
+                        let _ = socket.write_all(&body[from..to]).await;
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (url, connections)
+    }
+
+    fn client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn a_cut_transfer_resumes_to_the_whole_file() {
+        let body = pattern(100_000);
+        let (url, connections) = serve(body.clone(), 16_384, true, 200).await;
+        let (got, content_type) = fetch_resumable(&client(), &url, 1 << 20, 8, Duration::from_millis(1))
+            .await
+            .expect("resumed to the end");
+        assert_eq!(got, body);
+        assert_eq!(content_type.as_deref(), Some("image/webp"));
+        assert_eq!(connections.load(Ordering::SeqCst), 7, "16 KB per connection for 100 KB");
+    }
+
+    #[tokio::test]
+    async fn an_uncut_transfer_takes_one_connection() {
+        let body = pattern(50_000);
+        let (url, connections) = serve(body.clone(), usize::MAX, true, 200).await;
+        let (got, _) = fetch_resumable(&client(), &url, 1 << 20, 8, Duration::from_millis(1)).await.unwrap();
+        assert_eq!(got, body);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_ignores_range_gives_up_after_its_attempts() {
+        let (url, connections) = serve(pattern(100_000), 16_384, false, 200).await;
+        let result = fetch_resumable(&client(), &url, 1 << 20, 3, Duration::from_millis(1)).await;
+        assert!(result.is_err());
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_is_not_retried() {
+        let (url, connections) = serve(Vec::new(), 0, true, 404).await;
+        let result = fetch_resumable(&client(), &url, 1 << 20, 8, Duration::from_millis(1)).await;
+        assert!(result.unwrap_err().to_string().contains("404"));
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_file_is_refused() {
+        let (url, _) = serve(pattern(10_000), usize::MAX, true, 200).await;
+        let result = fetch_resumable(&client(), &url, 4_096, 8, Duration::from_millis(1)).await;
+        assert!(result.unwrap_err().to_string().contains("larger than"));
+    }
+
+    #[test]
+    fn only_cdn_streamnook_art_is_fetched() {
+        assert!(is_streamnook_art_url("https://cdn.streamnook.app/badges/kindred.webp?v=2"));
+        assert!(!is_streamnook_art_url("https://cdn.streamnook.app/"));
+        assert!(!is_streamnook_art_url("http://cdn.streamnook.app/badges/kindred.webp"));
+        assert!(!is_streamnook_art_url("https://cdn.streamnook.app.evil.test/badges/kindred.webp"));
+        assert!(!is_streamnook_art_url("https://static-cdn.jtvnw.net/badges/v1/x/3"));
+    }
+
+    #[test]
+    fn art_file_names_are_readable_and_versioned() {
+        let v2 = streamnook_art_file_name("https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=2", "webp");
+        let v3 = streamnook_art_file_name("https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=3", "webp");
+        assert!(v2.starts_with("streamnook-mobius-") && v2.ends_with(".webp"), "{v2}");
+        assert_ne!(v2, v3, "a re-upload under a new version gets its own file");
+        let odd = streamnook_art_file_name("https://cdn.streamnook.app/badges/M%C3%B6bius:%20x.webp", "webp");
+        assert!(odd.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)), "{odd}");
+    }
+
+    #[test]
+    fn content_range_reads_start_and_total() {
+        assert_eq!(content_range_start("bytes 16384-99999/100000"), Some((16384, Some(100000))));
+        assert_eq!(content_range_start("bytes 0-9/*"), Some((0, None)));
+        assert_eq!(content_range_start("items 0-9/10"), None);
     }
 }

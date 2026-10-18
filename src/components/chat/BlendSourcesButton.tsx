@@ -6,6 +6,7 @@ import { Toggle } from '../ui/Toggle';
 import { ProviderMark } from '../ProviderLogo';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { BlendCompanion, LinkSuggestion } from '../../hooks/useBlendCompanions';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
 // The combined chat's one control in the chat header. A mark per linked
 // platform took about 22px each, and with three the header truncated its own
@@ -58,22 +59,14 @@ export function BlendSourcesButton({
   }, [menuOpen]);
 
   // Escape or a click outside the button and the menu closes it.
+  const markInside = useOutsidePress(menuOpen, [menuRef, buttonRef], () => setMenuOpen(false));
   useEffect(() => {
     if (!menuOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setMenuOpen(false);
     };
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (menuRef.current?.contains(t) || buttonRef.current?.contains(t)) return;
-      setMenuOpen(false);
-    };
     window.addEventListener('keydown', onKey);
-    document.addEventListener('pointerdown', onDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.removeEventListener('pointerdown', onDown, true);
-    };
+    return () => window.removeEventListener('keydown', onKey);
   }, [menuOpen]);
 
   const found = suggestions.map((s) => s.candidate.provider);
@@ -137,6 +130,7 @@ export function BlendSourcesButton({
           // pinned message and polls, and whose overflow would clip it.
           <div
             ref={menuRef}
+            onPointerDownCapture={markInside}
             role="menu"
             aria-label="Combined chat sources"
             className="glass-flyout fixed z-[70] w-[248px] rounded-xl p-1.5"

@@ -307,6 +307,13 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             name: if target.user_name.is_empty() { target.login.clone() } else { target.user_name.clone() },
         }),
     );
+    // While a Cast session is up, the TV follows what the view switched to.
+    // An offline room plays nothing, so the TV keeps what it has.
+    #[cfg(target_os = "android")]
+    if !target.offline {
+        crate::services::cast_session::on_watch_target(&app, &target);
+    }
+
     // This channel's EventSub, unless MultiNook's focused tile holds the
     // socket. A Twitch subscription must not keep firing over a Kick stream.
     aim_watch_socket(&app).await;
@@ -611,6 +618,14 @@ pub fn on_raid(app: &AppHandle, raid: &RaidEvent) {
             session.last_raid_ms = now_ms();
         }
     });
+    // The TV follows the raid itself rather than waiting for the view: a locked
+    // phone's page can be slow to act on the redirect below.
+    #[cfg(target_os = "android")]
+    crate::services::cast_session::on_raid(
+        app,
+        &raid.to_broadcaster_user_login,
+        &raid.to_broadcaster_user_name,
+    );
     // A floor, not an answer: the raid knows ids and the raiding party's size,
     // so everything else is left blank for the view's start to backfill from the
     // target's live row. A blank reads as "not known yet"; a wrong value would be

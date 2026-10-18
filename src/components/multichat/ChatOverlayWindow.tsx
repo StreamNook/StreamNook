@@ -25,6 +25,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { MousePointer2, MousePointerBan, X } from 'lucide-react';
 import BlendedChatPane from './BlendedChatPane';
+import BadgeSpotlightHost from '../BadgeSpotlightHost';
 import { Tooltip } from '../ui/Tooltip';
 import { useAppStore } from '../../stores/AppStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
@@ -123,7 +124,9 @@ export default function ChatOverlayWindow() {
       themeId === OLED_THEME_ID
         ? getOledTheme(settings.oled_accent)
         : getThemeByIdWithCustom(themeId, settings.custom_themes || []) || getThemeById(DEFAULT_THEME_ID);
-    if (theme) applyTheme(theme);
+    // The one see-through window: its slab mixes the theme background at the
+    // overlay's own slider, so the theme's alpha stays as the user set it.
+    if (theme) applyTheme(theme, { floor: null });
     applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
@@ -317,6 +320,7 @@ export default function ChatOverlayWindow() {
       <div className="sn-overlay-feed flex min-h-0 flex-1 flex-col">
         <BlendedChatPane channels={channels} readOnly transparent />
       </div>
+      <BadgeSpotlightHost />
     </div>
   );
 }

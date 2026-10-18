@@ -16,6 +16,8 @@ import { Logger } from '../utils/logger';
 import ChatMessageList from './ChatMessageList';
 import { openProfilePopup } from '../utils/openProfilePopup';
 import { useChatCosmetics } from '../hooks/useChatCosmetics';
+import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
+import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../utils/badgeSpotlight';
 import {
   beginVodReplay,
   clipReplayWindow,
@@ -35,6 +37,9 @@ interface ClipResolveResult {
 }
 
 const NOOP = () => {};
+// A replayed badge opens its spotlight card like a live one (above this modal).
+const openBadgeCard = (badgeKey: string, badgeInfo: TwitchRowBadgeInfo) =>
+  openBadgeSpotlight(twitchRowBadgeRef(badgeKey, badgeInfo));
 const EMPTY_IDS: Set<string> = new Set();
 const EMPTY_CONTEXTS = new Map<string, never>();
 // Replay comments arrive already tokenized into segments by the Rust parser, so the
@@ -112,7 +117,7 @@ function ClipChatPanel({
         onReplyClick={NOOP}
         onEmoteRightClick={NOOP}
         onUsernameRightClick={NOOP}
-        onBadgeClick={NOOP}
+        onBadgeClick={openBadgeCard}
         highlightedMessageId={null}
         deletedMessageIds={EMPTY_IDS}
         clearedUserContexts={EMPTY_CONTEXTS}

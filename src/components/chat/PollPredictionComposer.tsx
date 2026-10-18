@@ -6,6 +6,7 @@ import { Tooltip } from '../ui/Tooltip';
 import { OverlayBanner } from './OverlayBanner';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { Logger } from '../../utils/logger';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
 /**
  * Builder for a Twitch poll or prediction, anchored above the chat input.
@@ -72,6 +73,7 @@ export function PollPredictionComposer({ broadcasterId, initialKind = 'poll', on
   }, []);
 
   // Escape closes; click-away closes. Matches the emote picker and mod menu.
+  const markInside = useOutsidePress(true, [rootRef], onClose);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -79,15 +81,8 @@ export function PollPredictionComposer({ broadcasterId, initialKind = 'poll', on
         onClose();
       }
     };
-    const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose();
-    };
     document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDown);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDown);
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
   // Switching tabs keeps what you've typed but trims to the new maximum, so
@@ -172,6 +167,7 @@ export function PollPredictionComposer({ broadcasterId, initialKind = 'poll', on
   return (
     <div
       ref={rootRef}
+      onPointerDownCapture={markInside}
       className="sn-popover absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden"
     >
       {/* Kind switch */}

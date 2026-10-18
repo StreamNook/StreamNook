@@ -367,12 +367,12 @@ export interface ChatDesignSettings {
   link_color?: string;
   // Underline links. Default true.
   link_underline?: boolean;
-  // How per-message mod actions are offered in the chat hover dock:
-  // 'buttons' = the classic click buttons (delete/timeout/ban), 'drag' = the
-  // grab handle that lifts a chatter into action buckets, 'both' = offer both.
-  // Default 'both'. Profile/whisper buckets are available to everyone whenever
-  // the grip is shown; delete/timeout/ban are mod-only either way.
-  mod_action_style?: 'buttons' | 'drag' | 'both';
+  // Two switches in one field: the hover buttons (delete/timeout/ban in the
+  // corner of the hovered message) and drag to tiles (the left-edge handle
+  // lifts the chatter onto action tiles, only while the slider and the line
+  // buttons are off). 'buttons' = hover only, 'drag' = tiles only, 'both',
+  // 'none'. Settings shows them as Message edge and Hover buttons.
+  mod_action_style?: 'buttons' | 'drag' | 'both' | 'none';
   // Where the grab cursor shows while drag is on: 'row' = anywhere on the
   // message, 'edge' = only the accent strip at its left edge. A press anywhere
   // lifts the chatter either way. Default 'row'.
@@ -386,6 +386,30 @@ export interface ChatDesignSettings {
   // Copy on the message, 'drag' = a drop target in the drag-to-moderate gesture,
   // 'both' = both places. Mod-only either way. Default 'both'.
   mod_pin_style?: 'inline' | 'drag' | 'both';
+  // The slider on a message's left edge: drag right through the timeout steps
+  // to Ban, release to apply. Moderators only. Default true.
+  mod_slider?: boolean;
+  // The slider's steps: Delete first (default true), the timeouts in seconds
+  // (default 1m, 5m, 10m, 30m, 1h, 1d, 1w; drawn shortest first), then Ban (default
+  // true). The order is fixed so further right is always harsher.
+  mod_slider_delete?: boolean;
+  mod_slider_timeouts?: number[];
+  mod_slider_ban?: boolean;
+  // How much of the message width the slider's steps spread over: half,
+  // four fifths (default) or all of it. Steps stay evenly spaced.
+  mod_slider_length?: 'short' | 'medium' | 'long';
+  // Line buttons: one-click action buttons at the start of every line a
+  // moderator can act on. They take the left edge, so the slider grip is not
+  // drawn while they are on. Default false.
+  mod_line_buttons?: boolean;
+  // The line buttons' own list: Delete (default true), the timeouts in seconds
+  // (default 10m; drawn shortest first), then Ban (default true).
+  mod_line_delete?: boolean;
+  mod_line_timeouts?: number[];
+  mod_line_ban?: boolean;
+  // Seconds a drop on the drag-to-moderate Timeout tile times out for.
+  // Default 600.
+  mod_bucket_timeout?: number;
   // Deprecated: superseded by mod_action_style ('buttons' when this was false).
   drag_moderation_enabled?: boolean;
 }
@@ -757,6 +781,14 @@ export interface LiveNotificationSettings {
   // Someone mentions you, or replies to you, in a Twitch chat you joined,
   // while StreamNook is not the window in use (Rust: services/mention_notify.rs).
   show_mention_notifications?: boolean;
+  // Extras on the Windows channel points notification (Rust
+  // services/points_notify.rs), off by default: a Rewards button with a
+  // right-click way to these settings, and a bar toward the next reward.
+  points_rewards_button?: boolean;
+  points_next_reward?: boolean;
+  // A notification when a prediction opens on a watched channel while
+  // StreamNook is not the window in use. Off by default.
+  show_prediction_notifications?: boolean;
   // Notification method toggles (Dynamic Island vs Toast)
   use_dynamic_island?: boolean;
   use_toast?: boolean;
@@ -2506,6 +2538,12 @@ export interface ChannelPointsNotificationData {
   channel_name: string;
   points_earned: number;
   total_points?: number;
+  /** One channel's burst: its face, its own name for its points and its
+   *  points icon, from Rust (services/points_notify.rs). Absent for older
+   *  entries and for several channels at once. */
+  avatar_url?: string;
+  points_name?: string;
+  icon_url?: string;
 }
 
 export interface BadgeNotificationData {

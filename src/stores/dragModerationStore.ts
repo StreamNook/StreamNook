@@ -19,6 +19,10 @@ export interface DragModUser {
   channel?: string;
   /** Gates the destructive buckets (delete/timeout/ban) to moderators. */
   isModerator: boolean;
+  /** False for a chatter a ban or timeout cannot land on (yourself, the
+   *  channel owner, another mod unless it is your channel): only Delete and
+   *  Pin are offered then. */
+  canPunish?: boolean;
   /** Current moderation state of the user (from the lifted message): drives the
    *  inverse Unban / Untimeout action instead of Ban / Timeout. */
   moderationState?: 'timeout' | 'ban' | null;

@@ -124,6 +124,19 @@ html[data-theme-effect="prism"] {
   );
 }
 
+/* Every lit surface has a 1px transparent border, and backgrounds default to
+   sizing on the padding box and repeating, so each border strip showed a
+   slice of the next tile: a bright bloom line along one edge and the streak
+   out of step at the others. Sized on the border box, the light is one
+   continuous sheet edge to edge. */
+html[data-theme-effect="prism"] :is(
+  .liquid-glass-panel, .glass-modal, .glass-panel,
+  .sn-popover, .settings-card, .glass-button
+) {
+  background-origin: border-box;
+  background-repeat: no-repeat;
+}
+
 /* ── The source: the app shell ───────────────────────────────────────────
    The room the interface sits in. The bloom and a soft streak lie on the
    shell itself, so chat, sidebar, and every other glass surface shows that

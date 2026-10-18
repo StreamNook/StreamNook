@@ -559,6 +559,8 @@ const HOMIES_CUSTOM_MAX_ENTRIES: usize = 250_000;
 /// member loadout key `homies:homies-custom` names it without depending on
 /// the tooltip, which follows the holder's display name.
 pub const HOMIES_CUSTOM_BADGE_ID: &str = "homies-custom";
+/// The gallery's one tile for all of them (`homies_custom_gallery_tile`).
+const HOMIES_CUSTOM_TILE_TITLE: &str = "Homies Custom Badge";
 const HOMIES_CLICK_URL: &str = "https://chatterinohomies.com/";
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -654,7 +656,7 @@ fn homies_custom_gallery_tile(
     Some(ThirdPartyGalleryBadge {
         id: HOMIES_CUSTOM_BADGE_ID.to_string(),
         provider: BadgeProvider::Homies,
-        title: "Homies Custom Badge".to_string(),
+        title: HOMIES_CUSTOM_TILE_TITLE.to_string(),
         image_1x: info.image_1x.clone(),
         image_2x: info.image_2x.clone(),
         image_4x: info.image_4x.clone(),
@@ -1241,6 +1243,450 @@ impl ThirdPartyCache {
             .map(|(uid, ranked)| (uid, ranked.into_iter().map(|(badge, _)| badge).collect()))
             .collect()
     }
+}
+
+/// Every distinct third-party badge as a browse-gallery tile, from the feeds
+/// already in memory (no network). Entries sharing a (provider, title) are one
+/// tile. Chatty glyph backdrops are NOT painted here; `get_all_third_party_badges`
+/// does that, since it may download.
+fn third_party_gallery_tiles(tp: &ThirdPartyCache, viewer_user_id: Option<&str>) -> Vec<ThirdPartyGalleryBadge> {
+    let mut out: Vec<ThirdPartyGalleryBadge> = Vec::new();
+
+    // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id].
+    if let Some(ffz) = &tp.ffz {
+        let viewer_num = viewer_user_id.and_then(|uid| uid.parse::<u32>().ok());
+        for badge in ffz.badges.iter().filter(|b| !b.is_bot()) {
+            let holders = ffz.users.get(&badge.id.to_string());
+            let user_count = holders.map(|h| h.len()).unwrap_or(0);
+            let owned = match (viewer_num, holders) {
+                (Some(n), Some(h)) => h.contains(&n),
+                _ => false,
+            };
+            let (img_1x, img_2x, img_4x) = badge.image_urls();
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("ffz-{}", badge.id),
+                provider: BadgeProvider::FFZ,
+                title: badge
+                    .title
+                    .clone()
+                    .or_else(|| badge.name.clone())
+                    .unwrap_or_else(|| format!("FFZ Badge {}", badge.id)),
+                image_1x: img_1x,
+                image_2x: img_2x,
+                image_4x: img_4x,
+                user_count,
+                owned,
+                click_url: Some("https://www.frankerfacez.com/badges".to_string()),
+            });
+        }
+    }
+
+    // BetterTTV. One entry per holder; the (provider, title) dedupe below
+    // collapses the ~160 entries into one tile per distinct badge type and
+    // sums the holder counts.
+    if let Some(bttv) = &tp.bttv {
+        for badge in bttv {
+            let owned = viewer_user_id
+                .map(|uid| badge.provider_id == uid)
+                .unwrap_or(false);
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("bttv-{}", badge.badge.description),
+                provider: BadgeProvider::BTTV,
+                title: badge.badge.description.clone(),
+                image_1x: badge.badge.svg.clone(),
+                image_2x: badge.badge.svg.clone(),
+                image_4x: badge.badge.svg.clone(),
+                user_count: 1,
+                owned,
+                click_url: Some("https://betterttv.com".to_string()),
+            });
+        }
+    }
+
+    // Chatterino
+    if let Some(chatterino) = &tp.chatterino {
+        for badge in &chatterino.badges {
+            let owned = viewer_user_id
+                .map(|uid| badge.users.iter().any(|u| u == uid))
+                .unwrap_or(false);
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("chatterino-{}", badge.tooltip),
+                provider: BadgeProvider::Chatterino,
+                title: badge.tooltip.clone(),
+                image_1x: badge.image1.clone(),
+                image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
+                image_4x: badge
+                    .image3
+                    .clone()
+                    .or_else(|| badge.image2.clone())
+                    .unwrap_or_else(|| badge.image1.clone()),
+                user_count: badge.users.len(),
+                owned,
+                click_url: Some("https://chatterino.com/".to_string()),
+            });
+        }
+    }
+
+    // Homies
+    if let Some(homies) = &tp.homies {
+        for badge in &homies.badges {
+            let owned = viewer_user_id
+                .map(|uid| badge.users.iter().any(|u| u == uid))
+                .unwrap_or(false);
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("homies-{}", badge.tooltip),
+                provider: BadgeProvider::Homies,
+                title: badge.tooltip.clone(),
+                image_1x: badge.image1.clone(),
+                image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
+                image_4x: badge
+                    .image3
+                    .clone()
+                    .or_else(|| badge.image2.clone())
+                    .unwrap_or_else(|| badge.image1.clone()),
+                user_count: badge.users.len(),
+                owned,
+                click_url: Some("https://chatterinohomies.com/".to_string()),
+            });
+        }
+    }
+    if let Some(custom) = &tp.homies_custom {
+        out.extend(homies_custom_gallery_tile(custom, viewer_user_id));
+    }
+
+    // Chatsen
+    if let Some(chatsen) = &tp.chatsen {
+        for badge in chatsen {
+            let owned = viewer_user_id
+                .map(|uid| badge.users.iter().any(|u| u == uid))
+                .unwrap_or(false);
+            let img_1x = badge.mipmap.first().cloned().unwrap_or_default();
+            let img_4x = badge
+                .mipmap
+                .last()
+                .cloned()
+                .unwrap_or_else(|| img_1x.clone());
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("chatsen-{}", badge.id),
+                provider: BadgeProvider::Chatsen,
+                title: badge.name.clone(),
+                image_1x: img_1x,
+                image_2x: img_4x.clone(),
+                image_4x: img_4x,
+                user_count: badge.users.len(),
+                owned,
+                click_url: Some("https://chatsen.app".to_string()),
+            });
+        }
+    }
+
+    // Chatty (tduva)
+    if let Some(chatty) = &tp.chatty {
+        for badge in chatty.iter().filter(|b| !b.is_ffz_bot()) {
+            let owned = viewer_user_id
+                .map(|uid| badge.userids.iter().any(|u| u == uid))
+                .unwrap_or(false);
+            let (img_1x, img_2x, img_4x) = badge.image_urls();
+            out.push(ThirdPartyGalleryBadge {
+                id: format!(
+                    "chatty-{}-{}",
+                    badge.id,
+                    badge.version.clone().unwrap_or_default()
+                ),
+                provider: BadgeProvider::Chatty,
+                title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
+                image_1x: img_1x,
+                image_2x: img_2x,
+                image_4x: img_4x,
+                user_count: badge.userids.len(),
+                owned,
+                click_url: badge
+                    .meta_url
+                    .clone()
+                    .or_else(|| Some("https://chatty.github.io".to_string())),
+            });
+        }
+    }
+
+    // DankChat (flex3r)
+    if let Some(dankchat) = &tp.dankchat {
+        for badge in dankchat {
+            let owned = viewer_user_id
+                .map(|uid| badge.users.iter().any(|u| u == uid))
+                .unwrap_or(false);
+            out.push(ThirdPartyGalleryBadge {
+                id: format!("dankchat-{}", badge.badge_type),
+                provider: BadgeProvider::DankChat,
+                title: badge.badge_type.clone(),
+                image_1x: badge.url.clone(),
+                image_2x: badge.url.clone(),
+                image_4x: badge.url.clone(),
+                user_count: badge.users.len(),
+                owned,
+                click_url: Some("https://github.com/flex3r/DankChat".to_string()),
+            });
+        }
+    }
+
+    // Moltorino
+    if let Some(moltorino) = &tp.moltorino {
+        out.extend(moltorino_gallery_tiles(moltorino, viewer_user_id));
+    }
+
+    // Collapse entries that share a (provider, title) into one tile. Some feeds
+    // (notably Chatty's FFZ re-host) emit one entry PER USER under the same title
+    // (e.g. 122x "FFZ:AP Supporter"), which would otherwise flood the gallery.
+    // Merging sums the user counts and keeps the badge "owned" if any matched.
+    let mut deduped: Vec<ThirdPartyGalleryBadge> = Vec::with_capacity(out.len());
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for badge in out {
+        let key = (badge.provider.as_key().to_string(), badge.title.clone());
+        if let Some(&i) = index.get(&key) {
+            deduped[i].user_count += badge.user_count;
+            deduped[i].owned = deduped[i].owned || badge.owned;
+        } else {
+            index.insert(key, deduped.len());
+            deduped.push(badge);
+        }
+    }
+    deduped
+}
+
+// ============================================================================
+// BADGE DETAIL (the badge spotlight card)
+// ============================================================================
+
+/// What the badge spotlight shows for a clicked third-party badge, from the
+/// feeds already in memory. A field is `None` when Rust does not know it: the
+/// clicked badge itself (its art and title, which React already holds) fills
+/// those in, so a detail never needs a gallery hit. That matters because the
+/// gallery merges badges by (provider, title) and keeps ONE tile for every
+/// Homies custom badge.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BadgeDetail {
+    /// The canonical lowercase provider key (`BadgeProvider::as_key`).
+    pub provider: String,
+    pub provider_label: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image_1x: Option<String>,
+    pub image_2x: Option<String>,
+    pub image_4x: Option<String>,
+    /// The badge's own link (a Chatty badge's page, FFZ's badge list).
+    pub click_url: Option<String>,
+    /// The provider's site, always known.
+    pub homepage: String,
+    pub holder_count: Option<u32>,
+    /// Whether the viewer holds this badge; `None` when unknown (no viewer
+    /// given, or a badge the feeds do not list, such as BetterTTV Pro).
+    pub owned: Option<bool>,
+}
+
+/// The longest badge id or title accepted from the WebView. Real ones are a
+/// few dozen characters (Chatterino ids carry the tooltip).
+const MAX_BADGE_REF_LEN: usize = 256;
+
+impl BadgeProvider {
+    /// The provider for a wire key, in any letter case (`BTTV` for the
+    /// BetterTTV Pro badge, `ffz` from Rust).
+    pub fn from_key(key: &str) -> Option<BadgeProvider> {
+        Some(match key.to_ascii_lowercase().as_str() {
+            "twitch" => BadgeProvider::Twitch,
+            "ffz" => BadgeProvider::FFZ,
+            "bttv" => BadgeProvider::BTTV,
+            "chatterino" => BadgeProvider::Chatterino,
+            "homies" => BadgeProvider::Homies,
+            "chatsen" => BadgeProvider::Chatsen,
+            "chatty" => BadgeProvider::Chatty,
+            "dankchat" => BadgeProvider::DankChat,
+            "moltorino" => BadgeProvider::Moltorino,
+            _ => return None,
+        })
+    }
+
+    /// The provider's name as people know it.
+    pub fn label(&self) -> &'static str {
+        match self {
+            BadgeProvider::Twitch => "Twitch",
+            BadgeProvider::FFZ => "FrankerFaceZ",
+            BadgeProvider::BTTV => "BetterTTV",
+            BadgeProvider::Chatterino => "Chatterino",
+            BadgeProvider::Homies => "Homies",
+            BadgeProvider::Chatsen => "Chatsen",
+            BadgeProvider::Chatty => "Chatty",
+            BadgeProvider::DankChat => "DankChat",
+            BadgeProvider::Moltorino => "Moltorino",
+        }
+    }
+
+    /// The provider's site (the same links the gallery's section headers use).
+    pub fn homepage(&self) -> &'static str {
+        match self {
+            BadgeProvider::Twitch => "https://www.twitch.tv/",
+            BadgeProvider::FFZ => "https://www.frankerfacez.com/badges",
+            BadgeProvider::BTTV => "https://betterttv.com",
+            BadgeProvider::Chatterino => "https://chatterino.com/",
+            BadgeProvider::Homies => HOMIES_CLICK_URL,
+            BadgeProvider::Chatsen => "https://chatsen.app",
+            BadgeProvider::Chatty => "https://chatty.github.io",
+            BadgeProvider::DankChat => "https://github.com/flex3r/DankChat",
+            BadgeProvider::Moltorino => "https://moltorino.com/",
+        }
+    }
+}
+
+fn has_control_chars(s: &str) -> bool {
+    s.chars().any(char::is_control)
+}
+
+/// Turn a clicked badge's (provider, id) into the id space the feeds use.
+///
+/// Three id spaces reach the WebView: the Rust path (`ffz-3`), the member
+/// loadout path (`ffz:ffz-3`), and a bare provider id (`3`). All three become
+/// `ffz-3`. Providers arrive in any case (`BTTV` for the BetterTTV Pro badge,
+/// whose id `bttv-pro` passes through). Twitch is not a third-party provider
+/// and is refused, as are empty, overlong and control-character ids.
+pub fn normalize_badge_ref(provider: &str, id: &str) -> Result<(BadgeProvider, String), String> {
+    let provider_key = provider.trim();
+    if provider_key.is_empty() || provider_key.len() > 32 || !provider_key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err("Invalid badge provider".to_string());
+    }
+    let provider = match BadgeProvider::from_key(provider_key) {
+        Some(BadgeProvider::Twitch) | None => return Err(format!("Not a third-party badge provider: {provider_key}")),
+        Some(p) => p,
+    };
+    let id = id.trim();
+    if id.is_empty() || id.len() > MAX_BADGE_REF_LEN || has_control_chars(id) {
+        return Err("Invalid badge id".to_string());
+    }
+    let key = provider.as_key();
+    // `ffz:ffz-3` -> `ffz-3` (the loadout key carries its provider in front).
+    let id = match id.split_once(':') {
+        Some((prefix, rest)) if prefix.eq_ignore_ascii_case(key) => rest.trim(),
+        _ => id,
+    };
+    if id.is_empty() {
+        return Err("Invalid badge id".to_string());
+    }
+    let prefix = format!("{key}-");
+    // `get` (not indexing): the id may hold multi-byte characters.
+    let id = match (id.get(..prefix.len()), id.get(prefix.len()..)) {
+        (Some(head), Some(rest)) if head.eq_ignore_ascii_case(&prefix) && !rest.is_empty() => format!("{prefix}{rest}"),
+        _ => format!("{prefix}{id}"),
+    };
+    Ok((provider, id))
+}
+
+/// A clicked badge's title, checked like its id. Blank means none.
+fn normalize_badge_title(title: Option<&str>) -> Result<Option<String>, String> {
+    let Some(title) = title.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
+    if title.len() > MAX_BADGE_REF_LEN || has_control_chars(title) {
+        return Err("Invalid badge title".to_string());
+    }
+    Ok(Some(title.to_string()))
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// The detail for one (already normalised) badge, from the in-memory feeds.
+/// A gallery tile is used only when it is this badge: the same id, or, for
+/// feeds whose ids repeat per holder, the same title. The Homies custom tile
+/// stands for thousands of different badges, so it is never used; whether the
+/// viewer wears the clicked custom badge is read from their own entry instead.
+fn badge_detail_from_cache(
+    tp: &ThirdPartyCache,
+    provider: BadgeProvider,
+    id: &str,
+    title: Option<&str>,
+    viewer_user_id: Option<&str>,
+) -> BadgeDetail {
+    let mut detail = BadgeDetail {
+        provider: provider.as_key().to_string(),
+        provider_label: provider.label().to_string(),
+        title: None,
+        description: None,
+        image_1x: None,
+        image_2x: None,
+        image_4x: None,
+        click_url: None,
+        homepage: provider.homepage().to_string(),
+        holder_count: None,
+        owned: None,
+    };
+
+    if provider == BadgeProvider::Homies && id == HOMIES_CUSTOM_BADGE_ID {
+        // The gallery tile itself (no title of its own badge) stands for "a
+        // Homies custom badge": its count and the viewer's having one are true
+        // of it. A chat badge is one person's own, told apart by its title.
+        let whole_tile = title.is_none_or(|t| t.eq_ignore_ascii_case(HOMIES_CUSTOM_TILE_TITLE));
+        if let Some(custom) = tp.homies_custom.as_ref() {
+            if whole_tile {
+                detail.holder_count = u32::try_from(custom.len()).ok().filter(|n| *n > 0);
+            }
+            if let Some(uid) = viewer_user_id {
+                let own = custom.get(uid);
+                detail.owned = Some(match (own, title) {
+                    (Some(_), _) if whole_tile => true,
+                    (Some(badge), Some(t)) => badge.badge_info.title.eq_ignore_ascii_case(t),
+                    _ => false,
+                });
+            }
+        }
+        return detail;
+    }
+
+    let tiles = third_party_gallery_tiles(tp, viewer_user_id);
+    let tile = tiles
+        .iter()
+        .filter(|t| t.provider == provider)
+        .find(|t| t.id == id)
+        .or_else(|| {
+            let t = title?;
+            tiles
+                .iter()
+                .filter(|tile| tile.provider == provider && tile.id != HOMIES_CUSTOM_BADGE_ID)
+                .find(|tile| tile.title.eq_ignore_ascii_case(t))
+        });
+    if let Some(tile) = tile {
+        detail.title = non_empty(&tile.title);
+        detail.image_1x = non_empty(&tile.image_1x);
+        detail.image_2x = non_empty(&tile.image_2x);
+        detail.image_4x = non_empty(&tile.image_4x);
+        detail.click_url = tile.click_url.as_deref().and_then(non_empty);
+        detail.holder_count = u32::try_from(tile.user_count).ok().filter(|n| *n > 0);
+        if viewer_user_id.is_some() {
+            detail.owned = Some(tile.owned);
+        }
+    }
+
+    // The chat index knows exactly what the viewer holds, by id.
+    if let Some(uid) = viewer_user_id {
+        let held = tp
+            .by_user
+            .get(uid)
+            .is_some_and(|badges| badges.iter().any(|b| b.provider == provider && b.badge_info.id == id));
+        if held {
+            detail.owned = Some(true);
+        }
+    }
+
+    // Moltorino is the one feed that writes descriptions.
+    if provider == BadgeProvider::Moltorino {
+        if let Some(feed) = &tp.moltorino {
+            detail.description = feed
+                .badges
+                .iter()
+                .find(|b| format!("moltorino-{}", b.id) == id)
+                .and_then(|b| non_empty(&b.description));
+        }
+    }
+
+    detail
 }
 
 struct BadgeCache {
@@ -2479,205 +2925,7 @@ impl BadgeService {
         viewer_user_id: Option<&str>,
     ) -> Vec<ThirdPartyGalleryBadge> {
         let cache = self.cache.read().await;
-        let mut out: Vec<ThirdPartyGalleryBadge> = Vec::new();
-
-        // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id].
-        if let Some(ffz) = &cache.third_party.ffz {
-            let viewer_num = viewer_user_id.and_then(|uid| uid.parse::<u32>().ok());
-            for badge in ffz.badges.iter().filter(|b| !b.is_bot()) {
-                let holders = ffz.users.get(&badge.id.to_string());
-                let user_count = holders.map(|h| h.len()).unwrap_or(0);
-                let owned = match (viewer_num, holders) {
-                    (Some(n), Some(h)) => h.contains(&n),
-                    _ => false,
-                };
-                let (img_1x, img_2x, img_4x) = badge.image_urls();
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("ffz-{}", badge.id),
-                    provider: BadgeProvider::FFZ,
-                    title: badge
-                        .title
-                        .clone()
-                        .or_else(|| badge.name.clone())
-                        .unwrap_or_else(|| format!("FFZ Badge {}", badge.id)),
-                    image_1x: img_1x,
-                    image_2x: img_2x,
-                    image_4x: img_4x,
-                    user_count,
-                    owned,
-                    click_url: Some("https://www.frankerfacez.com/badges".to_string()),
-                });
-            }
-        }
-
-        // BetterTTV. One entry per holder; the (provider, title) dedupe below
-        // collapses the ~160 entries into one tile per distinct badge type and
-        // sums the holder counts.
-        if let Some(bttv) = &cache.third_party.bttv {
-            for badge in bttv {
-                let owned = viewer_user_id
-                    .map(|uid| badge.provider_id == uid)
-                    .unwrap_or(false);
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("bttv-{}", badge.badge.description),
-                    provider: BadgeProvider::BTTV,
-                    title: badge.badge.description.clone(),
-                    image_1x: badge.badge.svg.clone(),
-                    image_2x: badge.badge.svg.clone(),
-                    image_4x: badge.badge.svg.clone(),
-                    user_count: 1,
-                    owned,
-                    click_url: Some("https://betterttv.com".to_string()),
-                });
-            }
-        }
-
-        // Chatterino
-        if let Some(chatterino) = &cache.third_party.chatterino {
-            for badge in &chatterino.badges {
-                let owned = viewer_user_id
-                    .map(|uid| badge.users.iter().any(|u| u == uid))
-                    .unwrap_or(false);
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("chatterino-{}", badge.tooltip),
-                    provider: BadgeProvider::Chatterino,
-                    title: badge.tooltip.clone(),
-                    image_1x: badge.image1.clone(),
-                    image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
-                    image_4x: badge
-                        .image3
-                        .clone()
-                        .or_else(|| badge.image2.clone())
-                        .unwrap_or_else(|| badge.image1.clone()),
-                    user_count: badge.users.len(),
-                    owned,
-                    click_url: Some("https://chatterino.com/".to_string()),
-                });
-            }
-        }
-
-        // Homies
-        if let Some(homies) = &cache.third_party.homies {
-            for badge in &homies.badges {
-                let owned = viewer_user_id
-                    .map(|uid| badge.users.iter().any(|u| u == uid))
-                    .unwrap_or(false);
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("homies-{}", badge.tooltip),
-                    provider: BadgeProvider::Homies,
-                    title: badge.tooltip.clone(),
-                    image_1x: badge.image1.clone(),
-                    image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
-                    image_4x: badge
-                        .image3
-                        .clone()
-                        .or_else(|| badge.image2.clone())
-                        .unwrap_or_else(|| badge.image1.clone()),
-                    user_count: badge.users.len(),
-                    owned,
-                    click_url: Some("https://chatterinohomies.com/".to_string()),
-                });
-            }
-        }
-        if let Some(custom) = &cache.third_party.homies_custom {
-            out.extend(homies_custom_gallery_tile(custom, viewer_user_id));
-        }
-
-        // Chatsen
-        if let Some(chatsen) = &cache.third_party.chatsen {
-            for badge in chatsen {
-                let owned = viewer_user_id
-                    .map(|uid| badge.users.iter().any(|u| u == uid))
-                    .unwrap_or(false);
-                let img_1x = badge.mipmap.first().cloned().unwrap_or_default();
-                let img_4x = badge
-                    .mipmap
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| img_1x.clone());
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("chatsen-{}", badge.id),
-                    provider: BadgeProvider::Chatsen,
-                    title: badge.name.clone(),
-                    image_1x: img_1x,
-                    image_2x: img_4x.clone(),
-                    image_4x: img_4x,
-                    user_count: badge.users.len(),
-                    owned,
-                    click_url: Some("https://chatsen.app".to_string()),
-                });
-            }
-        }
-
-        // Chatty (tduva)
-        if let Some(chatty) = &cache.third_party.chatty {
-            for badge in chatty.iter().filter(|b| !b.is_ffz_bot()) {
-                let owned = viewer_user_id
-                    .map(|uid| badge.userids.iter().any(|u| u == uid))
-                    .unwrap_or(false);
-                let (img_1x, img_2x, img_4x) = badge.image_urls();
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!(
-                        "chatty-{}-{}",
-                        badge.id,
-                        badge.version.clone().unwrap_or_default()
-                    ),
-                    provider: BadgeProvider::Chatty,
-                    title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
-                    image_1x: img_1x,
-                    image_2x: img_2x,
-                    image_4x: img_4x,
-                    user_count: badge.userids.len(),
-                    owned,
-                    click_url: badge
-                        .meta_url
-                        .clone()
-                        .or_else(|| Some("https://chatty.github.io".to_string())),
-                });
-            }
-        }
-
-        // DankChat (flex3r)
-        if let Some(dankchat) = &cache.third_party.dankchat {
-            for badge in dankchat {
-                let owned = viewer_user_id
-                    .map(|uid| badge.users.iter().any(|u| u == uid))
-                    .unwrap_or(false);
-                out.push(ThirdPartyGalleryBadge {
-                    id: format!("dankchat-{}", badge.badge_type),
-                    provider: BadgeProvider::DankChat,
-                    title: badge.badge_type.clone(),
-                    image_1x: badge.url.clone(),
-                    image_2x: badge.url.clone(),
-                    image_4x: badge.url.clone(),
-                    user_count: badge.users.len(),
-                    owned,
-                    click_url: Some("https://github.com/flex3r/DankChat".to_string()),
-                });
-            }
-        }
-
-        // Moltorino
-        if let Some(moltorino) = &cache.third_party.moltorino {
-            out.extend(moltorino_gallery_tiles(moltorino, viewer_user_id));
-        }
-
-        // Collapse entries that share a (provider, title) into one tile. Some feeds
-        // (notably Chatty's FFZ re-host) emit one entry PER USER under the same title
-        // (e.g. 122x "FFZ:AP Supporter"), which would otherwise flood the gallery.
-        // Merging sums the user counts and keeps the badge "owned" if any matched.
-        let mut deduped: Vec<ThirdPartyGalleryBadge> = Vec::with_capacity(out.len());
-        let mut index: HashMap<(String, String), usize> = HashMap::new();
-        for badge in out {
-            let key = (badge.provider.as_key().to_string(), badge.title.clone());
-            if let Some(&i) = index.get(&key) {
-                deduped[i].user_count += badge.user_count;
-                deduped[i].owned = deduped[i].owned || badge.owned;
-            } else {
-                index.insert(key, deduped.len());
-                deduped.push(badge);
-            }
-        }
+        let mut deduped = third_party_gallery_tiles(&cache.third_party, viewer_user_id);
         drop(cache);
 
         // A Chatty tile drawn from a glyph image gets its backdrop painted.
@@ -2690,6 +2938,28 @@ impl BadgeService {
         }
 
         deduped
+    }
+
+    /// The badge spotlight's detail for one clicked third-party badge. The id
+    /// may be in any of the three id spaces (`normalize_badge_ref`). Reads only
+    /// the feeds in memory after the usual cached warm-up; a viewer id that is
+    /// not a Twitch user id is ignored rather than refused.
+    pub async fn get_badge_detail(
+        &self,
+        provider: &str,
+        id: &str,
+        title: Option<&str>,
+        viewer_user_id: Option<&str>,
+    ) -> Result<BadgeDetail, String> {
+        let (provider, id) = normalize_badge_ref(provider, id)?;
+        let title = normalize_badge_title(title)?;
+        let viewer = viewer_user_id.map(str::trim).filter(|v| is_twitch_user_id(v));
+
+        // Warm the feeds (a no-op while they are fresh).
+        let _ = self.fetch_third_party_badges().await;
+
+        let cache = self.cache.read().await;
+        Ok(badge_detail_from_cache(&cache.third_party, provider, &id, title.as_deref(), viewer))
     }
 
     // ========================================================================
@@ -3466,6 +3736,117 @@ mod tests {
         );
         // Every one carries provider `homies`, so only the set_id tells them apart.
         assert!(owned(&index, "95700563").iter().all(|b| b.provider == BadgeProvider::Homies));
+    }
+
+    // ------------------------------------------------------------------
+    // Badge detail (the spotlight card)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn badge_ids_from_every_id_space_normalise_to_the_feed_id() {
+        let n = |p: &str, id: &str| normalize_badge_ref(p, id).map(|(p, id)| (p.as_key(), id));
+        // Rust path, member loadout path, bare provider id.
+        assert_eq!(n("ffz", "ffz-3"), Ok(("ffz", "ffz-3".to_string())));
+        assert_eq!(n("ffz", "ffz:ffz-3"), Ok(("ffz", "ffz-3".to_string())));
+        assert_eq!(n("ffz", "3"), Ok(("ffz", "ffz-3".to_string())));
+        // Providers arrive in any case; BetterTTV Pro is `BTTV` + `bttv-pro`.
+        assert_eq!(n("BTTV", "bttv-pro"), Ok(("bttv", "bttv-pro".to_string())));
+        assert_eq!(n("FFZ", "FFZ:FFZ-3"), Ok(("ffz", "ffz-3".to_string())));
+        // Ids that carry spaces and their own prefix pass through.
+        assert_eq!(
+            n("chatterino", "chatterino-Chatterino Top Donator"),
+            Ok(("chatterino", "chatterino-Chatterino Top Donator".to_string()))
+        );
+        assert_eq!(n("homies", "homies-custom"), Ok(("homies", "homies-custom".to_string())));
+        // A colon that is not the provider prefix stays part of the id.
+        assert_eq!(n("chatty", "x:y"), Ok(("chatty", "chatty-x:y".to_string())));
+        // Multi-byte ids never split a character.
+        assert_eq!(n("chatsen", "ü"), Ok(("chatsen", "chatsen-ü".to_string())));
+    }
+
+    #[test]
+    fn badge_refs_outside_the_rules_are_refused() {
+        assert!(normalize_badge_ref("twitch", "subscriber").is_err(), "Twitch is not third-party");
+        assert!(normalize_badge_ref("7tv", "abc").is_err());
+        assert!(normalize_badge_ref("", "ffz-3").is_err());
+        assert!(normalize_badge_ref("ff z", "ffz-3").is_err());
+        assert!(normalize_badge_ref("ffz", "").is_err());
+        assert!(normalize_badge_ref("ffz", "ffz:").is_err());
+        assert!(normalize_badge_ref("ffz", "ffz-3\n").is_ok(), "surrounding whitespace is trimmed");
+        assert!(normalize_badge_ref("ffz", "ffz\u{0}3").is_err());
+        assert!(normalize_badge_ref("ffz", &"9".repeat(MAX_BADGE_REF_LEN + 1)).is_err());
+        assert!(normalize_badge_title(Some("a\u{7}b")).is_err());
+        assert!(normalize_badge_title(Some(&"t".repeat(MAX_BADGE_REF_LEN + 1))).is_err());
+        assert_eq!(normalize_badge_title(Some("  ")), Ok(None));
+    }
+
+    #[test]
+    fn a_badge_the_feeds_do_not_list_still_gets_its_provider_details() {
+        // BetterTTV Pro badges never appear in the contributor feed.
+        let (p, id) = normalize_badge_ref("BTTV", "bttv-pro").unwrap();
+        let detail = badge_detail_from_cache(&empty_cache(), p, &id, Some("BTTV Pro"), Some("12345"));
+        assert_eq!(detail.provider, "bttv");
+        assert_eq!(detail.provider_label, "BetterTTV");
+        assert_eq!(detail.homepage, "https://betterttv.com");
+        // Nothing invented: React fills title and art from the clicked badge.
+        assert_eq!(detail.title, None);
+        assert_eq!(detail.image_4x, None);
+        assert_eq!(detail.holder_count, None);
+        assert_eq!(detail.owned, None, "ownership of an unlisted badge is unknown, not false");
+    }
+
+    #[test]
+    fn a_homies_custom_badge_never_takes_the_shared_gallery_tile() {
+        let tp = homies_cache(HOMIES_ROLES_FIXTURE, Some(HOMIES_CUSTOM_FIXTURE));
+        let (p, id) = normalize_badge_ref("homies", "homies:homies-custom").unwrap();
+        // Robits clicks their own custom badge.
+        let own = badge_detail_from_cache(&tp, p.clone(), &id, Some("Robits Badge"), Some("67534991"));
+        assert_eq!(own.owned, Some(true));
+        // The one tile stands for every custom badge: not its title, art or count.
+        assert_eq!(own.title, None);
+        assert_eq!(own.image_4x, None);
+        assert_eq!(own.holder_count, None);
+        assert_eq!(own.homepage, HOMIES_CLICK_URL);
+        // Someone else's custom badge, seen by a viewer who has a different one.
+        let other = badge_detail_from_cache(&tp, p.clone(), &id, Some("Robits Badge"), Some("95700563"));
+        assert_eq!(other.owned, Some(false));
+        // The gallery tile itself means "a Homies custom badge": its holder
+        // count is true of it, and any custom badge of the viewer's counts.
+        let tile = badge_detail_from_cache(&tp, p, &id, Some(HOMIES_CUSTOM_TILE_TITLE), Some("95700563"));
+        assert_eq!(tile.owned, Some(true));
+        assert_eq!(tile.holder_count, u32::try_from(tp.homies_custom.as_ref().unwrap().len()).ok());
+        assert_eq!(tile.title, None, "the tile's art and title stay the clicked tile's own");
+    }
+
+    #[test]
+    fn a_moltorino_badge_carries_its_description_and_holders() {
+        let feed: MoltorinoBadgesResponse = serde_json::from_str(MOLTORINO_FIXTURE).unwrap();
+        let mut tp = moltorino_cache(feed);
+        tp.by_user = tp.build_by_user_index();
+        let (p, id) = normalize_badge_ref("moltorino", "moltorino:moltorino-supporter").unwrap();
+        let detail = badge_detail_from_cache(&tp, p, &id, None, Some("249031143"));
+        assert_eq!(detail.title.as_deref(), Some("Moltorino Supporter"));
+        assert_eq!(detail.description.as_deref(), Some("Thanks for supporting Moltorino."));
+        assert_eq!(detail.holder_count, Some(1));
+        assert_eq!(detail.owned, Some(true));
+        assert!(detail.image_4x.as_deref().is_some_and(|u| u.ends_with("3x.webp?v=369")));
+        // No viewer: ownership is unknown.
+        let anon = badge_detail_from_cache(&tp, BadgeProvider::Moltorino, "moltorino-developer", None, None);
+        assert_eq!(anon.owned, None);
+        assert_eq!(anon.description.as_deref(), Some("Given to people who help build and maintain Moltorino."));
+    }
+
+    #[test]
+    fn badge_detail_serializes_the_wire_shape() {
+        let (p, id) = normalize_badge_ref("ffz", "ffz-3").unwrap();
+        let json = serde_json::to_value(badge_detail_from_cache(&empty_cache(), p, &id, None, None)).unwrap();
+        for key in [
+            "provider", "provider_label", "title", "description", "image_1x", "image_2x", "image_4x",
+            "click_url", "homepage", "holder_count", "owned",
+        ] {
+            assert!(json.get(key).is_some(), "missing {key}");
+        }
+        assert_eq!(json["provider"], "ffz");
     }
 }
 

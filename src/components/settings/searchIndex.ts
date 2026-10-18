@@ -1596,8 +1596,9 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Timeout presets',
-    description: 'Custom timeout durations on the message hover dock and drag dial.'
+    title: 'Timeout lengths',
+    parent: 'Hover buttons',
+    description: 'The lengths the arrow beside the quick 10m timeout opens on a hovered message, shortest first. Previously "Timeout presets", typed in seconds.'
   },
   {
     tab: 'Moderation',
@@ -1630,34 +1631,61 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Moderation',
     section: 'Moderation Actions',
     title: 'Moderation Actions',
-    description: 'Choose how to moderate: classic click buttons, drag a chat message into an action bucket (ban/timeout/delete/whisper/profile), or both. Also called Action Style. Includes Drag Style and Pin Action placement.'
+    description: 'How you ban, time out or delete straight from a message: what sits on its left edge (slider, tiles or line buttons) and the hover buttons in its corner. Also called Action Style or Method.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Method',
-    description: 'Buttons show delete, timeout, and ban when you hover a message; Drag lets you pick a message up and drop it on a color-coded action bucket; Both gives you both. Previously "How you act on a message".'
+    title: 'Hover buttons',
+    description: 'Ban, Delete and a quick 10 minute timeout in the corner of the message under your pointer, with the other lengths one click away. Copy and Pin are always there. Also called mod buttons or the hover dock. Previously "Method: Buttons".'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Bucket position',
-    parent: 'Method',
-    description: 'Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight. Previously "Where the drop buckets appear".'
+    title: 'Tile position',
+    parent: 'Message edge',
+    description: 'Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight. Previously "Bucket position".'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Pin bucket',
-    parent: 'Method',
-    description: 'Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well. Previously "Pin from the drag gesture too".'
+    title: 'Pin tile',
+    parent: 'Message edge',
+    description: 'Adds a Pin tile to the drag tiles. Mods always get a Pin button beside Copy on a message. Previously "Pin bucket".'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Grab cursor',
-    parent: 'Method',
-    description: 'Whole message shows the grab hand anywhere on a message you can drag; Edge only keeps the normal cursor and shows the hand on the strip at its left edge. You can pick a message up from anywhere either way.'
+    title: 'Timeout length',
+    parent: 'Message edge',
+    description: 'What a drop on the Timeout tile times someone out for. One drop, no second drag; pick other lengths with the slider.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Message edge',
+    description: 'What sits at the left edge of a message you can act on. Slider: drag it right through Delete, timeouts from short to long, then Ban, and let go to apply. Tiles: drag the message by its left-edge handle onto a Delete, Timeout or Ban tile. Line buttons: Delete, timeouts and Ban as small buttons on every line, one click each. Off: nothing. No ban or timeout on your own messages, the owner\'s, or other mods\'. Also called mod slider, swipe to moderate, drag to moderate, grab handle, drag tiles, buckets, inline mod buttons, one-click moderation. Previously "Slider" and "Method: Drag".'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Buttons',
+    parent: 'Message edge',
+    description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths. They run from mildest to harshest, left to right.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Length',
+    parent: 'Message edge',
+    description: 'How far you drag to reach each step: Short spreads them over half a message, Medium four fifths, Long the whole width. Also called slider distance or spacing.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Steps',
+    parent: 'Message edge',
+    description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths. They always run from mildest to harshest.'
   },
   {
     tab: 'Moderation',
@@ -2508,7 +2536,41 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Notifications',
     section: 'Notification Types',
     title: 'Channel points',
-    description: 'A notification confirms each channel points bonus claimed for you. Previously "When channel points are claimed".'
+    description: 'A notification for the points you earn: bonus chests, raids, watch streaks and prediction results, with the channel\'s face and its own name for its points. Points for watching update quietly in Action Center. Previously "When channel points are claimed".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Rewards button',
+    parent: 'Channel points',
+    description: 'A Rewards button on the Windows channel points notification that opens the channel\'s rewards, and a right-click item for these settings.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Next reward',
+    parent: 'Channel points',
+    description: 'A progress bar on the Windows channel points notification toward the cheapest reward you cannot afford yet.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Try one',
+    parent: 'Channel points',
+    description: 'Shows a sample channel points notification with the extras you turned on. Nothing is spent.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Predictions',
+    description: 'A notification when a prediction opens on a channel you are watching while StreamNook is in the background, with its choices and how long betting stays open.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'Try one',
+    parent: 'Predictions',
+    description: 'Shows a sample prediction notification. Nothing is bet.'
   },
   {
     tab: 'Notifications',

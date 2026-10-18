@@ -555,10 +555,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const toggleBadgeProvider = (id: string) =>
     void editSettingsList('chat_design.hidden_badge_providers', { op: 'toggle', value: id });
 
+  // The stored group goes first so a field `cd` does not list (the ones the
+  // Moderation tab owns: grab cursor, slider steps, bucket timeout) survives a
+  // save from this tab instead of falling back to its default.
   const setDesign = (patch: Partial<typeof cd>) => {
     updateSettings({
       ...settings,
-      chat_design: { ...cd, ...patch },
+      chat_design: { ...stored, ...cd, ...patch },
     });
   };
 

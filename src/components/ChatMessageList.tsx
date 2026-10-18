@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, memo } from 'react';
 import ChatMessage from './ChatMessage';
 import HeldMessageRow from './chat/HeldMessageRow';
 import { isHiddenEvent } from '../utils/chatEvents';
@@ -10,6 +10,9 @@ import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
 import type { ProviderId } from '../types/providers';
 import { ScrollbarMarks } from './chat/ScrollbarMarks';
+import { holdChatRow, moderateWithToast, ROW_HOLD_EVENT, useLineConfig, useModSliderSteps } from '../services/moderation';
+import { lineButtons, type LineButton } from './chat/modLine';
+import { bindLineStrips, isOnLineStrip, useLineArt } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
 
@@ -26,6 +29,22 @@ const PHONE_TOP_FADE: React.CSSProperties = {
   WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, #000 24px)',
   maskImage: 'linear-gradient(to bottom, transparent 0, #000 24px)',
 };
+
+/**
+ * How long the pointer can be off a mod target (a line's buttons, a row with
+ * the hover dock, the slider grip) before the hover hold lets go: long enough
+ * to cross the gap between one line's buttons and the next, short enough that
+ * leaving them feels immediate.
+ */
+const MOD_HOLD_GRACE_MS = 250;
+
+/** Where a mod action starts, besides the line buttons: a row that offers the
+ *  hover dock (ChatMessage marks it), and the slider grip or tile handle. */
+const MOD_TARGET_SELECTOR = '[data-mod-dock], [data-mod-edge]';
+
+function isOnModTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && (isOnLineStrip(target) || target.closest(MOD_TARGET_SELECTOR) !== null);
+}
 
 /**
  * Per-row wrapper carrying the native-virtualization styles, with one
@@ -60,6 +79,8 @@ interface MessageRowProps {
   /** The platform being watched, so a row from one of the streamer's OTHER
    *  platforms can be told apart from this channel's own. */
   homeProvider?: ProviderId;
+  /** The line buttons, one shared array for every row (null when off). */
+  modLine: LineButton[] | null;
   onUsernameClick: ChatMessageListProps['onUsernameClick'];
   onReplyClick: ChatMessageListProps['onReplyClick'];
   onMessageCopy?: ChatMessageListProps['onMessageCopy'];
@@ -98,6 +119,7 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
   if (prev.isModerator !== next.isModerator) return false;
   if (prev.broadcasterId !== next.broadcasterId) return false;
   if (prev.homeProvider !== next.homeProvider) return false;
+  if (prev.modLine !== next.modLine) return false;
   return true;
 };
 
@@ -115,6 +137,7 @@ const MessageRow = memo(function MessageRow({
   isModerator,
   broadcasterId,
   homeProvider,
+  modLine,
   onUsernameClick,
   onReplyClick,
   onMessageCopy,
@@ -172,6 +195,7 @@ const MessageRow = memo(function MessageRow({
         broadcasterId={broadcasterId}
         homeProvider={homeProvider}
         sourceMark={sourceProvider}
+        modLine={modLine}
       />
       )}
     </div>
@@ -254,7 +278,7 @@ interface ChatMessageListProps {
  * - Simpler architecture: Just render messages, browser does the rest
  */
 const ChatMessageList = memo(function ChatMessageList({
-  messages,
+  messages: liveMessages,
   isPaused,
   onScroll,
   onPauseIntent,
@@ -279,6 +303,32 @@ const ChatMessageList = memo(function ChatMessageList({
   headerInset = 40,
   pinnedIds,
 }: ChatMessageListProps) {
+  // While a moderator points where a mod action starts (the hover effect
+  // below), or presses a row to slide or drag it, the list keeps drawing the
+  // rows that were on screen, so nothing moves and nothing is trimmed away
+  // however fast chat runs; it catches up to live when the pointer leaves and
+  // the press ends. The frozen array is the store's own copy-on-write
+  // snapshot, so holding it costs one reference. Everything below draws
+  // `messages`.
+  const [frozenView, setFrozenView] = useState<ChatMessageListProps['messages'] | null>(null);
+  const messages = frozenView ?? liveMessages;
+  const shownRef = useRef(messages);
+  useLayoutEffect(() => {
+    shownRef.current = messages;
+  });
+  const viewFrozenRef = useRef(false);
+  // Why the view is held: the pointer rests on a mod target, a press holds a
+  // row, or both. It thaws only when neither is left.
+  const freezeRef = useRef({ hover: false, press: false });
+  // A wheel scroll lets go of the hover hold, which then waits for the
+  // pointer to move again, so scrolling never fights it.
+  const hoverMutedRef = useRef(false);
+  const syncFreeze = useCallback(() => {
+    const want = freezeRef.current.hover || freezeRef.current.press;
+    if (want === viewFrozenRef.current) return;
+    viewFrozenRef.current = want;
+    setFrozenView(want ? shownRef.current : null);
+  }, []);
   const containerRef = useRef<HTMLDivElement>(null);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
   // that any height change (badge/emote/cosmetic images settling in after a
@@ -298,6 +348,78 @@ const ChatMessageList = memo(function ChatMessageList({
   // resume (or unmount) can cancel it.
   const isResumeAnimatingRef = useRef(false);
   const resumeRafRef = useRef<number | null>(null);
+  // The row a moderator is pressing to slide or drag (ModSlider, the drag
+  // pickup), and where it sat on screen. A press also freezes the view, so the
+  // 100-row buffer cannot trim the held row away mid-slide (which cancels the
+  // slide). While it is held the list stops following new messages and, after
+  // every update, scrolls by however far the row moved, so the row stays under
+  // the pointer. The browser's own scroll anchoring was not enough: it let go
+  // after a few hundred milliseconds of trimming. The hold ends on its own
+  // when the button comes up or the row leaves the list, so it can never
+  // stick; then the list catches up to the live bottom unless it was paused.
+  const rowHoldRef = useRef<{ row: HTMLElement; top: number } | null>(null);
+  const isPausedRef = useRef(isPaused);
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+  const isRowHeld = () => {
+    const held = rowHoldRef.current;
+    if (held && !held.row.isConnected) rowHoldRef.current = null;
+    return rowHoldRef.current !== null;
+  };
+  /** Scroll by however far the held row moved, so it stays put on screen. */
+  const keepHeldRowStill = () => {
+    const held = rowHoldRef.current;
+    const el = containerRef.current;
+    if (!held || !el) return;
+    const drift = held.row.getBoundingClientRect().top - held.top;
+    if (Math.abs(drift) < 0.5) return;
+    isScrollingProgrammatically.current = true;
+    el.scrollTop += drift;
+    setTimeout(() => {
+      isScrollingProgrammatically.current = false;
+    }, 60);
+  };
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const freeze = freezeRef.current;
+    const release = () => {
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      freeze.press = false;
+      syncFreeze();
+      if (!rowHoldRef.current) return;
+      rowHoldRef.current = null;
+      if (isPausedRef.current || userScrolledUpRef.current) return;
+      isScrollingProgrammatically.current = true;
+      el.scrollTop = el.scrollHeight;
+      wasAtBottomRef.current = true;
+      setTimeout(() => {
+        isScrollingProgrammatically.current = false;
+      }, 150);
+    };
+    const onHold = (e: Event) => {
+      if ((e as CustomEvent<{ on?: boolean }>).detail?.on !== true) {
+        release();
+        return;
+      }
+      const row = e.target as HTMLElement;
+      rowHoldRef.current = { row, top: row.getBoundingClientRect().top };
+      freeze.press = true;
+      syncFreeze();
+      window.addEventListener('pointerup', release, true);
+      window.addEventListener('pointercancel', release, true);
+    };
+    el.addEventListener(ROW_HOLD_EVENT, onHold);
+    return () => {
+      el.removeEventListener(ROW_HOLD_EVENT, onHold);
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      freeze.press = false;
+      syncFreeze();
+    };
+  }, [syncFreeze]);
 
   // Per-row CSS `contain-intrinsic-block-size` placeholder size. The browser
   // uses this for off-screen messages (content-visibility: auto). Picking a
@@ -323,6 +445,96 @@ const ChatMessageList = memo(function ChatMessageList({
     return `auto ${total}px`;
   }, [chatDesign?.font_size, chatDesign?.message_spacing, chatDesign?.show_timestamps]);
 
+  // Line buttons. Rust's steps for the viewer's line list are resolved here,
+  // once for the whole list, and every row gets the same array: no per-row
+  // hooks or subscriptions on the hot path. Nothing is asked for unless the
+  // viewer moderates this channel and has them on.
+  const lineOn = !!isModerator && chatDesign?.mod_line_buttons === true;
+  const lineConfig = useLineConfig();
+  const lineSteps = useModSliderSteps(homeProvider ?? 'twitch', lineConfig, lineOn);
+  const modLine = useMemo(
+    () => (lineOn && lineSteps && lineSteps.length > 0 ? lineButtons(lineSteps) : null),
+    [lineOn, lineSteps],
+  );
+  const lineActive = modLine !== null;
+  // The buttons' picture, drawn once for the list; every strip shows it.
+  const lineArt = useLineArt(modLine, chatDesign?.font_size ?? 14);
+  const lineArtRef = useRef<{ art: NonNullable<typeof lineArt>; buttons: LineButton[] } | null>(null);
+  useLayoutEffect(() => {
+    lineArtRef.current = lineArt && modLine ? { art: lineArt, buttons: modLine } : null;
+  });
+  // Pointing where a mod action starts freezes the view (mouse and pen; a
+  // touch has no hover), so a fast chat cannot pull the target away while you
+  // aim, however fast it runs: a line's buttons, a row that offers the hover
+  // dock (from the row itself: by the time the pointer reaches the dock above
+  // it, a fast chat has already moved the row), the slider grip or tile
+  // handle. Moving between lines passes through the gap below each strip, so
+  // the view thaws only after the pointer has been off every target for
+  // MOD_HOLD_GRACE_MS, or at once on a wheel scroll; then the list catches up
+  // to live.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !isModerator) return;
+    let graceTimer: number | undefined;
+    const thaw = () => {
+      window.clearTimeout(graceTimer);
+      freezeRef.current.hover = false;
+      syncFreeze();
+    };
+    const onOver = (e: PointerEvent) => {
+      if (e.pointerType === 'touch' || hoverMutedRef.current || !isOnModTarget(e.target)) return;
+      window.clearTimeout(graceTimer);
+      freezeRef.current.hover = true;
+      syncFreeze();
+    };
+    const onOut = (e: PointerEvent) => {
+      if (!freezeRef.current.hover || !isOnModTarget(e.target) || isOnModTarget(e.relatedTarget)) return;
+      window.clearTimeout(graceTimer);
+      graceTimer = window.setTimeout(thaw, MOD_HOLD_GRACE_MS);
+    };
+    // After a wheel scroll, a real move of the pointer aims again.
+    const onMove = (e: PointerEvent) => {
+      if (!hoverMutedRef.current || (e.movementX === 0 && e.movementY === 0)) return;
+      hoverMutedRef.current = false;
+      onOver(e);
+    };
+    const onLeave = () => {
+      hoverMutedRef.current = false;
+    };
+    el.addEventListener('pointerover', onOver);
+    el.addEventListener('pointerout', onOut);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerleave', onLeave);
+    return () => {
+      el.removeEventListener('pointerover', onOver);
+      el.removeEventListener('pointerout', onOut);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerleave', onLeave);
+      thaw();
+    };
+  }, [isModerator, syncFreeze]);
+  // One set of listeners on the list serves every row's line buttons.
+  // - The button under the pointer lights up (`bindLineStrips`).
+  // - A press without the hover hold (touch) holds the row until it lifts.
+  // - A press keeps the composer's focus and starts no text selection.
+  // - A click picks the button under the pointer and sends it through
+  //   `moderate_chatter`, with Undo in the toast for a timeout or ban.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !lineActive) return;
+    const onDown = (e: PointerEvent) => {
+      if (!isOnLineStrip(e.target) || e.button !== 0 || viewFrozenRef.current) return;
+      holdChatRow(e.target as HTMLElement, true);
+    };
+    el.addEventListener('pointerdown', onDown);
+    const unbind = bindLineStrips(el, () => lineArtRef.current, (hit) => void moderateWithToast(hit.request));
+    return () => {
+      el.removeEventListener('pointerdown', onDown);
+      unbind();
+    };
+  }, [lineActive]);
+
+
   // Track if user explicitly scrolled UP via wheel (negative deltaY = scroll up)
   // This is the ONLY reliable way to detect user scroll intent
   // Flag persists until user scrolls DOWN or reaches bottom
@@ -345,7 +557,16 @@ const ChatMessageList = memo(function ChatMessageList({
       // Scrolling DOWN (toward bottom) - clear the flag
       userScrolledUpRef.current = false;
     }
-  }, [onPauseIntent]);
+    // Scrolling is not aiming: a wheel over a mod target lets go of the hover
+    // hold at once, so the wheel scrolls the live feed (up pauses it as
+    // usual), and the hold waits for the pointer to move again. A press still
+    // holds its row.
+    hoverMutedRef.current = true;
+    if (freezeRef.current.hover) {
+      freezeRef.current.hover = false;
+      syncFreeze();
+    }
+  }, [onPauseIntent, syncFreeze]);
 
   // Handle touch scrolling - track direction via Y position change
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -392,6 +613,11 @@ const ChatMessageList = memo(function ChatMessageList({
       // paused state has committed — otherwise a height change landing in that
       // window would re-pin to bottom and fight the pause.
       if (userScrolledUpRef.current) return;
+      // A row is being slid; it must stay under the pointer.
+      if (isRowHeld()) {
+        keepHeldRowStill();
+        return;
+      }
       // Only re-pin when the user was already at bottom — never YANK them
       // down if they've scrolled up to read history.
       if (!wasAtBottomRef.current) return;
@@ -436,6 +662,11 @@ const ChatMessageList = memo(function ChatMessageList({
     // A resume glide owns the scroll position until it lands; let it run
     // rather than instant-jumping on every message and stuttering it.
     if (isResumeAnimatingRef.current) return;
+    // A row being slid stays put; the hold's release catches up.
+    if (!isChannelLoad && isRowHeld()) {
+      keepHeldRowStill();
+      return;
+    }
 
     // NOT PAUSED: Always scroll to bottom, now (before paint), then once more
     // after content-visibility resolves for anything further up.
@@ -449,6 +680,7 @@ const ChatMessageList = memo(function ChatMessageList({
       if (!containerRef.current || isPaused) return;
       if (!isChannelLoad && userScrolledUpRef.current) return;
       if (isResumeAnimatingRef.current) return;
+      if (isRowHeld()) return;
       isScrollingProgrammatically.current = true;
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
       wasAtBottomRef.current = true;
@@ -649,6 +881,7 @@ const ChatMessageList = memo(function ChatMessageList({
           '--sn-emote-margin': `${emoteMargin}rem`,
           '--sn-backfill-opacity': Math.max(0.3, Math.min(1, (chatDesign?.backfill_opacity ?? 100) / 100)),
           '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
+          ...lineArt?.vars,
         } as React.CSSProperties}
       >
         {/* Messages container with native virtualization. The top padding clears
@@ -758,6 +991,7 @@ const ChatMessageList = memo(function ChatMessageList({
                 isModerator={isModerator}
                 broadcasterId={broadcasterId}
                 homeProvider={homeProvider}
+                modLine={modLine}
                 onUsernameClick={onUsernameClick}
                 onReplyClick={onReplyClick}
                 onMessageCopy={onMessageCopy}
