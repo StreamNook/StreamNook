@@ -195,6 +195,32 @@ async fn me_goes_to_chat_as_typed() {
 }
 
 #[tokio::test]
+async fn uptime_says_offline_only_when_twitch_says_so() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "get_stream" { Err("Not logged in".into()) } else { Ok(Value::Null) });
+    let failed = run(&fake, "/uptime").await;
+    assert!(failed.notices.is_empty());
+    assert_eq!(toast(&failed, ToastKind::Error), ["Couldn't check whether this channel is live: Not logged in"]);
+    fake.answer(|_, _| Ok(Value::Null));
+    assert_eq!(run(&fake, "/uptime").await.notices, ["This channel is offline."]);
+    fake.answer(|cmd, _| {
+        if cmd == "get_stream" {
+            Ok(json!({ "user_name": "Chan", "started_at": "2001-09-09T01:46:40Z" }))
+        } else {
+            Ok(Value::Null)
+        }
+    });
+    assert!(run(&fake, "/uptime").await.notices[0].starts_with("Chan has been live for"));
+}
+
+#[tokio::test]
+async fn a_failed_disconnect_is_shown() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "stop_chat" { Err("socket busy".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/disconnect").await, ToastKind::Error), ["Couldn't disconnect from chat: socket busy"]);
+}
+
+#[tokio::test]
 async fn a_failed_lookup_is_never_called_not_found() {
     let fake = Fake::new();
     fake.answer(|cmd, _| if cmd == "get_user_by_login" { Err("User 'ghost' not found".into()) } else { Ok(Value::Null) });

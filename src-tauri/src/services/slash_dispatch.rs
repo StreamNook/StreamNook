@@ -725,6 +725,16 @@ async fn room_stream(b: &dyn Backend, channel: &str) -> Option<Value> {
     b.invoke("get_stream", json!({ "login": channel })).await.ok().filter(|v| !v.is_null())
 }
 
+/// The room's live stream for /uptime: `None` when Twitch answered that it is
+/// not live, the failure when the check itself failed.
+async fn uptime_stream(b: &dyn Backend, channel: &str) -> Result<Option<Value>, String> {
+    if channel.is_empty() || channel.contains(':') {
+        return Ok(None);
+    }
+    let stream = b.invoke("get_stream", json!({ "login": channel })).await?;
+    Ok(Some(stream).filter(|s| s["started_at"].as_str().is_some_and(|t| !t.is_empty())))
+}
+
 /// The placeholders for a template run in `channel` (the room it was typed
 /// in, never the stream playing elsewhere). The room is looked up only when
 /// the template names it.
@@ -1539,9 +1549,11 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let window = if c.command == "overlay" { "overlay" } else { "multichat" };
             o.ui = Some(Ui::OpenChatWindow { window: window.to_string(), channel, channel_id });
         }
-        "uptime" => match room_stream(b, &login).await.filter(|s| s["started_at"].as_str().is_some_and(|t| !t.is_empty())) {
-            None => o.say("This channel is offline."),
-            Some(s) => {
+        // A failed check is said as such: "offline" only when Twitch answered that it is.
+        "uptime" => match uptime_stream(b, &login).await {
+            Err(e) => o.err(format!("Couldn't check whether this channel is live: {e}")),
+            Ok(None) => o.say("This channel is offline."),
+            Ok(Some(s)) => {
                 let uptime = format_uptime(s["started_at"].as_str(), b.now_ms());
                 let name = s["user_name"]
                     .as_str()
