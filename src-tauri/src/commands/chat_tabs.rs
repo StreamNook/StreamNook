@@ -12,6 +12,33 @@ use std::sync::OnceLock;
 use tauri::{Emitter, State};
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
+static MENTIONS_FEED: std::sync::Once = std::sync::Once::new();
+
+/// Every open tab's unread count, read from the mentions inbox. A room with
+/// none gets 0, so reading it there clears the tab.
+fn push_mention_counts() {
+    let counts = crate::services::mention_inbox::unread_by_room();
+    for tab in chat_tabs::view().tabs {
+        let channel = tab.tab.channel;
+        note_mentions(&channel, counts.get(&channel).copied().unwrap_or(0));
+    }
+}
+
+/// From the first tab change on: the tabs follow the mentions inbox's counts.
+fn ensure_mentions_feed() {
+    MENTIONS_FEED.call_once(|| {
+        let mut rx = crate::services::mention_inbox::watch_unread();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                rx.borrow_and_update();
+                push_mention_counts();
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    });
+}
 
 fn emit(app: &AppHandle, view: &ChatTabsView) {
     let _ = APP.set(app.clone());
@@ -26,6 +53,14 @@ fn emit(app: &AppHandle, view: &ChatTabsView) {
 /// Other platforms ride the live poller, which reads the tabs itself.
 fn settle(app: &AppHandle, change: &ChatTabsChange) {
     emit(app, &change.view);
+    ensure_mentions_feed();
+    // A room just opened shows the mentions it already has.
+    if !change.acquire.is_empty() {
+        let counts = crate::services::mention_inbox::unread_by_room();
+        for tab in &change.acquire {
+            note_mentions(&tab.channel, counts.get(&tab.channel).copied().unwrap_or(0));
+        }
+    }
     let watch = |tab: &ChatTab| tab.provider == "twitch" && tab.channel_id.as_deref().is_some_and(|id| !id.is_empty());
     let join: Vec<ChatTab> = change.acquire.iter().filter(|t| watch(t)).cloned().collect();
     let leave: Vec<ChatTab> = change.release.iter().filter(|t| watch(t)).cloned().collect();
@@ -68,6 +103,8 @@ pub fn note_mentions(channel: &str, unread: u32) {
 #[tauri::command]
 pub fn chat_tabs_get(app: AppHandle) -> ChatTabsView {
     let _ = APP.set(app);
+    ensure_mentions_feed();
+    push_mention_counts();
     chat_tabs::view()
 }
 
@@ -152,6 +189,7 @@ pub fn chat_tabs_park(app: AppHandle) -> ChatTabsChange {
 pub fn chat_tabs_visible(rooms: Vec<String>) {
     let rooms: Vec<String> = rooms.into_iter().map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
     log::debug!("[ChatTabs] on screen: {rooms:?}");
+    crate::services::mention_inbox::set_visible_rooms(rooms);
 }
 
 /// Keeps the stream's chat after the player closes, or lets it close with it.
