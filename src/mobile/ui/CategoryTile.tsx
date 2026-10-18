@@ -3,7 +3,7 @@
 // object, and a glass frame only shrank it. Names never sit on the art.
 import React, { useCallback, useState } from 'react';
 import { gameBoxArt } from '../../utils/boxArt';
-import { CHIN_CLASS, TILE_ART_CLASS, artPixelWidth, viewersLine } from './categoryTileLayout';
+import { CHIN_CLASS, TILE_ART_CLASS, artPixelWidth } from './categoryTileLayout';
 
 // One observer for every tile on the page: a grid mounts dozens at once, and
 // one observer per tile would be dozens of observers doing a single job.
@@ -38,14 +38,14 @@ export const CategoryTile: React.FC<{
    *  line at zero. */
   viewers?: number | null;
   /** The words under the name, as Rust serves them with the category
-   *  (`viewers_line`, one compact format for every shell). The local format
-   *  stands in only for a caller that does not pass it yet. */
+   *  (`viewers_line`, one compact format for every shell); none when nobody
+   *  counted. */
   viewersText?: string | null;
   /** Search results give the name two lines; browsing keeps one. */
   twoLineName?: boolean;
   onPress: () => void;
 }> = ({ name, art, boxArt, viewers, viewersText, twoLineName = false, onPress }) => {
-  const line = viewersText ?? viewersLine(viewers);
+  const line = viewersText ?? null;
   // Rounded up to 30 px steps (in artPixelWidth), so a fold, a rotation or a
   // fractional column width lands on a handful of sizes the cache already
   // holds instead of a new request per pixel.

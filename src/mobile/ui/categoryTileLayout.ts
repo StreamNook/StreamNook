@@ -1,4 +1,5 @@
-// The category tile's shared geometry and words, for the tile and its skeleton.
+// The category tile's shared geometry, for the tile and its skeleton. Its
+// viewers line comes from Rust with each category (`viewers_line`).
 
 /** The grid both browse screens lay tiles in. */
 export const TILE_GRID_CLASS = 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-x-2.5 gap-y-3.5';
@@ -12,14 +13,4 @@ export const CHIN_CLASS = 'mt-[5px] min-h-[33px]';
  *  to a 30 px step. The height follows at 3:4. */
 export function artPixelWidth(drawnCssWidth: number, devicePixelRatio: number): number {
   return Math.ceil((Math.max(drawnCssWidth, 60) * devicePixelRatio) / 30) * 30;
-}
-
-const compact =new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-
-/** "No live streams", "1 viewer", "12.4K viewers"; null when nobody counted. */
-export function viewersLine(count: number | null | undefined): string | null {
-  if (count == null) return null;
-  if (count === 0) return 'No live streams';
-  if (count === 1) return '1 viewer';
-  return `${compact.format(count)} viewers`;
 }
