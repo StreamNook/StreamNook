@@ -152,7 +152,9 @@ const BASE: &[Def] = &[
 /// shows on someone else's profile until it is earned, which is all this list
 /// ever shows anyway.
 const MORE: &[Def] = &[
-    def("completionist", "Completionist", "star", "#f472b6", "#db2777", Rule::Completionist),
+    // Names too long for a medallion's column carry soft hyphens, so they
+    // break at a syllable (with a hyphen) instead of mid-letter.
+    def("completionist", "Com\u{ad}ple\u{ad}tion\u{ad}ist", "star", "#f472b6", "#db2777", Rule::Completionist),
     def("triple", "Triple Threat", "layers", "#34d399", "#0f766e", Rule::TripleThreat),
     def("palindrome", "Palindrome", "repeat", "#c084fc", "#7e22ce", Rule::Palindrome),
     def("nice", "Nice", "smile", "#facc15", "#ca8a04", Rule::Nice),
@@ -175,7 +177,7 @@ const MORE: &[Def] = &[
     def("winter", "Winter", "snowflake", "#93c5fd", "#2563eb", Rule::Saved),
     def("cake_day", "Cake Day", "cake", "#f9a8d4", "#db2777", Rule::Saved),
     def("cs2_major_cologne_2026", "CS2 Major Cologne 2026", "trophy", "#f6e3a0", "#9c7528", Rule::Saved),
-    def("semiquincentennial_2026", "Semiquincentennial", "flag", "#93b4ff", "#dc3d55", Rule::Saved),
+    def("semiquincentennial_2026", "Semi\u{ad}quin\u{ad}cen\u{ad}ten\u{ad}nial", "flag", "#93b4ff", "#dc3d55", Rule::Saved),
 ];
 
 /// The public numbers the accolade rules read.
@@ -680,6 +682,9 @@ mod tests {
         let saved: HashSet<String> = BASE.iter().map(|d| d.id.to_string()).collect();
         let all = earned_accolades(&Tally::default(), &saved);
         assert!(all.iter().any(|a| a.id == "completionist"));
+        // The long single words break at a syllable, never mid-letter.
+        let label = all.iter().find(|a| a.id == "completionist").map(|a| a.label.replace('\u{ad}', ""));
+        assert_eq!(label.as_deref(), Some("Completionist"));
         assert_eq!(all[0].colors, ["#6aa9ff".to_string(), "#3b6fd4".to_string()]);
     }
 

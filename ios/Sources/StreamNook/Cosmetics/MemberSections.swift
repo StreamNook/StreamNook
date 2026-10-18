@@ -6,11 +6,15 @@ import SwiftUI
 /// sheet's badge groups. Android draws the same answer in `MemberSections.tsx`.
 struct MemberSections: View {
     let profile: MemberProfile
+    /// Emotes whose every image failed; they take themselves out, as a badge does.
+    @State private var failed: Set<String> = []
+
+    private var shownEmotes: [TopEmote] { profile.topEmotes.filter { !failed.contains($0.id) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if !profile.stats.isEmpty { overview }
-            if !profile.topEmotes.isEmpty { emotes }
+            if !shownEmotes.isEmpty { emotes }
             if !profile.accolades.isEmpty { accolades }
         }
     }
@@ -38,8 +42,8 @@ struct MemberSections: View {
         VStack(alignment: .leading, spacing: 8) {
             ProfileSectionHeader("Top emotes")
             FlowLayout(spacing: 8) {
-                ForEach(profile.topEmotes) { emote in
-                    CosmeticImage(emote.url, animate: true)
+                ForEach(shownEmotes) { emote in
+                    CosmeticImage(emote.url, animate: true, onFailure: { failed.insert(emote.id) })
                         .frame(width: 28, height: 28)
                         .frame(width: 32, height: 32)
                         .accessibilityLabel("\(emote.name), used \(emote.count) times")
@@ -51,7 +55,8 @@ struct MemberSections: View {
     private var accolades: some View {
         VStack(alignment: .leading, spacing: 12) {
             ProfileSectionHeader("Accolades", detail: "\(profile.accolades.count)")
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64, maximum: 80), spacing: 8, alignment: .top)],
+            // Five to a row, as on Android.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 5),
                       alignment: .leading, spacing: 12) {
                 ForEach(profile.accolades) { AccoladeMedallion(medal: $0) }
             }
@@ -123,11 +128,10 @@ private struct AccoladeMedallion: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 64)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(medal.label)
+        .accessibilityLabel(medal.label.replacingOccurrences(of: "\u{AD}", with: ""))
     }
 
     /// The nearest SF Symbol for each of the desktop's lucide icons.
