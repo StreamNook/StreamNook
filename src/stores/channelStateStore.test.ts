@@ -22,6 +22,7 @@ const blank = (login: string): ChannelState => ({
   pinned: [],
   pinned_at: null,
   collab: null,
+  shared_chat: null,
   collab_at: null,
 });
 

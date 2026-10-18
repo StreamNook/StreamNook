@@ -203,3 +203,13 @@ import Testing
         }
     }
 }
+
+@Suite struct SharedChatRowTests {
+    @Test func aPartnerRowCarriesItsChannel() throws {
+        let json = ##"{"name_color":"#ffffff","spans":[],"source":{"id":"200","login":"myth","display_name":"Myth","avatar_url":"https://x/m.png","color":"#57b8ff"}}"##
+        let view = try JSONDecoder().decode(ChatRowView.self, from: Data(json.utf8))
+        #expect(view.source == SharedChatSource(id: "200", login: "myth", displayName: "Myth", avatarURL: "https://x/m.png", color: "#57b8ff"))
+        let home = try JSONDecoder().decode(ChatRowView.self, from: Data(##"{"name_color":"#ffffff","spans":[]}"##.utf8))
+        #expect(home.source == nil)
+    }
+}

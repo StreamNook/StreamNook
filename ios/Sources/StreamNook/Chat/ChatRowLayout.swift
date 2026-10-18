@@ -269,8 +269,11 @@ struct ChatRowLayoutBuilder {
             decor.fill = .tint(color, alpha: 0.20)
             label = (restricted ? "Restricted user" : "Monitored user", color)
         } else if meta.isFromSharedChat {
-            decor.leadingBar = (ChatTheme.accent.withAlphaComponent(0.5), 2)
-            decor.fill = .solid(ChatTheme.accent.withAlphaComponent(0.05))
+            // A partner's row wears that channel's own color, so two partners read apart at chat
+            // speed; the accent stands in until the core knows the channel.
+            let color = view?.source.flatMap { ChatTheme.color($0.color) } ?? ChatTheme.accent
+            decor.leadingBar = (color, 3)
+            decor.fill = .tint(color, alpha: 0.10)
         }
         if let redemption = Self.redemptionLabel(msgID) {
             decor.fill = .gradient([ChatTheme.highlightCyan.withAlphaComponent(0.18), UIColor.systemBlue.withAlphaComponent(0.10)])
@@ -317,8 +320,12 @@ struct ChatRowLayoutBuilder {
             top += 6
         }
 
-        // Badges, name and body flow as one paragraph.
+        // Badges, name and body flow as one paragraph. A Shared Chat partner's row leads with the
+        // channel's face, round and ringed in its color (the cell draws the ring).
         var block = RowText(builder: self)
+        if meta.isFromSharedChat, let face = view?.source?.avatarURL, !face.isEmpty {
+            block.face(face, gapAfter: 5)
+        }
         // Only badges whose image can load, so the gap before the name follows the last one shown.
         let badges = (view?.badges ?? []).filter { !ImagePipeline.shared.hasFailed($0.url) }
         for (i, badge) in badges.enumerated() {

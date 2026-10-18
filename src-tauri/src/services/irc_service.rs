@@ -3038,6 +3038,10 @@ impl IrcService {
                                                     true,
                                                     std::sync::atomic::Ordering::Relaxed,
                                                 );
+                                                // Who each partner is, ahead of their first row.
+                                                crate::services::shared_chat_source::warm(
+                                                    partner_ids.iter().filter(|id| id.as_str() != room_id).cloned().collect(),
+                                                );
                                             }
 
                                             debug!(

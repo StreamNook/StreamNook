@@ -199,6 +199,7 @@ pub mod chat_recovery;
 pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
+pub mod shared_chat_source;
 pub mod share_link;
 pub mod slash_commands;
 pub mod slash_dispatch;

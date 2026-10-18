@@ -2245,8 +2245,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return s.offlineLastBroadcasts[offlineChannelId] ?? null;
   });
   // Shared Viewership: while the channel streams with others, the header shows
-  // a Together chip beside the channel's own count.
-  const collab = isTwitch ? (channelState?.collab ?? null) : null;
+  // a Together chip beside the channel's own count. Outside one, a Twitch
+  // Shared Chat session takes the same slot ("Shared chat" with the partners'
+  // faces; Rust reads it with the group), so people know whose chatters these
+  // are.
+  const sharedChatGroup = isTwitch ? (channelState?.shared_chat ?? null) : null;
+  const collab = isTwitch ? (channelState?.collab ?? sharedChatGroup) : null;
 
   // Auto-heal a set whose 7TV rows are not this channel's real dictionary. Rust
   // says so with `seven_tv_ok`: false when the channel document fetch failed and
@@ -4728,13 +4732,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                       data-fit-label
-                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat ? 'iridescent-title' : ''}`}
+                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat && !sharedChatGroup ? 'iridescent-title' : ''}`}
                     >
                       {!isConnected
                         ? 'Disconnected'
                         : channelOverride && !isMainSurface
                           ? channelOverride.user_name || channelOverride.user_login || 'Stream chat'
-                          : isSharedChat
+                          : isSharedChat && !sharedChatGroup
                             ? 'Shared stream chat'
                             : currentMediaType === 'offline_chat'
                               ? 'Offline chat'

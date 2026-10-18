@@ -38,17 +38,24 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
 }
 
 extension ChannelGroup {
-    /// A `channel-state` push's collab section for `login`: `.some(nil)` when the channel left
-    /// its group, nil when the push is another section or another channel.
+    /// A `channel-state` push's collab section for `login`: the Shared Viewership group, else
+    /// the Twitch Shared Chat session the chat is in; `.some(nil)` when the channel is in
+    /// neither, nil when the push is another section or another channel.
     public static func collabPush(_ json: String, login: String) -> ChannelGroup?? {
         struct Push: Decodable {
             var section: String
             var login: String
             var collab: ChannelGroup?
+            var sharedChat: ChannelGroup?
+
+            enum CodingKeys: String, CodingKey {
+                case section, login, collab
+                case sharedChat = "shared_chat"
+            }
         }
         guard let push = try? JSONDecoder().decode(Push.self, from: Data(json.utf8)), push.section == "collab",
               push.login.lowercased() == login.lowercased() else { return nil }
-        return .some(push.collab)
+        return .some(push.collab ?? push.sharedChat)
     }
 
     /// The sheet's subtitle: "1,234 viewers combined" or "One chat across 3 channels".

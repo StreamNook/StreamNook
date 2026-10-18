@@ -1634,6 +1634,9 @@ export interface ChannelState {
   pinned: unknown[];
   pinned_at: number | null;
   collab: Collaboration | null;
+  /** Outside a Stream Together group, the Twitch Shared Chat session the
+   *  channel's chat is in. Read with `collab` (same tick, `collab_at`). */
+  shared_chat: SharedChat | null;
   collab_at: number | null;
 }
 
@@ -1651,7 +1654,7 @@ export type ChannelStateUpdate =
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
   | { section: 'bits'; login: string; bits: ChannelBitsFace | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
-  | { section: 'collab'; login: string; collab: Collaboration | null; at: number };
+  | { section: 'collab'; login: string; collab: Collaboration | null; shared_chat: SharedChat | null; at: number };
 
 /** One channel's bulk hype-train status, as Rust reports it. */
 export interface HypeTrainBulkStatus {
