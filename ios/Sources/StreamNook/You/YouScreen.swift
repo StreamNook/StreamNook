@@ -24,6 +24,13 @@ struct YouScreen: View {
                     label("Accounts")
                     AccountsCard(model: model, picks: picks, sevenTvPicture: ownIdentity?.picture)
                         .padding(.horizontal, 16)
+
+                    label("Clips")
+                    NavigationLink(value: Route.myClips) {
+                        RowLabel(symbol: "scissors", title: "Your clips", detail: "Clips you made while watching")
+                    }
+                    .buttonStyle(RowPress())
+                    .padding(.horizontal, 12)
                 }
 
                 label("Open the app on")

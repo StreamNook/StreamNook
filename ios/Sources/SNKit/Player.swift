@@ -147,6 +147,16 @@ public struct PlayerPrefs: Decodable, Sendable, Equatable {
 
 /// The words the player's controls show.
 public enum PlayerText {
+    /// A VOD playhead: "1:02:14", "4:05", "0:09". `width` pads to another clock's shape so the
+    /// two times on a seek bar keep their size as they count.
+    public static func clock(_ seconds: Double, like width: Double? = nil) -> String {
+        let s = seconds.isFinite ? max(0, Int(seconds.rounded(.down))) : 0
+        let hours = s / 3600
+        let wide = hours > 0 || (width.map { $0 >= 3600 } ?? false)
+        if wide { return String(format: "%d:%02d:%02d", hours, (s % 3600) / 60, s % 60) }
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
     /// "2h 14m" or "14m" since the broadcast began; empty when the start is unknown or unreadable.
     public static func uptime(startedAt: String?, now: Date = Date()) -> String {
         guard let startedAt, let start = parseDate(startedAt) else { return "" }
@@ -180,7 +190,15 @@ public enum PlayerText {
         return "best"
     }
 
-    private static func parseDate(_ text: String) -> Date? {
+    /// A playback speed as the speed menu shows it: "1x", "1.25x", "2x".
+    public static func rate(_ rate: Float) -> String {
+        let hundredths = Int((rate * 100).rounded())
+        if hundredths % 100 == 0 { return "\(hundredths / 100)x" }
+        if hundredths % 10 == 0 { return String(format: "%.1fx", Double(rate)) }
+        return String(format: "%.2fx", Double(rate))
+    }
+
+    public static func parseDate(_ text: String) -> Date? {
         let full = ISO8601DateFormatter()
         full.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = full.date(from: text) { return date }

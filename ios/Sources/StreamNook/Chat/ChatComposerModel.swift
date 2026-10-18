@@ -312,6 +312,9 @@ final class ChatComposerModel {
             picker.reload(debounce: false)
         case "speak":
             if let text = action.text, !text.isEmpty { speech.speak(AVSpeechUtterance(string: text)) }
+        case "create_clip":
+            ClipRouter.create?(action.channel ?? session.channel, action.channelID ?? session.roomID ?? "",
+                               action.title ?? "")
         default:
             let command = typed.split(separator: " ").first.map(String.init) ?? typed
             show("\(command) is not on iPhone yet")

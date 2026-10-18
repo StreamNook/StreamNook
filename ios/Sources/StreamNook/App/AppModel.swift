@@ -43,6 +43,14 @@ final class AppModel {
     private(set) var phase = Phase.booting
     /// A clip link from chat, open in the clip sheet.
     var clip: ClipLink?
+    /// The Create clip sheet, from the player's Clip button or `/clip`.
+    var clipTarget: ClipTarget?
+    /// A playing VOD's recorded chat, fed by the core in step with the player.
+    private(set) var replay: ChatSession?
+    /// The chat pane shows the replay (the default for a VOD) rather than the channel's live chat.
+    var replayShown = true
+    /// The Channel sheet (a channel's videos and clips).
+    var channelSheet: TwitchStream?
     private(set) var started = false
     private(set) var startError: String?
     private(set) var startMS: Int?
@@ -62,6 +70,8 @@ final class AppModel {
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }
         watch.nowPlaying.onStop = { [weak self] in self?.stopWatching() }
+        watch.nowPlaying.onSeek = { watch.seekVod(to: $0) }
+        watch.nowPlaying.onSkip = { watch.skipVod(by: $0) }
         watch.pip.onRestore = { [weak self] in
             guard let self else { return }
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
@@ -76,11 +86,16 @@ final class AppModel {
         }
         let toasts = toasts
         watch.onToast = { toasts.show($0) }
+        watch.onVodChange = { [weak self] vod in self?.vodChanged(vod) }
+        watch.onReplay = { [weak self] step in self?.replay?.pipeline.applyReplay(step) }
         watch.onLive = { [weak self] live in self?.startWatching(live) }
         LinkRouter.clip = { [weak self] url in
             guard let self, LinkRouter.isClip(url) else { return false }
             self.clip = ClipLink(url: url)
             return true
+        }
+        ClipRouter.create = { [weak self] login, channelID, title in
+            self?.createClip(login: login, channelID: channelID, title: title)
         }
         chat.toasts = toasts
         chat.kick = kick
@@ -220,18 +235,43 @@ final class AppModel {
         }
     }
 
+    /// Plays one of `channel`'s videos (from its Channel sheet): the channel's chat opens with it,
+    /// showing the recorded chat in step with the video.
+    func openVod(videoID: String, title: String, thumbnail: String?, channel: TwitchStream, at: Double? = nil) {
+        channelSheet = nil
+        if signedIn { chat.syncStream(channel) }
+        nav.open(channel)
+        watch.openVod(videoID: videoID, title: title, thumbnail: thumbnail, channel: channel, at: at, core: core)
+    }
+
+    /// A VOD began or ended: its replay room opens with it, and goes with it.
+    private func vodChanged(_ vod: VodInfo?) {
+        replay?.stop()
+        guard let vod else {
+            replay = nil
+            return
+        }
+        let login = vod.channelLogin ?? watch.stream?.userLogin ?? ""
+        replay = ChatSession(channel: login, core: core, source: .replay, roomID: watch.stream?.userID)
+        replayShown = true
+    }
+
     /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
-    /// as the intent. A failure leaves playback as it was.
+    /// as the intent. A VOD switches at its playhead. A failure leaves playback as it was.
     func changeQuality(_ quality: String) async {
         guard let stream = watch.stream else { return }
+        let vod = watch.playingVod
+        let resumeAt = watch.vodPosition
+        let url = vod.map { "https://www.twitch.tv/videos/\($0.videoID)" } ?? stream.playbackURL
         do {
             let start = try await core.invoke(
-                "change_stream_quality", args: ["url": stream.playbackURL, "quality": quality],
+                "change_stream_quality", args: ["url": url, "quality": quality],
                 as: StreamStart.self
             )
             guard watch.stream?.id == stream.id else { return }
             log.notice("quality \(quality, privacy: .public) -> \(start.quality, privacy: .public)")
             await watch.switched(to: start, picked: quality, core: core)
+            if vod != nil { watch.seekVod(to: resumeAt) }
             await patchSettings(["quality": quality])
             toasts.show(quality == start.quality ? "Quality changed to \(start.quality)"
                                                  : "Quality \"\(quality)\" unavailable, switched to \"\(start.quality)\"",
@@ -284,6 +324,27 @@ final class AppModel {
     }
 
     /// Closes the watch layer: the player lets go of its item before the core stops the relay.
+    /// Opens Create clip for `login`'s room. The watched channel clips what plays (a VOD at its
+    /// playhead); any other room clips its live stream.
+    func createClip(login: String, channelID: String, title: String = "") {
+        guard !login.hasPrefix("kick:") else {
+            toasts.show("Clips work on Twitch channels")
+            return
+        }
+        let bare = login.lowercased()
+        if let stream = watch.stream, stream.isTwitch, stream.userLogin.lowercased() == bare {
+            var target = ClipTarget(channelID: stream.userID ?? channelID, login: stream.userLogin, name: stream.userName,
+                                    title: title.isEmpty ? (watch.live?.title ?? stream.title) : title)
+            if let vod = watch.playingVod {
+                target.vodID = vod.videoID
+                target.vodOffset = watch.player.currentTime().seconds
+            }
+            clipTarget = target
+        } else {
+            clipTarget = ClipTarget(channelID: channelID, login: bare, name: login, title: title)
+        }
+    }
+
     func stopWatching() {
         watch.close(core: core)
         nav.close()

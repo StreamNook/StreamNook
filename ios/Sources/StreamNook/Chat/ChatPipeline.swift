@@ -102,6 +102,23 @@ final class ChatPipeline: @unchecked Sendable {
         queue.async { [self] in buffer.paused = paused }
     }
 
+    /// A VOD replay step from the core: a reset replaces every row (a seek, the first rows), else
+    /// the rows join the bottom like live ones.
+    func applyReplay(_ step: ReplayStep) {
+        guard step.reset else {
+            for message in step.rows { ingest(frame: .row(message)) }
+            return
+        }
+        queue.async { [self] in
+            pending.removeAll()
+            buffer.removeAll()
+            layouts.removeAll()
+            _ = buffer.apply(step.rows.map { .row($0) })
+            relayoutAll()
+            if width > 0 { ready.withLock { $0[$0.count - 1].forceLive = true } }
+        }
+    }
+
     /// A room behind another tab keeps its rows but lays none out until it is on screen again.
     func setVisible(_ visible: Bool) {
         queue.async { [self] in self.visible = visible }

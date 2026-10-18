@@ -84,6 +84,22 @@ struct OfflineRoomView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
+                // The channel's videos and clips, beside its latest broadcast.
+                if let stream = watch.stream {
+                    Button { model.channelSheet = stream } label: {
+                        Text("Videos")
+                            .font(.sn(13, 600))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .snGlass(Capsule(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                    .layoutPriority(1)
+                    .accessibilityLabel("Videos and clips")
+                }
                 if room.latestVod != nil {
                     Button { watch.playRoomVod() } label: {
                         Label("Latest broadcast", systemImage: Symbol.play)

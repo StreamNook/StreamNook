@@ -8,6 +8,8 @@ enum Route: Hashable {
     case category(TwitchCategory)
     case settings(SettingsSection)
     case cosmetics
+    /// You › Your clips.
+    case myClips
 }
 
 /// The settings sections, in the You tab's order. One table drives the rows and the pages they

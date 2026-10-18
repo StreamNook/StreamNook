@@ -7,11 +7,36 @@ import UIKit
 struct ChatRoomsPanel: View {
     let rooms: ChatRooms
     var overlay = false
+    /// A playing VOD's recorded chat; shown instead of the rooms while `replayShown` is on.
+    var replay: ChatSession?
+    var replayShown: Binding<Bool>?
+    /// The VOD's playhead, for the line beside the switch.
+    var replayAt: String?
     /// The stream's own card over the chat (the drop being earned), above the pinned banner.
     var streamBanner: AnyView?
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let replay, let replayShown {
+                ReplaySwitch(shown: replayShown, at: replayAt)
+                if replayShown.wrappedValue {
+                    ChatPanel(session: replay, overlay: true, onProfile: onProfile)
+                        .id(ObjectIdentifier(replay))
+                } else {
+                    roomsBody
+                }
+            } else {
+                roomsBody
+            }
+        }
+        .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
+            AddChatSheet(rooms: rooms)
+        }
+    }
+
+    @ViewBuilder
+    private var roomsBody: some View {
         VStack(spacing: 0) {
             if rooms.showsStrip {
                 ChatTabStrip(rooms: rooms)
@@ -23,9 +48,31 @@ struct ChatRoomsPanel: View {
                 Color.clear
             }
         }
-        .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
-            AddChatSheet(rooms: rooms)
+    }
+}
+
+/// Over a VOD's chat: Replay (the recorded chat, in step with the video) or the channel's live
+/// chat, and where the replay is.
+struct ReplaySwitch: View {
+    @Binding var shown: Bool
+    let at: String?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            GlazeSegments([Segment(value: true, label: "Replay"), Segment(value: false, label: "Live chat")],
+                          selection: Binding(get: { shown }, set: { if let on = $0 { shown = on } }))
+                .fixedSize()
+            Spacer(minLength: 8)
+            if shown, let at {
+                Text("chat at \(at)")
+                    .font(.sn(12.5).monospacedDigit())
+                    .foregroundStyle(SN.textMuted)
+                    .lineLimit(1)
+            }
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 }
 
