@@ -100,6 +100,15 @@ body:has(.sn-mobile) .glass-input:focus {
   padding-right: var(--sn-safe-r);
 }
 
+/* A scrolling list that ends against a bar (the emote grid above the
+   Emotes/GIFs switch): the last 16px fade out instead of being cut, so the list
+   reads as running on under the bar. Unscoped, because such lists also live in
+   sheets. */
+.sn-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+}
+
 /* Minimum touch target for interactive rows/buttons in the mobile tree. */
 .sn-touch {
   min-height: 44px;

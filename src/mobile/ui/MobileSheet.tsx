@@ -19,6 +19,10 @@ export interface MobileSheetProps {
   children: React.ReactNode;
   /** Max sheet height as a viewport fraction. Default 0.72. */
   maxHeightFraction?: number;
+  /** Open at the full cap from the first frame instead of hugging the content:
+   *  for a sheet whose content arrives late (a chatter's card and badge
+   *  wall), so it never grows under the finger; the content scrolls inside. */
+  fill?: boolean;
 }
 
 const DISMISS_DISTANCE = 96;
@@ -40,8 +44,10 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   title,
   children,
   maxHeightFraction = 0.72,
+  fill = false,
 }) => {
   const [dragY, setDragY] = useState(0);
+  const cap = `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`;
   // Mirrors dragStart as STATE because the transition is chosen during render: a
   // finger drag must track 1:1 with no easing, a release should spring. Reading
   // the ref in render would not re-render when the drag begins.
@@ -105,7 +111,8 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
         // unchanged.
         style={{
           bottom: 'var(--sn-kb, 0px)',
-          maxHeight: `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`,
+          maxHeight: cap,
+          height: fill ? cap : undefined,
           paddingBottom: SAFE_B,
           transition: 'bottom 0.15s ease-out',
         }}
