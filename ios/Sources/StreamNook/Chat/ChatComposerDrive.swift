@@ -13,6 +13,8 @@ import SNKit
 /// - `chatfail[:WHY]` shows the draft as a message Twitch did not take
 /// - `chatnotice:TEXT` prints a line only the viewer sees
 /// - `chatpickerlog` logs the picker's tabs and sections
+/// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `chatsend` presses Send (use a
+///   cheering draft only on FakeCore); `cheerlog` logs the cheer bar's state
 @MainActor
 enum ComposerDrive {
     static func run(_ name: String, _ value: String, session: ChatSession?) async -> Bool {
@@ -33,6 +35,20 @@ enum ComposerDrive {
             composer?.debugFailure(value.isEmpty ? "same as your last message" : value)
         case "chatnotice":
             composer?.notice(value.isEmpty ? "Your message was not sent: your message was blocked by AutoMod" : value)
+        case "chatdraft":
+            composer?.draft = value.replacingOccurrences(of: "_", with: " ")
+            try? await Task.sleep(for: .milliseconds(600))
+        case "chatsend":
+            // FakeCore only: on the real core this posts chat as the signed-in account, and a
+            // cheering draft would spend real bits.
+            guard session.core is FakeCore else {
+                log.error("drive chatsend refused: not FakeCore")
+                return true
+            }
+            await composer?.send()
+        case "cheerlog":
+            let flow = composer?.cheer
+            log.notice("cheer draft \(flow?.draft?.total ?? -1) problems \(flow?.draft?.problems.count ?? -1) status \(String(describing: flow?.status.map { "\($0)" }), privacy: .public)")
         case "chatpickerlog":
             guard let picker = composer?.picker else { return true }
             let tabs = picker.tabs.map { "\($0)=\(picker.count($0).map(String.init) ?? "-")" }.joined(separator: ",")
