@@ -1,4 +1,4 @@
-use crate::services::emote_credit::{self, CreditProvider, EmoteCredit};
+use crate::services::emote_credit::{self as credit, CreditProvider, EmoteCredit};
 use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
 use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
@@ -527,7 +527,7 @@ impl SeventvMapEntry for youtube_emotes::YouTubeEmote {
 pub async fn clear_emote_cache(state: State<'_, EmoteServiceState>) -> Result<(), String> {
     let service = state.0.read().await;
     service.clear_cache().await;
-    emote_credit::clear();
+    credit::clear();
     Ok(())
 }
 
@@ -558,7 +558,7 @@ pub async fn emote_credit(
     let mut held = None;
     if let Some(channel) = channel.as_deref().filter(|c| !c.is_empty()) {
         held = irc_service::with_channel_emotes(channel, |set| {
-            emote_credit::find_in_set(set, provider, &id, seventv_global)
+            credit::find_in_set(set, provider, &id, seventv_global)
         })
         .await
         .flatten();
@@ -567,7 +567,7 @@ pub async fn emote_credit(
         if let Some(cid) = channel_id.as_deref().filter(|c| !c.is_empty()) {
             let service = state.0.read().await;
             held = service
-                .with_cached_set(cid, |set| emote_credit::find_in_set(set, provider, &id, seventv_global))
+                .with_cached_set(cid, |set| credit::find_in_set(set, provider, &id, seventv_global))
                 .await
                 .flatten();
         }
@@ -576,12 +576,12 @@ pub async fn emote_credit(
     if held.is_none() && provider == CreditProvider::SevenTv {
         if let Some(me) = AccountStore::primary() {
             held = irc_service::with_personal_emotes(&me.user_id, |map| {
-                map.values().find(|e| e.id == id).map(|e| emote_credit::held_from(provider, e, false))
+                map.values().find(|e| e.id == id).map(|e| credit::held_from(provider, e, false))
             })
             .flatten();
         }
     }
-    Ok(emote_credit::resolve(provider, &id, name.as_deref(), held, detail.unwrap_or(false)).await)
+    Ok(credit::resolve(provider, &id, name.as_deref(), held, detail.unwrap_or(false)).await)
 }
 
 #[cfg(test)]
