@@ -2304,7 +2304,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Discover',
     sectionId: 'settings-section-discover',
     title: 'Languages',
-    description: 'Filter the Discover tab and sidebar recommended streams by broadcast language: only show streams in english, french, german, spanish, or any other language you pick.'
+    description: 'Which languages Discover, the sidebar recommendations and Kick browse show: your device language by default, the languages you pick, or any language. Foreign streams, english only, stream language filter, broadcast language. Previously "Empty means any language".'
   },
   {
     tab: 'Interface',

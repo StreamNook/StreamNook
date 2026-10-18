@@ -43,9 +43,12 @@ impl Slot {
 static SLOTS: Lazy<std::sync::Mutex<HashMap<String, Arc<Slot>>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// A platform's slot for the languages shown now: Kick's grid is built from
+/// streams in those languages, so a changed setting gets its own page.
 fn slot(provider: &str) -> Arc<Slot> {
+    let key = format!("{}|{}", provider, crate::services::browse_languages::current().join(","));
     let mut slots = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
-    slots.entry(provider.to_string()).or_default().clone()
+    slots.entry(key).or_default().clone()
 }
 
 /// `provider`'s top `limit` categories, most watched first: the cached page

@@ -1496,7 +1496,9 @@ pub async fn get_recommended_streams_paginated(
         &state,
         cursor,
         limit,
-        languages.unwrap_or_default(),
+        crate::services::browse_languages::resolve_stored(
+            &languages.unwrap_or_else(|| crate::services::browse_languages::stored(&state)),
+        ),
         personalized.unwrap_or(false),
     )
     .await

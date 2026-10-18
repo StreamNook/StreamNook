@@ -267,6 +267,25 @@
    ]
   },
   {
+   "page": "player",
+   "section": "Discover",
+   "title": "Languages",
+   "paths": [
+    "discovery_languages"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Streams in Discover and Kick browse. Your device language until you pick some.",
+   "aliases": [
+    "language",
+    "foreign streams",
+    "english only",
+    "stream language",
+    "any language",
+    "kick"
+   ]
+  },
+  {
    "page": "chat",
    "section": "Landscape Chat",
    "title": "Layout",

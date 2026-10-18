@@ -7,7 +7,11 @@ import type { ProviderId } from '../../types/providers';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { GlassMultiSelect } from '../ui/GlassMultiSelect';
-import { DISCOVERY_LANGUAGES } from '../../utils/discoveryLanguages';
+import {
+    DEVICE_LANGUAGE_LABEL,
+    DISCOVERY_LANGUAGE_OPTIONS,
+    nextDiscoveryLanguages,
+} from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MAC } from '../../utils/platform';
 import type { MotionMode, CloseToTrayMode, HiddenRealms } from '../../types';
@@ -154,7 +158,8 @@ const InterfaceSettings = () => {
         // updateSettings commits to the store only after the save completes,
         // and the reload below reads the filter back out of the store.
         const current = useAppStore.getState().settings;
-        await updateSettings({ ...current, discovery_languages: languages });
+        const next = nextDiscoveryLanguages(current.discovery_languages ?? [], languages);
+        await updateSettings({ ...current, discovery_languages: next });
         void useAppStore.getState().loadRecommendedStreams();
     };
 
@@ -380,14 +385,14 @@ const InterfaceSettings = () => {
 
                 <SettingsRow
                     title="Languages"
-                    description="Only show recommended streams in these languages. Empty means any language."
+                    description="Streams in Discover and Kick browse. Your device language until you pick some."
                     onReset={resetFor(['discovery_languages', []]) && (() => void applyDiscoveryLanguages([]))}
                     control={
                         <GlassMultiSelect
                             values={settings.discovery_languages ?? []}
                             onChange={(v) => void applyDiscoveryLanguages(v)}
-                            options={DISCOVERY_LANGUAGES}
-                            emptyLabel="Any language"
+                            options={DISCOVERY_LANGUAGE_OPTIONS}
+                            emptyLabel={DEVICE_LANGUAGE_LABEL}
                         />
                     }
                 />
