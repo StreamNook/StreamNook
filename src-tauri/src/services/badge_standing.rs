@@ -816,7 +816,32 @@ fn check_id_drift(collection: &Cached, catalogue: &[CatalogueBadge]) {
 /// The signed-in account's standing, answered from cache. A due refresh is
 /// spawned in the background and announced with `badge-standing-changed`; it
 /// also settles who is signed in when the account registry has not said.
+/// A forced read (Badges opened, or a pull to refresh) renews a global badge
+/// list older than six hours, in the background so opening Badges never waits
+/// on Twitch, then has the wall read again. The list is otherwise kept up to
+/// a week, which left new drop badges off the wall for days.
+fn refresh_stale_catalogue(app: &crate::rt::AppHandle) {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let stale = crate::commands::badges::global_badges_age_secs()
+            .await
+            .map_or(true, |age| age > 6 * 60 * 60);
+        if stale && crate::commands::badges::refresh_global_badges().await.is_ok() {
+            use tauri::Emitter;
+            let _ = app.emit("badge-standing-changed", ());
+        }
+        RUNNING.store(false, Ordering::Release);
+    });
+}
+
 pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStanding {
+    if force {
+        refresh_stale_catalogue(app);
+    }
     let now = now_ms();
     let primary = AccountStore::primary();
     let cached = cached_for(primary.as_ref().map(|a| a.user_id.as_str())).await;

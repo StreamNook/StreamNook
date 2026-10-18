@@ -217,6 +217,14 @@ fn note_row_view_badges(room_id: Option<&str>, badges: &HelixBadgesResponse) {
     );
 }
 
+/// Seconds since the global badge list was read from Twitch; None with none
+/// cached.
+pub async fn global_badges_age_secs() -> Option<u64> {
+    let cached = get_cached_item(CacheType::Badge, "global_badges").await.ok()??;
+    let data = serde_json::from_value::<CachedBadgesData>(cached.data).ok()?;
+    Some(get_current_timestamp().saturating_sub(data.cached_at))
+}
+
 /// Get cached global badges without fetching from API
 #[tauri::command]
 pub async fn get_cached_global_badges() -> Result<Option<HelixBadgesResponse>, String> {
