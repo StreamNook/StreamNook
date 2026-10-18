@@ -69,6 +69,10 @@ struct PlayerPanel: View {
                       detail: "Rides as close to live as the Twitch site on channels that support it. On by default.",
                       help: "Off falls back to the wider whole-segment path. If a stream stutters or refuses to play, turn this off first.")
         }
+
+        SettingsBlock(title: "Discover", detail: "What Discover and Kick browse show you.") {
+            LanguagesRow()
+        }
     }
 
     static let qualities = [
@@ -107,5 +111,112 @@ private struct TargetLatencyRow: View {
                        .padding(.top, 10)
                    },
                    nested: { EmptyView() })
+    }
+}
+
+/// Discover > Languages: which languages Discover and Kick browse show. Nothing picked is the
+/// device language, "any" alone is no filter, otherwise the picked codes; Rust reads the list on
+/// every browse (`browse_languages.rs`).
+private struct LanguagesRow: View {
+    @Environment(SettingsStore.self) private var store
+    @State private var picking = false
+
+    var body: some View {
+        let summary = DiscoveryLanguages.summary(store.strings(DiscoveryLanguages.path))
+        SettingRow(title: "Languages", detail: "Streams in Discover and Kick browse. Your device language until you pick some.",
+                   paths: [DiscoveryLanguages.path]) {
+            Button { picking = true } label: {
+                HStack(spacing: 4) {
+                    Text(summary).font(.sn(13, 500)).foregroundStyle(SN.textSecondary).lineLimit(1)
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(SN.textMuted)
+                }
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: 160, alignment: .trailing)
+            .accessibilityLabel("Languages")
+            .accessibilityValue(summary)
+        }
+        .sheet(isPresented: $picking) { LanguagesSheet() }
+    }
+}
+
+/// The language list: "Any language" first and on its own, then every language in the desktop's
+/// order. Picking a language drops "Any language"; picking none goes back to the device language.
+private struct LanguagesSheet: View {
+    @Environment(SettingsStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let picked = store.strings(DiscoveryLanguages.path)
+        NavigationStack {
+            List {
+                Section {
+                    Text(picked.isEmpty ? "Showing your device language. Pick languages to choose your own."
+                                        : "Pick none to go back to your device language.")
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+                        .listRowBackground(Color.clear)
+                }
+                Section {
+                    row("Any language", on: picked == [DiscoveryLanguages.any]) {
+                        [DiscoveryLanguages.any]
+                    }
+                    ForEach(DiscoveryLanguages.options, id: \.code) { option in
+                        row(option.name, on: picked.contains(option.code)) {
+                            let rest = picked.filter { $0 != DiscoveryLanguages.any }
+                            return rest.contains(option.code) ? rest.filter { $0 != option.code } : rest + [option.code]
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(SN.background)
+            .navigationTitle("Languages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func row(_ name: String, on: Bool, next: @escaping () -> [String]) -> some View {
+        Button {
+            let value = next()
+            Task { await store.set(DiscoveryLanguages.path, value) }
+        } label: {
+            HStack {
+                Text(name).font(.sn(14)).foregroundStyle(SN.textPrimary)
+                Spacer()
+                if on { Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(SN.accent) }
+            }
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(SN.backgroundSecondary)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// The Discover languages, in the desktop's order (src/utils/discoveryLanguages.ts).
+enum DiscoveryLanguages {
+    static let path = "discovery_languages"
+    static let any = "any"
+    static let options: [(code: String, name: String)] = [
+        ("en", "English"), ("es", "Español"), ("fr", "Français"), ("de", "Deutsch"), ("it", "Italiano"),
+        ("pt", "Português"), ("ru", "Русский"), ("ja", "日本語"), ("ko", "한국어"), ("zh", "中文"), ("zh-hk", "粵語"),
+        ("ar", "العربية"), ("tr", "Türkçe"), ("pl", "Polski"), ("nl", "Nederlands"), ("sv", "Svenska"), ("no", "Norsk"),
+        ("da", "Dansk"), ("fi", "Suomi"), ("cs", "Čeština"), ("sk", "Slovenčina"), ("hu", "Magyar"), ("ro", "Română"),
+        ("bg", "Български"), ("el", "Ελληνικά"), ("th", "ไทย"), ("vi", "Tiếng Việt"), ("id", "Bahasa Indonesia"),
+        ("ms", "Bahasa Melayu"), ("hi", "हिन्दी"), ("tl", "Filipino"), ("uk", "Українська"), ("ca", "Català"),
+        ("other", "Other"),
+    ]
+
+    /// "Device language", "Any language", or the first two picked names and how many more.
+    static func summary(_ picked: [String]) -> String {
+        if picked.isEmpty { return "Device language" }
+        if picked == [any] { return "Any language" }
+        let names = picked.map { code in options.first { $0.code == code }?.name ?? code }
+        return names.count <= 2 ? names.joined(separator: ", ") : "\(names.prefix(2).joined(separator: ", ")) +\(names.count - 2)"
     }
 }
