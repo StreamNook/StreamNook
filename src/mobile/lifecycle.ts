@@ -49,9 +49,9 @@ let lastNotifyKick = 0;
 // Android freezes a backgrounded process, Twitch then drops the connection for
 // a missed keepalive, and the reconnect that follows runs before the network is
 // back, which ends the connection for good. A brief switch away to read a
-// notification does none of that, and rebuilding costs a visible reload of
-// every open room, so short absences are left alone and the staleness watchdog
-// picks up the rare miss. Anything longer is worth rebuilding on sight rather
+// notification does none of that, and rebuilding costs a reconnect and a
+// history load for every open room, so short absences are left alone and the
+// staleness watchdog picks up the rare miss. Anything longer is worth rebuilding on sight rather
 // than making someone stare at a dead room for the two minutes the watchdog
 // needs to be sure.
 const CHAT_REBUILD_AFTER_HIDDEN_MS = 90_000;

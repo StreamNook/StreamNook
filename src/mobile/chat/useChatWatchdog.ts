@@ -6,16 +6,17 @@
 // handoff. Nothing would ever recover that on its own.
 //
 // The signal already exists and costs nothing to read. Rust sends a bare
-// heartbeat every thirty seconds and that stops the instant its IRC task dies,
-// so the connection store marks a room stale once no frames at all have arrived
-// for two minutes. That message is what this watches for.
+// heartbeat every thirty seconds while its IRC reads are alive and stops it once
+// they are not, so the connection store marks a room stale once neither a chat
+// frame nor a heartbeat has arrived for two minutes (`staleWarningDue`). That
+// message is what this watches for.
 //
 // Two things about it are worth knowing. It flaps, because the store resets its
 // own timer a minute after raising it, so the same dead connection raises and
 // clears the message repeatedly; the arming flag below means one quiet spell
-// produces one rebuild attempt. And it cannot fire early, because a channel
-// with no chatters still receives heartbeats, so silence really does mean the
-// connection rather than the room.
+// produces one rebuild attempt. And a quiet room never raises it, because the
+// heartbeat keeps arriving there, so silence really does mean the connection
+// rather than the room.
 import { useEffect, useRef } from 'react';
 import { useChannelChat } from '../../stores/chatConnectionStore';
 import { hardCycleChat } from './chatRecovery';
@@ -44,6 +45,6 @@ export function useChatWatchdog(channel: string | null | undefined): void {
 
     if (handledFor.current === channel) return;
     handledFor.current = channel;
-    void hardCycleChat('no frames for two minutes');
+    void hardCycleChat('no frames or heartbeats for two minutes');
   }, [channel, error]);
 }
