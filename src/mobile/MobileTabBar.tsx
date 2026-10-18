@@ -100,14 +100,9 @@ const YouTabIcon: React.FC<{ selected: boolean }> = ({ selected }) => {
         boxShadow: selected ? `inset 0 0 0 ${RING}px var(--color-accent)` : undefined,
       }}
     >
-      {/* A black disc under the picture, as the You card draws it (Brandon:
-          black behind a clear picture, not gray): a picture with transparent
-          parts (many 7TV pictures) otherwise floats as loose marks over the
-          glass. */}
-      <span
-        className="block overflow-hidden rounded-full"
-        style={{ width: diameter, height: diameter, background: '#000' }}
-      >
+      {/* No backing (Brandon: a transparent picture stays transparent in the
+          tab bar). The You card and Edit profile keep their black disc. */}
+      <span className="block overflow-hidden rounded-full" style={{ width: diameter, height: diameter }}>
         <img src={shown.url} alt="" draggable={false} className="h-full w-full object-cover" />
       </span>
     </span>
