@@ -1,4 +1,8 @@
 /**
+ * Stream languages for Discover and Kick browse (`discovery_languages`). Rust
+ * reads the setting (services/browse_languages.rs): empty follows the device
+ * language, `any` shows every language, anything else is the list picked.
+ *
  * Twitch broadcast languages selectable in the Discover feed filter, in Helix
  * code form ("fr", "zh-hk"). Labels are native names, matching Twitch's own
  * directory language picker. ASL is deliberately absent: streams tagged ASL
@@ -46,3 +50,28 @@ export const DISCOVERY_LANGUAGES: DiscoveryLanguage[] = [
   { value: 'ca', label: 'Català' },
   { value: 'other', label: 'Other' },
 ];
+
+/** The pick that turns the filter off. */
+export const ANY_LANGUAGE = 'any';
+
+/** Every choice the Languages row offers: "Any language" first. */
+export const DISCOVERY_LANGUAGE_OPTIONS: DiscoveryLanguage[] = [
+  { value: ANY_LANGUAGE, label: 'Any language' },
+  ...DISCOVERY_LANGUAGES,
+];
+
+/** The empty setting's label: it follows the device language. */
+export const DEVICE_LANGUAGE_LABEL = 'Device language';
+
+/**
+ * The value to save when the picks change from `prev` to `next`. "Any
+ * language" stands alone: picking it clears the languages, and picking a
+ * language while it is on drops it.
+ */
+export function nextDiscoveryLanguages(prev: string[], next: string[]): string[] {
+  const hadAny = prev.includes(ANY_LANGUAGE);
+  const hasAny = next.includes(ANY_LANGUAGE);
+  if (hasAny && !hadAny) return [ANY_LANGUAGE];
+  if (hasAny && next.length > 1) return next.filter((l) => l !== ANY_LANGUAGE);
+  return next;
+}
