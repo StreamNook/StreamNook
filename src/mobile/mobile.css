@@ -13,8 +13,8 @@
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
-  /* 64: the tabs carry labels under their icons. */
-  --sn-tabbar-h: 64px;
+  /* 56: icons only (five tabs left no room for labels), a 44 px pill inside. */
+  --sn-tabbar-h: 56px;
   --sn-safe-t: var(--sn-inset-t, env(safe-area-inset-top, 0px));
   --sn-safe-r: var(--sn-inset-r, env(safe-area-inset-right, 0px));
   --sn-safe-b: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));
@@ -107,6 +107,15 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-fade-bottom {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+}
+
+/* A sheet's content once it has scrolled under the handle (MobileSheet adds
+   it), and a list that scrolls up under a header or the status bar (the Chats
+   tab): the top 24px fade out, so nothing meets the edge with a hard line.
+   The iPhone's fitted sheets fade the same way. */
+.sn-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
 }
 
 /* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
@@ -236,14 +245,17 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* A popover that sits OVER SCROLLING CHAT (the drop bar, the pinned banner).
-   The house popover blurs 64px of whatever is behind it, and behind these two
-   is a chat that repaints on every message, so the blur was recomputed on
-   every frame for the whole watch. A firmer tint carries the legibility the
-   blur was providing: at 90% the chat's words still showed through the card,
-   so it is 97%, and solid at Glassiness 0. */
+/* A popover with no blur behind it (the drop bar, the pinned banner, the You
+   card's picture note). The house popover blurs 64px of whatever is behind
+   it, and behind the first two is a chat that repaints on every message, so
+   the blur was recomputed every frame. With no blur the tint is all there is,
+   and any tint short of solid leaves the text behind crisp (at 97% a white
+   line still showed as a ghost on the phone), so a static popover is fully
+   opaque: the glass contract's "never crisp". The page background it mixes
+   is opaque on a phone (phoneFloors), and the theme's popover light still
+   rides the image layers on top. */
 .sn-mobile .sn-popover--static {
-  --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
+  --sn-popover-tint: 100%;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

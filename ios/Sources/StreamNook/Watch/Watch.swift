@@ -353,11 +353,11 @@ final class Watch {
         let paused = status == .paused && player.currentItem != nil
         self.paused = paused
         guard stream != nil else {
-            UIApplication.shared.isIdleTimerDisabled = false
+            ScreenAwake.hold("player", false)
             return
         }
         nowPlaying.playing(!paused)
-        UIApplication.shared.isIdleTimerDisabled = !paused
+        ScreenAwake.hold("player", !paused)
         switch status {
         case .playing: reportState("playing")
         case .paused: reportState("paused")
@@ -454,7 +454,7 @@ final class Watch {
         guard let login = stream?.userLogin else { return }
         // A pause still waiting out its grace must not gate the next stream off.
         reportState("teardown")
-        UIApplication.shared.isIdleTimerDisabled = false
+        ScreenAwake.hold("player", false)
         // A brightness the landscape dial borrowed goes back with the stream.
         ScreenBrightness.restore()
         lastStart = nil

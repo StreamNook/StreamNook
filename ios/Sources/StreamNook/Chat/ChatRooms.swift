@@ -86,6 +86,7 @@ final class ChatRooms {
     func start() {
         guard !listening else { return }
         listening = true
+        load()
         let tabsEvents = core.events.stream("chat-tabs")
         let rebuilt = core.events.stream("chat-rebuilt")
         let channelState = core.events.stream("channel-state")
@@ -129,7 +130,34 @@ final class ChatRooms {
         change("chat_tabs_sync_stream", ["room": room])
     }
 
-    /// Opens a room beside the stream and puts it on screen.
+    /// The saved chats, as the core restored them for whoever is signed in (not joined yet).
+    func load() {
+        Task {
+            guard let view = try? await core.invoke("chat_tabs_get", args: [:], as: ChatTabsState.self) else { return }
+            mirror(view)
+        }
+    }
+
+    /// Joins every chat not joined yet: the Chats tab's first look.
+    func connect() {
+        change("chat_tabs_connect", [:])
+    }
+
+    /// The rooms on screen right now, for the mentions hub (mentions there are read as they land).
+    func setVisible(_ rooms: [String]) {
+        Task { _ = try? await core.invoke("chat_tabs_visible", args: ["rooms": rooms]) }
+    }
+
+    /// Keeps the stream's chat after the player closes, or lets it close with it.
+    func keep(_ channel: String, _ keep: Bool) {
+        Task {
+            guard let view = try? await core.invoke("chat_tabs_keep", args: ["channel": channel, "keep": keep],
+                                                    as: ChatTabsState.self) else { return }
+            mirror(view)
+        }
+    }
+
+    /// Opens a room as one of your chats and puts it on screen.
     func add(_ row: ChatRoomRow) {
         change("chat_tabs_add", ["room": Self.room(provider: row.provider, channel: row.userLogin, id: row.userID,
                                                    label: row.userName.isEmpty ? row.userLogin : row.userName,
@@ -178,8 +206,10 @@ final class ChatRooms {
     /// Shows the core's list unless a newer one is already on screen.
     private func mirror(_ view: ChatTabsState) {
         guard view.revision >= state.revision else { return }
-        state = ChatTabsState(tabs: view.tabs, activeChannel: view.activeChannel, mixedPlatforms: view.mixedPlatforms,
-                              revision: view.revision)
+        var shown = view
+        shown.acquire = []
+        shown.release = []
+        state = shown
         showActive()
     }
 

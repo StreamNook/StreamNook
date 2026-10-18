@@ -112,8 +112,7 @@ pub mod youtube_auth_service;
 pub mod favorite_categories;
 pub mod hidden_channels;
 pub mod favorite_live_service;
-// Reads the chat dock, which is desktop only.
-#[cfg(desktop)]
+// The live line for the desktop chat dock and the phone chats.
 pub mod chat_dock_live;
 pub mod live_announce;
 pub mod live_bookmark;
@@ -197,6 +196,7 @@ pub mod channel_rewards;
 pub mod channel_state;
 // The phone chat pane's open rooms (both phone shells).
 pub mod chat_tabs;
+pub mod chat_picker;
 // Rebuilds a dead Twitch chat connection with its rooms (the phones' reload and watchdog).
 pub mod chat_recovery;
 // A native shell's outage row and gap backfill for Twitch chat.

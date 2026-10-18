@@ -2,7 +2,7 @@ import Foundation
 
 /// The four tabs, in the bar's order. The raw value is what the start tab pref stores.
 public enum MobileTab: String, CaseIterable, Sendable, Hashable {
-    case following, browse, rewards, you
+    case following, browse, chats, rewards, you
 
     /// A stored start tab; anything unknown or missing opens Following.
     public static func stored(_ raw: String?) -> MobileTab {
@@ -13,6 +13,7 @@ public enum MobileTab: String, CaseIterable, Sendable, Hashable {
         switch self {
         case .following: "Following"
         case .browse: "Browse"
+        case .chats: "Chats"
         case .rewards: "Rewards"
         case .you: "You"
         }

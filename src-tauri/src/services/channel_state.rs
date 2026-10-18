@@ -495,6 +495,8 @@ async fn refresh_viewers(inner: &Inner) {
         crate::services::channel_rewards::note_stream_seen(&login, &start);
     }
     for (login, l) in changed {
+        #[cfg(mobile)]
+        crate::commands::chat_tabs::note_live(&login, l.viewer_count.is_some(), l.viewer_count);
         emit(
             &inner.app,
             ChannelUpdate::Viewers {

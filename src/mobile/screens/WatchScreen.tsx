@@ -20,13 +20,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
-import { usePinStore } from '../../stores/pinStore';
-import {
-  refreshChannelState,
-  unwatchChannel,
-  useChannelState,
-  watchChannel,
-} from '../../stores/channelStateStore';
+import { useRoomPins } from '../chat/useRoomPins';
+import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useWindowShape } from '../ui/useWindowShape';
 import {
   readWatchLayout,
@@ -49,7 +44,6 @@ import {
   useChatTabsVisible,
   useViewingStreamChat,
 } from '../chat/ChatTabStrip';
-import { useChatTabsStore } from '../chat/chatTabsStore';
 import { DropProgressBar } from '../watch/DropProgressBar';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -61,7 +55,7 @@ import {
   getScreenBrightness,
   isInPip,
   setImmersive,
-  setKeepScreenOn,
+  holdScreenOn,
   setMediaVolume,
   setPipEligible,
   setPipSourceRect,
@@ -75,20 +69,6 @@ import { hapticStep } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { isTwitchStream } from '../../utils/streamProvider';
 
-interface PinnedMessage {
-  id: string;
-  message_id: string;
-  message_text: string;
-  sender_id: string;
-  sender_name: string;
-  sender_color: string;
-  sender_badges: Array<{ set_id: string; version: string }>;
-}
-
-// One empty list, so a room with no pins keeps a stable identity for the
-// effects that read it.
-const NO_PINS: PinnedMessage[] = [];
-
 const MINI_W = 200;
 const MINI_H = Math.round((MINI_W * 9) / 16);
 const EDGE_GAP = 12;
@@ -96,8 +76,10 @@ const EDGE_GAP = 12;
 // the cards under it. Used by the clamp, the resting spot and the snap alike.
 const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar
-// (64 px tall with its labels).
-const BOTTOM_GAP = 112;
+// (56 px, icons only, riding 14 px above the gesture strip).
+const BOTTOM_GAP = 104;
+// On the Chats tab the composer sits on the bar too; the box rests above it.
+const CHATS_COMPOSER_GAP = 49;
 
 // Where the mini player is ALLOWED to be.
 //
@@ -126,6 +108,7 @@ function clampMini(
   vw: number,
   vh: number,
   ins: ResolvedInsets,
+  floor: number = BOTTOM_GAP,
 ): { x: number; y: number } {
   // Clear of the BACK strips at the sides, and of the status bar plus the home /
   // quick-switch strips top and bottom. An app cannot opt out of the home
@@ -133,7 +116,7 @@ function clampMini(
   const left = MINI_GUTTER + Math.max(ins.left, ins.gestureLeft);
   const right = MINI_GUTTER + Math.max(ins.right, ins.gestureRight);
   const top = EDGE_GAP + Math.max(ins.top, ins.gestureTop);
-  const bottom = Math.max(BOTTOM_GAP, ins.bottom + ins.gestureBottom + EDGE_GAP);
+  const bottom = Math.max(floor, ins.bottom + ins.gestureBottom + EDGE_GAP);
 
   // Math.max applied LAST, so that on a viewport too small to satisfy both
   // bounds the box lands at the top-left edge rather than off-screen. Getting
@@ -165,7 +148,6 @@ export const WatchScreen: React.FC = () => {
   const exitStream = useAppStore((s) => s.exitStream);
   const playerMode = useMobileNavStore((s) => s.playerMode);
   const setPlayerMode = useMobileNavStore((s) => s.setPlayerMode);
-  const refreshNonce = usePinStore((s) => s.refreshNonce);
   const shape = useWindowShape();
   const [landscapeChat, setLandscapeChat] = useState(false);
   // A large screen shows chat by default (beside or under the video), so its
@@ -177,6 +159,7 @@ export const WatchScreen: React.FC = () => {
   const [pinsOpen, setPinsOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const chatTabsVisible = useChatTabsVisible();
+  const chatTabsOpen = useChatTabsStore((s) => s.tabs.length > 0);
   const viewingStreamChat = useViewingStreamChat();
   // Hype train, drops, polls and predictions are Twitch contracts keyed by a
   // numeric user_id; a Kick id would name an unrelated Twitch channel.
@@ -448,9 +431,20 @@ export const WatchScreen: React.FC = () => {
   // getComputedStyle forces a style resolve, so the insets are read inside this
   // memo rather than every render: they can only have changed when the viewport
   // did, and the viewport is already a dependency of the clamp itself.
+  // Shown higher over the Chats tab while a chat is open there, so the box
+  // never covers its composer; the stored spot is kept for the other tabs.
+  const overChatsComposer = useMobileNavStore((s) => s.activeTab === 'chats') && chatTabsOpen;
   const miniClamped = useMemo(
-    () => clampMini(miniPos.x, miniPos.y, viewport.w, viewport.h, readInsets()),
-    [miniPos.x, miniPos.y, viewport.w, viewport.h],
+    () =>
+      clampMini(
+        miniPos.x,
+        miniPos.y,
+        viewport.w,
+        viewport.h,
+        readInsets(),
+        overChatsComposer ? BOTTOM_GAP + CHATS_COMPOSER_GAP : BOTTOM_GAP,
+      ),
+    [miniPos.x, miniPos.y, viewport.w, viewport.h, overChatsComposer],
   );
 
   // System PiP strip-down flag from MainActivity. Also mirrored onto <html> so
@@ -499,8 +493,8 @@ export const WatchScreen: React.FC = () => {
   const videoPaused = useLiveVideoPaused();
   const keepAwake = (playingHere && !videoPaused) || tvOwns;
   useEffect(() => {
-    setKeepScreenOn(keepAwake);
-    return () => setKeepScreenOn(false);
+    holdScreenOn('player', keepAwake);
+    return () => holdScreenOn('player', false);
   }, [keepAwake]);
 
   // Native playback affordances: PiP eligibility while playing, immersive bars
@@ -572,79 +566,8 @@ export const WatchScreen: React.FC = () => {
     if (channelId) setPlayerMode('full');
   }, [channelId, setPlayerMode]);
 
-  // Pinned messages come from Rust's channel-state service, the same source as
-  // the desktop chat header and the iPhone: it polls each watched room's pins
-  // and pushes `channel-state` only when they change, and its pin and unpin
-  // commands keep re-reading until Twitch reflects the action.
-  //
-  // Every open Twitch room is watched, not just the one on screen, so switching
-  // tabs paints that room's pin at once instead of after a fetch. The watches
-  // are diffed against the tab list rather than torn down and rebuilt, because
-  // dropping a room's last watch drops its state and the banner would blink on
-  // every tab added. Rust refcounts watches, so the stream's room being held by
-  // the player too is fine.
-  const twitchRooms = useChatTabsStore((s) =>
-    s.tabs
-      .filter((t) => t.provider === 'twitch' && t.channelId)
-      .map((t) => `${t.login.toLowerCase()} ${t.channelId}`)
-      .join('\n'),
-  );
-  const roomWatches = useRef(new Map<string, string>());
-  useEffect(() => {
-    const held = roomWatches.current;
-    const want = new Map<string, string>();
-    if (watching && twitchRooms) {
-      for (const row of twitchRooms.split('\n')) {
-        const [login, id] = row.split(' ');
-        want.set(login, id);
-      }
-    }
-    for (const login of [...held.keys()]) {
-      if (want.has(login)) continue;
-      held.delete(login);
-      void unwatchChannel(login);
-    }
-    for (const [login, id] of want) {
-      if (held.has(login)) continue;
-      held.set(login, id);
-      void watchChannel(login, id);
-    }
-  }, [watching, twitchRooms]);
-  useEffect(() => {
-    const held = roomWatches.current;
-    return () => {
-      for (const login of held.keys()) void unwatchChannel(login);
-      held.clear();
-    };
-  }, []);
-
-  // Keyed to the CHAT on screen, not to the stream. A pinned message is a
-  // property of the room you are reading, and the state is looked up by that
-  // room's own login, so one channel's pin can never sit above another's
-  // messages. Kick rooms have no Twitch id and show none.
-  const pinLogin = useChatTabsStore((s) => {
-    const t = s.tabs.find((tab) => tab.channel === s.activeChannel);
-    return t?.provider === 'twitch' && t.channelId ? t.login.toLowerCase() : null;
-  });
-  const pinState = useChannelState(pinLogin);
-  const pinned = useMemo(
-    () => (pinState?.pinned as PinnedMessage[] | undefined) ?? NO_PINS,
-    [pinState?.pinned],
-  );
-  // The chat rows read this to flip a Pin control into Unpin.
-  useEffect(() => {
-    usePinStore.getState().setPinnedIds(pinned.map((m) => m.message_id).filter(Boolean));
-  }, [pinned]);
-  // A pin or unpin from this phone asks for the room's pins at once. Rust's pin
-  // commands already settle on their own; this covers anything that bumps the
-  // nonce without going through them. Compared against the last nonce seen so
-  // switching rooms does not refetch.
-  const pinNonceSeen = useRef(refreshNonce);
-  useEffect(() => {
-    if (refreshNonce === pinNonceSeen.current) return;
-    pinNonceSeen.current = refreshNonce;
-    if (pinLogin) void refreshChannelState(pinLogin, 'pinned');
-  }, [refreshNonce, pinLogin]);
+  // Pinned messages for the room on screen (shared with the Chats screen).
+  const pinned = useRoomPins(watching);
 
   // ONE gesture on the band, serving both drags, bound UNCONDITIONALLY.
   //

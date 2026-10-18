@@ -1,5 +1,6 @@
 //! Live line (live or not, category, viewers, title) for the chat dock's
-//! chats on platforms other than Twitch.
+//! chats on platforms other than Twitch, and for the phones' joined chats on
+//! those platforms (a tab's live dot and the Chats screen's play pill).
 //!
 //! Twitch docked chats ride `channel_state`'s one batched viewer poll. Kick,
 //! YouTube and TikTok have nothing equivalent for an arbitrary channel, so
@@ -67,12 +68,20 @@ pub fn wake() {
     WAKE.notify_one();
 }
 
-/// Docked chats per non-Twitch platform, as `(provider, logins)`.
+/// Docked chats (desktop) and joined phone chats per non-Twitch platform, as
+/// `(provider, logins)`.
 fn docked_by_provider() -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    for c in crate::commands::chat_dock::get_chat_dock().chats {
-        if c.provider != "twitch" {
-            out.entry(c.provider).or_default().push(c.login);
+    #[cfg(desktop)]
+    let chats = crate::commands::chat_dock::get_chat_dock().chats.into_iter().map(|c| (c.provider, c.login));
+    #[cfg(mobile)]
+    let chats = crate::services::chat_tabs::joined().into_iter().map(|c| (c.provider, c.login));
+    for (provider, login) in chats {
+        if provider != "twitch" {
+            let logins = out.entry(provider).or_default();
+            if !logins.contains(&login) {
+                logins.push(login);
+            }
         }
     }
     out
@@ -133,6 +142,10 @@ async fn check(app: &AppHandle) {
         match src.live_check(logins).await {
             Ok(found) => {
                 let rows = rows_for(provider, logins, &found);
+                #[cfg(mobile)]
+                for (k, row) in &rows {
+                    crate::commands::chat_tabs::note_live(k, row.live, row.viewer_count.map(u64::from));
+                }
                 if let Ok(mut s) = STATE.lock() {
                     s.checked.insert(provider.clone(), now);
                     for (k, row) in rows {

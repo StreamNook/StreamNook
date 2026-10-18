@@ -904,6 +904,25 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsSection>
       )}
 
+      {/* The phone's Chats tab: your chats with no stream playing. */}
+      {IS_MOBILE && (
+        <SettingsSection label="Chats Tab" description="Reading your chats with no stream playing.">
+          <SettingsRow
+            title="Keep screen on"
+            onReset={resetFor(['chats_keep_screen_on', true])}
+            description="The screen stays on while the Chats tab is open, until 30 minutes pass without a touch."
+            control={
+              <Toggle
+                enabled={settings.chats_keep_screen_on ?? true}
+                onChange={() =>
+                  updateSettings({ ...settings, chats_keep_screen_on: !(settings.chats_keep_screen_on ?? true) })
+                }
+              />
+            }
+          />
+        </SettingsSection>
+      )}
+
       <SettingsSection
         id="settings-section-combined-chat"
         label="Combined Chat"

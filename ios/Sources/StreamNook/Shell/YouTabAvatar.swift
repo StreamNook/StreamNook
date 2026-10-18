@@ -81,11 +81,8 @@ final class YouTabAvatar {
             cg.saveGState()
             cg.addEllipse(in: circle)
             cg.clip()
-            // A black disc under the picture, as the You card draws it (Brandon: black behind a
-            // clear picture, not gray): a picture with transparent parts (many 7TV pictures)
-            // otherwise floats as loose marks in the bar.
-            cg.setFillColor(UIColor.black.cgColor)
-            cg.fill(circle)
+            // No backing (Brandon: a transparent picture stays transparent in the tab bar). The
+            // You card and Edit profile keep their black disc.
             let w = CGFloat(image.width), h = CGFloat(image.height)
             let fill = max(diameter / w, diameter / h)
             let box = CGRect(x: circle.midX - w * fill / 2, y: circle.midY - h * fill / 2, width: w * fill, height: h * fill)

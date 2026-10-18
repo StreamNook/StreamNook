@@ -10,6 +10,7 @@ struct ChatSettingsPanel: View {
     var body: some View {
         landscape
         pollsAndPredictions
+        chatsTab
         events
         layout
         names
@@ -73,6 +74,15 @@ struct ChatSettingsPanel: View {
                                  fallback: "prediction-first")
                 }
             }
+        }
+    }
+
+    // MARK: Chats tab
+
+    private var chatsTab: some View {
+        SettingsBlock(title: "Chats Tab", detail: "Reading your chats with no stream playing.") {
+            ToggleRow(title: "Keep screen on", path: "chats_keep_screen_on", fallback: true,
+                      detail: "The screen stays on while the Chats tab is open, until 30 minutes pass without a touch.")
         }
     }
 

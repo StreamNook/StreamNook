@@ -148,6 +148,26 @@ struct ChatMenuSheet: View {
                             }
                         }
                     }
+                    // The stream's own chat closes with the player unless you keep it.
+                    if let rooms = session.rooms, let tab = rooms.tabs.first(where: { $0.channel == session.channel }),
+                       tab.pinnedToStream {
+                        Button {
+                            rooms.keep(tab.channel, !tab.kept)
+                        } label: {
+                            HStack {
+                                Label {
+                                    Text("Keep this chat")
+                                } icon: {
+                                    Image(systemName: tab.kept ? "bookmark.fill" : "bookmark")
+                                        .foregroundStyle(tab.kept ? SN.accent : SN.textSecondary)
+                                }
+                                Spacer()
+                                Text(tab.kept ? "On" : "Off")
+                                    .font(.sn(12.5))
+                                    .foregroundStyle(SN.textSecondary)
+                            }
+                        }
+                    }
                     if let tab = session.rooms?.tabs.first(where: { $0.channel == session.channel }), !tab.pinnedToStream {
                         Button(role: .destructive) {
                             dismiss()
