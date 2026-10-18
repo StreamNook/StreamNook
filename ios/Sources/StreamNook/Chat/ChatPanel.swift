@@ -157,10 +157,22 @@ struct ChatListHost: UIViewRepresentable {
                     list?.pauseForJump()
                     onToast("Original message is no longer in chat history")
                 }
+            case .held(let messageID, let allow):
+                // Twitch's answer folds the row (the core's AUTOMOD_HELD update); only a refusal
+                // needs words here.
+                Task { @MainActor in
+                    do {
+                        try await session.core.resolveHeld(messageID: messageID, allow: allow)
+                    } catch {
+                        onToast(allow ? "Could not allow that message: \(error)" : "Could not deny that message: \(error)")
+                    }
+                }
             }
         }
         list.fanContext = { layout in
-            guard let message = session.pipeline.message(layout.id), !message.isSystem else { return nil }
+            // A held message has its own Allow and Deny; there is nothing to reply to yet.
+            guard let message = session.pipeline.message(layout.id), !message.isSystem,
+                  !layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")) else { return nil }
             let twitch = message.provider == "twitch"
             var buckets: [FanBucket] = []
             if !readOnly { buckets.append(.reply) }

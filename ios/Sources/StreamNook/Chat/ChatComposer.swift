@@ -56,6 +56,9 @@ private struct ComposerBar: View {
             if model.cheer.shown != nil {
                 CheerBar(model: model)
             }
+            if let warning = model.warning {
+                warningBox(warning)
+            }
             inputRow(slowWait: model.slowWait)
         }
         // The home indicator's inset plus 8.
@@ -162,6 +165,42 @@ private struct ComposerBar: View {
         .padding(.leading, 14)
         .padding(.trailing, 16)
         .padding(.top, 6)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// A moderator's warning: what they said, and Acknowledge, which is the one way to chat
+    /// again. It sits where the room's words already live and cannot scroll away.
+    private func warningBox(_ warning: ChatWarning) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(warning.title, systemImage: "exclamationmark.bubble.fill")
+                .font(.sn(14, 600))
+                .foregroundStyle(Color(ChatTheme.textPrimary))
+                .labelStyle(WarningLabelStyle())
+            Text(warning.detail)
+                .font(.sn(13))
+                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task { await model.acknowledge() }
+            } label: {
+                ZStack {
+                    Text(warning.action).opacity(model.acknowledging ? 0 : 1)
+                    if model.acknowledging { ProgressView().tint(Color(ChatTheme.background)) }
+                }
+                .font(.sn(15, 600))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .foregroundStyle(Color(ChatTheme.background))
+                .background(Color(ChatTheme.info), in: .rect(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.acknowledging)
+            .padding(.top, 6)
+        }
+        .padding(12)
+        .background(Color(ChatTheme.info).opacity(0.08), in: .rect(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(ChatTheme.info).opacity(0.25)))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
         .accessibilityElement(children: .contain)
     }
 
@@ -332,6 +371,16 @@ private struct ComposerBar: View {
             .frame(width: 36, height: 36)
         }
         .accessibilityLabel(model.panel == .emotes ? "Close emotes" : "Emotes and emoji")
+    }
+}
+
+/// The warning's title: its symbol in the info ink, centered on the title's line.
+private struct WarningLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            configuration.icon.foregroundStyle(Color(ChatTheme.info))
+            configuration.title
+        }
     }
 }
 
