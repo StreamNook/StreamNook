@@ -181,6 +181,7 @@ export const KickBrowseBody: React.FC<{
                 name={c.name}
                 art={c.thumbnail}
                 viewers={c.viewer_count}
+                viewersText={c.viewers_line}
                 twoLineName={!!trimmed}
                 onPress={() => onPickCategory(c)}
               />

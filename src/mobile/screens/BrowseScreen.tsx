@@ -397,6 +397,7 @@ export const BrowseScreen: React.FC = () => {
                       name={c.name}
                       boxArt={c.box_art_url}
                       viewers={c.viewer_count}
+                      viewersText={c.viewers_line}
                       twoLineName={!!categoryResults}
                       onPress={() => openBrowseCategory(c)}
                     />
