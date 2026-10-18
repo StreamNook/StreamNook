@@ -74,6 +74,26 @@ pub async fn select_all(table: &str, query: &str) -> Result<Vec<Value>, String> 
     Ok(rows)
 }
 
+/// A database function the anon key may call (the `security definer` ones that
+/// check their own arguments), answering what it returns.
+pub async fn rpc(name: &str, args: Value) -> Result<Value, String> {
+    let (url, key) = creds().ok_or_else(|| "StreamNook backend not configured".to_string())?;
+    let res = crate::services::http::client()
+        .post(format!("{url}/rest/v1/rpc/{name}"))
+        .header("apikey", key)
+        .header("Authorization", format!("Bearer {key}"))
+        .json(&args)
+        .send()
+        .await
+        .map_err(|e| format!("{name}: {e}"))?;
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("{name}: {status} {}", body.chars().take(200).collect::<String>()));
+    }
+    res.json::<Value>().await.map_err(|e| format!("{name}: {e}"))
+}
+
 /// The legacy direct write: an upsert under the anon key. Used only while the
 /// server path for a write is switched off (`client_config.write_via_api`).
 pub async fn upsert(table: &str, on_conflict: &str, row: Value) -> Result<(), String> {
