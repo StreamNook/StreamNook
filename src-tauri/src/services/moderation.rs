@@ -97,6 +97,10 @@ pub struct ModRequest {
     /// With no reason given, use the first saved ban reason.
     #[serde(default)]
     pub use_saved_reason: bool,
+    /// The words after the name in a typed `/timeout` ("10m spam", "spam").
+    /// With a Timeout action they set its length and reason (`typed_timeout`).
+    #[serde(default)]
+    pub typed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -368,9 +372,34 @@ fn youtube_slug(req: &ModRequest) -> Result<String> {
     Ok(raw.strip_prefix("youtube:").unwrap_or(raw).to_string())
 }
 
+/// The words after the name in a typed `/timeout` as the seconds and the
+/// reason, read the same on every app: a leading length (plain seconds, or
+/// 30s, 10m, 1h30m, 2d, 1w) sets the time; without one it is Twitch's ten
+/// minutes and every word is the reason.
+pub fn typed_timeout(words: &str) -> (u32, Option<String>) {
+    let words = words.trim();
+    let (first, rest) = words.split_once(char::is_whitespace).unwrap_or((words, ""));
+    let (seconds, reason) = match crate::services::slash_dispatch::parse_delay(first) {
+        Some(ms) => ((ms / 1000).max(1), rest.trim()),
+        None => (600, words),
+    };
+    (u32::try_from(seconds).unwrap_or(u32::MAX), Some(reason.to_string()).filter(|r| !r.is_empty()))
+}
+
+/// Folds a typed `/timeout` tail into the request's length and reason. A
+/// reason the page gave on its own still wins.
+fn settle_typed(req: &mut ModRequest) {
+    if let (ModAction::Timeout { seconds }, Some(words)) = (&mut req.action, req.typed.take()) {
+        let (typed_seconds, typed_reason) = typed_timeout(&words);
+        *seconds = typed_seconds;
+        req.reason = req.reason.take().or(typed_reason);
+    }
+}
+
 /// Run one moderation action on the right platform. Errors carry the
 /// platform's own reason ("Twitch refused the ban: ...").
-pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
+pub async fn moderate(mut req: ModRequest) -> Result<ModOutcome> {
+    settle_typed(&mut req);
     let platform = Platform::from_provider(req.provider.as_deref());
     let reason = req
         .reason
@@ -582,5 +611,29 @@ mod tests {
         let unban: ModRequest =
             serde_json::from_value(serde_json::json!({ "action": { "kind": "unban" } })).unwrap();
         assert!(matches!(unban.action, ModAction::Unban { timeout: false }));
+    }
+
+    #[test]
+    fn a_typed_timeout_reads_the_same_on_every_app() {
+        assert_eq!(typed_timeout("5m spam links"), (300, Some("spam links".to_string())));
+        assert_eq!(typed_timeout("1h30m"), (5400, None));
+        assert_eq!(typed_timeout("45 caps"), (45, Some("caps".to_string())));
+        assert_eq!(typed_timeout("spam links"), (600, Some("spam links".to_string())));
+        assert_eq!(typed_timeout("10x"), (600, Some("10x".to_string())));
+        assert_eq!(typed_timeout(""), (600, None));
+    }
+
+    #[test]
+    fn a_typed_tail_sets_the_requests_length_and_reason() {
+        let mut req: ModRequest = serde_json::from_value(serde_json::json!({
+            "provider": "kick",
+            "action": { "kind": "timeout", "seconds": 600 },
+            "typed": "2h being rude"
+        }))
+        .unwrap();
+        settle_typed(&mut req);
+        assert!(matches!(req.action, ModAction::Timeout { seconds: 7200 }));
+        assert_eq!(req.reason.as_deref(), Some("being rude"));
+        assert!(req.typed.is_none());
     }
 }
