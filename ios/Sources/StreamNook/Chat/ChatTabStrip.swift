@@ -2,8 +2,9 @@ import SNKit
 import SwiftUI
 
 /// The open rooms over the chat, shown from two rooms up under the player so single-room chat
-/// keeps every point of height, and always on the Chats tab, where its controls follow the rooms. A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill.
-/// The capsule hugs its rooms. When they outgrow the bar the row compresses in place and never
+/// keeps every point of height, and always on the Chats tab, where its controls sit at the right.
+/// A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill. The capsule
+/// hugs its rooms and sits centered in the bar. When they outgrow the bar the row compresses in place and never
 /// scrolls, clips or wraps: rooms behind the one on screen fold to their faces one at a time, the
 /// longest name first, until the row fits; with every other room folded, the name on screen
 /// truncates. It reads only the tabs, never the rows, so arriving messages never rebuild it.
@@ -15,7 +16,10 @@ struct ChatTabStrip: View {
     static let height: CGFloat = 45
 
     var body: some View {
+        // The rooms sit centered between two equal sides and stay centered as rooms are added;
+        // the controls live in the right side, so they never pull the center off.
         HStack(spacing: 6) {
+            Color.clear.frame(maxWidth: .infinity, maxHeight: 1).accessibilityHidden(true)
             ViewThatFits(in: .horizontal) {
                 ForEach(0..<max(1, rooms.tabs.count), id: \.self) { folds in
                     row(folding: folds)
@@ -23,8 +27,12 @@ struct ChatTabStrip: View {
             }
             .padding(4)
             .snGlass(Capsule())
-            Spacer(minLength: 0)
-            if let trailing { trailing }
+            .layoutPriority(1)
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                if let trailing { trailing.fixedSize() }
+            }
+            .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 10)
         .frame(height: Self.height)

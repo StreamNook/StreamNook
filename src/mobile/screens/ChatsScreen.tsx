@@ -100,27 +100,34 @@ export const ChatsScreen: React.FC<{ active?: boolean }> = ({ active = true }) =
   const openAdd = useCallback(() => setAddOpen(true), []);
   const closeAdd = useCallback(() => setAddOpen(false), []);
 
+  // The strip's own parts: the same 40 px glass as the rooms capsule, quieter
+  // than the room it serves (secondary text, no red; the room's face already
+  // says live). Each button keeps a 44 px touch area around its 40 px shape,
+  // so the row shares one top and bottom line.
   const trailing = (
     <>
       {canWatch && (
         <button
           onClick={watch}
-          className="sn-touch shrink-0 h-8 flex items-center gap-1.5 pl-2.5 pr-3 rounded-full bg-live/15 text-textPrimary active:opacity-70"
+          className="shrink-0 h-11 flex items-center active:opacity-70"
           aria-label={`Watch ${active?.label ?? ''}`}
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-live" />
-          {active?.viewerCount != null && (
-            <span className="text-[12px] font-semibold tabular-nums">{formatViewerCount(active.viewerCount)}</span>
-          )}
-          <Play size={12} weight="fill" />
+          <span className="h-10 flex items-center gap-1.5 px-3 rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+            <Play size={12} weight="fill" className="translate-x-[0.5px]" />
+            {active?.viewerCount != null && (
+              <span className="text-[12px] font-medium tabular-nums">{formatViewerCount(active.viewerCount)}</span>
+            )}
+          </span>
         </button>
       )}
       <button
         onClick={openAdd}
-        className="sn-touch shrink-0 w-8 h-8 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary active:opacity-70"
+        className="shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70"
         aria-label="Add a chat"
       >
-        <Plus size={15} weight="bold" />
+        <span className="w-10 h-10 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+          <Plus size={15} weight="bold" />
+        </span>
       </button>
     </>
   );

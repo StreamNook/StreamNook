@@ -1,7 +1,7 @@
 // Chat room tabs. Under the player the strip hides while only the watched
 // stream's chat is open, so the single-chat case keeps every pixel of height it
 // has now; the Chats screen always shows it, with its controls at the end.
-import React from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Broadcast } from 'phosphor-react';
 import { useChatTabsStore } from './chatTabsStore';
 import { ProviderMark } from '../../components/ProviderLogo';
@@ -65,22 +65,63 @@ const ChatTabStripImpl: React.FC<{
   const setActive = useChatTabsStore((s) => s.setActive);
   const removeTab = useChatTabsStore((s) => s.removeTab);
 
+  // The rooms sit centered in the strip and stay centered as rooms are added.
+  // Once they outgrow it, the row scrolls from its leading edge, fades on the
+  // side that has more, and keeps the room on screen in view.
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
+  const readEdges = useCallback(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const start = el.scrollLeft > 1;
+    const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, []);
+  useLayoutEffect(readEdges, [readEdges, tabs, activeChannel]);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(readEdges);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [readEdges]);
+  useEffect(() => {
+    const el = rowRef.current?.querySelector<HTMLElement>('[data-active-room="true"]');
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [activeChannel]);
+
   if (tabs.length < (always ? 1 : 2)) return null;
+
+  const fade = 16;
+  const mask =
+    edges.start || edges.end
+      ? `linear-gradient(to right, ${edges.start ? 'transparent' : '#000'}, #000 ${fade}px, #000 calc(100% - ${fade}px), ${edges.end ? 'transparent' : '#000'})`
+      : undefined;
 
   return (
     <div
       className="shrink-0 flex items-center gap-1.5 px-2 border-b border-borderSubtle"
       style={{ height: CHAT_TAB_STRIP_H }}
     >
+      {/* Two equal sides hold the rooms in the middle; the controls live in
+          the right side, so they never pull the center off. The right side
+          keeps the controls' own width when space runs out. */}
+      <div className="flex-1 basis-0 min-w-0" aria-hidden />
       {/* The row of rooms wears the glaze and the open room is the darker pill
           inside it. The rooms scroll inside the glass, so its rim stays put. */}
       <div className="min-w-0 max-w-full chrome-glaze chrome-glaze--flat">
-        <div className="flex items-center gap-1 p-1 overflow-x-auto rounded-full [scrollbar-width:none]">
+        <div
+          ref={rowRef}
+          onScroll={readEdges}
+          className="flex items-center gap-1 p-1 overflow-x-auto rounded-full [scrollbar-width:none]"
+          style={{ WebkitMaskImage: mask, maskImage: mask }}
+        >
           {tabs.map((tab) => {
             const active = tab.channel === activeChannel;
             return (
               <div
                 key={tab.channel}
+                data-active-room={active ? 'true' : undefined}
                 className={`shrink-0 flex items-center rounded-full pl-2.5 pr-1 h-8 ${
                   active ? 'glaze-selected' : ''
                 }`}
@@ -152,7 +193,7 @@ const ChatTabStripImpl: React.FC<{
           })}
         </div>
       </div>
-      {trailing && <div className="ml-auto shrink-0 flex items-center gap-1.5">{trailing}</div>}
+      <div className="flex-1 basis-0 min-w-max flex items-center justify-end gap-1.5">{trailing}</div>
     </div>
   );
 };
