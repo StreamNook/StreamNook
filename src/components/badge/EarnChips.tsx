@@ -31,10 +31,19 @@ const StepIcon = ({ step, art }: { step: EarnStep; art?: string }) => {
  *  than a chip per step keeps several steps compact enough to sit beside a
  *  title and reads as one requirement. The classification is Rust's
  *  (badge_earn.rs), and so is the Twitch art (`icons`, by step kind). A random
- *  draw is shown separately with `RandomDrawNote`. */
-export const EarnChips = ({ earn, icons }: { earn: EarnPath; icons?: Record<string, string> }) => {
+ *  draw is shown separately with `RandomDrawNote`. `iconsOnly` drops the words
+ *  when the pill's place is too narrow for them. */
+export const EarnChips = ({
+  earn,
+  icons,
+  iconsOnly: forceIcons = false,
+}: {
+  earn: EarnPath;
+  icons?: Record<string, string>;
+  iconsOnly?: boolean;
+}) => {
   if (earn.steps.length === 0) return null;
-  const iconsOnly = earn.steps.length >= ICONS_ONLY_FROM;
+  const iconsOnly = forceIcons || earn.steps.length >= ICONS_ONLY_FROM;
   return (
     <span className="glaze-inset glaze-chip bg-white/[0.10] inline-flex items-center gap-1.5 h-[22px] px-2 shrink-0 text-[11px] font-medium leading-none text-textPrimary whitespace-nowrap">
       {earn.steps.map((step, i) => (

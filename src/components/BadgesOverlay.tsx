@@ -34,6 +34,7 @@ import streamNookLogo from '../assets/streamnook-logo-128.webp';
 import chatterinoLogo from '../assets/chatterino-logo.svg';
 import betterttvLogo from '../assets/betterttv-logo.png';
 import { ChatClientsGallery } from './ChatClientsGallery';
+import { BreakableName } from './badge/BreakableName';
 import type { ChatClientBadge } from './ChatClientsGallery';
 
 import { Logger } from '../utils/logger';
@@ -1702,10 +1703,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       {!hasCollected && isComingSoon && (
                         <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
                       )}
-                      <span className={`text-xs text-center line-clamp-2 transition-all duration-300 font-medium ${
+                      <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-all duration-300 font-medium ${
                         hasCollected ? 'text-[#f0d78c] drop-shadow-[0_0_8px_rgba(212,168,75,0.3)]' : 'text-textSecondary group-hover:text-textPrimary'
                       }`}>
-                        {badge.title}
+                        <BreakableName name={badge.title} />
                       </span>
                     </button>
                     </Tooltip>
@@ -1817,10 +1818,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                             loading="lazy"
                           />
                         </div>
-                        <span className={`text-xs text-center line-clamp-2 transition-colors font-medium ${
+                        <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-colors font-medium ${
                           isOwned ? 'text-[#29b6f6]' : 'text-textSecondary group-hover:text-textPrimary'
                         }`}>
-                          {badge.name}
+                          <BreakableName name={badge.name} />
                         </span>
 
                       </button>
@@ -2001,10 +2002,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                               {paint.name}
                             </span>
                           </div>
-                          <span className={`text-xs text-center line-clamp-2 transition-colors font-medium ${
+                          <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-colors font-medium ${
                             isOwned ? 'text-[#29b6f6]' : 'text-textSecondary group-hover:text-textPrimary'
                           }`}>
-                            {paint.name}
+                            <BreakableName name={paint.name} />
                           </span>
                         </button>
                         </Tooltip>
@@ -2116,10 +2117,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                                 <Check size={13} className="text-[#f0d78c] drop-shadow-[0_0_3px_rgba(212,168,75,0.8)] z-10" strokeWidth={2.5} />
                               </div>
                             )}
-                            <span className={`text-xs text-center line-clamp-2 transition-all duration-300 font-medium ${
+                            <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-all duration-300 font-medium ${
                               owned ? 'text-[#f0d78c] drop-shadow-[0_0_8px_rgba(212,168,75,0.3)]' : 'text-textSecondary group-hover:text-textPrimary'
                             }`}>
-                              {cosmetic.name}
+                              <BreakableName name={cosmetic.name} />
                             </span>
                           </button>
                         </Tooltip>
@@ -2267,10 +2268,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                               loading="lazy"
                             />
                           </div>
-                          <span className={`text-xs text-center line-clamp-2 transition-colors font-medium ${
+                          <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-colors font-medium ${
                             badge.owned ? 'text-[#e84b4b]' : 'text-textSecondary group-hover:text-textPrimary'
                           }`}>
-                            {badge.title}
+                            <BreakableName name={badge.title} />
                           </span>
                         </button>
                         </Tooltip>
