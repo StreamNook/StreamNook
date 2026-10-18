@@ -63,6 +63,10 @@ struct MainShell: View {
         .sheet(item: $model.clip) { link in
             ClipSheet(url: link.url, model: model)
         }
+        // Mentions from the chat menu, over the watch layer.
+        .sheet(isPresented: Binding(get: { model.chat.mentionsOpen }, set: { model.chat.mentionsOpen = $0 })) {
+            MentionsSheet(model: model)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
@@ -99,6 +103,8 @@ struct MainShell: View {
             SettingsPage(model: model, section: section)
         case .cosmetics:
             CosmeticsScreen(model: model)
+        case .mentions:
+            MentionsScreen(model: model)
         }
     }
 }

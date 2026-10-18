@@ -51,10 +51,12 @@ struct ChatPanel: View {
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
                 // Under the tab strip, a short fade instead of a hard cut too.
                 .mask {
-                    if let rooms, !overlay, !rooms.activePins.isEmpty || rooms.showsStrip {
+                    if let rooms, !overlay,
+                       !rooms.activePins.isEmpty || rooms.showsStrip || rooms.mentionCards[session.channel] != nil {
+                        let floating = !rooms.activePins.isEmpty || rooms.mentionCards[session.channel] != nil
                         VStack(spacing: 0) {
                             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: rooms.activePins.isEmpty ? 12 : 30)
+                                .frame(height: floating ? 30 : 12)
                             Color.black
                         }
                     } else {
@@ -69,6 +71,12 @@ struct ChatPanel: View {
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
                                 .padding(.horizontal, 10)
                                 .padding(.top, 6)
+                        }
+                        if let rooms, !overlay, let card = rooms.mentionCards[session.channel] {
+                            MentionContextCard(entry: card) { rooms.dismissMentionCard(session.channel) }
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                         if let toast {
                             Text(toast)

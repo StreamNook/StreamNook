@@ -113,6 +113,23 @@ struct ChatMenuSheet: View {
                         } label: {
                             Label("Add a chat", systemImage: "plus.bubble")
                         }
+                        if let mentions = rooms.mentions {
+                            Button {
+                                dismiss()
+                                // After this sheet has gone, so the next one can come up.
+                                Task {
+                                    try? await Task.sleep(for: .milliseconds(350))
+                                    rooms.mentionsOpen = true
+                                }
+                            } label: {
+                                HStack {
+                                    Label("Mentions", systemImage: "at")
+                                    Spacer()
+                                    UnreadCount(count: mentions.unreadTotal)
+                                }
+                            }
+                            .accessibilityValue(mentions.unreadTotal > 0 ? "\(mentions.unreadTotal) unread" : "")
+                        }
                     }
                     Button {
                         dismiss()

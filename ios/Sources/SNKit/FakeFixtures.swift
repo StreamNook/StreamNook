@@ -13,6 +13,8 @@ public final class FakeFixtures: Sendable {
     private let cosmetics = FakeCosmetics()
     /// Drops, the badge wall and channel points: canned, and every write only recorded.
     public let rewards = FakeRewards()
+    /// The mentions inbox: canned rows, every change announced.
+    public let mentions = FakeMentions()
 
     public init(signedIn: Bool) {
         state = Mutex(State(signedIn: signedIn, settings: [
@@ -88,6 +90,7 @@ public final class FakeFixtures: Sendable {
             return try FakeCore.json(found.map(FakeCore.object))
         default:
             if let answer = try rewards.answer(cmd, args) { return answer }
+            if let answer = try mentions.answer(cmd, args) { return answer }
             return try cosmetics.answer(cmd, args, userID: Self.user.id)
         }
     }

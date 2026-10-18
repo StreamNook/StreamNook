@@ -24,6 +24,20 @@ public final class FakeCore: CoreBridge {
 
     public init(fixtures: FakeFixtures? = nil) {
         self.fixtures = fixtures
+        let events = events
+        fixtures?.mentions.onChange.withLock { change in
+            change = { total in
+                events.emit(name: "mention-inbox-changed", payloadJSON: #"{"unread_total":\#(total)}"#, target: nil)
+            }
+        }
+    }
+
+    /// Files a mention in the fixture inbox and asks for its notification, as the core does when
+    /// a live message mentions you in a chat that is not on screen.
+    public func simulateMention(_ entry: MentionEntry) {
+        fixtures?.mentions.file(entry)
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        events.emit(name: "mention-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
     }
 
     /// The commands invoked so far, oldest first.

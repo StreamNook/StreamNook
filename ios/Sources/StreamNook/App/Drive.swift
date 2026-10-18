@@ -55,6 +55,7 @@ import SwiftUI
 /// - the chat steps in `ChatDrive` (`chatlab`, `chatperf`, ...) and the profile and cosmetics
 ///   steps in `CosmeticsDrive` (`profile:LOGIN`, `cosmetics:dump`, `wash:find`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
+/// - the Mentions steps in `MentionsDrive` (`mentions`, `mentions:fake`, `mentionnotify`, `mentioncard`, ...)
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
@@ -204,7 +205,8 @@ enum Drive {
                 if !(await ChatDrive.run(name, value, model: model)),
                    !(await CosmeticsDrive.run(name, value, model: model)),
                    !(await RewardsDrive.run(name, value, model: model)),
-                   !(await KickDrive.run(name, value, model: model)) {
+                   !(await KickDrive.run(name, value, model: model)),
+                   !(await MentionsDrive.run(name, value, model: model)) {
                     log.error("drive: unknown step \(name, privacy: .public)")
                 }
             }

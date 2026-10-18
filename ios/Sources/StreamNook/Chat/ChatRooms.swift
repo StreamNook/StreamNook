@@ -45,6 +45,15 @@ final class ChatRooms {
     var includeStreak = true
     /// Rooms (by login) whose moderator tools were turned off this session.
     @ObservationIgnored private(set) var modToolsOff: Set<String> = []
+    /// A mention opened from Mentions or its notification that the room's rows no longer hold,
+    /// by room: shown pinned over the chat ("Older than chat history") until dismissed.
+    var mentionCards: [String: MentionEntry] = [:]
+    /// The mentions inbox, for the chat menu's Mentions row and its count.
+    @ObservationIgnored weak var mentions: MentionsStore?
+    /// The Mentions sheet is up over the watch layer (opened from the chat menu).
+    var mentionsOpen = false
+    /// The latest mention being brought into view; an older search gives way to it.
+    @ObservationIgnored var mentionFocus: Task<Void, Never>?
     /// The Twitch follows that are live now, for the "Add a chat" sheet (the home snapshot's).
     @ObservationIgnored var followedLive: @MainActor () -> [TwitchStream] = { [] }
 
@@ -278,6 +287,7 @@ final class ChatRooms {
     private func leave(_ tab: ChatTabInfo, last: Bool) {
         guard let session = sessions.removeValue(forKey: tab.channel) else { return }
         session.stop()
+        mentionCards[tab.channel.lowercased()] = nil
         routes.remove(tab.channel)
         if tab.provider == "kick" {
             leaveKick(tab, last: last)
