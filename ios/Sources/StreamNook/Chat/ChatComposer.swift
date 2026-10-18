@@ -304,6 +304,8 @@ private struct ComposerBar: View {
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
                             .contentTransition(.symbolEffect(.replace))
+                            // The keyboard coming and going swaps the mark over 0.2 s, as Android crossfades it.
+                            .animation(.easeOut(duration: 0.2), value: focused)
                     }
                 }
                 // A circle reads smaller than the 40 pt field beside it; 44 matches it.
