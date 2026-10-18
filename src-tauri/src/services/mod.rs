@@ -54,6 +54,7 @@ pub mod suspicious_users;
 pub mod user_notes;
 pub mod mod_history;
 pub mod chat_warning;
+pub mod chatter_card;
 pub mod diagnostic_logger;
 pub mod hls_projection;
 pub mod hls_seq_ids;

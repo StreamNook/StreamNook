@@ -721,5 +721,6 @@ allow = [
   "chat_send_paced",
   "acknowledge_chat_warning",
   "get_chatter_mod_history",
+  "get_chatter_card_tools",
   "save_stream_screenshot",
 ]
