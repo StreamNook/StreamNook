@@ -194,6 +194,51 @@ async fn me_goes_to_chat_as_typed() {
     assert!(!run(&fake, "/nosuchcommand x").await.handled);
 }
 
+#[tokio::test]
+async fn mods_and_vips_run_here_and_never_reach_chat() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "get_chatters_by_role" => Ok(json!({
+            "moderators": [{ "login": "nightbot" }, { "login": "streamelements" }],
+            "vips": [],
+            "moderators_error": null,
+            "vips_error": null,
+        })),
+        _ => Ok(Value::Null),
+    });
+    let mods = run(&fake, "/mods").await;
+    assert!(mods.handled && mods.send.is_none());
+    assert_eq!(mods.notices, ["The moderators of this channel are: nightbot, streamelements"]);
+    let vips = run(&fake, "/vips").await;
+    assert!(vips.handled && vips.send.is_none());
+    assert_eq!(vips.notices, ["There are no VIPs of this channel."]);
+    assert!(fake.calls("send_chat_message").is_empty() && fake.calls("chat_send_paced").is_empty());
+}
+
+#[tokio::test]
+async fn a_refused_mods_list_is_an_error_never_no_moderators() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "get_chatters_by_role" => Ok(json!({
+            "moderators": [],
+            "vips": [{ "login": "growl" }],
+            "moderators_error": "Couldn't load this channel's moderators (Twitch: unauthenticated).",
+            "vips_error": null,
+        })),
+        _ => Ok(Value::Null),
+    });
+    let o = run(&fake, "/mods").await;
+    assert!(o.handled && o.send.is_none());
+    assert!(o.notices.is_empty(), "no \"There are no moderators\" line");
+    assert_eq!(toast(&o, ToastKind::Error), ["Couldn't load this channel's moderators (Twitch: unauthenticated)."]);
+    // The lookup itself failing is still handled here, shown as an error, never sent as text.
+    fake.answer(|cmd, _| if cmd == "get_chatters_by_role" { Err("GQL request failed".into()) } else { Ok(Value::Null) });
+    let failed = run(&fake, "/mods").await;
+    assert!(failed.handled && failed.send.is_none());
+    assert_eq!(toast(&failed, ToastKind::Error), ["Command failed: GQL request failed"]);
+    assert!(fake.calls("send_chat_message").is_empty());
+}
+
 // ─────────────────────────────── dispatch ───────────────────────────────
 
 #[tokio::test]
