@@ -38,5 +38,7 @@ allow = [
   "chat_tabs_keep",
   "chat_tabs_visible",
   "chat_room_from_link",
+  "search_chat_rooms",
+  "chat_picker",
   "rebuild_chat",
 ]

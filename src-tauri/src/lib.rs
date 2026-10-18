@@ -1713,10 +1713,6 @@ pub fn run() {
             #[cfg(desktop)]
             commands::chat_dock::set_docked_chat_light,
             #[cfg(desktop)]
-            commands::multichat_saved::get_multichat_window_state,
-            #[cfg(desktop)]
-            commands::multichat_saved::save_multichat_window_state,
-            #[cfg(desktop)]
             services::chat_dock_live::get_chat_dock_live,
             #[cfg(desktop)]
             open_plugin_window,
@@ -2444,7 +2440,9 @@ pub fn run() {
             commands::chat_tabs::chat_tabs_visible,
             #[cfg(mobile)]
             commands::chat_tabs::chat_room_from_link,
+            #[cfg(mobile)]
             commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
             commands::chat_tabs::chat_picker,
             #[cfg(mobile)]
             commands::chat_tabs::rebuild_chat,

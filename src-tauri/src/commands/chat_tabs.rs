@@ -187,10 +187,10 @@ pub async fn rebuild_chat(
     }))
 }
 
-/// The "add a chat" picker: your live follows, then your offline follows, from
-/// the Following snapshot (no request). `platforms` keeps the ones the shell
-/// can chat on; `open` names the chats open now (the phones leave it out and
-/// their tabs are read here; MultiChat passes its own).
+/// The phones' "add a chat" picker: your live follows, then your offline
+/// follows, from the Following snapshot (no request). `platforms` keeps the
+/// ones the shell can chat on; `open` names the chats open now, read from the
+/// tabs when left out.
 #[tauri::command]
 pub async fn chat_picker(
     platforms: Option<Vec<String>>,
