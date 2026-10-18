@@ -39,6 +39,7 @@ pub mod ffz;
 pub mod gifs;
 pub mod bits;
 pub mod home_snapshot;
+pub mod shared_chat;
 pub mod helix;
 pub mod hype_train;
 pub mod identity;
