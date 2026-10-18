@@ -5770,105 +5770,60 @@ impl TwitchService {
         }
     }
 
-    /// Get channel chatters (moderators and VIPs) via GQL
-    /// The Helix API requires broadcaster_id to match the access token user_id,
-    /// so we use the GQL Mods/VIPs queries which work for any authenticated user.
+    /// A channel's moderators and VIPs, from the GQL `Mods` and `VIPs` queries
+    /// twitch.tv's own `/mods` and `/vips` send (Helix lists them only for the
+    /// broadcaster's own token). Twitch answers `Mods` only with a signed-in
+    /// session ("unauthenticated" otherwise), so it carries the in-app twitch.tv
+    /// web session; `VIPs` still answers without one and goes anonymous.
+    ///
+    /// Each list comes back with `moderators_error` / `vips_error` set when it
+    /// could not be read, so a refusal is never shown as "no moderators".
     pub async fn get_chatters_by_role(channel_login: &str) -> Result<serde_json::Value> {
-        let client = crate::services::http::client().clone();
-
-        // Build batch GQL request — both Mods and VIPs in one round trip
-        let payload = serde_json::json!([
-            {
-                "operationName": "Mods",
-                "variables": {
-                    "login": channel_login
-                },
-                "extensions": {
-                    "persistedQuery": {
-                        "version": 1,
-                        "sha256Hash": "cb912a7e0789e0f8a4c85c25041a08324475831024d03d624172b59498caf085"
-                    }
-                }
+        use crate::services::twitch_web_gql;
+        let query = |operation: &str, hash: &str| {
+            serde_json::json!({
+                "operationName": operation,
+                "variables": { "login": channel_login },
+                "extensions": { "persistedQuery": { "version": 1, "sha256Hash": hash } }
+            })
+        };
+        let session = Self::web_session().await;
+        let (mods, vips) = tokio::join!(
+            async {
+                let answer = twitch_web_gql::post(
+                    session.as_deref(),
+                    query("Mods", "cb912a7e0789e0f8a4c85c25041a08324475831024d03d624172b59498caf085"),
+                    "Mods",
+                )
+                .await;
+                answer.and_then(|a| role_list(&a, "mods"))
             },
-            {
-                "operationName": "VIPs",
-                "variables": {
-                    "login": channel_login
-                },
-                "extensions": {
-                    "persistedQuery": {
-                        "version": 1,
-                        "sha256Hash": "612a574d07afe5db2f9e878e290225224a0b955e65b5d1235dcd4b68ff668218"
-                    }
-                }
-            }
-        ]);
-
-        let response = client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-Id", TWITCH_GQL_CLIENT_ID)
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!(
-                "[TwitchService] GQL Mods/VIPs failed ({}): {}",
-                status, error_text
-            );
-            return Err(anyhow::anyhow!("GQL Mods/VIPs failed: HTTP {}", status));
-        }
-
-        let json: serde_json::Value = response.json().await?;
-
-        // Response is an array of two results: [ModsResponse, VIPsResponse]
-        // Mods: data.user.mods.edges[].node.login
-        // VIPs: data.user.vips.edges[].node.login
-        let mut moderators: Vec<serde_json::Value> = Vec::new();
-        let mut vips: Vec<serde_json::Value> = Vec::new();
-
-        if let Some(arr) = json.as_array() {
-            // Parse Mods response (index 0)
-            if let Some(mods_data) = arr.first() {
-                if let Some(edges) = mods_data
-                    .get("data")
-                    .and_then(|d| d.get("user"))
-                    .and_then(|u| u.get("mods"))
-                    .and_then(|m| m.get("edges"))
-                    .and_then(|e| e.as_array())
-                {
-                    for edge in edges {
-                        if let Some(node) = edge.get("node") {
-                            moderators.push(node.clone());
-                        }
-                    }
-                }
-            }
-
-            // Parse VIPs response (index 1)
-            if let Some(vips_data) = arr.get(1) {
-                if let Some(edges) = vips_data
-                    .get("data")
-                    .and_then(|d| d.get("user"))
-                    .and_then(|u| u.get("vips"))
-                    .and_then(|v| v.get("edges"))
-                    .and_then(|e| e.as_array())
-                {
-                    for edge in edges {
-                        if let Some(node) = edge.get("node") {
-                            vips.push(node.clone());
-                        }
-                    }
-                }
-            }
-        }
-
+            async {
+                let answer = twitch_web_gql::post(
+                    None,
+                    query("VIPs", "612a574d07afe5db2f9e878e290225224a0b955e65b5d1235dcd4b68ff668218"),
+                    "VIPs",
+                )
+                .await;
+                answer.and_then(|a| role_list(&a, "vips"))
+            },
+        );
+        let mods = mods.map_err(|e| role_error_text("moderators", &e, session.is_some()));
+        let vips = vips.map_err(|e| role_error_text("VIPs", &e, true));
         Ok(serde_json::json!({
-            "moderators": moderators,
-            "vips": vips
+            "moderators": mods.as_ref().cloned().unwrap_or_default(),
+            "vips": vips.as_ref().cloned().unwrap_or_default(),
+            "moderators_error": mods.err(),
+            "vips_error": vips.err(),
         }))
+    }
+
+    /// The in-app twitch.tv web session, when the viewer is signed in.
+    async fn web_session() -> Option<String> {
+        use tauri::Manager;
+        let app = crate::services::providers::app_handle()?;
+        let auth = app.try_state::<AppState>().map(|s| s.twitch_auth.clone())?;
+        crate::services::twitch_web_gql::web_session_token(&auth).await.ok()
     }
 
     /// The chatters list any viewer can see, grouped by role: Twitch's public
@@ -6071,11 +6026,17 @@ impl TwitchService {
             }
         }
 
-        // 2. Role sets from the GQL Mods/VIPs lookup (best-effort; an empty result
-        //    just means everyone falls into the viewers bucket).
+        // 2. Role sets from the GQL Mods/VIPs lookup (best-effort: a list that
+        //    could not be read leaves those chatters among the viewers, and is
+        //    logged rather than taken for "no moderators").
         let mut mod_logins: HashSet<String> = HashSet::new();
         let mut vip_logins: HashSet<String> = HashSet::new();
         if let Ok(roles) = Self::get_chatters_by_role(channel_login).await {
+            for key in ["moderators_error", "vips_error"] {
+                if let Some(e) = roles.get(key).and_then(|e| e.as_str()) {
+                    warn!("[TwitchService] chatters roles for {channel_login}: {e}");
+                }
+            }
             if let Some(mods) = roles.get("moderators").and_then(|m| m.as_array()) {
                 for m in mods {
                     if let Some(login) = m.get("login").and_then(|l| l.as_str()) {
@@ -6764,6 +6725,30 @@ pub(crate) fn vod_refresh_from_node(
 }
 
 /// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
+/// One role list (`mods` or `vips`) from a GQL answer: the users, or why there
+/// is none to show. A list that is present but empty is a real "none"; a
+/// missing list is Twitch's refusal (its `errors` message) or an unknown
+/// channel, never an empty list.
+fn role_list(answer: &serde_json::Value, field: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let user = answer.pointer("/data/user").filter(|u| !u.is_null());
+    if let Some(edges) = user.and_then(|u| u.pointer(&format!("/{field}/edges"))).and_then(|e| e.as_array()) {
+        return Ok(edges.iter().filter_map(|e| e.get("node").cloned()).collect());
+    }
+    if let Some(message) = answer.pointer("/errors/0/message").and_then(|m| m.as_str()) {
+        return Err(message.to_string());
+    }
+    Err(if user.is_some() { format!("no {field} list in the answer") } else { "channel not found".to_string() })
+}
+
+/// What a viewer reads when a role list could not be loaded.
+fn role_error_text(what: &str, error: &str, signed_in: bool) -> String {
+    if !signed_in && error.eq_ignore_ascii_case("unauthenticated") {
+        format!("Sign in to Twitch to see this channel's {what}.")
+    } else {
+        format!("Couldn't load this channel's {what} (Twitch: {error}).")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PredictionEnd {
@@ -7438,5 +7423,52 @@ mod web_login_tests {
         let url = TwitchService::begin_web_login().unwrap();
         let no_code = TwitchService::web_login_token(None, Some(state_of(&url)), None).await;
         assert!(no_code.unwrap_err().to_string().contains("authorization code"));
+    }
+}
+
+#[cfg(test)]
+mod role_list_tests {
+    use super::{role_error_text, role_list};
+    use serde_json::json;
+
+    #[test]
+    fn a_listed_role_comes_back_as_its_users() {
+        let answer = json!({"data": {"user": {"id": "1", "mods": {"edges": [
+            {"node": {"id": "2", "login": "nightbot"}},
+            {"node": {"id": "3", "login": "streamelements"}}
+        ]}}}});
+        let mods = role_list(&answer, "mods").unwrap();
+        assert_eq!(mods.iter().map(|m| m["login"].as_str().unwrap()).collect::<Vec<_>>(), ["nightbot", "streamelements"]);
+    }
+
+    #[test]
+    fn an_empty_list_is_a_real_none() {
+        let answer = json!({"data": {"user": {"id": "1", "vips": {"edges": []}}}});
+        assert_eq!(role_list(&answer, "vips").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_refused_list_is_an_error_never_an_empty_list() {
+        // What Twitch answers an anonymous Mods query today.
+        let answer = json!({
+            "errors": [{"message": "unauthenticated", "path": ["user", "mods"], "extensions": {"code": "Unauthenticated"}}],
+            "data": {"user": {"id": "71092938", "mods": null}}
+        });
+        assert_eq!(role_list(&answer, "mods").unwrap_err(), "unauthenticated");
+    }
+
+    #[test]
+    fn an_unknown_channel_says_so() {
+        assert_eq!(role_list(&json!({"data": {"user": null}}), "mods").unwrap_err(), "channel not found");
+    }
+
+    #[test]
+    fn the_viewer_reads_why_the_list_is_missing() {
+        assert_eq!(role_error_text("moderators", "unauthenticated", false), "Sign in to Twitch to see this channel's moderators.");
+        assert_eq!(
+            role_error_text("moderators", "unauthenticated", true),
+            "Couldn't load this channel's moderators (Twitch: unauthenticated)."
+        );
+        assert!(!role_error_text("VIPs", "service error", true).contains("no VIPs"));
     }
 }
