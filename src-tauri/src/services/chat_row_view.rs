@@ -276,6 +276,24 @@ fn twitch_badge_art(room_id: Option<&str>, set: &str, version: &str) -> Option<(
     }
 }
 
+/// A badge's art from one room's own set (its channel badges, or its FFZ
+/// moderator and VIP art), never the global set: what a Shared Chat partner
+/// row carries so every renderer draws the partner channel's badges.
+pub(crate) fn room_badge_art(room_id: &str, set: &str, version: &str) -> Option<(String, String)> {
+    let own = {
+        let guard = TWITCH_BADGES.read().ok()?;
+        guard.as_ref()?.rooms.get(room_id).and_then(|m| m.get(&format!("{set}/{version}"))).cloned()
+    };
+    let role = matches!(set, "moderator" | "vip")
+        .then(|| crate::services::ffz_room_badges::art_for(room_id, set))
+        .flatten()
+        .and_then(|art| [art.x2, art.x4, art.x1].into_iter().find(|u| !u.is_empty()));
+    match (role, own) {
+        (Some(url), own) => Some((url, own.map(|(_, t)| t).unwrap_or_else(|| if set == "vip" { "VIP" } else { "Moderator" }.to_string()))),
+        (None, own) => own,
+    }
+}
+
 // ---- 7TV cosmetics -----------------------------------------------------------
 
 /// A 7TV paint definition (the GraphQL shape the resolver keeps) reduced to

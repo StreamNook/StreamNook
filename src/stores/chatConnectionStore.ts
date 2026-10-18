@@ -1308,6 +1308,8 @@ interface HistorySegmentsRow {
   id: string;
   segments: RowSegments;
   parent_segments?: RowSegments | null;
+  /** A Shared Chat partner row's badges, once its room's badge art landed. */
+  badges?: BackendChatMessage['badges'];
 }
 
 /** Re-stamps that arrived before their backlog merged (the merge also waits
@@ -1320,6 +1322,7 @@ function withHistorySegments(m: BackendChatMessage, row: HistorySegmentsRow): Ba
   return {
     ...m,
     segments: row.segments,
+    ...(Array.isArray(row.badges) ? { badges: row.badges } : {}),
     ...(m.metadata && replyInfo && row.parent_segments
       ? { metadata: { ...m.metadata, reply_info: { ...replyInfo, parent_segments: row.parent_segments } } }
       : {}),
