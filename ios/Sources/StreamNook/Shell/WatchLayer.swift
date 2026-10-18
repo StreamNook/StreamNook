@@ -30,6 +30,10 @@ struct WatchLayer: View {
     @State private var dialShown = false
     @State private var dialRelease = 0
     @GestureState private var dialHeld = false
+    /// How far the keyboard reaches up from the screen's bottom edge (0 while it is down). The
+    /// layer draws past every safe area and places the chat by offset, so SwiftUI's own keyboard
+    /// inset would be measured from the wrong place; the chat's bottom is set from this instead.
+    @State private var keyboardLift: CGFloat = 0
     @Environment(\.snStill) private var still
 
     private var nav: Navigator { model.nav }
@@ -116,12 +120,17 @@ struct WatchLayer: View {
                 // stopping at the safe-area line left a black band under the composer.
                 let landscapeChat = landscape && full
                 let chatShown = (full && !landscape) || sideChat
+                // With the keyboard up the chat ends at its top edge (the composer keeps its own
+                // 8 pt below the field); with it down, nothing moves.
                 let bottomKeep = max(0, insets.bottom - Self.indicatorOverlap)
+                let portraitBottom = full && keyboardLift > 0 ? keyboardLift : bottomKeep * (1 - progress)
                 ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
                          backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
                          outerInset: landscapeChat ? outer : 0, leading: chat.leading)
+                    .ignoresSafeArea(.keyboard)
                     .frame(width: landscapeChat ? columnWidth : layer.width,
-                           height: landscapeChat ? screen.height : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
+                           height: landscapeChat ? max(0, screen.height - keyboardLift)
+                                                 : max(0, layer.maxY - band.maxY - portraitBottom))
                     .offset(x: landscapeChat ? columnX : layer.minX, y: landscapeChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)
                     .animation(SNMotion.run(.easeOut(duration: 0.2)), value: nav.landscapeChat)
@@ -209,6 +218,12 @@ struct WatchLayer: View {
             }
         }
         .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            followKeyboard(note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
+            followKeyboard(note, hiding: true)
+        }
         .task(id: controlsTouch) {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))
@@ -272,6 +287,18 @@ struct WatchLayer: View {
     private func touchedControls() {
         withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { controlsShown = true }
         controlsTouch += 1
+    }
+
+    /// Moves the chat's bottom with the keyboard, over the keyboard's own duration, so the
+    /// composer rides up and down with it.
+    private func followKeyboard(_ note: Notification, hiding: Bool = false) {
+        let info = note.userInfo ?? [:]
+        let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+        let screenHeight = (note.object as? UIScreen)?.bounds.height ?? end.maxY
+        let lift = hiding ? 0 : max(0, screenHeight - end.minY)
+        guard abs(lift - keyboardLift) > 0.5 else { return }
+        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        withAnimation(SNMotion.run(.spring(duration: max(duration, 0.01), bounce: 0))) { keyboardLift = lift }
     }
 
     private func hideLandscapeChat() {
