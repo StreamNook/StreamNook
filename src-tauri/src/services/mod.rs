@@ -35,6 +35,7 @@ pub mod chat_bridge_route;
 pub mod chat_history;
 pub mod chat_rules;
 pub mod chat_row_view;
+pub mod shared_chat_emotes;
 pub mod history_cosmetics;
 pub mod command_catalog;
 pub mod chat_send_limiter;
