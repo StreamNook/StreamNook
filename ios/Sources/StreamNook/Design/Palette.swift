@@ -52,6 +52,11 @@ struct RGBA: Equatable, Sendable {
 
     func opacity(_ alpha: Double) -> RGBA { RGBA(r, g, b, alpha) }
 
+    /// This colour laid over an opaque `base`, opaque.
+    func over(_ base: RGBA) -> RGBA {
+        RGBA(r * a + base.r * (1 - a), g * a + base.g * (1 - a), b * a + base.b * (1 - a), 1)
+    }
+
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
     var uiColor: UIColor { UIColor(red: r, green: g, blue: b, alpha: a) }
 
@@ -128,15 +133,19 @@ struct Palette: Equatable, Sendable {
 extension Palette {
     /// A palette the core resolved (`get_active_theme`, `get_theme_catalog`): CSS colours by the
     /// desktop's token names, highlights nested. A token missing or unreadable keeps the default.
+    /// The page floors are flattened over black: desktop's window can be see-through, a phone's
+    /// never is, so a see-through custom background is what it looks like over black, and every
+    /// surface built as solid from the floors stays solid.
     init(tokens: [String: Any]) {
         let base = Palette.frostedGlass
         let highlight = tokens["highlight"] as? [String: Any] ?? [:]
         func read(_ key: String, _ fallback: RGBA) -> RGBA { (tokens[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
         func hl(_ key: String, _ fallback: RGBA) -> RGBA { (highlight[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
+        let page = read("background", base.background).over(RGBA(0, 0, 0))
         self.init(
-            background: read("background", base.background),
+            background: page,
             backgroundSecondary: read("backgroundSecondary", base.backgroundSecondary),
-            backgroundTertiary: read("backgroundTertiary", base.backgroundTertiary),
+            backgroundTertiary: read("backgroundTertiary", base.backgroundTertiary).over(page),
             surface: read("surface", base.surface),
             surfaceHover: read("surfaceHover", base.surfaceHover),
             surfaceActive: read("surfaceActive", base.surfaceActive),
