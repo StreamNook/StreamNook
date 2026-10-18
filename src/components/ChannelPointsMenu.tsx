@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { MessageSquareText, Search, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
 import { ChannelReward, ChannelRewardsSnapshot, RedeemOutcome, RewardBlock, UnlockedEmote } from '../types';
@@ -843,7 +843,11 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             ) : shownRewards.length === 0 ? (
               <p className="px-4 py-6 text-center text-[12px] text-textMuted">No rewards match “{query.trim()}”</p>
             ) : (
-              shownRewards.map((reward) => {
+              // Rust drops a reward that turned off or sold out while the menu
+              // is open; it folds away (and one coming back unfolds) instead of
+              // the rows below jumping.
+              <AnimatePresence initial={false}>
+              {shownRewards.map((reward) => {
                 const available = reward.availability.redeemable;
                 const status = rewardStatusText(reward.availability, nowMs, 'label');
                 const about = reward.prompt?.trim() || reward.description?.trim() || null;
@@ -857,7 +861,14 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                   : null;
 
                 return (
-                  <div key={reward.id} className="px-1.5">
+                  <motion.div
+                    key={reward.id}
+                    className="overflow-hidden px-1.5"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                  >
                     <button
                       type="button"
                       onClick={() => openDetail(reward)}
@@ -906,9 +917,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                         )}
                       </span>
                     </button>
-                  </div>
+                  </motion.div>
                 );
-              })
+              })}
+              </AnimatePresence>
             )}
           </div>
         </>
