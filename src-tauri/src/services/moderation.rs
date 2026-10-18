@@ -538,6 +538,7 @@ mod tests {
             action: ModAction::Warn,
             reason: reason.map(str::to_string),
             use_saved_reason: false,
+            typed: None,
         };
         assert!(moderate(req("twitch", Some("  "))).await.unwrap_err().to_string().contains("needs a reason"));
         assert!(moderate(req("kick", Some("spam"))).await.unwrap_err().to_string().contains("Twitch feature"));
