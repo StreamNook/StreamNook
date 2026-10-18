@@ -254,11 +254,12 @@ pub fn category_label(category: &str) -> &'static str {
 }
 
 /// Everyone and custom commands never lock; Broadcaster commands need the
-/// broadcaster or a moderator; the rest need a moderator or the broadcaster.
+/// broadcaster (Twitch takes them only on the channel owner's own token, so a
+/// moderator is refused too); the rest need a moderator or the broadcaster.
 pub fn lock_for(category: &str, is_moderator: bool, is_broadcaster: bool) -> Option<&'static str> {
     match category {
         "Everyone" | "Custom" => None,
-        "Broadcaster" if !is_broadcaster && !is_moderator => Some("Needs the broadcaster in this channel"),
+        "Broadcaster" if !is_broadcaster => Some("Needs the broadcaster in this channel"),
         _ if !is_moderator && !is_broadcaster => Some("Needs moderator status in this channel"),
         _ => None,
     }
@@ -399,8 +400,13 @@ mod tests {
         let viewer = catalog(true, false, false, &[], "ban");
         let ban = viewer.iter().find(|r| r.name == "ban").unwrap();
         assert_eq!(ban.lock.as_deref(), Some("Needs moderator status in this channel"));
+        // A moderator runs the moderator commands, but Twitch refuses them the owner's.
         let moderator = catalog(true, true, false, &[], "editor");
-        assert_eq!(moderator.iter().find(|r| r.name == "editor").unwrap().lock, None);
+        assert_eq!(moderator.iter().find(|r| r.name == "editor").unwrap().lock.as_deref(), Some("Needs the broadcaster in this channel"));
+        let moderator_ban = catalog(true, true, false, &[], "ban");
+        assert_eq!(moderator_ban.iter().find(|r| r.name == "ban").unwrap().lock, None);
+        let owner = catalog(true, false, true, &[], "editor");
+        assert_eq!(owner.iter().find(|r| r.name == "editor").unwrap().lock, None);
         let raid = catalog(true, false, false, &[], "raidsend");
         assert_eq!(raid[0].lock.as_deref(), Some("Needs the broadcaster in this channel"));
         assert!(catalog(true, false, false, &[], "mods").iter().all(|r| r.lock.is_none() || r.category != "Everyone"));
