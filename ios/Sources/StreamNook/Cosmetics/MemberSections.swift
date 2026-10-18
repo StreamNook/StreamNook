@@ -55,7 +55,8 @@ struct MemberSections: View {
     private var accolades: some View {
         VStack(alignment: .leading, spacing: 12) {
             ProfileSectionHeader("Accolades", detail: "\(profile.accolades.count)")
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64, maximum: 80), spacing: 8, alignment: .top)],
+            // Five to a row, as on Android.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 5),
                       alignment: .leading, spacing: 12) {
                 ForEach(profile.accolades) { AccoladeMedallion(medal: $0) }
             }
@@ -127,11 +128,10 @@ private struct AccoladeMedallion: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 64)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(medal.label)
+        .accessibilityLabel(medal.label.replacingOccurrences(of: "\u{AD}", with: ""))
     }
 
     /// The nearest SF Symbol for each of the desktop's lucide icons.

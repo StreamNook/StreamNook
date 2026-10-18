@@ -23,7 +23,7 @@ final class ProfileSheetModel {
 
     /// The signed-in viewer's Twitch id: your own sheet shows your picture without the medal.
     let ownID: String?
-    /// A section to scroll to (drive steps: `member`, `recent`).
+    /// A section to scroll to (drive steps: `member`, `recent`, or a badge group's title).
     var scrollTarget: String?
     @ObservationIgnored private weak var store: CosmeticsStore?
 
@@ -184,7 +184,7 @@ struct ProfileSheet: View {
                     pickedPanel(picked).padding(.top, 12)
                 }
                 ForEach(sheet?.groups ?? []) { group in
-                    badgeGroup(group).padding(.top, 20)
+                    badgeGroup(group).padding(.top, 20).id(group.title)
                 }
                 if sheet?.hasNoBadges == true && model.medal == nil {
                     Text("No badges to show for this user.")
