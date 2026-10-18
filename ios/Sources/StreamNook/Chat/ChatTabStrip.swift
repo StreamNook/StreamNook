@@ -15,6 +15,9 @@ struct ChatTabStrip: View {
     /// The bar's height. The Chats header is taller, so its 40 pt capsules get air above the
     /// separator instead of sitting on it.
     var height: CGFloat = ChatTabStrip.height
+    /// What sits in the left side, opposite the controls (the Chats tab's Shared Chat or Together
+    /// group for the room on screen).
+    var leading: AnyView?
 
     static let height: CGFloat = 45
 
@@ -22,7 +25,11 @@ struct ChatTabStrip: View {
         // The rooms sit centered between two equal sides and stay centered as rooms are added;
         // the controls live in the right side, so they never pull the center off.
         HStack(spacing: 6) {
-            Color.clear.frame(maxWidth: .infinity, maxHeight: 1).accessibilityHidden(true)
+            HStack(spacing: 0) {
+                if let leading { leading }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
             ViewThatFits(in: .horizontal) {
                 ForEach(0..<max(1, rooms.tabs.count), id: \.self) { folds in
                     row(folding: folds)

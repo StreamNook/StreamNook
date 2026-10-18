@@ -9,7 +9,7 @@
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Plus } from 'phosphor-react';
+import { ChatsCircle, Play, Plus } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
 import { MobileChatPane } from '../chat/MobileChatPane';
@@ -21,6 +21,10 @@ import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
+import { useChannelState } from '../../stores/channelStateStore';
+import { CollabAvatarStack } from '../../components/SharedViewers';
+import { isTogether } from '../../utils/sharedViewers';
+import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
 
 /** The Chats header's room strip: 40 px capsules with 7 px of air above and
@@ -201,6 +205,29 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     </button>
   );
 
+  // The room on screen streams together, or shares its chat: said the way the
+  // watch screen says it (Rust's channel state for the room, the partners'
+  // faces and the group's word), in the strip's empty left side. Tapping it
+  // lists the partners, and a partner starts their stream.
+  const roomState = useChannelState(active?.provider === 'twitch' ? active.login : null);
+  const group = roomState?.collab ?? roomState?.shared_chat ?? null;
+  const [groupOpen, setGroupOpen] = useState(false);
+  const leading = group ? (
+    <button
+      onClick={() => setGroupOpen(true)}
+      className="min-w-0 h-11 flex items-center active:opacity-70"
+      aria-label={group.label}
+    >
+      <span className="min-w-0 h-10 flex items-center gap-1.5 pl-2 pr-3 rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+        {!isTogether(group) && <ChatsCircle size={14} weight="fill" className="shrink-0" />}
+        <span className="shrink-0">
+          <CollabAvatarStack collab={group} size={18} />
+        </span>
+        <span className="min-w-0 truncate text-[12px] font-medium">{isTogether(group) ? 'Together' : 'Shared chat'}</span>
+      </span>
+    </button>
+  ) : null;
+
   // The strip's own parts: the same 40 px glass as the rooms capsule, quieter
   // than the room it serves (secondary text, no red; the room's face already
   // says live). Each button keeps a 44 px touch area around its 40 px shape,
@@ -239,7 +266,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           moves to it; the room row still scrolls sideways). */}
       <div className="shrink-0 flex flex-col [touch-action:pan-x]" {...headerHandlers}>
         {grabber}
-        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} height={CHATS_STRIP_H} />}
+        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} leading={leading} height={CHATS_STRIP_H} />}
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
@@ -264,6 +291,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
         </>
       )}
       <AddChatSheet open={addOpen} onClose={closeAdd} />
+      <TogetherSheet collab={group} open={groupOpen} onClose={() => setGroupOpen(false)} />
     </div>
   );
 };

@@ -59,7 +59,10 @@ const ChatTabStripImpl: React.FC<{
   /** The bar's height. The Chats screen's header is taller, so its 40 px
    *  capsules get air above the separator instead of sitting on it. */
   height?: number;
-}> = ({ always = false, trailing, height = CHAT_TAB_STRIP_H }) => {
+  /** What sits in the left side, opposite the controls (the Chats screen's
+   *  Shared Chat or Together group for the room on screen). */
+  leading?: React.ReactNode;
+}> = ({ always = false, trailing, height = CHAT_TAB_STRIP_H, leading }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   // Platform marks only earn their place when the open rooms span platforms;
   // with every tab on Kick (or every tab on Twitch) they say nothing.
@@ -109,7 +112,7 @@ const ChatTabStripImpl: React.FC<{
       {/* Two equal sides hold the rooms in the middle; the controls live in
           the right side, so they never pull the center off. The right side
           keeps the controls' own width when space runs out. */}
-      <div className="flex-1 basis-0 min-w-0" aria-hidden />
+      <div className="flex-1 basis-0 min-w-0 flex items-center justify-start">{leading}</div>
       {/* The row of rooms wears the glaze and the open room is the darker pill
           inside it. The rooms scroll inside the glass, so its rim stays put. */}
       <div className="min-w-0 max-w-full chrome-glaze chrome-glaze--flat">
