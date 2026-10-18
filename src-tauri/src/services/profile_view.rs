@@ -258,6 +258,9 @@ pub struct ProfileSheet {
     /// Present only for a StreamNook member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streamnook: Option<SnBadge>,
+    /// A member's number and rank, drawn on the right of the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<MemberRank>,
     /// The Atmosphere they wear on their profile, after the wear gate. It shows
     /// here whether or not they keep it out of chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +268,61 @@ pub struct ProfileSheet {
     /// The Cologne event look instead of an Atmosphere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cologne: Option<member_theme::Cologne>,
+}
+
+/// A member's place in line as the profile cards show it: the number, its rank
+/// and the rank's color. The bands and the famous numbers match the desktop
+/// card's tier card.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MemberRank {
+    pub number: u32,
+    /// `ethereal`, `mythic`, `ascendant`, `founder` or `member`.
+    pub tier: String,
+    /// The rank's name, or a famous number's own ("Nice" for 69).
+    pub label: String,
+    /// The rank's color as #rrggbb.
+    pub accent: String,
+}
+
+pub fn member_rank(number: u32) -> MemberRank {
+    let (tier, label, accent) = match number {
+        1 => ("ethereal", "Ethereal", "#8B5CF6"),
+        2..=10 => ("mythic", "Mythic", "#FBBF24"),
+        11..=100 => ("ascendant", "Ascendant", "#22D3EE"),
+        101..=250 => ("founder", "Founder", "#E2E8F0"),
+        _ => ("member", "Member", "#94A3B8"),
+    };
+    let famous = match number {
+        42 => Some("The Answer"),
+        67 => Some("Six Seven"),
+        69 => Some("Nice"),
+        141 => Some("Going Dark"),
+        404 => Some("Not Found"),
+        420 => Some("Blaze It"),
+        1337 => Some("Leet"),
+        9000 => Some("Over 9000"),
+        _ => None,
+    };
+    MemberRank {
+        number,
+        tier: tier.into(),
+        label: famous.unwrap_or(label).into(),
+        accent: accent.into(),
+    }
+}
+
+/// The person's Twitch badges for the sheet. Outside a room a channel's badges
+/// (broadcaster, moderator, subscriber and the rest) say nothing, and Twitch
+/// would answer for the person's own channel, where everyone who streams is
+/// the broadcaster; so they show only in the room the sheet was opened from.
+/// The earned list is never one room's, so it never carries them.
+fn sheet_twitch_badges(resp: &UserBadgesResponse, in_room: bool) -> Vec<ProfileBadge> {
+    let personal = |b: &&crate::services::badge_service::UserBadge| !CHANNEL_SCOPED.contains(&b.badge_info.set_id.as_str());
+    twitch_badges(&UserBadgesResponse {
+        display_badges: resp.display_badges.iter().filter(|b| in_room || personal(b)).cloned().collect(),
+        earned_badges: resp.earned_badges.iter().filter(personal).cloned().collect(),
+        third_party_badges: Vec::new(),
+    })
 }
 
 static SHEETS: Mutex<Option<LruCache<String, ProfileSheet>>> = Mutex::new(None);
@@ -307,6 +365,7 @@ pub async fn profile_sheet(
         .map(|u| u.display_name.as_str())
         .filter(|_| display_name.is_empty() || display_name.eq_ignore_ascii_case(login))
         .unwrap_or(display_name);
+    let in_room = channel_id.is_some_and(|c| !c.is_empty());
     let channel_id = channel_id.filter(|c| !c.is_empty()).unwrap_or(user_id).to_string();
     let channel_login = channel_login.filter(|c| !c.is_empty()).unwrap_or(login).to_string();
     let (badges, inventory, helix, pictures, (atmosphere, cologne)) = tokio::join!(
@@ -336,7 +395,7 @@ pub async fn profile_sheet(
             groups.push(BadgeGroup { title: title.into(), badges: list });
         }
     };
-    push("Twitch", badges.as_ref().map(twitch_badges).unwrap_or_default());
+    push("Twitch", badges.as_ref().map(|b| sheet_twitch_badges(b, in_room)).unwrap_or_default());
     push(
         "7TV",
         inventory
@@ -362,6 +421,7 @@ pub async fn profile_sheet(
         paint_def,
         groups,
         streamnook: registry::member_badge(user_id, false),
+        member: registry::member_number(user_id).map(member_rank),
         atmosphere,
         cologne,
     };
@@ -887,10 +947,13 @@ mod tests {
             paint_def: None,
             groups: vec![BadgeGroup { title: "Twitch".into(), badges: vec![ProfileBadge { id: "b".into(), url: "x".into(), ..Default::default() }] }],
             streamnook: Some(SnBadge { slug: None, image_url: "streamnook-house:streamnook-default".into(), label: "StreamNook".into() }),
+            member: Some(member_rank(7)),
             atmosphere: Some(registry::Atmosphere { id: "aurora".into(), name: "Aurora".into(), ..Default::default() }),
             cologne: None,
         };
         let v = serde_json::to_value(&sheet).unwrap();
+        assert_eq!(v["member"]["number"], 7);
+        assert_eq!(v["member"]["tier"], "mythic");
         assert_eq!(v["atmosphere"]["id"], "aurora");
         assert!(v["atmosphere"].get("look").is_some(), "the look rides with the Atmosphere");
         assert!(v.get("cologne").is_none());
@@ -909,6 +972,30 @@ mod tests {
         let v = serde_json::to_value(&picker).unwrap();
         assert!(v.get("show_chat_toggle").is_some() && v.get("chat_atmosphere").is_some());
         assert!(v["badges"][0].get("image_url").is_none());
+    }
+
+    #[test]
+    fn channel_badges_show_only_in_the_room_they_belong_to() {
+        let resp = UserBadgesResponse {
+            display_badges: vec![badge("bc", "broadcaster", "BC4"), badge("p", "premium", "P4")],
+            earned_badges: vec![badge("m", "moderator", "M4"), badge("g", "glhf-pledge", "G4")],
+            third_party_badges: vec![],
+        };
+        let ids = |list: Vec<ProfileBadge>| list.into_iter().map(|b| b.id).collect::<Vec<_>>();
+        assert_eq!(ids(sheet_twitch_badges(&resp, false)), vec!["p", "g"]);
+        assert_eq!(ids(sheet_twitch_badges(&resp, true)), vec!["bc", "p", "g"]);
+    }
+
+    #[test]
+    fn member_ranks_follow_the_bands_and_the_famous_numbers() {
+        assert_eq!(member_rank(1).tier, "ethereal");
+        assert_eq!(member_rank(10).label, "Mythic");
+        assert_eq!(member_rank(11).label, "Ascendant");
+        assert_eq!(member_rank(250).tier, "founder");
+        assert_eq!(member_rank(251).label, "Member");
+        assert_eq!(member_rank(69).label, "Nice");
+        assert_eq!(member_rank(69).tier, "ascendant");
+        assert_eq!(member_rank(9000).accent, "#94A3B8");
     }
 
     #[test]

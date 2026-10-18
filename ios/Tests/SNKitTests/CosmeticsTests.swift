@@ -133,6 +133,8 @@ import Testing
         let sheet = try await core.invoke("user_profile_sheet", args: ["userId": "9", "login": "x", "displayName": "X"],
                                           as: ProfileSheetData.self)
         #expect(sheet.groups.map(\.title) == ["Twitch", "7TV"] && sheet.streamnook != nil && !sheet.hasNoBadges)
+        #expect(sheet.member == MemberRank(number: 69, tier: "ascendant", label: "Nice", accent: "#22D3EE"))
+        #expect(sheet.member?.lit == true)
         let me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
         #expect(me.badges.count == 2 && me.paint?.name == "Sunset")
         let standing = try await core.invoke("get_sub_standing", args: [:], as: SubStanding?.self)

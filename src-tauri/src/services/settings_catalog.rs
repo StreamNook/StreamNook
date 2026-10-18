@@ -24,6 +24,10 @@ pub struct CatalogRow {
     /// The brand whose logo stands in for its name in the title (`7tv`, `ffz`, `bttv`).
     #[serde(default)]
     pub logo: Option<String>,
+    /// For a nested row, the title of the row it is drawn under, so a search
+    /// hit can say where it lives ("Size" under "GIFs" is not the emote "Size").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub under: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -31,8 +35,26 @@ struct Catalog {
     rows: Vec<CatalogRow>,
 }
 
+/// A nested row sits under the nearest row above it on the same page and
+/// section that is not nested itself.
+fn link_nested(rows: &mut [CatalogRow]) {
+    let mut parent: Option<(String, String, String)> = None;
+    for row in rows.iter_mut() {
+        if !row.nested {
+            parent = Some((row.page.clone(), row.section.clone(), row.title.clone()));
+            continue;
+        }
+        row.under = parent
+            .as_ref()
+            .filter(|(page, section, _)| *page == row.page && *section == row.section)
+            .map(|(_, _, title)| title.clone());
+    }
+}
+
 static ROWS: Lazy<Vec<CatalogRow>> = Lazy::new(|| {
-    serde_json::from_str::<Catalog>(include_str!("settings_catalog.json")).map(|c| c.rows).unwrap_or_default()
+    let mut rows = serde_json::from_str::<Catalog>(include_str!("settings_catalog.json")).map(|c| c.rows).unwrap_or_default();
+    link_nested(&mut rows);
+    rows
 });
 
 pub fn rows() -> &'static [CatalogRow] {
@@ -186,6 +208,15 @@ mod tests {
         assert!(titles(&search("nightbot", 5)).contains(&"Known bots"));
         assert!(search("zzzz nothing", 5).is_empty());
         assert!(search("   ", 5).is_empty());
+    }
+
+    #[test]
+    fn nested_rows_name_the_row_they_sit_under() {
+        let gif = rows().iter().find(|r| r.paths.iter().any(|p| p == "chat_design.gif_scale")).unwrap();
+        assert_eq!(gif.under.as_deref(), Some("GIFs"));
+        let emote = rows().iter().find(|r| r.paths.iter().any(|p| p == "chat_design.emote_scale")).unwrap();
+        assert_eq!(emote.under, None);
+        assert!(rows().iter().filter(|r| r.nested).all(|r| r.under.is_some()), "a nested row has no row above it");
     }
 
     #[test]

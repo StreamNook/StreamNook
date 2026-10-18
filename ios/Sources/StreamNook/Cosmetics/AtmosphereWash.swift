@@ -41,10 +41,13 @@ final class AtmosphereWashLayer: CALayer {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Shows `look` over `size`; `animate` false stills the curtains and the drift.
+    /// Shows `look` over `size`; `animate` false stills the curtains and the drift. With `breathe`
+    /// the curtains hold still and only their opacity moves, the way an identity's glow lives
+    /// behind a card rather than streaming past like a chat row.
     @MainActor
-    func show(_ look: AtmosphereLook, cologne: CologneLook?, size: CGSize, scale: CGFloat, animate: Bool) {
-        let next = "\(look.hashValue)|\(cologne?.coin == true)|\(Int(size.width))x\(Int(size.height))|\(animate)"
+    func show(_ look: AtmosphereLook, cologne: CologneLook?, size: CGSize, scale: CGFloat, animate: Bool,
+              breathe: Bool = false) {
+        let next = "\(look.hashValue)|\(cologne?.coin == true)|\(Int(size.width))x\(Int(size.height))|\(animate)|\(breathe)"
         guard next != key else { return }
         key = next
         CATransaction.begin()
@@ -58,15 +61,16 @@ final class AtmosphereWashLayer: CALayer {
         }
         let bounds = CGRect(origin: .zero, size: size)
         if look.kind == "cologne-chrome" {
-            showCologne(look, coin: cologne?.coin == true, bounds: bounds, scale: scale, animate: animate)
+            // Its only motion is the texture's drift, so a breathing glow holds it still.
+            showCologne(look, coin: cologne?.coin == true, bounds: bounds, scale: scale, animate: animate && !breathe)
         } else {
-            showAtmosphere(look, bounds: bounds, scale: scale, animate: animate)
+            showAtmosphere(look, bounds: bounds, scale: scale, animate: animate, breathe: breathe)
         }
         CATransaction.commit()
     }
 
     @MainActor
-    private func showAtmosphere(_ look: AtmosphereLook, bounds: CGRect, scale: CGFloat, animate: Bool) {
+    private func showAtmosphere(_ look: AtmosphereLook, bounds: CGRect, scale: CGFloat, animate: Bool, breathe: Bool) {
         base.frame = bounds
         base.opacity = 0.85
         base.contents = WashBitmaps.fill(SNFill(layers: look.baseLayers.layers + [.solid(color: look.baseColor)]),
@@ -88,7 +92,11 @@ final class AtmosphereWashLayer: CALayer {
                 layer.frame = box
                 layer.contents = WashBitmaps.fill(fill, size: box.size, scale: scale)
                 layer.isHidden = false
-                if animate { layer.add(Self.drift(n), forKey: "drift") } else { layer.opacity = n == 1 ? 0.78 : 0.6 }
+                if animate {
+                    layer.add(breathe ? Self.breathing(n) : Self.drift(n), forKey: "drift")
+                } else {
+                    layer.opacity = n == 1 ? 0.78 : 0.6
+                }
             }
         }
         if let fill = look.chatRim {
@@ -124,6 +132,17 @@ final class AtmosphereWashLayer: CALayer {
         group.repeatCount = .infinity
         group.timingFunction = CAMediaTimingFunction(name: .linear)
         return group
+    }
+
+    /// The curtains' breathing alone (the chat drift's opacity curve and periods, no travel):
+    /// opacity-only, so the compositor runs it at full frame rate with nothing to repaint.
+    private static func breathing(_ n: Int) -> CAAnimation {
+        let o = CAKeyframeAnimation(keyPath: "opacity")
+        o.values = n == 1 ? [0.78, 1, 0.78] : [0.6, 0.92, 0.6]
+        o.duration = n == 1 ? 9 : 12
+        o.repeatCount = .infinity
+        o.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        return o
     }
 
     @MainActor

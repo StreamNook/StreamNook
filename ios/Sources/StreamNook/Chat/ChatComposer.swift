@@ -210,7 +210,7 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if !session.style.hideCommandButton, !session.isKick {
+                if !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {

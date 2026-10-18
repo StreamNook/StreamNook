@@ -8,11 +8,18 @@ import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from '../navStore';
 import { usePhonePrefs } from '../phonePrefs';
-import { SegmentedSelect } from '../../components/settings/_primitives';
+import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
 import { OwnIdentityCard, SignedOutIdentityCard } from '../profile/OwnIdentityHeader';
 import { SettingsDirectory } from './SettingsSearch';
 import { AccountsCard } from '../profile/AccountsCard';
+
+const START_TABS: Segment<MobileTab>[] = [
+  { value: 'following', label: 'Following' },
+  { value: 'browse', label: 'Browse' },
+  { value: 'rewards', label: 'Rewards' },
+  { value: 'you', label: 'You' },
+];
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
@@ -97,17 +104,14 @@ export const YouScreen: React.FC = () => {
       <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">
         Open the app on
       </div>
-      <div className="px-4 mb-4">
-        <SegmentedSelect<MobileTab>
+      {/* The segments share the row's width, so the track ends where the
+          cards above and below it end. */}
+      <div className="px-4 mb-4 [&_[role=radio]]:flex-1">
+        <SegmentedControl<MobileTab>
+          label="Open the app on"
           value={startTab}
           onChange={setStartTab}
-          fullWidth
-          options={[
-            { value: 'following', label: 'Following' },
-            { value: 'browse', label: 'Browse' },
-            { value: 'rewards', label: 'Rewards' },
-            { value: 'you', label: 'You' },
-          ]}
+          segments={START_TABS}
         />
       </div>
 

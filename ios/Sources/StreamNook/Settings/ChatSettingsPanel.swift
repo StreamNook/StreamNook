@@ -407,9 +407,6 @@ struct ChatSettingsPanel: View {
                       help: "Tap the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
             ToggleRow(title: "Hide placeholder", path: "chat_input.hide_placeholder",
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
-            ToggleRow(title: "Hide command button", path: "chat_input.hide_command_button",
-                      detail: "Removes the slash button from inside the message box. Typing / still opens the quick command list.",
-                      help: "The command button opens a browsable menu of every command you can run here, with what each one does and examples you can tap into the box. It also has a larger view for reading comfortably.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
                       detail: "Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion.")
             PointsBalanceRow()

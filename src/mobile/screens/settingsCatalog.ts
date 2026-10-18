@@ -16,6 +16,8 @@ export interface CatalogRow {
   aliases?: string[];
   /** The brand whose mark leads the title (`7tv`, `ffz`, `bttv`). */
   logo?: string | null;
+  /** A nested row's parent row title (Rust fills it). */
+  under?: string | null;
 }
 
 /** The catalog's page ids, as the settings layer names its pages. */
@@ -37,10 +39,11 @@ export const CATALOG_PAGES = Object.keys(PAGE_VIEW);
 export const pageViewOf = (page: string): string | null => PAGE_VIEW[page] ?? null;
 
 /** "Chat › Message Layout": where the row lives. A section named like its page
- *  ("Cache" on Cache) says it once. */
+ *  ("Cache" on Cache) says it once; a nested row adds the row it sits under. */
 export function rowPlace(row: CatalogRow): string {
   const page = pageViewOf(row.page) ?? row.page;
-  return row.section && row.section.toLowerCase() !== page.toLowerCase() ? `${page} › ${row.section}` : page;
+  const place = row.section && row.section.toLowerCase() !== page.toLowerCase() ? `${page} › ${row.section}` : page;
+  return row.under ? `${place} › ${row.under}` : place;
 }
 
 /** A row's identity: two rows can share a title, never a title and paths. */

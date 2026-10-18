@@ -551,9 +551,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
           )}
         </AnimatePresence>
         {/* The emote trigger and the points button live INSIDE the field so the
-            typing area keeps full width instead of being squeezed by chrome. */}
+            typing area keeps full width instead of being squeezed by chrome.
+            Exactly 40px, the height of the round button beside it. */}
         <div
-          className={`glass-input flex-1 min-w-0 flex items-end gap-1 pr-2 ${hideEmoteButton ? 'pl-3' : 'pl-1'}`}
+          className={`glass-input flex-1 min-w-0 h-10 flex items-center gap-1 pr-2 ${hideEmoteButton ? 'pl-3' : 'pl-1'}`}
         >
           {!hideEmoteButton && (
             <button
@@ -607,16 +608,13 @@ const MobileChatInputImpl: React.FC<Props> = ({
               }}
               placeholder={placeholder}
               // Typing is switched off, not just discouraged, when the badges prove
-              // the send would be rejected. The amber placeholder says why.
+              // the send would be rejected. The placeholder says why, in the
+              // field's ordinary placeholder ink: a statement, not an alarm.
               disabled={!!gating.blocked}
               spellCheck={spellcheck}
               autoCorrect={spellcheck ? 'on' : 'off'}
               rows={1}
-              className={`flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-[1.4] text-textPrimary outline-none max-h-[96px] ${
-                gating.blocked
-                  ? 'placeholder:text-warning placeholder:font-medium'
-                  : 'placeholder:text-textMuted'
-              }`}
+              className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-[1.4] text-textPrimary outline-none max-h-[96px] placeholder:text-textMuted"
               enterKeyHint="send"
             />
           )}
@@ -628,7 +626,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {!needsKickSignIn &&
             (charCount >= COUNTER_FROM ? (
               <span
-                className={`shrink-0 self-end h-9 flex items-center px-1 text-[12.5px] font-medium tabular-nums ${
+                className={`shrink-0 h-9 flex items-center px-1 text-[12px] font-medium tabular-nums ${
                   charCount > MESSAGE_LIMIT
                     ? 'text-error'
                     : charCount >= MESSAGE_LIMIT - 20

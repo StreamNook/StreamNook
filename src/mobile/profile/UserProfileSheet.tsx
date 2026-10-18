@@ -59,13 +59,43 @@ const toMillis = (ts: string | undefined): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const CLOCK = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+
+/** "7:59", the iPhone's stamp: the locale's own hours and minutes without the
+ *  AM/PM, which wrapped the column onto a second line. */
 const clock = (at: number | null): string =>
-  at === null ? '' : new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  at === null
+    ? ''
+    : CLOCK.formatToParts(at)
+        .filter((p) => p.type !== 'dayPeriod')
+        .map((p) => p.value)
+        .join('')
+        .trim();
 
 /** Identifies one badge image for the failed-image set. The url is part of it
  *  because the cached sheet and the fresh one can name the same badge with
  *  different art. */
 const badgeImageKey = (b: ProfileBadge): string => `${b.id}|${b.url}`;
+
+/** The badges block while Rust has not answered yet: the heading and a row of
+ *  tiles the size the badges land at, so the block arriving moves nothing. */
+const BadgeGridPlaceholder: React.FC = () => (
+  <div className="mt-5" aria-hidden="true">
+    <SectionHeader title="Badges" className="mb-2" />
+    <div className="flex gap-2">
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="w-8 h-8 flex items-center justify-center">
+          {/* glass-exempt: a placeholder in the theme's raised surface, solid
+              so it reads the same at any Glassiness. */}
+          <span
+            className="block w-7 h-7 rounded-md"
+            style={{ background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background)' }}
+          />
+        </span>
+      ))}
+    </div>
+  </div>
+);
 
 const BadgeGrid: React.FC<{
   title: string;
@@ -273,7 +303,7 @@ const ProfileBody: React.FC<{
   const pickedBrand = brandFor(picked?.provider);
 
   return (
-    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8}>
+    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
       <div className="flex flex-col pb-2">
         {/* Their Atmosphere as the band, else a quiet tint of their name color;
             the picture cut into its lower edge, the name below it, never on it. */}
@@ -341,6 +371,7 @@ const ProfileBody: React.FC<{
           </div>
         )}
 
+        {!sheet && <BadgeGridPlaceholder />}
         {groups.map((group) => (
           <BadgeGrid
             key={group.title}
@@ -372,7 +403,7 @@ const ProfileBody: React.FC<{
             <ul className="flex flex-col gap-1.5">
               {history.map((row) => (
                 <li key={row.id} className="flex gap-2.5 text-[14px] leading-snug">
-                  <span className="shrink-0 tabular-nums text-textMuted text-[12px] pt-[2px] w-[4.5ch]">
+                  <span className="shrink-0 whitespace-nowrap tabular-nums text-textMuted text-[12px] pt-[2px] min-w-[5ch]">
                     {clock(row.at)}
                   </span>
                   <span className="min-w-0 break-words text-textPrimary">{row.content}</span>

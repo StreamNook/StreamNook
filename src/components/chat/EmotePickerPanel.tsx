@@ -56,6 +56,7 @@ import { Logger } from '../../utils/logger';
 import { MOD_PREFIX, staticModifierStyle } from '../../utils/emoteModifiers';
 import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
+import { SearchField } from '../../mobile/ui/SearchField';
 import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
@@ -843,13 +844,23 @@ export function EmotePickerPanel({
       >
       <div className="p-2 border-b border-borderSubtle">
         <div className="flex items-center gap-1.5">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
-            className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
-          />
+          {IS_MOBILE ? (
+            // The phone's one search field (magnifier, clear button, 44px).
+            <SearchField
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder={selectedProvider === 'gifs' ? 'Search GIFs…' : 'Search emotes…'}
+              className="flex-1 min-w-0"
+            />
+          ) : (
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
+              className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
+            />
+          )}
           {onPopOut && (
             <Tooltip content="Pop out" side="top">
               <button
@@ -951,7 +962,11 @@ export function EmotePickerPanel({
         </div>
         )}
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
+      {/* On the phone the grid fades out against the Emotes/GIFs bar. */}
+      <div
+        ref={scrollRef}
+        className={`flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin ${IS_MOBILE ? 'sn-fade-bottom' : ''}`}
+      >
         {selectedProvider === 'gifs' ? (
           !gifStatus?.can_use ? (
             // Three distinct answers, so an empty pane is never ambiguous:
@@ -1037,7 +1052,12 @@ export function EmotePickerPanel({
                         {() =>
                           block.map((emoji, idx) => (
                             <Tooltip key={`${category}-${bi}-${idx}`} content={emoji}>
-                              <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
+                              <button
+                                onClick={() => onInsert(emoji)}
+                                // An emoji with no image falls back to its character
+                                // (onError below). On the phone that text gets the
+                                // image's 24px box, not the panel's inherited size.
+                                className={`flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors${IS_MOBILE ? ' text-[20px] leading-6' : ''}`}>
                                 <img
                                   src={getAppleEmojiUrl(emoji)}
                                   alt={emoji}
@@ -1085,7 +1105,7 @@ export function EmotePickerPanel({
               <div key={groupKey} className="flex flex-col">
                 <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                   {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={groupKey} />}
-                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
+                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
                 </h3>
                 {chunkArray(group.emotes, TWITCH_COLS * TWITCH_BLOCK_ROWS).map((block, bi) => {
                   const rows = Math.ceil(block.length / TWITCH_COLS);
@@ -1162,7 +1182,7 @@ export function EmotePickerPanel({
                 <div key={group.key} className="flex flex-col">
                   <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                     {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={group.key} />}
-                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
+                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
                   </h3>
                   {chunkArray(group.emotes, group.cols * WIDTH_BLOCK_ROWS).map((block, bi) => {
                     const rows = Math.ceil(block.length / group.cols);

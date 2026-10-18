@@ -164,7 +164,9 @@ export const SettingsScreen: React.FC = () => {
         >
           <ArrowLeft size={22} />
         </button>
-        <h1 className="text-lg font-bold text-textPrimary">{lastView}</h1>
+        {/* A drill-in title, 17/700 as the iPhone sets it, a step under the
+            tabs' large title. */}
+        <h1 className="text-[17px] font-bold leading-[22px] text-textPrimary">{lastView}</h1>
       </div>
       <div
         ref={scrollRef}

@@ -361,15 +361,10 @@ struct CategoryTile: View {
             .overlay { shape.strokeBorder(SN.textPrimary.opacity(0.10), lineWidth: 1 / scale) }
     }
 
-    /// Absent only when the core could not count (its fallback search carries no viewers).
-    private var viewers: String? {
-        guard let count = category.viewerCount else { return nil }
-        switch count {
-        case 0: return "No live streams"
-        case 1: return "1 viewer"
-        default: return "\(count.formatted(.number.notation(.compactName))) viewers"
-        }
-    }
+    /// The words the core serves with the category, in the one compact format every shell shows
+    /// (services/count_text.rs). Absent only when the core could not count (its fallback search
+    /// carries no viewers).
+    private var viewers: String? { category.viewersLine }
 }
 
 /// A category's box art. Twitch's CDN answers a category with no art by redirecting to its shared

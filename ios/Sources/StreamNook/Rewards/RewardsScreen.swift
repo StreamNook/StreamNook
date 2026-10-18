@@ -1,8 +1,9 @@
 import SNKit
 import SwiftUI
 
-/// Rewards: Twitch Drops and the badge wall, two segments under one title. Each visit opens on
-/// Drops with no search and every game closed.
+/// Rewards: Twitch Drops and the badge wall, chosen in the title row (Brandon: the parts beside
+/// the title, so the row under it goes and the content moves up). Each visit opens on Drops with
+/// no search and every game closed.
 struct RewardsScreen: View {
     let model: AppModel
 
@@ -16,10 +17,6 @@ struct RewardsScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if model.signedIn {
-                        GlazeSegments([Segment(value: RewardsStore.Part.drops, label: "Drops"),
-                                       Segment(value: RewardsStore.Part.badges, label: "Badges")],
-                                      selection: Binding(get: { rewards.segment }, set: { if let next = $0 { rewards.segment = next } }))
-                            .padding(.top, 4)
                         switch rewards.segment {
                         case .drops: DropsSegment(model: model, scroller: scroller)
                         case .badges: BadgesSegment(model: model)
@@ -46,6 +43,15 @@ struct RewardsScreen: View {
         .background(SN.background)
         .navigationTitle("Rewards")
         .toolbarTitleDisplayMode(.inlineLarge)
+        .toolbar {
+            if model.signedIn {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TitleSegments(segments: [Segment(value: RewardsStore.Part.drops, label: "Drops"),
+                                             Segment(value: RewardsStore.Part.badges, label: "Badges")],
+                                  selection: $rewards.segment)
+                }
+            }
+        }
         .refreshable { await refresh() }
         .onAppear {
             rewards.visited()

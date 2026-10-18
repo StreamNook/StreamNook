@@ -195,13 +195,35 @@ fn gql_nodes(connection: Option<&serde_json::Value>) -> Vec<&serde_json::Value> 
 /// always show the same number; it is absent only when GQL was unreachable and
 /// the answer came from Helix, which carries no viewers. The box art keeps the
 /// `{width}x{height}` template.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Serialized with `viewers_line`, the tile's words for `viewer_count`
+/// (`count_text::viewers_line`), so no shell formats the number itself.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct CategoryRow {
     pub id: String,
     pub name: String,
     pub box_art_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub viewer_count: Option<u64>,
+}
+
+impl Serialize for CategoryRow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut row = serializer.serialize_struct("CategoryRow", 5)?;
+        row.serialize_field("id", &self.id)?;
+        row.serialize_field("name", &self.name)?;
+        row.serialize_field("box_art_url", &self.box_art_url)?;
+        match self.viewer_count {
+            Some(viewers) => row.serialize_field("viewer_count", &viewers)?,
+            None => row.skip_field("viewer_count")?,
+        }
+        match crate::services::count_text::viewers_line(self.viewer_count) {
+            Some(line) => row.serialize_field("viewers_line", &line)?,
+            None => row.skip_field("viewers_line")?,
+        }
+        row.end()
+    }
 }
 
 impl CategoryRow {
