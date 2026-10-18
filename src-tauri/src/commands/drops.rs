@@ -838,6 +838,48 @@ pub async fn open_drop_details(_app_handle: AppHandle, url: String) -> Result<()
     crate::ios_ffi::open_url(&url)
 }
 
+/// The prediction card for a channel a shell just opened (`{ channel_id,
+/// view }`, view null when none runs). `channel_login` lets Rust word it in
+/// the channel's points name.
+#[tauri::command]
+pub async fn get_channel_prediction(
+    channel_id: String,
+    channel_login: Option<String>,
+) -> crate::services::predictions::PredictionPush {
+    crate::services::predictions::current(channel_id.trim(), channel_login.as_deref()).await
+}
+
+/// What a bet of `amount` (digits as typed) on `outcome_id` would say: the
+/// clamped amount, the button, the confirm's words. Spends nothing.
+#[tauri::command]
+pub async fn prediction_bet(
+    channel_id: String,
+    outcome_id: String,
+    amount: Option<String>,
+) -> Option<crate::services::predictions::BetView> {
+    crate::services::predictions::bet(channel_id.trim(), &outcome_id, amount.as_deref()).await
+}
+
+/// The confirm's yes: put `amount` channel points on `outcome_id`.
+#[tauri::command]
+pub async fn predict(
+    channel_id: String,
+    outcome_id: String,
+    amount: i64,
+) -> crate::services::predictions::PredictOutcome {
+    crate::services::predictions::predict(channel_id.trim(), &outcome_id, amount).await
+}
+
+/// The poll card for `channel_id` now, read from Twitch when Rust has none,
+/// and followed until the poll ends (`poll-state` pushes).
+#[tauri::command]
+pub async fn watch_channel_poll_view(
+    channel_id: String,
+) -> Result<Option<crate::services::poll_view::PollView>, String> {
+    let poll = crate::services::slash_commands::watch_poll_now(channel_id.trim(), None).await?;
+    Ok(poll.and_then(|p| crate::services::poll_view::view_of(&p, chrono::Utc::now().timestamp_millis())))
+}
+
 // Prediction commands
 #[tauri::command]
 pub async fn place_prediction(

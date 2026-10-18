@@ -841,6 +841,15 @@ impl ChannelPointsWebSocketService {
                 .unwrap_or_default()
         );
 
+        crate::services::predictions::note_self(
+            &channel_id,
+            &event_id,
+            &outcome_id,
+            points,
+            result_type.as_deref(),
+            points_won,
+        );
+
         // A settled prediction gets its own notification (won, lost, refunded).
         #[cfg(desktop)]
         if let Some(result) = result_type.clone() {
@@ -889,6 +898,11 @@ impl ChannelPointsWebSocketService {
             Some(ref cid) => Self::resolve_channel_login(cid, channel_mappings).await,
             None => None,
         };
+
+        // Rust keeps the prediction and pushes the card every shell draws.
+        if let Some(ref cid) = channel_id {
+            crate::services::predictions::note_channel_event(cid, channel_name.as_deref(), &message_data);
+        }
 
         // Format display string: "channel_name (ID)" or just "ID"
         let channel_display = match (&channel_name, &channel_id) {
@@ -1250,6 +1264,7 @@ impl ChannelPointsWebSocketService {
         if let Some(ref cid) = channel_id {
             crate::services::slash_commands::note_poll(cid, &payload, emit_event);
         }
+        crate::services::poll_view::publish(&payload);
         let _ = app_handle.emit(emit_event, payload);
     }
 

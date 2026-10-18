@@ -413,8 +413,7 @@
    "detail": "A live poll card with the running vote tally.",
    "aliases": [
     "poll"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -426,8 +425,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -442,8 +440,7 @@
    "aliases": [
     "prediction",
     "bet"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -455,8 +452,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
