@@ -48,9 +48,19 @@ interface Props {
   onClose: () => void;
   /** The stream manager's answer, so the Tools menu shows the running poll. */
   onOutcome?: (outcome: ActOutcome) => void;
+  /** Drawn in a page (the phone's Manage channel sheet) rather than as a
+   *  popover above the message box: no frame, no outside-press close. */
+  inline?: boolean;
 }
 
-export function PollPredictionComposer({ broadcasterId, channelLogin, initialKind = 'poll', onClose, onOutcome }: Props) {
+export function PollPredictionComposer({
+  broadcasterId,
+  channelLogin,
+  initialKind = 'poll',
+  onClose,
+  onOutcome,
+  inline = false,
+}: Props) {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const addToast = useAppStore((s) => s.addToast);
@@ -72,11 +82,12 @@ export function PollPredictionComposer({ broadcasterId, channelLogin, initialKin
   );
 
   useEffect(() => {
-    titleRef.current?.focus();
-  }, []);
+    // On a phone the keyboard would cover the form the moment it opens.
+    if (!inline) titleRef.current?.focus();
+  }, [inline]);
 
   // Escape closes; click-away closes. Matches the emote picker and mod menu.
-  const markInside = useOutsidePress(true, [rootRef], onClose);
+  const markInside = useOutsidePress(!inline, [rootRef], onClose);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -172,7 +183,11 @@ export function PollPredictionComposer({ broadcasterId, channelLogin, initialKin
     <div
       ref={rootRef}
       onPointerDownCapture={markInside}
-      className="sn-popover absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden"
+      className={
+        inline
+          ? 'flex flex-col'
+          : 'sn-popover absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden'
+      }
     >
       {/* Kind switch */}
       <div className="flex items-center gap-1 p-2">

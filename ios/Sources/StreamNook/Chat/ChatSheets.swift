@@ -129,6 +129,22 @@ struct ChatMenuSheet: View {
                             Label("Chat commands", systemImage: "terminal")
                         }
                     }
+                    // The stream manager, for the broadcaster and the channel's moderators: Rust
+                    // offers each role only what Twitch lets it do.
+                    if !session.isKick, session.roomID != nil, moderates || session.isModerator {
+                        Button {
+                            dismiss()
+                            model.manageOpen = true
+                        } label: {
+                            HStack {
+                                Label("Manage channel", systemImage: "slider.horizontal.3")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(SN.textMuted)
+                            }
+                        }
+                    }
                     // Only where the actions would succeed: Helix refuses them without mod powers here.
                     if moderates || session.isModerator {
                         Button {

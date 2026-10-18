@@ -2779,10 +2779,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // this channel and kept current while a builder is up.
   const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
   const [toolsOpened, setToolsOpened] = useState(false);
-  useEffect(() => {
+  const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
+  if (managerChannel !== currentStream?.user_id) {
+    setManagerChannel(currentStream?.user_id);
     setManagerPanel(null);
     setToolsOpened(false);
-  }, [currentStream?.user_id]);
+  }
   const handleToolsOpenChange = useCallback((open: boolean) => {
     if (open) setToolsOpened(true);
   }, []);

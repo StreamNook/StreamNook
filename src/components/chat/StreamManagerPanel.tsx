@@ -43,7 +43,7 @@ interface Props {
 
 const LABEL = 'text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary';
 
-const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
+export const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
   info: { title: 'Stream info', icon: <Pencil size={14} /> },
   raid: { title: 'Raid a channel', icon: <Send size={14} /> },
   ads: { title: 'Ad break', icon: <Tv size={14} /> },
@@ -51,10 +51,63 @@ const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
   announce: { title: 'Announce', icon: <Megaphone size={14} /> },
 };
 
-export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onClose }: Props) {
+/**
+ * One runner for every write: Rust answers with the line to show and the view
+ * after it. `onDone` runs after a write that succeeded and asked to close.
+ */
+export function useManagerAct(view: StreamManagerView, onOutcome: (o: ActOutcome) => void, onDone: () => void) {
   const addToast = useAppStore((s) => s.addToast);
-  const rootRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
+  const act: Act = async (action, closeOnSuccess = false) => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const outcome = await managerAct(view.channel_id, view.channel_login, action);
+      onOutcome(outcome);
+      addToast(outcome.message, outcome.ok ? 'success' : 'error');
+      if (outcome.ok && closeOnSuccess) onDone();
+      return outcome.ok;
+    } catch (err) {
+      addToast(typeof err === 'string' ? err : 'That did not go through', 'error');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, act };
+}
+
+/** The form for one builder, without its frame: the desktop popover and the
+ *  phone's Manage channel sheet both draw it. */
+export function ManagerForm({
+  kind,
+  view,
+  queue,
+  onQueue,
+  onOutcome,
+  onDone,
+}: {
+  kind: ManagerPanelKind;
+  view: StreamManagerView;
+  queue: QueueView | null;
+  onQueue: (q: QueueView) => void;
+  onOutcome: (o: ActOutcome) => void;
+  onDone: () => void;
+}) {
+  const { busy, act } = useManagerAct(view, onOutcome, onDone);
+  return (
+    <>
+      {kind === 'info' && <InfoForm view={view} busy={busy} act={act} />}
+      {kind === 'raid' && <RaidForm view={view} busy={busy} act={act} />}
+      {kind === 'ads' && <AdsForm view={view} busy={busy} act={act} />}
+      {kind === 'rewards' && <RewardsQueue view={view} queue={queue} onQueue={onQueue} busy={busy} act={act} />}
+      {kind === 'announce' && <AnnounceForm view={view} busy={busy} act={act} />}
+    </>
+  );
+}
+
+export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onClose }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const markInside = useOutsidePress(true, [rootRef], onClose);
   useEffect(() => {
@@ -67,25 +120,6 @@ export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onCl
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
-
-  // One runner for every write: Rust answers with the line to show and the
-  // view after it.
-  const act = async (action: ManagerAction, closeOnSuccess = false) => {
-    if (busy) return false;
-    setBusy(true);
-    try {
-      const outcome = await managerAct(view.channel_id, view.channel_login, action);
-      onOutcome(outcome);
-      addToast(outcome.message, outcome.ok ? 'success' : 'error');
-      if (outcome.ok && closeOnSuccess) onClose();
-      return outcome.ok;
-    } catch (err) {
-      addToast(typeof err === 'string' ? err : 'That did not go through', 'error');
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const head = TITLES[kind];
   return (
@@ -104,11 +138,7 @@ export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onCl
         </Tooltip>
       </div>
       <div className="overflow-y-auto scrollbar-thin px-3 pb-3">
-        {kind === 'info' && <InfoForm view={view} busy={busy} act={act} />}
-        {kind === 'raid' && <RaidForm view={view} busy={busy} act={act} />}
-        {kind === 'ads' && <AdsForm view={view} busy={busy} act={act} />}
-        {kind === 'rewards' && <RewardsQueue view={view} queue={queue} onQueue={onQueue} busy={busy} act={act} />}
-        {kind === 'announce' && <AnnounceForm view={view} busy={busy} act={act} />}
+        <ManagerForm kind={kind} view={view} queue={queue} onQueue={onQueue} onOutcome={onOutcome} onDone={onClose} />
       </div>
     </div>
   );
@@ -157,10 +187,7 @@ function InfoForm({ view, busy, act }: FormProps) {
   }, [draft, view.channel_id]);
 
   useEffect(() => {
-    if (catQuery === null || !catQuery.trim()) {
-      setCatResults([]);
-      return;
-    }
+    if (catQuery === null || !catQuery.trim()) return;
     let alive = true;
     const t = window.setTimeout(() => {
       void invoke<Category[]>('search_categories', { query: catQuery.trim(), limit: 8 })
@@ -229,7 +256,7 @@ function InfoForm({ view, busy, act }: FormProps) {
               placeholder="Search categories"
               className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
             />
-            {catResults.length > 0 && (
+            {catQuery.trim() && catResults.length > 0 && (
               <div className="mt-1 rounded-md overflow-hidden hairline-y max-h-56 overflow-y-auto scrollbar-thin">
                 {catResults.map((c) => (
                   <button
@@ -361,10 +388,7 @@ function RaidForm({ view, busy, act }: FormProps) {
   }, [raid]);
 
   useEffect(() => {
-    if (raid || !query.trim()) {
-      setResults([]);
-      return;
-    }
+    if (raid || !query.trim()) return;
     let alive = true;
     const t = window.setTimeout(() => {
       void searchRaidTargets(query, view.channel_id)
@@ -413,7 +437,7 @@ function RaidForm({ view, busy, act }: FormProps) {
         placeholder="Search for a channel"
         className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
       />
-      {results.map((t) => (
+      {(query.trim() ? results : []).map((t) => (
         <button
           key={t.id}
           disabled={busy || !t.live}

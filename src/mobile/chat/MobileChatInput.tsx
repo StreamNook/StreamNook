@@ -43,6 +43,7 @@ import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
+import { ManageChannelSheet } from './ManageChannelSheet';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -157,6 +158,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // that is still in flight answers into the room it was typed in.
   const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [manageOpen, setManageOpen] = useState(false);
   const text = drafts[roomKey] ?? '';
   const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
     setDrafts((d) => {
@@ -897,8 +899,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onAddChat={onAddChat}
         onReload={onReload}
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
+        onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
         onCloseChat={onCloseChat}
       />
+      {channel && channelId && isTwitch && isModerator && (
+        <ManageChannelSheet
+          open={manageOpen}
+          onClose={() => setManageOpen(false)}
+          channelId={channelId}
+          channelLogin={channel}
+        />
+      )}
       <MobileCommandSheet
         open={commandsOpen}
         onClose={() => setCommandsOpen(false)}

@@ -158,6 +158,15 @@ body:has(.sn-mobile) .glass-input:focus {
   min-width: 44px;
 }
 
+/* The stream manager's forms are the desktop builders' own; on the phone
+   their fields and buttons get finger-sized targets and text. */
+.sn-manage-touch .glass-input,
+.sn-manage-touch .glass-button,
+.sn-manage-touch .glass-button-secondary {
+  min-height: 44px;
+  font-size: 15px;
+}
+
 /* Bottom clearance for scroll content that runs behind the floating pill tab
    bar. The bar sits at `safe-b + 14px` and is `--sn-tabbar-h` tall, so it ends
    at `safe-b + 70px`; everything past that is breathing room.

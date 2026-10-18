@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -50,6 +50,9 @@ interface Props {
   onReload: () => void;
   /** Opens the chat command browser. Absent when no chat is open. */
   onBrowseCommands?: () => void;
+  /** Opens the stream manager. Absent where there is nothing to manage
+   *  (not a Twitch chat you moderate or own). */
+  onManageChannel?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
 }
@@ -68,6 +71,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onAddChat,
   onReload,
   onBrowseCommands,
+  onManageChannel,
   onCloseChat,
 }) => {
   const row =
@@ -240,6 +244,22 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               <Terminal size={ICON} className="text-textSecondary" />
             </span>
             <span className="flex-1 text-left">Chat commands</span>
+          </button>
+        )}
+
+        {onManageChannel && (
+          <button
+            onClick={() => {
+              onClose();
+              onManageChannel();
+            }}
+            className={row}
+          >
+            <span className={iconBox}>
+              <PencilSimpleLine size={ICON} className="text-textSecondary" />
+            </span>
+            <span className="flex-1 text-left">Manage channel</span>
+            <CaretRight size={16} className="text-textMuted" />
           </button>
         )}
 

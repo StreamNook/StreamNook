@@ -69,6 +69,13 @@ private struct ComposerBar: View {
             ChatMenuSheet(model: model, session: session)
                 .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $model.manageOpen) {
+            if let roomID = session.roomID {
+                ManageChannelSheet(core: session.core, channelID: roomID, channelLogin: session.channel,
+                                   toasts: session.rooms?.toasts)
+                    .presentationDetents([.large])
+            }
+        }
         .sheet(isPresented: $model.commandsOpen) {
             ChatCommandSheet(session: session) { name in
                 model.replaceWithCommand(name)
