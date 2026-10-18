@@ -79,7 +79,7 @@ struct SettingsDirectory: View {
 
             if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(SettingsSection.allCases) { section in
+                    ForEach(SettingsSection.listed) { section in
                         NavigationLink(value: Route.settings(section)) {
                             RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
                         }
@@ -240,7 +240,8 @@ struct BackupPanel: View {
                 }
                 ForEach(backups) { backup in
                     SettingRow(title: Self.day(backup.id),
-                               detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes)) {
+                               detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes),
+                               centersControl: true) {
                         ArmedPill(label: "Restore", armedLabel: "Replace current",
                                   armed: Binding(get: { armed == backup.id }, set: { armed = $0 ? backup.id : nil })) {
                             Task { await restore(backup.id) }

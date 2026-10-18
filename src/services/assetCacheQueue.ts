@@ -2,14 +2,14 @@
 // hears back where they landed. Rust keeps one queue per kind for every window,
 // dedupes across them, and paces the downloads; this only batches a window's
 // requests into one call per tick and passes arrivals to the service that keeps
-// that kind's lookup map (emotes, 7TV cosmetics, Twitch badges).
+// that kind's lookup map (emotes, 7TV cosmetics, Twitch badges, StreamNook art).
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 import { features } from '../features';
 import { Logger } from '../utils/logger';
 
-export type AssetKind = 'emote' | 'cosmetic' | 'badge';
+export type AssetKind = 'emote' | 'cosmetic' | 'badge' | 'streamnook';
 
 type Arrivals = (files: Record<string, string>) => void;
 

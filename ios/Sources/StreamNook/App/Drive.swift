@@ -35,7 +35,8 @@ import SwiftUI
 ///   arrow; `ssearch:TEXT` types into the You tab's settings search (`_` for spaces)
 /// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces);
 ///   `scroll:SECTION@end` shows the section's last rows
-/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
+/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it; `ptheme:ID`
+///   draws a built-in theme from the core's catalog without saving it
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `view:cards`, `view:list` the stream lists' card or row view (saved, like the menu)
 /// - `resume` sends the app to the background and back as the scene phase does; `snapshot` logs
@@ -167,6 +168,7 @@ enum Drive {
             case "scroll": SettingsAnchor.shared.target = value.replacingOccurrences(of: "_", with: " ")
             case "glass": model.look.preview(glassiness: (Double(value) ?? 100) / 100)
             case "motion": model.look.preview(motion: MotionMode(setting: value))
+            case "ptheme": await previewTheme(value, model: model)
             case "toast": model.toasts.show(value.isEmpty ? "Could not load your Kick follows. Try again in a moment." : value)
             case "undo": model.toasts.show(value.isEmpty ? "Message deleted" : value, .info, action: "Undo") {}
             case "wait": try? await Task.sleep(for: .seconds(Double(value) ?? 1))
@@ -261,6 +263,19 @@ enum Drive {
         let next = (try? JSONSerialization.jsonObject(with: Data(json.utf8), options: [.fragmentsAllowed])) ?? json
         await model.settingsStore.set(path, next)
         log.notice("drive try \(path, privacy: .public) = \(json, privacy: .public)")
+    }
+
+    /// Draws a built-in theme without saving it, for shots of a theme nobody has picked.
+    private static func previewTheme(_ id: String, model: AppModel) async {
+        guard let json = try? await model.core.invoke("get_theme_catalog", args: [:]),
+              let root = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let theme = (root["themes"] as? [[String: Any]])?.first(where: { $0["id"] as? String == id }),
+              let tokens = theme["palette"] as? [String: Any] else {
+            log.notice("drive ptheme \(id, privacy: .public) not found")
+            return
+        }
+        model.look.apply(palette: Palette(tokens: tokens), themeID: id)
+        log.notice("drive ptheme \(id, privacy: .public)")
     }
 
     private static func restoreSettings(model: AppModel) async {
@@ -387,7 +402,6 @@ extension SetupWizard.Page {
         case "welcome": .welcome
         case "accounts": .accounts
         case "drops": .drops
-        case "notifications": .notifications
         case "done": .done
         default: nil
         }

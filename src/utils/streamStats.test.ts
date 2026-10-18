@@ -47,7 +47,10 @@ test('abbreviates viewer counts at the thousand and million boundaries', () => {
   assert.equal(formatViewerCount(999), '999');
   assert.equal(formatViewerCount(1000), '1.0K');
   assert.equal(formatViewerCount(12300), '12.3K');
-  assert.equal(formatViewerCount(999999), '1000.0K');
+  assert.equal(formatViewerCount(999949), '999.9K');
+  // Rounding up to the next unit takes the next unit's letter.
+  assert.equal(formatViewerCount(999950), '1.0M');
+  assert.equal(formatViewerCount(999999), '1.0M');
   assert.equal(formatViewerCount(1000000), '1.0M');
   assert.equal(formatViewerCount(1234567), '1.2M');
 });
@@ -74,6 +77,7 @@ test('short counts drop a zero tenth and keep any other', () => {
   assert.equal(formatShortCount(136049), '136K');
   assert.equal(formatShortCount(136400), '136.4K');
   assert.equal(formatShortCount(1000000), '1M');
+  assert.equal(formatShortCount(999999), '1M');
   assert.equal(formatShortCount(1600000), '1.6M');
   assert.equal(formatShortCount(10000), '10K');
   assert.equal(formatShortCount(999), '999');

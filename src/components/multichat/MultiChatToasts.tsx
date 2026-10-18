@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useAppStore } from '../../stores/AppStore';
+import { useAppStore, type Toast } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import {
   MIRRORED_NOTIFICATION_EVENT,
@@ -17,9 +17,9 @@ import {
 // Minimal toast surface for the standalone MultiChat popout. The full ToastManager
 // also subscribes to live-stream Tauri events, so mounting it here would double the
 // "went live" notifications the main window already shows. Each Tauri window has its
-// own store instance, so this paints only THIS window's addToast() queue. Auto-
-// dismiss is handled by the store's own timer; this just renders + offers manual
-// dismiss.
+// own store instance, so this paints only THIS window's addToast() queue. Plain
+// toasts are dismissed by the store's own timer; a toast with an action (Undo)
+// carries no store timer, so this runs it and holds it while hovered.
 //
 // It also shows the main window's notifications while that window is hidden or
 // minimized: Rust sends each one to a single MultiChat window on screen
@@ -132,6 +132,69 @@ function MirroredCard({ notice, onDone }: { notice: MirroredNotice; onDone: (id:
   );
 }
 
+function PopoutToast({ toast, onDone }: { toast: Toast; onDone: (id: number) => void }) {
+  // Only toasts the store left without a timer (an action, live) run one here.
+  const ownTimer = !toast.timeoutId && toast.duration > 0;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remaining = useRef<number | null>(null);
+  const startedAt = useRef(0);
+
+  const arm = useCallback(() => {
+    if (!ownTimer) return;
+    if (timer.current) clearTimeout(timer.current);
+    remaining.current ??= Math.max(0, toast.duration - (Date.now() - toast.createdAt));
+    startedAt.current = Date.now();
+    timer.current = setTimeout(() => onDone(toast.id), remaining.current);
+  }, [ownTimer, onDone, toast.id, toast.duration, toast.createdAt]);
+  const hold = useCallback(() => {
+    if (!timer.current) return;
+    clearTimeout(timer.current);
+    timer.current = null;
+    remaining.current = Math.max(0, (remaining.current ?? 0) - (Date.now() - startedAt.current));
+  }, []);
+  useEffect(() => {
+    arm();
+    return hold;
+  }, [arm, hold]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.16 }}
+      onMouseEnter={hold}
+      onMouseLeave={arm}
+      className={`glass-panel pointer-events-auto flex items-start gap-2 rounded-lg border ${
+        TYPE_BORDER[toast.type] ?? 'border-borderSubtle'
+      } px-3 py-2 shadow-lg`}
+    >
+      <div className="min-w-0 flex-1 text-xs leading-relaxed text-textPrimary">{toast.message}</div>
+      {toast.action && (
+        <button
+          type="button"
+          onClick={() => {
+            toast.action?.onClick();
+            onDone(toast.id);
+          }}
+          className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/15"
+        >
+          {toast.action.label}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => onDone(toast.id)}
+        // Centers the cross on the message's first line.
+        className="mt-[3px] shrink-0 text-textSecondary transition-colors hover:text-textPrimary"
+        aria-label="Dismiss"
+      >
+        <X size={14} />
+      </button>
+    </motion.div>
+  );
+}
+
 export default function MultiChatToasts() {
   const toasts = useAppStore((s) => s.toasts);
   const removeToast = useAppStore((s) => s.removeToast);
@@ -158,26 +221,7 @@ export default function MultiChatToasts() {
           <MirroredCard key={n.id} notice={n} onDone={dropMirrored} />
         ))}
         {toasts.map((t) => (
-          <motion.div
-            key={t.id}
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.16 }}
-            className={`glass-panel pointer-events-auto flex items-start gap-2 rounded-lg border ${
-              TYPE_BORDER[t.type] ?? 'border-borderSubtle'
-            } px-3 py-2 shadow-lg`}
-          >
-            <div className="min-w-0 flex-1 text-xs leading-relaxed text-textPrimary">{t.message}</div>
-            <button
-              type="button"
-              onClick={() => removeToast(t.id)}
-              className="shrink-0 text-textSecondary transition-colors hover:text-textPrimary"
-              aria-label="Dismiss"
-            >
-              <X size={14} />
-            </button>
-          </motion.div>
+          <PopoutToast key={t.id} toast={t} onDone={removeToast} />
         ))}
       </AnimatePresence>
     </div>,

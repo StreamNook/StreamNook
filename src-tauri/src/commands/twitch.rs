@@ -2549,19 +2549,26 @@ pub async fn get_channel_vips(broadcaster_id: String) -> Result<Vec<serde_json::
         .map_err(|e| e.to_string())
 }
 
+/// A channel's moderators and VIPs, read signed in (the web session, then the
+/// rewards sign-in, then anonymous). `/mods` and `/vips` print theirs through
+/// `slash_role_list`, which the slash dispatcher calls on every platform.
 #[tauri::command]
-pub async fn get_chatters_by_role(channel_login: String) -> Result<serde_json::Value, String> {
-    TwitchService::get_chatters_by_role(&channel_login)
+pub async fn get_chatters_by_role(
+    state: State<'_, AppState>,
+    channel_login: String,
+) -> Result<serde_json::Value, String> {
+    TwitchService::get_chatters_by_role(&channel_login, Some(&state.twitch_auth))
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_channel_chatters(
+    state: State<'_, AppState>,
     broadcaster_id: String,
     channel_login: String,
 ) -> Result<serde_json::Value, String> {
-    let mut chatters = TwitchService::get_channel_chatters(&broadcaster_id, &channel_login)
+    let mut chatters = TwitchService::get_channel_chatters(&broadcaster_id, &channel_login, Some(&state.twitch_auth))
         .await
         .map_err(|e| e.to_string())?;
     // Twitch leaves the broadcaster out whenever they are not connected to

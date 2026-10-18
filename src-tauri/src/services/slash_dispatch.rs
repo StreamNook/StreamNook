@@ -68,6 +68,7 @@ use serde_json::{json, Value};
 use crate::services::chat_history::SweepEntry;
 use crate::services::chat_send_limiter::Role;
 use crate::services::command_catalog::{Builtin, UserCommand, BUILTINS};
+use crate::services::moderation::{self, ModAction};
 use crate::services::nuke;
 use crate::services::reminder_service::{self, RemindParse};
 
@@ -1164,6 +1165,12 @@ async fn on_user(
     Ok(())
 }
 
+/// A Twitch moderation action's toast, in the words `services::moderation`
+/// gives every surface.
+fn mod_words(action: &ModAction, name: &str) -> String {
+    moderation::outcome_for(moderation::Platform::Twitch, action, name).message
+}
+
 /// The commands of the original table.
 async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
     let b = c.b();
@@ -1194,7 +1201,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
             let username = clean_login(c.arg(0));
             let reason = c.from(1);
-            let done = format!("Banned {username}");
+            let done = mod_words(&ModAction::Ban, &username);
             on_user(c, o, &username, "ban_user", |u| {
                 json!({ "broadcasterId": id, "targetUserId": u.id, "duration": null, "reason": opt(&reason) })
             }, done)
@@ -1211,7 +1218,10 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 None => 600,
                 Some(ms) => (ms / 1000).max(1),
             };
-            let done = format!("Timed out {username} for {secs}s");
+            // What Twitch will really apply (it stops at 14 days), said the way
+            // every other moderation surface says it ("Timed out bob for 10m").
+            let secs = moderation::applied_timeout(moderation::Platform::Twitch, u32::try_from(secs).unwrap_or(u32::MAX));
+            let done = mod_words(&ModAction::Timeout { seconds: secs }, &username);
             on_user(c, o, &username, "ban_user", |u| {
                 json!({ "broadcasterId": id, "targetUserId": u.id, "duration": secs, "reason": opt(&reason) })
             }, done)
@@ -1222,7 +1232,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Usage);
             }
             let username = clean_login(c.arg(0));
-            let done = format!("Unbanned {username}");
+            let done = mod_words(&ModAction::Unban { timeout: c.command == "untimeout" }, &username);
             on_user(c, o, &username, "unban_user", |u| json!({ "broadcasterId": id, "targetUserId": u.id }), done).await?;
         }
         "clear" => {
@@ -1348,28 +1358,16 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             Err(e) => log::warn!("[Command Handler] Disconnect failed: {e}"),
         },
         "mods" | "vips" => {
-            let chatters = b.invoke("get_chatters_by_role", json!({ "channelLogin": login })).await?;
-            let names = |key: &str| -> Vec<String> {
-                chatters[key]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|m| m["login"].as_str()).filter(|l| !l.is_empty()).map(str::to_string).collect())
-                    .unwrap_or_default()
-            };
-            if c.command == "mods" {
-                let mods = names("moderators");
-                o.say(if mods.is_empty() {
-                    "There are no moderators of this channel.".to_string()
-                } else {
-                    format!("The moderators of this channel are: {}", mods.join(", "))
-                });
-            } else {
-                let vips = names("vips");
-                o.say(if vips.is_empty() {
-                    "There are no VIPs of this channel.".to_string()
-                } else {
-                    format!("The VIPs of this channel are: {}", vips.join(", "))
-                });
+            // Read signed in (the web session, then the rewards sign-in, then
+            // anonymous), every page of the list. A list Twitch would not give
+            // is said as such, with who of the group is in chat now, never as
+            // "none".
+            if login.is_empty() {
+                o.err(format!("/{}: open a channel first", c.command));
+                return Ok(Flow::Done);
             }
+            let lines = b.invoke("slash_role_list", json!({ "channel": login, "role": c.command })).await?;
+            o.say_all(as_lines(lines));
         }
         "monitor" | "unmonitor" | "restrict" | "unrestrict" => {
             if c.args.is_empty() {

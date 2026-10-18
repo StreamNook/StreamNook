@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { DotsThree } from 'phosphor-react';
 import { Tooltip } from '../ui/Tooltip';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
 export interface ChatHeaderMenuItem {
   key: string;
@@ -38,23 +39,17 @@ export default function ChatHeaderMenu({ items }: { items: ChatHeaderMenuItem[] 
     if (open) place();
   }, [open]);
 
+  const markInside = useOutsidePress(open, [triggerRef, menuRef], () => setOpen(false));
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
-      setOpen(false);
-    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
     const onMove = () => place();
-    document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', onMove);
     window.addEventListener('scroll', onMove, true);
     return () => {
-      document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onMove);
       window.removeEventListener('scroll', onMove, true);
@@ -86,6 +81,7 @@ export default function ChatHeaderMenu({ items }: { items: ChatHeaderMenuItem[] 
           {open && (
             <motion.div
               ref={menuRef}
+              onPointerDownCapture={markInside}
               role="menu"
               style={style}
               initial={{ opacity: 0, y: -4, scale: 0.97 }}

@@ -17,6 +17,10 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The pages the You tab lists. Notifications waits until the iPhone sends alerts: today it
+    /// could only ask for a permission nothing uses.
+    static var listed: [SettingsSection] { allCases.filter { $0 != .notifications } }
+
     var title: String {
         switch self {
         case .player: "Player"

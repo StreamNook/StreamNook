@@ -30,6 +30,8 @@ struct SettingsPage: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 16)
+                // "page-end" brings the bottom of a page without named sections into view.
+                .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id("page-end") }
             }
             .scrollIndicators(.hidden)
             .onChange(of: SettingsAnchor.shared.target) { _, target in

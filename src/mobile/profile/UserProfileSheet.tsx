@@ -474,10 +474,13 @@ const ProfileBody: React.FC<{
           {history === null ? null : history.length === 0 ? (
             <div className="text-[12.5px] text-textMuted">Nothing from them in this chat yet.</div>
           ) : (
-            <ul className="flex flex-col gap-1.5">
+            // One column for every row's time, as wide as the widest one
+            // ("12:34 PM" on a 12-hour phone, "12:34" on a 24-hour one), so
+            // a time never wraps and the messages start on one line.
+            <ul className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2.5 gap-y-1.5">
               {history.map((row) => (
-                <li key={row.id} className="flex gap-2.5 text-[14px] leading-snug">
-                  <span className="shrink-0 whitespace-nowrap tabular-nums text-textMuted text-[12px] pt-[2px] min-w-[5ch]">
+                <li key={row.id} className="col-span-2 grid grid-cols-subgrid text-[14px] leading-snug">
+                  <span className="whitespace-nowrap tabular-nums text-textMuted text-[12px] pt-[2px]">
                     {clock(row.at)}
                   </span>
                   <span className="min-w-0 break-words text-textPrimary">{row.content}</span>

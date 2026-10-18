@@ -10,6 +10,7 @@ import supporterBadge from '../assets/streamnook-badge-gold-128.webp';
 import subscriberBadge from '../assets/streamnook-badge-gold-animated.webp';
 import subscriberBadgeChat from '../assets/streamnook-badge-gold-animated-64.webp';
 import { resolveManifestAsset, type AssetManifest } from '../services/cosmetics/types';
+import { streamnookArtSrc } from '../services/streamnookArt';
 
 /** The badge every member wears until they equip another. */
 export const DEFAULT_COSMETIC_SLUG = 'streamnook-default';
@@ -43,6 +44,7 @@ export const COSMETIC_ASSET_CHAT_BY_SLUG: Record<string, string> = {
  * `asset_path` (an R2 URL on cdn.streamnook.app). Returns null when none is
  * usable, so callers can skip a cosmetic they can't render. This is what lets a
  * cloud-served badge (a DB row + an upload, no desktop release) show in chat.
+ * CDN art resolves to Rust's disk copy once it has one (services/streamnookArt).
  */
 export function resolveCosmeticAsset(
   cosmetic:
@@ -57,7 +59,7 @@ export function resolveCosmeticAsset(
     : COSMETIC_ASSET_BY_SLUG[cosmetic.slug];
   if (bundled) return bundled;
   const fromManifest = resolveManifestAsset(cosmetic.asset_manifest, opts);
-  if (fromManifest) return fromManifest;
+  if (fromManifest) return streamnookArtSrc(fromManifest);
   const path = cosmetic.asset_path;
-  return path && /^https?:\/\//.test(path) ? path : null;
+  return path && /^https?:\/\//.test(path) ? streamnookArtSrc(path) : null;
 }
