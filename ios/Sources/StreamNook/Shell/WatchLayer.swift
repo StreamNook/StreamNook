@@ -43,6 +43,13 @@ struct WatchLayer: View {
     /// below it, the field ends 20 pt above the screen edge, just clear of the home indicator.
     static let indicatorOverlap: CGFloat = 24
 
+    /// The window's own bottom inset (the home indicator's). The safe area the layer is handed
+    /// grows to the keyboard's height while it is up; the window's never does.
+    @MainActor private static var homeIndicatorInset: CGFloat {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom ?? 0
+    }
+
     private var chat: LandscapeChatLayout {
         LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "overlay"),
                             side: store.string("fullscreen_chat.side", "auto"),
@@ -113,19 +120,20 @@ struct WatchLayer: View {
                 // second one: below the player in portrait, over or beside the video in landscape
                 // when asked for, hidden but still reading while mini. Portrait chat runs down
                 // into the home-indicator inset, keeping only the strip the indicator needs:
-                // stopping at the safe-area line left a black band under the composer. The chat
-                // is laid out where it is drawn (padding, not offset): the keyboard's inset is
-                // measured from the chat's layout position, so the composer rides up with it.
+                // stopping at the safe-area line left a black band under the composer. With the
+                // keyboard up the bottom inset is the keyboard's, and the chat stops at its top
+                // edge in every layout (reaching past it put the field under the keys).
                 let landscapeChat = landscape && full
                 let chatShown = (full && !landscape) || sideChat
-                let bottomKeep = max(0, insets.bottom - Self.indicatorOverlap)
+                let keyboardUp = insets.bottom > Self.homeIndicatorInset + 1
+                let bottomKeep = max(0, insets.bottom - (keyboardUp ? 0 : Self.indicatorOverlap))
                 ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
                          backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
                          outerInset: landscapeChat ? outer : 0, leading: chat.leading)
                     .frame(width: landscapeChat ? columnWidth : layer.width,
-                           height: landscapeChat ? screen.height : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
-                    .padding(.leading, landscapeChat ? columnX : layer.minX)
-                    .padding(.top, landscapeChat ? 0 : band.maxY)
+                           height: landscapeChat ? max(0, screen.height - (keyboardUp ? insets.bottom : 0))
+                                                 : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
+                    .offset(x: landscapeChat ? columnX : layer.minX, y: landscapeChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)
                     .animation(SNMotion.run(.easeOut(duration: 0.2)), value: nav.landscapeChat)
                     .allowsHitTesting(chatShown && !dragging)
