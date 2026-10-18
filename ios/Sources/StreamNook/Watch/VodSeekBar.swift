@@ -11,6 +11,8 @@ struct VodSeekBar: View {
     @State private var scrub: Double?
 
     private static let track: CGFloat = 4
+    /// The scrub preview's width.
+    private static let preview: CGFloat = 128
     private static let knob: CGFloat = 14
 
     var body: some View {
@@ -37,6 +39,16 @@ struct VodSeekBar: View {
                         .offset(x: width * fraction - Self.knob / 2)
                 }
                 .frame(height: 28)
+                .overlay(alignment: .bottomLeading) {
+                    if let scrub, let frame = watch.playingVod?.storyboard?.frame(at: scrub * duration) {
+                        let shown = Self.preview
+                        let height = shown * frame.height / max(frame.width, 1)
+                        StoryboardFrame(frame: frame, width: shown)
+                            .offset(x: min(max(0, width * scrub - shown / 2), max(0, width - shown)), y: -(28 + 6))
+                            .frame(height: height, alignment: .bottom)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
@@ -90,5 +102,28 @@ struct VodSeekBar: View {
     /// Where each chapter after the first begins, as a fraction of the bar.
     private func chapterStarts(duration: Double) -> [Double] {
         (watch.playingVod?.chapters ?? []).map(\.startSecs).filter { $0 > 1 && $0 < duration }.map { $0 / duration }
+    }
+}
+
+/// One storyboard frame cut from its sprite sheet, drawn while scrubbing.
+private struct StoryboardFrame: View {
+    let frame: Storyboard.Frame
+    let width: CGFloat
+
+    var body: some View {
+        let k = width / max(frame.width, 1)
+        AsyncImage(url: frame.url) { phase in
+            if let image = phase.image {
+                image.resizable()
+                    .frame(width: frame.sheetWidth * k, height: frame.sheetHeight * k)
+                    .offset(x: -frame.x * k, y: -frame.y * k)
+            } else {
+                Color.black
+            }
+        }
+        .frame(width: width, height: frame.height * k, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(SN.floatEdge, lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 8, y: 4)
     }
 }

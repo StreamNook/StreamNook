@@ -69,6 +69,21 @@ import Testing
         #expect(live.vod == nil)
     }
 
+    @Test func storyboardFramesFallOnTheirCell() throws {
+        let board = try decode(Storyboard.self, """
+        {"base_url":"https://x/sb/","variants":[
+          {"quality":"low","width":110,"height":62,"rows":10,"cols":10,"count":300,"interval_secs":10,"images":["low-0.jpg","low-1.jpg","low-2.jpg"]},
+          {"quality":"high","width":220,"height":124,"rows":5,"cols":5,"count":300,"interval_secs":10,"images":["h-0.jpg"]}]}
+        """)
+        // Under 160 px the low variant answers: 1234 s is its frame 123, sheet 1, cell 23.
+        let frame = board.frame(at: 1234, maxWidth: 160)
+        #expect(frame?.url.absoluteString == "https://x/sb/low-1.jpg")
+        #expect(frame?.x == 330)
+        #expect(frame?.y == 124)
+        #expect(frame?.sheetWidth == 1100)
+        #expect(board.frame(at: 0, maxWidth: 320)?.url.absoluteString == "https://x/sb/h-0.jpg")
+    }
+
     @Test func speeds() {
         #expect(PlayerText.rate(1) == "1x")
         #expect(PlayerText.rate(1.25) == "1.25x")

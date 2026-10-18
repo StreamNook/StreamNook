@@ -153,9 +153,11 @@ public struct VodInfo: Decodable, Sendable, Equatable {
     public var playID: Int
     public var mutedSegments: [Range]
     public var chapters: [Chapter]
+    /// Seek-preview frames (finished VODs only).
+    public var storyboard: Storyboard?
 
     enum CodingKeys: String, CodingKey {
-        case status, title, chapters
+        case status, title, chapters, storyboard
         case videoID = "video_id", lengthSeconds = "length_seconds", recordedAt = "recorded_at"
         case channelLogin = "channel_login", startPositionSecs = "start_position_secs", playID = "play_id"
         case mutedSegments = "muted_segments"
@@ -173,7 +175,61 @@ public struct VodInfo: Decodable, Sendable, Equatable {
         playID = try c.decodeIfPresent(Int.self, forKey: .playID) ?? 0
         mutedSegments = try c.decodeIfPresent([Range].self, forKey: .mutedSegments) ?? []
         chapters = try c.decodeIfPresent([Chapter].self, forKey: .chapters) ?? []
+        storyboard = (try? c.decodeIfPresent(Storyboard.self, forKey: .storyboard)) ?? nil
     }
 
     public var isRecording: Bool { status == "recording" }
+}
+
+/// A VOD's seek-preview sprite sheets: each image is a grid of frames, one every `intervalSecs`.
+public struct Storyboard: Decodable, Sendable, Equatable {
+    public struct Variant: Decodable, Sendable, Equatable {
+        public var width: Double
+        public var height: Double
+        public var rows: Int
+        public var cols: Int
+        public var count: Int
+        public var intervalSecs: Double
+        public var images: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case width, height, rows, cols, count, images
+            case intervalSecs = "interval_secs"
+        }
+    }
+
+    /// One frame: the sheet to load and where the frame sits in it, in the sheet's pixels.
+    public struct Frame: Equatable, Sendable {
+        public var url: URL
+        public var x: Double
+        public var y: Double
+        public var width: Double
+        public var height: Double
+        public var sheetWidth: Double
+        public var sheetHeight: Double
+    }
+
+    public var baseURL: String
+    /// Smallest frames first.
+    public var variants: [Variant]
+
+    enum CodingKeys: String, CodingKey {
+        case variants
+        case baseURL = "base_url"
+    }
+
+    /// The frame for `seconds`, from the largest variant no wider than `maxWidth` pixels.
+    public func frame(at seconds: Double, maxWidth: Double = 320) -> Frame? {
+        guard let variant = variants.last(where: { $0.width <= maxWidth }) ?? variants.first,
+              variant.intervalSecs > 0, variant.rows > 0, variant.cols > 0, variant.count > 0 else { return nil }
+        let index = min(variant.count - 1, max(0, Int(seconds / variant.intervalSecs)))
+        let perSheet = variant.rows * variant.cols
+        let sheet = index / perSheet
+        guard variant.images.indices.contains(sheet),
+              let url = URL(string: baseURL + variant.images[sheet]) else { return nil }
+        let cell = index % perSheet
+        return Frame(url: url, x: Double(cell % variant.cols) * variant.width, y: Double(cell / variant.cols) * variant.height,
+                     width: variant.width, height: variant.height,
+                     sheetWidth: Double(variant.cols) * variant.width, sheetHeight: Double(variant.rows) * variant.height)
+    }
 }
