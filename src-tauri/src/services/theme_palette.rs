@@ -554,7 +554,7 @@ mod tests {
     fn the_four_inverted_themes_were_baked_to_the_floor() {
         let secondary = |id: &str| resolve(id, &[], None).palette["textSecondary"].clone();
         assert_eq!(secondary("solarized-dark"), "#4aa1de");
-        assert_eq!(secondary("monokai"), "#fa5892");
+        assert_eq!(secondary("monokai"), "#f3698d");
         assert_eq!(secondary("solarized-sand"), "#584a37");
         assert_eq!(secondary("catppuccin-latte"), "#545667");
         assert_eq!(secondary(DEFAULT_THEME_ID), "#97b1b9");

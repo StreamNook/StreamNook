@@ -123,6 +123,7 @@ export const getThemesByCategory = (category: Theme['category']): Theme[] => {
 // ============================================
 
 import type { CustomTheme, CustomThemeColor, CustomThemePalette } from '../types';
+import { IS_MOBILE } from '../utils/platform';
 
 // Resolve a CustomThemeColor to a CSS-compatible string
 const resolveColor = (c: CustomThemeColor): string => {
@@ -321,6 +322,38 @@ export const needsLightContentOn = (color: string): boolean => {
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
 };
 
+// What a theme color looks like painted over an opaque base, returned opaque
+// (#rrggbb): the source-over the compositor would do.
+const overOpaque = (color: string, base: { r: number; g: number; b: number }): string => {
+    const a = color.trim() === 'transparent' ? 0 : parseColorOpacity(color) / 100;
+    const { r, g, b } = hexToRgb(parseColorToHex(color));
+    const mix = (c: number, under: number) => Math.round(c * a + under * (1 - a)).toString(16).padStart(2, '0');
+    return `#${mix(r, base.r)}${mix(g, base.g)}${mix(b, base.b)}`;
+};
+
+// What sits under the page. Every desktop window paints this before the page
+// (tauri.conf.json backgroundColor, the recreated main window and the popouts
+// in Rust); a phone shows nothing behind the app.
+export const WINDOW_FLOOR = '#0c0c0d';
+export const PHONE_FLOOR = '#000000';
+
+/**
+ * The page floors as solid colors. A custom theme color can carry alpha, and
+ * every surface recipe (popovers, menus, modals, toasts, the dock, the
+ * Glassiness 0 bases, bg-background) mixes the background or tertiary color as
+ * if it were opaque, so a see-through floor leaves all of them see-through.
+ * The background is flattened over what is under the page and tertiary over
+ * that; the page itself looks the same, only the surfaces stop reading through.
+ */
+export const opaqueFloors = (
+    background: string,
+    tertiary: string,
+    under: string,
+): { background: string; tertiary: string } => {
+    const page = overOpaque(background, hexToRgb(parseColorToHex(under)));
+    return { background: page, tertiary: overOpaque(tertiary, hexToRgb(page)) };
+};
+
 // Resolve the OLED theme for a chosen accent. OLED is the one signature theme
 // whose accent the user picks; this fills the accent-derived slots (hover/muted,
 // secondary text, scrollbar) from a single hex so the look stays cohesive on
@@ -414,15 +447,23 @@ const writeSurfaceGlass = (strength: number): void => {
     root.style.setProperty('--color-surface-active', blendSurfaceForGlass(surfaceActive, tertiary, strength));
 };
 
-// Apply theme to CSS variables
-export const applyTheme = (theme: Theme): void => {
+// Apply theme to CSS variables. `floor` is what sits under the page; only a
+// window that is itself see-through (the Windows chat overlay, whose slab
+// alpha is its own slider) passes null to keep the theme's alpha.
+export const applyTheme = (
+    theme: Theme,
+    { floor = IS_MOBILE ? PHONE_FLOOR : WINDOW_FLOOR }: { floor?: string | null } = {},
+): void => {
     const root = document.documentElement;
     const { palette } = theme;
 
-    // Core colors
-    root.style.setProperty('--color-background', palette.background);
+    // Core colors, with the floors made solid (see opaqueFloors).
+    const floors = floor
+        ? opaqueFloors(palette.background, palette.backgroundTertiary, floor)
+        : { background: palette.background, tertiary: palette.backgroundTertiary };
+    root.style.setProperty('--color-background', floors.background);
     root.style.setProperty('--color-background-secondary', palette.backgroundSecondary);
-    root.style.setProperty('--color-background-tertiary', palette.backgroundTertiary);
+    root.style.setProperty('--color-background-tertiary', floors.tertiary);
 
     // Surface colors. Capture the raw per-theme tints, then paint them at the
     // current glassiness via writeSurfaceGlass so switching themes never flashes
@@ -432,7 +473,7 @@ export const applyTheme = (theme: Theme): void => {
         surface: palette.surface,
         surfaceHover: palette.surfaceHover,
         surfaceActive: palette.surfaceActive,
-        tertiary: palette.backgroundTertiary,
+        tertiary: floors.tertiary,
     };
     writeSurfaceGlass(effectiveGlassStrength());
 
@@ -497,12 +538,12 @@ export const applyTheme = (theme: Theme): void => {
     // (src/mobile/systemBars.ts). Deliberately an event rather than a direct
     // call: this file is shared, and shared code must not reach for a native
     // bridge that only exists on the phone.
-    themeDark = needsLightContentOn(palette.background);
+    themeDark = needsLightContentOn(floors.background);
     window.dispatchEvent(
         new CustomEvent('sn:theme-applied', {
             detail: {
-                background: palette.background,
-                lightContent: needsLightContentOn(palette.background),
+                background: floors.background,
+                lightContent: needsLightContentOn(floors.background),
             },
         }),
     );

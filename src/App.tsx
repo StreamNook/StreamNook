@@ -46,6 +46,7 @@ import { TooltipManager } from './components/ui/TooltipManager';
 import { Tooltip } from './components/ui/Tooltip';
 import DropProgressController from './components/plugins/DropProgressController';
 import EmoteSpotlight from './components/EmoteSpotlight';
+import BadgeSpotlightHost from './components/BadgeSpotlightHost';
 import WhispersWidget from './components/WhispersWidget';
 import PluginRuntimeBridge from './components/plugins/PluginRuntimeBridge';
 import Sidebar from './components/Sidebar';
@@ -2437,6 +2438,7 @@ function App() {
       <DropProgressController />
       {emoteSetsEverOpened && <Suspense fallback={null}><EmoteSetsOverlay /></Suspense>}
       <EmoteSpotlight />
+      <BadgeSpotlightHost />
 
       {profileModalUser && (
         <Suspense fallback={null}>

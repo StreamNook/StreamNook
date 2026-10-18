@@ -382,7 +382,9 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isClickable = toast.type === 'live' && toast.action;
-  const canPause = toast.type === 'live';
+  // A live toast, and any toast with an action, holds while hovered (the
+  // store leaves their timer to this item).
+  const canPause = toast.type === 'live' || !!toast.action;
 
   // Set up the initial auto-dismiss timer (only runs once on mount)
   useEffect(() => {

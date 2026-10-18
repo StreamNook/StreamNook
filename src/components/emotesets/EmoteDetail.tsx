@@ -2,6 +2,7 @@
 // usage count, plus the actions for this emote (rename, zero-width, remove,
 // add to a set, copy link, open on 7tv.app). Opens as a centered modal over the
 // workspace from either the set grid or the directory search results.
+import { CreatorChip } from '../chat/CreatorChip';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
@@ -127,19 +128,35 @@ export default function EmoteDetail({ ctx, canManage, sets, workingSetId, channe
               <div className="text-[11px] text-textMuted">original: {data.defaultName}</div>
             )}
             {data?.ownerName && (
-              <div className="flex items-center gap-1.5 mt-1 text-xs text-textSecondary">
-                {data.ownerAvatarUrl && (
-                  <SevenTvAvatar
-                    cosmeticsId={data.ownerTwitchId}
-                    px={16}
-                    src={data.ownerAvatarUrl}
-                    alt=""
-                    className="w-4 h-4 rounded-full object-cover"
-                    loading="lazy"
+              // A valid 7TV user id makes the uploader a chip to their 7TV
+              // profile; anything else stays the plain credit line.
+              data.ownerId && /^[0-9A-Za-z]{24,26}$/.test(data.ownerId) ? (
+                <div className="-ml-0.5 mt-1">
+                  <CreatorChip
+                    compact
+                    creator={{
+                      role: 'uploader',
+                      name: data.ownerName,
+                      avatarUrl: data.ownerAvatarUrl,
+                      link: { kind: 'web', url: `https://7tv.app/users/${data.ownerId}`, site: '7TV' },
+                    }}
                   />
-                )}
-                <span>by {data.ownerName}</span>
-              </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 mt-1 text-xs text-textSecondary">
+                  {data.ownerAvatarUrl && (
+                    <SevenTvAvatar
+                      cosmeticsId={data.ownerTwitchId}
+                      px={16}
+                      src={data.ownerAvatarUrl}
+                      alt=""
+                      className="w-4 h-4 rounded-full object-cover"
+                      loading="lazy"
+                    />
+                  )}
+                  <span>by {data.ownerName}</span>
+                </div>
+              )
             )}
           </div>
           <button onClick={onClose} className="p-1.5 text-textSecondary hover:text-textPrimary hover:bg-glass rounded shrink-0">
