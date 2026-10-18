@@ -4100,7 +4100,14 @@ impl TwitchService {
     /// counts and the channel's collaboration group (null when it is not in
     /// one). Anonymous on the Android client id. The raw `data` object comes
     /// back for `services::collaboration` to read per alias.
+    /// Callers send at most `twitch_limits::GQL_MAX_ALIASES` ids.
     pub async fn get_collaborations(ids: &[String]) -> Result<serde_json::Value> {
+        let resp = Self::gql_public_read(Self::collaborations_body(ids)).await?;
+        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// The request `get_collaborations` sends: one `cN` alias per id.
+    pub(crate) fn collaborations_body(ids: &[String]) -> serde_json::Value {
         let mut vars = serde_json::Map::new();
         let mut params = Vec::with_capacity(ids.len());
         let mut fields = String::new();
@@ -4113,13 +4120,11 @@ impl TwitchService {
                  profileImageURL(width: 70) stream {{ viewersCount }} }} }} }} }} }}\n"
             ));
         }
-        let body = serde_json::json!({
+        serde_json::json!({
             "operationName": "StreamNookCollaborations",
             "query": format!("query StreamNookCollaborations({}) {{\n{fields}}}", params.join(", ")),
             "variables": vars,
-        });
-        let resp = Self::gql_public_read(body).await?;
-        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+        })
     }
 
     /// Live rows for Twitch channels from the public GQL, with no account: the
@@ -4222,7 +4227,14 @@ impl TwitchService {
     /// Name, avatar and live viewer count for a batch of Twitch channel ids,
     /// one aliased anonymous GQL request (`u0`, `u1`, ... in the order given).
     /// `stream` is null for a channel that is not live.
+    /// Callers send at most `twitch_limits::GQL_MAX_ALIASES` ids.
     pub async fn get_channel_faces(ids: &[String]) -> Result<serde_json::Value> {
+        let resp = Self::gql_public_read(Self::channel_faces_body(ids)).await?;
+        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// The request `get_channel_faces` sends: one `uN` alias per id.
+    pub(crate) fn channel_faces_body(ids: &[String]) -> serde_json::Value {
         let mut vars = serde_json::Map::new();
         let mut params = Vec::with_capacity(ids.len());
         let mut fields = String::new();
@@ -4233,13 +4245,11 @@ impl TwitchService {
                 "u{i}: user(id: $i{i}) {{ id login displayName profileImageURL(width: 70) stream {{ viewersCount }} }}\n"
             ));
         }
-        let body = serde_json::json!({
+        serde_json::json!({
             "operationName": "StreamNookChannelFaces",
             "query": format!("query StreamNookChannelFaces({}) {{\n{fields}}}", params.join(", ")),
             "variables": vars,
-        });
-        let resp = Self::gql_public_read(body).await?;
-        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+        })
     }
 
     /// One streamer's clips, fetched the way the Twitch website's Clips tab does:
@@ -4752,37 +4762,11 @@ impl TwitchService {
         Vec<crate::services::vod_progress_service::VodRefresh>,
         Vec<String>,
     )> {
-        /// Aliases per request. Kept well under any practical query-size cap;
-        /// callers currently send at most a couple of dozen.
-        const CHUNK: usize = 50;
-
         let mut found = Vec::new();
         let mut gone = Vec::new();
 
-        for chunk in ids.chunks(CHUNK) {
-            let params = (0..chunk.len())
-                .map(|i| format!("$i{i}: ID!"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let selections = (0..chunk.len())
-                .map(|i| {
-                    format!("v{i}: video(id: $i{i}) {{ {VOD_CARD_FIELDS} }}")
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            let query = format!("query StreamNookVodsByIds({params}) {{ {selections} }}");
-            let variables: serde_json::Map<String, serde_json::Value> = chunk
-                .iter()
-                .enumerate()
-                .map(|(i, id)| (format!("i{i}"), serde_json::Value::String(id.clone())))
-                .collect();
-
-            let resp = Self::gql_public_read(serde_json::json!({
-                "operationName": "StreamNookVodsByIds",
-                "query": query,
-                "variables": variables,
-            }))
-            .await?;
+        for chunk in ids.chunks(Self::VODS_BATCH) {
+            let resp = Self::gql_public_read(Self::videos_by_ids_body(chunk)).await?;
 
             for (i, id) in chunk.iter().enumerate() {
                 // Map back by ALIAS INDEX, never by the returned id: a deleted
@@ -4796,6 +4780,31 @@ impl TwitchService {
         }
 
         Ok((found, gone))
+    }
+
+    /// VODs per `get_videos_by_ids` request: one alias each.
+    pub(crate) const VODS_BATCH: usize = crate::services::twitch_limits::GQL_MAX_ALIASES;
+
+    /// The request for one `get_videos_by_ids` chunk: one `vN` alias per id.
+    pub(crate) fn videos_by_ids_body(chunk: &[String]) -> serde_json::Value {
+        let params = (0..chunk.len())
+            .map(|i| format!("$i{i}: ID!"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let selections = (0..chunk.len())
+            .map(|i| format!("v{i}: video(id: $i{i}) {{ {VOD_CARD_FIELDS} }}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let variables: serde_json::Map<String, serde_json::Value> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (format!("i{i}"), serde_json::Value::String(id.clone())))
+            .collect();
+        serde_json::json!({
+            "operationName": "StreamNookVodsByIds",
+            "query": format!("query StreamNookVodsByIds({params}) {{ {selections} }}"),
+            "variables": variables,
+        })
     }
 
     /// Format a second count as a Helix-style duration string ("3h21m4s").

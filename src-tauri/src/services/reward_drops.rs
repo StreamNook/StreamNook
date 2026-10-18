@@ -479,7 +479,16 @@ fn disambiguate_names(campaigns: &mut [DropCampaign], firsts: &[String]) {
     }
 }
 
-fn details_query(count: usize) -> String {
+/// The campaign list split into details requests of at most
+/// `GQL_MAX_ALIASES` campaigns (one alias each), as index ranges.
+pub(crate) fn detail_chunks(count: usize) -> Vec<std::ops::Range<usize>> {
+    let max = crate::services::twitch_limits::GQL_MAX_ALIASES;
+    (0..count).step_by(max).map(|start| start..(start + max).min(count)).collect()
+}
+
+/// One details request: `c0..cN` read `count` campaigns, plus `currentUser`
+/// (unaliased, so free under the cap; `merge_details` keeps the first).
+pub(crate) fn details_query(count: usize) -> String {
     let group = format!(
         "rewardGroups {{ id name progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL }} }} }} }}"
     );
@@ -494,6 +503,22 @@ fn details_query(count: usize) -> String {
     )
 }
 
+/// Every details answer's `data` as one object, as `build` reads it: chunk
+/// k's `cN` becomes `c<start of k + N>`, and `currentUser` comes from the
+/// first chunk.
+fn merge_details(chunks: &[(std::ops::Range<usize>, Value)]) -> Value {
+    let mut merged = serde_json::Map::new();
+    for (range, data) in chunks {
+        for (i, at) in range.clone().enumerate() {
+            merged.insert(format!("c{at}"), data[format!("c{i}")].clone());
+        }
+        if !data["currentUser"].is_null() && !merged.contains_key("currentUser") {
+            merged.insert("currentUser".into(), data["currentUser"].clone());
+        }
+    }
+    Value::Object(merged)
+}
+
 async fn post(client: &reqwest::Client, token: &str, device_id: &str, session_id: &str, body: Value) -> Result<Value> {
     Ok(client
         .post(GQL_URL)
@@ -506,8 +531,9 @@ async fn post(client: &reqwest::Client, token: &str, device_id: &str, session_id
         .await?)
 }
 
-/// The drops in Twitch's second list, as ordinary drops. Two requests: the
-/// list, then every campaign's tiers and the viewer's progress in one go.
+/// The drops in Twitch's second list, as ordinary drops. The list, then every
+/// campaign's tiers and the viewer's progress, in as few details requests as
+/// the alias cap allows (asked at once).
 pub async fn fetch(client: &reqwest::Client, token: &str, device_id: &str, session_id: &str) -> Result<Vec<DropCampaign>> {
     if let Some((at, campaigns)) = CACHE.lock().ok().and_then(|c| c.clone()) {
         if at.elapsed().as_secs() < CACHE_SECS {
@@ -521,24 +547,25 @@ pub async fn fetch(client: &reqwest::Client, token: &str, device_id: &str, sessi
     let campaigns = if items.is_empty() {
         Vec::new()
     } else {
-        let mut variables = serde_json::Map::new();
-        for (i, item) in items.iter().enumerate() {
-            variables.insert(format!("id{i}"), item["id"].clone());
-        }
-        let details = post(
-            client,
-            token,
-            device_id,
-            session_id,
-            json!({ "query": details_query(items.len()), "variables": variables }),
-        )
-        .await?;
-        if details["data"].is_null() {
-            return Err(anyhow!("no details in the answer: {}", details["errors"]));
-        }
+        let requests = detail_chunks(items.len()).into_iter().map(|range| {
+            let mut variables = serde_json::Map::new();
+            for (i, item) in items[range.clone()].iter().enumerate() {
+                variables.insert(format!("id{i}"), item["id"].clone());
+            }
+            let body = json!({ "query": details_query(range.len()), "variables": variables });
+            async move {
+                let details = post(client, token, device_id, session_id, body).await?;
+                if details["data"].is_null() {
+                    return Err(anyhow!("no details in the answer: {}", details["errors"]));
+                }
+                Ok::<_, anyhow::Error>((range, details["data"].clone()))
+            }
+        });
+        let chunks = futures::future::try_join_all(requests).await?;
+        let details = merge_details(&chunks);
         let now = Utc::now();
         let mut tracker = TRACKER.lock().map_err(|_| anyhow!("tracker poisoned"))?;
-        build(&items, &details["data"], &mut tracker, now)
+        build(&items, &details, &mut tracker, now)
     };
     debug!("[RewardDrops] {} campaigns from Twitch's second list", campaigns.len());
     if let Ok(mut c) = CACHE.lock() {
@@ -926,6 +953,19 @@ mod tests {
         assert!(q.starts_with("query($id0: ID!, $id1: ID!)"));
         assert!(q.contains("c1: dropsCampaign(id: $id1)"));
     }
+
+    #[test]
+    fn chunked_details_merge_back_in_list_order() {
+        assert_eq!(detail_chunks(0), Vec::<std::ops::Range<usize>>::new());
+        assert_eq!(detail_chunks(16), vec![0..15, 15..16]);
+        let merged = merge_details(&[
+            (0..2, json!({ "c0": { "id": "a" }, "c1": { "id": "b" }, "currentUser": { "id": "u1" } })),
+            (2..3, json!({ "c0": { "id": "c" } })),
+        ]);
+        assert_eq!(merged["c0"]["id"], "a");
+        assert_eq!(merged["c2"]["id"], "c");
+        assert_eq!(merged["currentUser"]["id"], "u1");
+    }
 }
 
 #[cfg(test)]
@@ -1029,12 +1069,13 @@ mod live_probe {
             let list = gql(&client, &token, json!({ "query": super::LIST_QUERY })).await;
             let list_ms = t.elapsed().as_millis();
             let items = list["data"]["rewardCampaignsAvailableToUser"].as_array().cloned().unwrap_or_default();
+            let first = super::detail_chunks(items.len()).into_iter().next().unwrap_or(0..0);
             let mut vars = serde_json::Map::new();
-            for (i, item) in items.iter().enumerate() {
+            for (i, item) in items[first.clone()].iter().enumerate() {
                 vars.insert(format!("id{i}"), item["id"].clone());
             }
             let t = std::time::Instant::now();
-            let _ = gql(&client, &token, json!({ "query": super::details_query(items.len()), "variables": vars })).await;
+            let _ = gql(&client, &token, json!({ "query": super::details_query(first.len()), "variables": vars })).await;
             let details_ms = t.elapsed().as_millis();
             let t = std::time::Instant::now();
             let _ = gql(&client, &token, json!({ "query": "query { currentUser { inventory { earnedDropRewards(first: 100) { edges { node { status item { id } } } } } } }" })).await;
