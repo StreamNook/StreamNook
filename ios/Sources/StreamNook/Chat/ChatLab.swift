@@ -219,7 +219,10 @@ enum ChatDrive {
                 guard seen.insert(attachment.url).inserted else { continue }
                 let moving = ImagePipeline.shared.cached(attachment.url, pixelHeight: attachment.pixelHeight, animated: true)
                 let still = ImagePipeline.shared.cached(attachment.url, pixelHeight: attachment.pixelHeight, animated: false)
-                log.notice("badgeprobe \(String(attachment.url.prefix(100)), privacy: .public) animate \(attachment.animate) frames \(moving?.frames.count ?? -1) still \(still != nil)")
+                let frames = moving?.frames ?? []
+                let moves = frames.count > 1
+                    && (frames[0].dataProvider?.data as Data?) != (frames[frames.count / 2].dataProvider?.data as Data?)
+                log.notice("badgeprobe \(String(attachment.url.prefix(100)), privacy: .public) animate \(attachment.animate) frames \(frames.count) differ \(moves) still \(still != nil)")
             }
             log.notice("badgeprobe reduceMotion \(AnimationClock.shared.reduceMotion) animating \(AnimationClock.shared.registeredCount)")
         case "chattype":
