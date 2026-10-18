@@ -6,11 +6,15 @@ import SwiftUI
 /// sheet's badge groups. Android draws the same answer in `MemberSections.tsx`.
 struct MemberSections: View {
     let profile: MemberProfile
+    /// Emotes whose every image failed; they take themselves out, as a badge does.
+    @State private var failed: Set<String> = []
+
+    private var shownEmotes: [TopEmote] { profile.topEmotes.filter { !failed.contains($0.id) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if !profile.stats.isEmpty { overview }
-            if !profile.topEmotes.isEmpty { emotes }
+            if !shownEmotes.isEmpty { emotes }
             if !profile.accolades.isEmpty { accolades }
         }
     }
@@ -38,8 +42,8 @@ struct MemberSections: View {
         VStack(alignment: .leading, spacing: 8) {
             ProfileSectionHeader("Top emotes")
             FlowLayout(spacing: 8) {
-                ForEach(profile.topEmotes) { emote in
-                    CosmeticImage(emote.url, animate: true)
+                ForEach(shownEmotes) { emote in
+                    CosmeticImage(emote.url, animate: true, onFailure: { failed.insert(emote.id) })
                         .frame(width: 28, height: 28)
                         .frame(width: 32, height: 32)
                         .accessibilityLabel("\(emote.name), used \(emote.count) times")
@@ -49,9 +53,10 @@ struct MemberSections: View {
     }
 
     private var accolades: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             ProfileSectionHeader("Accolades", detail: "\(profile.accolades.count)")
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64, maximum: 80), spacing: 8, alignment: .top)],
+            // Five to a row, as on Android.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 5),
                       alignment: .leading, spacing: 12) {
                 ForEach(profile.accolades) { AccoladeMedallion(medal: $0) }
             }
@@ -66,19 +71,28 @@ private struct MemberStatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
+                // One width for every symbol, so the labels start on one line.
                 Image(systemName: Self.symbol[stat.key] ?? "chart.bar")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(nameColor(Self.tint[stat.key] ?? "#aebfca"))
-                Text(stat.label).font(.sn(12)).foregroundStyle(SN.textMuted).lineLimit(1)
+                    .frame(width: 14, alignment: .center)
+                Text(stat.label).font(.sn(12)).foregroundStyle(SN.textSecondary).lineLimit(1)
             }
             Text(stat.value)
                 .font(.sn(17, 700).monospacedDigit())
                 .foregroundStyle(SN.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-            if let caption = stat.caption {
-                Text(caption).font(.sn(12)).foregroundStyle(SN.textMuted).lineLimit(1).minimumScaleFactor(0.8)
-            }
+            // Every tile keeps the caption line, so the grid is one even block; the caption
+            // hugs its value.
+            Text(stat.caption ?? " ")
+                .font(.sn(12))
+                .foregroundStyle(SN.textMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .opacity(stat.caption == nil ? 0 : 1)
+                .accessibilityHidden(stat.caption == nil)
+                .padding(.top, -3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
@@ -104,7 +118,7 @@ private struct AccoladeMedallion: View {
     let medal: AccoladeMedal
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             ZStack {
                 Circle().fill(LinearGradient(colors: medal.colors.map { nameColor($0) },
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -119,15 +133,14 @@ private struct AccoladeMedallion: View {
             .frame(width: 44, height: 44)
             Text(medal.label)
                 .font(.sn(11, 500))
-                .foregroundStyle(SN.textPrimary)
+                .foregroundStyle(SN.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 64)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(medal.label)
+        .accessibilityLabel(medal.label.replacingOccurrences(of: "\u{AD}", with: ""))
     }
 
     /// The nearest SF Symbol for each of the desktop's lucide icons.

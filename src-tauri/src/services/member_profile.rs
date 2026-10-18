@@ -84,6 +84,10 @@ pub struct TopEmote {
 /// hides it or has nothing in it.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct MemberProfile {
+    /// Their relics with art, the featured one first. The sheet's StreamNook
+    /// block leads with them, ahead of every badge group.
+    #[serde(default)]
+    pub relics: Vec<ProfileBadge>,
     /// The overview, in the desktop card's order, ending on how many times
     /// other people opened their profile.
     pub stats: Vec<MemberStat>,
@@ -152,7 +156,9 @@ const BASE: &[Def] = &[
 /// shows on someone else's profile until it is earned, which is all this list
 /// ever shows anyway.
 const MORE: &[Def] = &[
-    def("completionist", "Completionist", "star", "#f472b6", "#db2777", Rule::Completionist),
+    // Names too long for a medallion's column carry soft hyphens, so they
+    // break at a syllable (with a hyphen) instead of mid-letter.
+    def("completionist", "Com\u{ad}ple\u{ad}tion\u{ad}ist", "star", "#f472b6", "#db2777", Rule::Completionist),
     def("triple", "Triple Threat", "layers", "#34d399", "#0f766e", Rule::TripleThreat),
     def("palindrome", "Palindrome", "repeat", "#c084fc", "#7e22ce", Rule::Palindrome),
     def("nice", "Nice", "smile", "#facc15", "#ca8a04", Rule::Nice),
@@ -175,7 +181,7 @@ const MORE: &[Def] = &[
     def("winter", "Winter", "snowflake", "#93c5fd", "#2563eb", Rule::Saved),
     def("cake_day", "Cake Day", "cake", "#f9a8d4", "#db2777", Rule::Saved),
     def("cs2_major_cologne_2026", "CS2 Major Cologne 2026", "trophy", "#f6e3a0", "#9c7528", Rule::Saved),
-    def("semiquincentennial_2026", "Semiquincentennial", "flag", "#93b4ff", "#dc3d55", Rule::Saved),
+    def("semiquincentennial_2026", "Semi\u{ad}quin\u{ad}cen\u{ad}ten\u{ad}nial", "flag", "#93b4ff", "#dc3d55", Rule::Saved),
 ];
 
 /// The public numbers the accolade rules read.
@@ -376,7 +382,7 @@ pub fn build(f: &MemberFacts) -> MemberProfile {
             .collect()
     };
 
-    MemberProfile { stats: tiles, accolades, top_emotes }
+    MemberProfile { relics: Vec::new(), stats: tiles, accolades, top_emotes }
 }
 
 const TOP_EMOTES: usize = 8;
@@ -479,13 +485,12 @@ async fn count_view(member_id: &str) -> Option<u64> {
     }
 }
 
-/// What a member's sheet adds for them: the member sections, their StreamNook
-/// badges, their relics, and whether they hide their badge collection (which
+/// What a member's sheet adds for them: the member sections (relics included),
+/// their StreamNook badges, and whether they hide their badge collection (which
 /// hides every badge group, as on desktop).
 pub struct MemberSheet {
     pub profile: MemberProfile,
     pub streamnook: Vec<ProfileBadge>,
-    pub relics: Vec<ProfileBadge>,
     pub hide_badges: bool,
 }
 
@@ -504,10 +509,13 @@ impl MemberReads {
         let catalog = registry::catalog();
         self.facts.cosmetics = seventv_cosmetics + owned.len() as u64;
         let hidden = &self.facts.hidden;
+        let mut profile = build(&self.facts);
+        if !is_stat_hidden(hidden, "relics") {
+            profile.relics = relics(&owned, self.featured.as_deref(), &catalog);
+        }
         MemberSheet {
-            profile: build(&self.facts),
+            profile,
             streamnook: streamnook_badges(registry::member_badge(&self.member_id, false).as_ref(), &owned, &catalog),
-            relics: if is_stat_hidden(hidden, "relics") { Vec::new() } else { relics(&owned, self.featured.as_deref(), &catalog) },
             hide_badges: is_stat_hidden(hidden, "badge_collection"),
         }
     }
@@ -680,6 +688,9 @@ mod tests {
         let saved: HashSet<String> = BASE.iter().map(|d| d.id.to_string()).collect();
         let all = earned_accolades(&Tally::default(), &saved);
         assert!(all.iter().any(|a| a.id == "completionist"));
+        // The long single words break at a syllable, never mid-letter.
+        let label = all.iter().find(|a| a.id == "completionist").map(|a| a.label.replace('\u{ad}', ""));
+        assert_eq!(label.as_deref(), Some("Completionist"));
         assert_eq!(all[0].colors, ["#6aa9ff".to_string(), "#3b6fd4".to_string()]);
     }
 
@@ -746,7 +757,7 @@ mod tests {
     #[test]
     fn the_shape_keeps_the_keys_both_phones_decode() {
         let v = serde_json::to_value(build(&facts())).unwrap();
-        for key in ["stats", "accolades", "top_emotes"] {
+        for key in ["relics", "stats", "accolades", "top_emotes"] {
             assert!(v.get(key).is_some(), "{key}");
         }
         assert_eq!(v["stats"][0]["key"], "hours");
