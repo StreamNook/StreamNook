@@ -274,6 +274,30 @@ pub struct ChannelReward {
     /// when the room or the stream changes; the menu shows it as-is.
     #[serde(default)]
     pub availability: RewardAvailability,
+    /// What redeeming it involves and the words for it
+    /// (services/reward_redeem.rs), stamped with the verdict.
+    #[serde(default)]
+    pub view: RewardView,
+}
+
+/// How a reward is redeemed and what its controls say, for every shell.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RewardView {
+    /// `highlight`, `sub_message`, `random_emote`, `choose_emote`,
+    /// `modify_emote`, `input` or `standard`.
+    pub kind: String,
+    /// The redeem carries the viewer's typed text.
+    pub takes_text: bool,
+    /// The cost for a narrow pill: "950", "3k", "2.5k", "1.2M".
+    pub cost_label: String,
+    /// The action button: "Redeem", "Send highlighted", "Send", "Choose emote".
+    pub action: String,
+    /// The action button while it works: "Redeeming...", "Sending...".
+    pub busy: String,
+    /// The text box's placeholder, for a reward that takes text.
+    pub placeholder: Option<String>,
+    /// "Can't be undone", for a reward redeemed with one press.
+    pub hint: Option<String>,
 }
 
 /// Why a reward cannot be redeemed right now. Earlier variants win when

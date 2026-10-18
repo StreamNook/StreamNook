@@ -204,7 +204,7 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if !session.style.hideCommandButton, !session.isKick {
+                if !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {
@@ -215,6 +215,8 @@ private struct ComposerBar: View {
                     }
                     .accessibilityLabel("Chat commands")
                 }
+                // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
+                if !session.isKick { WalletButton(session: session) { model.panel = .none } }
             }
             .padding(.leading, 4)
             .padding(.trailing, 5)

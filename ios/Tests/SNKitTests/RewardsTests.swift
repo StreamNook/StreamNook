@@ -68,6 +68,49 @@ import Testing
         #expect(bits.balance == nil)
     }
 
+    @Test func walletFacesReadTheStateAndThePushes() throws {
+        let rewards = FakeRewards()
+        let state = try #require(try rewards.answer("get_channel_state", ["login": "nookstreamer"]))
+        let faces = try #require(WalletFaces.parseState(state))
+        #expect(faces.pointsOn?.balance == 12_850)
+        #expect(faces.pointsOn?.name == "Nooks")
+        #expect(faces.bitsOn?.balance == 300)
+        #expect(faces.hasAny)
+        #expect(WalletFaces.parseState("null") == nil)
+
+        let push = rewards.gainPush(login: "NookStreamer", amount: 50, chest: true)
+        guard case .points(let login, let points)? = WalletFaces.parsePush(push) else {
+            Issue.record("no points push")
+            return
+        }
+        #expect(login == "nookstreamer")
+        #expect(points?.balance == 12_900)
+        #expect(points?.lastGain?.seq == 1 && points?.lastGain?.chest == true)
+        #expect(WalletFaces.parsePush(#"{"section":"pinned","login":"x","pinned":[],"at":0}"#) == nil)
+    }
+
+    @Test func theRewardsListCarriesRustsWordsAndRedeemsAreRecorded() throws {
+        let rewards = FakeRewards()
+        let json = try #require(try rewards.answer("get_channel_rewards", ["channelId": "nookstreamer"]))
+        let list = try JSONDecoder().decode(ChannelRewardsSnapshot.self, from: Data(json.utf8))
+        let byID = Dictionary(uniqueKeysWithValues: list.rewards.map { ($0.id, $0) })
+        #expect(byID["hydrate"]?.view.hint == "Can't be undone")
+        #expect(byID["song"]?.view.takesText == true)
+        #expect(byID["highlight"]?.view.action == "Send highlighted")
+        #expect(byID["choose"]?.view.picksEmote == true)
+        #expect(byID["timeout"]?.availability.cooldownEnd != nil)
+        #expect(byID["vip"]?.availability.reason == "not_enough_points")
+        #expect(byID["vip"]?.view.costLabel == "150k")
+        #expect(byID["hydrate"]?.gone().availability.label == "Gone")
+
+        let outcome = try JSONDecoder().decode(RedeemOutcome.self, from: Data(try #require(
+            try rewards.answer("redeem_reward", ["rewardId": "hydrate", "channelLogin": "x", "channelId": "1"])).utf8))
+        #expect(outcome.success && outcome.message == "Redeemed: Hydrate!")
+        #expect(rewards.redeems == ["hydrate"])
+        let emotes = try JSONDecoder().decode([ModifiableEmote].self, from: Data(try #require(try rewards.answer("get_modifiable_emotes", [:])).utf8))
+        #expect(emotes.first?.modifications.first?.words.name == "Black & White")
+    }
+
     @Test func theFakeWallDecodes() throws {
         let json = try #require(try FakeRewards().answer("get_badge_wall", ["sort": "available"]))
         let wall = try JSONDecoder().decode(BadgeWall.self, from: Data(json.utf8))

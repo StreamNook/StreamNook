@@ -21,7 +21,7 @@ pub struct WatchDrop {
     /// The reward's name, else the drop's, else "Drop".
     pub name: String,
     pub image: String,
-    /// "12m to watch", or "Ready to claim" once the minutes are in.
+    /// "12m to watch"; empty once the minutes are in (the Claim button says it).
     pub trailing: String,
     /// "Campaign name · 2 of 5" (the tier part only with more than one tier).
     pub line: String,
@@ -98,7 +98,8 @@ pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &st
         campaign_id: item.campaign.id.clone(),
         drop_id: drop.id.clone(),
         instance_id: drop.progress.as_ref().and_then(|p| p.drop_instance_id.clone()),
-        trailing: if complete { "Ready to claim".into() } else { drop_words::to_watch(left) },
+        // A finished drop is said once, by its Claim button.
+        trailing: if complete { String::new() } else { drop_words::to_watch(left) },
         spoken: if complete {
             format!("{name}, ready to claim")
         } else {
@@ -253,7 +254,7 @@ mod tests {
     fn a_finished_drop_waiting_on_a_claim_comes_first() {
         let items = vec![item("1", "Rust", &[], vec![drop("b", 120, 119, false), drop("c", 60, 60, false)])];
         let bar = pick(&items, "", "x", "g-Rust", "").unwrap();
-        assert_eq!((bar.drop_id.as_str(), bar.complete, bar.trailing.as_str()), ("c", true, "Ready to claim"));
+        assert_eq!((bar.drop_id.as_str(), bar.complete, bar.trailing.as_str()), ("c", true, ""));
         assert_eq!(bar.claim_label, "Claim");
     }
 

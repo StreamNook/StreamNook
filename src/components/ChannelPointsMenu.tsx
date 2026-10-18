@@ -4,10 +4,10 @@ import { listen } from '@tauri-apps/api/event';
 import { motion } from 'framer-motion';
 import { MessageSquareText, Search, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
-import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, RewardBlock, UnlockedEmote } from '../types';
+import { ChannelReward, ChannelRewardsSnapshot, RedeemOutcome, RewardBlock, UnlockedEmote } from '../types';
 
 import { Logger } from '../utils/logger';
-import { formatCostShort, newTransactionId, rewardKind, rewardStatusText, rewardTakesText } from '../utils/rewardStatus';
+import { rewardStatusText } from '../utils/rewardStatus';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
 
@@ -161,17 +161,6 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   // The reward opened in the detail view, and the text typed for it.
   const [detailReward, setDetailReward] = useState<ChannelReward | null>(null);
   const [inputText, setInputText] = useState('');
-  // One transaction id per redeem attempt: kept while the same reward and text
-  // are retried, so Twitch recognises a retry after a lost answer instead of
-  // posting and charging twice. A success, closing the view or new text drops it.
-  const transactionRef = useRef<{ key: string; id: string } | null>(null);
-  const transactionFor = (rewardId: string, text: string): string => {
-    const key = `${rewardId}\n${text}`;
-    if (transactionRef.current?.key !== key) {
-      transactionRef.current = { key, id: newTransactionId() };
-    }
-    return transactionRef.current.id;
-  };
 
   // Emote reveal popup state
   const [showEmoteReveal, setShowEmoteReveal] = useState(false);
@@ -346,7 +335,6 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   const closeDetail = useCallback(() => {
     setDetailReward(null);
     setInputText('');
-    transactionRef.current = null;
   }, []);
 
   // A press outside the popover closes it, as the commands menu beside it
@@ -450,7 +438,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     if (!detailReward || redeemingId) return;
     const reward = liveOf(detailReward);
     if (!reward.availability.redeemable) return;
-    const kind = rewardKind(reward);
+    const kind = reward.view.kind;
 
     if (kind === 'modify_emote') {
       closeDetail();
@@ -464,45 +452,17 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     }
 
     const text = inputText.trim();
-    if (rewardTakesText(kind) && !text) return;
+    if (reward.view.takes_text && !text) return;
 
     setRedeemingId(reward.id);
-    // Rust treats Twitch's "already committed" answer to a reused id as sent.
-    const transactionId = transactionFor(reward.id, text);
     try {
-      let result: RedemptionResult;
-      if (kind === 'highlight') {
-        result = await invoke<RedemptionResult>('send_highlighted_message', {
-          channelId: channelId,
-          message: text,
-          cost: reward.cost,
-          transactionId: transactionId,
-        });
-      } else if (kind === 'sub_message') {
-        result = await invoke<RedemptionResult>('send_sub_mode_message', {
-          channelId: channelId,
-          channelLogin: channelLogin,
-          message: text,
-          cost: reward.cost,
-          transactionId: transactionId,
-        });
-      } else if (kind === 'random_emote') {
-        result = await invoke<RedemptionResult>('unlock_random_emote', {
-          channelId: channelId,
-          cost: reward.cost,
-        });
-      } else {
-        result = await invoke<RedemptionResult>('redeem_channel_reward', {
-          channelId: channelId,
-          rewardId: reward.id,
-          cost: reward.cost,
-          title: reward.title,
-          prompt: reward.prompt ?? '',
-          transactionId: transactionId,
-          ...(kind === 'input' ? { textInput: text } : {}),
-        });
-      }
-
+      // Rust routes by the reward's type and keeps the retry-safe transaction id.
+      const result = await invoke<RedeemOutcome>('redeem_reward', {
+        channelLogin: channelLogin,
+        channelId: channelId,
+        rewardId: reward.id,
+        text: text,
+      });
       if (result.success) {
         closeDetail();
         if (kind === 'random_emote') {
@@ -510,21 +470,16 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             setRevealedEmote(result.unlocked_emote);
             setShowEmoteReveal(true);
           } else {
-            useAppStore.getState().addToast('Random emote unlocked!', 'success');
+            useAppStore.getState().addToast(result.message, 'success');
           }
           if (onEmotesChange) onEmotesChange();
         } else {
-          useAppStore
-            .getState()
-            .addToast(
-              kind === 'highlight' ? 'Highlighted message sent!' : kind === 'sub_message' ? 'Message sent' : `Redeemed: ${reward.title}`,
-              'success',
-            );
+          useAppStore.getState().addToast(result.message, 'success');
         }
         onBalanceUpdate();
         void refreshRewards(); // A redeem can start a cooldown or use up stock
       } else {
-        useAppStore.getState().addToast(result.error_message || 'Redemption failed', 'error');
+        useAppStore.getState().addToast(result.message, 'error');
       }
     } catch (err) {
       Logger.error('[ChannelPointsMenu] Redemption error:', err);
@@ -549,10 +504,12 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     setRedeemingId(modifyEmoteReward.id);
 
     try {
-      const result = await invoke<RedemptionResult>('unlock_modified_emote', {
+      const result = await invoke<RedeemOutcome>('redeem_reward', {
+        channelLogin: channelLogin,
         channelId: channelId,
+        rewardId: modifyEmoteReward.id,
         emoteId: finalEmoteId,
-        cost: modifyEmoteReward.cost,
+        emoteName: selectedModifier.token,
       });
 
       if (result.success) {
@@ -572,7 +529,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           onEmotesChange();
         }
       } else {
-        useAppStore.getState().addToast(result.error_message || 'Failed to modify emote', 'error');
+        useAppStore.getState().addToast(result.message, 'error');
       }
     } catch (err) {
       Logger.error('[ChannelPointsMenu] Modify emote error:', err);
@@ -598,10 +555,12 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     setRedeemingId(chooseEmoteReward.id);
 
     try {
-      const result = await invoke<RedemptionResult>('unlock_chosen_emote', {
+      const result = await invoke<RedeemOutcome>('redeem_reward', {
+        channelLogin: channelLogin,
         channelId: channelId,
+        rewardId: chooseEmoteReward.id,
         emoteId: selectedUnlockEmote.id,
-        cost: chooseEmoteReward.cost,
+        emoteName: selectedUnlockEmote.token,
       });
 
       if (result.success) {
@@ -620,7 +579,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           onEmotesChange();
         }
       } else {
-        useAppStore.getState().addToast(result.error_message || 'Failed to unlock emote', 'error');
+        useAppStore.getState().addToast(result.message, 'error');
       }
     } catch (err) {
       Logger.error('[ChannelPointsMenu] Choose emote error:', err);
@@ -634,8 +593,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
   // Current verdicts for whichever view is open.
   const detail = detailReward ? liveOf(detailReward) : null;
-  const detailKind = detail ? rewardKind(detail) : null;
-  const detailTakesText = detailKind !== null && rewardTakesText(detailKind);
+  const detailKind = detail ? detail.view.kind : null;
+  const detailTakesText = !!detail?.view.takes_text;
   const detailStatus = detail ? rewardStatusText(detail.availability, nowMs, 'detail') : null;
   const detailAbout = detail ? (detail.prompt?.trim() || detail.description?.trim() || null) : null;
   const detailBusy = detail !== null && redeemingId === detail.id;
@@ -643,15 +602,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     && detail.availability.redeemable
     && redeemingId === null
     && (!detailTakesText || inputText.trim().length > 0);
-  const detailActionLabel = detailBusy
-    ? (detailKind === 'highlight' || detailKind === 'sub_message' ? 'Sending...' : 'Redeeming...')
-    : detailKind === 'highlight'
-      ? 'Send highlighted'
-      : detailKind === 'sub_message'
-        ? 'Send'
-      : detailKind === 'choose_emote' || detailKind === 'modify_emote'
-        ? 'Choose emote'
-        : 'Redeem';
+  // Rust's words for the reward's action and its busy state.
+  const detailActionLabel = detail ? (detailBusy ? detail.view.busy : detail.view.action) : '';
   const modifyAvail = modifyEmoteReward ? liveOf(modifyEmoteReward).availability : null;
   const chooseAvail = chooseEmoteReward ? liveOf(chooseEmoteReward).availability : null;
   const modifyBlocked = modifyAvail ? rewardStatusText(modifyAvail, nowMs, 'detail') : null;
@@ -805,7 +757,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                         }`}
                       >
                         {pointsGlyph(12)}
-                        {formatCostShort(reward.cost)}
+                        {reward.view.cost_label}
                       </span>
                       <span
                         className={`line-clamp-2 break-words text-[12px] leading-snug ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
@@ -903,7 +855,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 const available = reward.availability.redeemable;
                 const status = rewardStatusText(reward.availability, nowMs, 'label');
                 const about = reward.prompt?.trim() || reward.description?.trim() || null;
-                const takesText = rewardTakesText(rewardKind(reward));
+                const takesText = reward.view.takes_text;
                 const canAfford = reward.availability.affordable;
                 // How close the balance is to a reward it cannot cover yet,
                 // only while points are what stands in the way.
@@ -953,7 +905,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                           className={`flex items-center gap-1 text-[12.5px] font-semibold tabular-nums ${available ? 'text-textPrimary' : 'text-textMuted'}`}
                         >
                           {pointsGlyph(12, available ? 'text-accent-neon' : '')}
-                          {formatCostShort(reward.cost)}
+                          {reward.view.cost_label}
                         </span>
                         {progress !== null && (
                           <span className="block h-0.5 w-9 overflow-hidden rounded-full bg-white/[0.08]" aria-hidden="true">
