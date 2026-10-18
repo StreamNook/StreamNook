@@ -1,8 +1,8 @@
 import SNKit
 import SwiftUI
 
-/// Who you are, at the top of the You tab: your Atmosphere as the card's band, your 7TV picture
-/// cut into its edge with your StreamNook badge on it, your name in your 7TV paint below the art,
+/// Who you are, at the top of the You tab: your Atmosphere glowing behind you, your picture on its
+/// own (no marks: your accounts and badges show in the rows below), your name in your 7TV paint,
 /// the badges you wear and what you have on, a line of chat as everyone sees it, and the way into
 /// Edit profile. The core saves the identity for the next cold launch, so the card paints on the
 /// first frame, then rebuilds it fresh.
@@ -14,21 +14,20 @@ struct OwnIdentityCard: View {
     /// Read here, held by the You screen so the 7TV account row shows the same picture.
     @Binding var identity: OwnIdentityData?
 
-    static let band: CGFloat = 104
+    /// How far down the card the Atmosphere's glow reaches: the picture, the name and the worn
+    /// line, fading out above the preview row.
+    static let glow: CGFloat = 210
     static let avatar: CGFloat = 80
     static let radius: CGFloat = 22
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AtmosphereBand(look: look, tint: nameColor(picks.ext?.chatColor))
-                .frame(height: Self.band)
-            CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: Self.avatar,
-                         medal: identity?.streamnook?.imageURL, medalLabel: identity?.streamnook?.label ?? "", explains: true)
-                .padding(.leading, 12)
-                .padding(.top, -(Self.avatar / 2 + 4))
+            CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: Self.avatar, explains: true)
+                .padding(.leading, 16)
+                .padding(.top, 16)
             details
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
+                .padding(.top, 12)
             if picks.sn != nil || picks.ext != nil {
                 ProfilePreviewRow(name: user.displayName, picks: picks, fallbackPaint: identity?.paint, framed: false)
                     .padding(.horizontal, 12)
@@ -52,6 +51,9 @@ struct OwnIdentityCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(RowPress())
+        }
+        .background(alignment: .top) {
+            AtmosphereGlow(look: look, tint: nameColor(picks.ext?.chatColor)).frame(height: Self.glow)
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
         .snPanel(radius: Self.radius)

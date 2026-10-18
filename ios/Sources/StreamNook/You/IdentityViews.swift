@@ -3,40 +3,48 @@ import SwiftUI
 import UIKit
 
 // The pieces every identity surface shares (the You card, the Edit profile preview, a chatter's
-// profile sheet): the Atmosphere as a band across the top, the avatar cut into the card's edge
-// under it, and the name below the art, never on it.
+// profile sheet): the Atmosphere glowing behind the identity, the picture standing alone, and the
+// name below it.
 
-/// A member's Atmosphere as a band: its swatch, the full-strength art the picker shows. (The chat
-/// row's wash is built to sit dim behind text, so as a banner it reads near black.) Without one, a
-/// quiet wash of `tint` so the card keeps its shape.
-struct AtmosphereBand: View {
+/// A member's Atmosphere as the air around their identity (Brandon: it read like a cover, not an
+/// atmosphere): the chat row's own wash, held soft and low behind the picture and name and faded
+/// out at every edge, so it is a glow in the card and never a block of art across it. It breathes
+/// (opacity only) where the Atmosphere moves. Without one, a faint glow of `tint`.
+struct AtmosphereGlow: View {
     let look: AtmosphereLook?
     var tint: Color = SN.accent
 
     var body: some View {
         ZStack {
-            if let look, !look.swatch.isEmpty {
-                FillView(fill: look.swatch)
-            } else if let look {
-                WashView(look: look)
+            if let look {
+                WashView(look: look, breathe: true).opacity(0.7)
             } else {
-                ZStack {
-                    SN.backgroundTertiary
-                    RadialGradient(colors: [tint.opacity(0.42), .clear], center: .topLeading, startRadius: 0, endRadius: 280)
-                    RadialGradient(colors: [tint.opacity(0.18), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 240)
-                }
+                RadialGradient(colors: [tint.opacity(0.28), .clear], center: UnitPoint(x: 0.25, y: 0.3),
+                               startRadius: 0, endRadius: 260)
             }
+        }
+        // Faded on every side: in from both edges across, and down from just under the top to
+        // nothing well before the bottom, so no edge of the art ever shows.
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.18),
+                                   .init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
+                           startPoint: .leading, endPoint: .trailing)
+        }
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.2),
+                                   .init(color: .black.opacity(0.75), location: 0.5), .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
 
-/// An avatar set into the card's edge: a ring of the card's own surface around it, so it reads as
-/// cut out of the band, with an optional medal (the StreamNook member badge) on a disc at its
-/// lower right. It shows the one picture others see in chat; when that is the 7TV picture, 7TV's
-/// mark sits on its lower left, so which picture it is shows without words. With `explains`, a tap
-/// says which picture shows where.
+/// A person's picture, standing alone on a black disc (Brandon: black behind a clear picture, not
+/// gray), with a hairline edge and a soft shadow. No marks on your own: which accounts you hold
+/// and what you wear show in the card's rows. On another person's, their StreamNook badge sits on
+/// it as a medal (`medal`), because their card shows it nowhere else. With `explains`, a tap says
+/// which picture shows where.
 struct CutoutAvatar: View {
     let platformURL: String?
     let picture: AvatarPick?
@@ -48,41 +56,30 @@ struct CutoutAvatar: View {
     var explains = false
     @State private var explaining = false
 
-    private var ring: CGFloat { max(3, (size * 0.05).rounded()) }
     private var showsSevenTv: Bool { local == nil && picture != nil }
 
     var body: some View {
         Group {
             if let local {
-                Image(uiImage: local).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+                Image(uiImage: local).resizable().scaledToFill().frame(width: size, height: size)
+                    .background(Color.black)
+                    .clipShape(Circle())
             } else {
                 SevenTvAvatar(platformURL: platformURL, picture: picture, size: size)
             }
         }
-            .padding(ring)
-            .background { Circle().fill(SN.background).overlay { Circle().fill(SN.floor) }.overlay { Circle().fill(SN.backgroundSecondary) } }
             .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
             .overlay(alignment: .bottomTrailing) {
                 if let medal {
-                    // The badge on a disc of the card's own floor, so it reads as a medal, not a
-                    // mark scratched on the photo.
+                    // Another person's StreamNook badge, on a black disc like the picture's own,
+                    // so it reads as a medal and not a mark scratched on the photo.
                     CosmeticImage(medal, animate: true)
                         .frame(width: size * 0.24, height: size * 0.24)
                         .frame(width: size * 0.32, height: size * 0.32)
-                        .background(Circle().fill(SN.backgroundTertiary))
-                        .overlay { Circle().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
-                        .offset(x: -ring * 0.6, y: -ring * 0.6)
+                        .background(Circle().fill(Color.black))
+                        .overlay { Circle().stroke(Color.white.opacity(0.1), lineWidth: 0.5) }
+                        .offset(x: size * 0.02, y: size * 0.02)
                         .accessibilityLabel(medalLabel)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if showsSevenTv {
-                    PlatformMark(platform: .sevenTV, size: size * 0.11)
-                        .frame(width: size * 0.26, height: size * 0.26)
-                        .background(Circle().fill(SN.backgroundTertiary))
-                        .overlay { Circle().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
-                        .offset(x: ring * 0.6, y: -ring * 0.6)
-                        .accessibilityLabel("7TV picture")
                 }
             }
             .contentShape(Circle())
@@ -201,6 +198,36 @@ struct WornMarks: ViewModifier {
 
 extension View {
     func wornMarks(_ worn: Bool, radius: CGFloat = SNRadius.panel) -> some View { modifier(WornMarks(worn: worn, radius: radius)) }
+}
+
+/// A member's place in line on the right of their sheet, as the desktop card's hero draws it:
+/// Nº and the number in the display serif, a hairline, then the rank's name in small caps. The
+/// first three ranks wear their color on the number; the rest keep the text color.
+struct MemberRankMark: View {
+    let rank: MemberRank
+
+    var body: some View {
+        let tint = nameColor(rank.accent)
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Nº").font(.system(size: 11, weight: .light)).foregroundStyle(SN.textMuted)
+                Text(rank.number.formatted())
+                    .font(.system(size: 34, weight: .light, design: .serif).italic())
+                    .monospacedDigit()
+                    .foregroundStyle(rank.lit ? tint : SN.textPrimary)
+            }
+            LinearGradient(colors: [.clear, tint.opacity(0.5), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 48, height: 1)
+                .padding(.top, 8)
+            Text(rank.label.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(2.2)
+                .foregroundStyle(rank.lit ? tint : SN.textSecondary)
+                .padding(.top, 8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("StreamNook member number \(rank.number), \(rank.label)")
+    }
 }
 
 /// A name's color from the core's `#rrggbb`, Twitch purple when it has none.

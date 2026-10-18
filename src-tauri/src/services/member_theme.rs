@@ -233,6 +233,15 @@ pub(crate) fn prefs_from_row(row: Option<&Value>) -> ProfilePrefs {
     }
 }
 
+/// A member's profile preferences, a failed read as an error: what they hide
+/// must never show because a read blinked.
+pub async fn try_profile_prefs(member_id: &str) -> Result<ProfilePrefs, String> {
+    if member_id.is_empty() {
+        return Ok(ProfilePrefs::default());
+    }
+    read_prefs(member_id).await
+}
+
 /// A member's profile preferences; the defaults when none are saved or the
 /// read fails (a failure is logged).
 pub async fn profile_prefs(member_id: &str) -> ProfilePrefs {

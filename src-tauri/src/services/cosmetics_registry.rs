@@ -440,9 +440,13 @@ pub fn owned_slugs(member_id: &str) -> BTreeSet<String> {
 /// everyone is worse than letting an odd kind through.
 const OTHER_SLOT_KINDS: &[&str] = &["atmosphere", "frame", "cipher", "member_plate", "relic", "accolade_pin_style"];
 
-fn is_badge_kind_in(s: &State, slug: &str) -> bool {
-    let kind = s.catalog.iter().find(|c| c.slug == slug).map(|c| c.kind.as_str()).unwrap_or_default();
+/// Whether a catalog kind wears in the badge slot.
+pub fn kind_is_badge(kind: &str) -> bool {
     !OTHER_SLOT_KINDS.contains(&kind)
+}
+
+fn is_badge_kind_in(s: &State, slug: &str) -> bool {
+    kind_is_badge(s.catalog.iter().find(|c| c.slug == slug).map(|c| c.kind.as_str()).unwrap_or_default())
 }
 
 pub fn is_badge_kind(slug: &str) -> bool {

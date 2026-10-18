@@ -74,9 +74,6 @@ final class YouTabAvatar {
         format.scale = scale
         format.opaque = false
         let size = CGSize(width: canvas, height: canvas)
-        let palette = Look.shared.palette
-        let floor = palette.backgroundTertiary.uiColor.cgColor
-        let wash = palette.surface.uiColor.cgColor
         let drawn = UIGraphicsImageRenderer(size: size, format: format).image { context in
             let cg = context.cgContext
             let diameter = ring == nil ? plainDiameter : canvas - 2 * (ringWidth + ringGap)
@@ -84,11 +81,10 @@ final class YouTabAvatar {
             cg.saveGState()
             cg.addEllipse(in: circle)
             cg.clip()
-            // A solid disc under the picture, as the You card draws it: a picture with transparent
-            // parts (many 7TV pictures) otherwise floats as loose marks in the bar.
-            cg.setFillColor(floor)
-            cg.fill(circle)
-            cg.setFillColor(wash)
+            // A black disc under the picture, as the You card draws it (Brandon: black behind a
+            // clear picture, not gray): a picture with transparent parts (many 7TV pictures)
+            // otherwise floats as loose marks in the bar.
+            cg.setFillColor(UIColor.black.cgColor)
             cg.fill(circle)
             let w = CGFloat(image.width), h = CGFloat(image.height)
             let fill = max(diameter / w, diameter / h)
