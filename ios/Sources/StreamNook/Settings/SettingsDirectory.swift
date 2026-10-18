@@ -240,7 +240,8 @@ struct BackupPanel: View {
                 }
                 ForEach(backups) { backup in
                     SettingRow(title: Self.day(backup.id),
-                               detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes)) {
+                               detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes),
+                               centersControl: true) {
                         ArmedPill(label: "Restore", armedLabel: "Replace current",
                                   armed: Binding(get: { armed == backup.id }, set: { armed = $0 ? backup.id : nil })) {
                             Task { await restore(backup.id) }

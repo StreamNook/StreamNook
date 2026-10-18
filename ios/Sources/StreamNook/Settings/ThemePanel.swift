@@ -134,7 +134,8 @@ struct ThemePanel: View {
     }
 }
 
-/// A theme drawn in its own colors: five swatches, its name and description, a check when picked.
+/// A theme drawn in its own colors: five swatches and its name, a check when picked. A third of
+/// the width cut every description mid-word, so the description is read out, not drawn.
 private struct ThemeCard: View {
     let card: ThemePanel.Card
     let picked: Bool
@@ -151,11 +152,10 @@ private struct ThemeCard: View {
                     }
                 }
                 Text(card.name).font(.sn(13, 600)).foregroundStyle(p.textPrimary.color).lineLimit(1).minimumScaleFactor(0.8)
-                Text(card.description).font(.sn(11)).foregroundStyle(p.textSecondary.color).lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
-            .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(p.background.color) }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -175,6 +175,7 @@ private struct ThemeCard: View {
         }
         .buttonStyle(CardPress())
         .accessibilityLabel(card.name)
+        .accessibilityHint(card.description)
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }

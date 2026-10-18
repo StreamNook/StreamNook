@@ -1736,7 +1736,7 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   --color-surface-active: rgba(151, 177, 185, 0.35);
 
   /* Text colors */
-  --color-text-primary: #ffffff;
+  --color-text-primary: #ebf0f2;
   --color-text-secondary: #97b1b9;
   --color-text-muted: rgba(151, 177, 185, 0.75);
 
@@ -2996,6 +2996,15 @@ html[data-blur="off"] *::after {
   backdrop-filter: blur(8px);
 }
 .atm-frost.atm-frost--flat,
+/* Blur off: a popover has nothing softening what is behind it, and at its
+   capped glass strength (77.5% tint) the text under a menu read crisp through
+   it. With no blur the tint is all there is, so it goes solid: the glass
+   contract's "never crisp". The theme's popover light stays in its image
+   layers. (Phones do the same for their static popovers, mobile.css.) */
+html[data-blur="off"] .sn-popover {
+  --sn-popover-tint: 100%;
+}
+
 html[data-blur="off"] .atm-frost {
   background-color: rgba(5, 6, 13, 0.66);
   -webkit-backdrop-filter: none;
