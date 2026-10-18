@@ -2,7 +2,7 @@
 // sheet, as Rust shaped them (services/member_profile.rs: what they hide is
 // already gone). Their StreamNook badges and relics ride the sheet's badge
 // groups. The iPhone draws the same answer in Cosmetics/MemberSections.swift.
-import React from 'react';
+import React, { useState } from 'react';
 import { Star } from 'lucide-react';
 import { FallbackImage } from '../../components/FallbackImage';
 import type { AccoladeMedalView, MemberProfileView, MemberStatView } from '../../types/profileView';
@@ -48,41 +48,51 @@ const Medallion: React.FC<{ medal: AccoladeMedalView }> = ({ medal }) => {
   );
 };
 
-export const MemberSections: React.FC<{ profile: MemberProfileView }> = ({ profile }) => (
-  <>
-    {profile.stats.length > 0 && (
-      <div className="mt-5">
-        <SectionHeader title="Overview" className="mb-2" />
-        <div className="grid grid-cols-2 gap-2">
-          {profile.stats.map((s) => (
-            <StatTile key={s.key} stat={s} />
-          ))}
+export const MemberSections: React.FC<{ profile: MemberProfileView }> = ({ profile }) => {
+  // An emote whose art fails every URL takes itself out, as a badge does.
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const emotes = profile.top_emotes.filter((e) => !failed.has(e.id));
+  return (
+    <>
+      {profile.stats.length > 0 && (
+        <div className="mt-5">
+          <SectionHeader title="Overview" className="mb-2" />
+          <div className="grid grid-cols-2 gap-2">
+            {profile.stats.map((s) => (
+              <StatTile key={s.key} stat={s} />
+            ))}
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
-    {profile.top_emotes.length > 0 && (
-      <div className="mt-5">
-        <SectionHeader title="Top emotes" className="mb-2" />
-        <div className="flex flex-wrap gap-2">
-          {profile.top_emotes.map((e) => (
-            <span key={e.id} className="w-8 h-8 flex items-center justify-center" title={e.name}>
-              <FallbackImage src={e.url} alt={e.name} className="w-7 h-7 object-contain" />
-            </span>
-          ))}
+      {emotes.length > 0 && (
+        <div className="mt-5">
+          <SectionHeader title="Top emotes" className="mb-2" />
+          <div className="flex flex-wrap gap-2">
+            {emotes.map((e) => (
+              <span key={e.id} className="w-8 h-8 flex items-center justify-center" title={e.name}>
+                <FallbackImage
+                  src={e.url}
+                  alt={e.name}
+                  className="w-7 h-7 object-contain"
+                  onAllFailed={() => setFailed((prev) => new Set(prev).add(e.id))}
+                />
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
-    {profile.accolades.length > 0 && (
-      <div className="mt-5">
-        <SectionHeader title="Accolades" detail={String(profile.accolades.length)} className="mb-3" />
-        <div className="grid grid-cols-5 gap-x-2 gap-y-3">
-          {profile.accolades.map((a) => (
-            <Medallion key={a.id} medal={a} />
-          ))}
+      {profile.accolades.length > 0 && (
+        <div className="mt-5">
+          <SectionHeader title="Accolades" detail={String(profile.accolades.length)} className="mb-3" />
+          <div className="grid grid-cols-5 gap-x-2 gap-y-3">
+            {profile.accolades.map((a) => (
+              <Medallion key={a.id} medal={a} />
+            ))}
+          </div>
         </div>
-      </div>
-    )}
-  </>
-);
+      )}
+    </>
+  );
+};
