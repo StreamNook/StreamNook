@@ -269,8 +269,8 @@ pub struct ProfileSheet {
     /// The Cologne event look instead of an Atmosphere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cologne: Option<member_theme::Cologne>,
-    /// A member's overview, accolades, top emotes and profile views, with what
-    /// they hide left out. Their StreamNook badges and relics ride `groups`.
+    /// A member's relics, overview, accolades and top emotes, with what they
+    /// hide left out. Their StreamNook badges ride `groups`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member_profile: Option<MemberProfile>,
 }
@@ -404,11 +404,8 @@ pub async fn profile_sheet(
         }
     };
     // A member who hides their badge collection hides every group, as their
-    // desktop card does; their relics come first there, StreamNook last.
+    // desktop card does; StreamNook comes last. Relics ride `member_profile`.
     let hide_badges = member.as_ref().is_some_and(|m| m.hide_badges);
-    if let Some(m) = member.as_ref() {
-        push("Relics", m.relics.clone());
-    }
     if !hide_badges {
         push("Twitch", badges.as_ref().map(|b| sheet_twitch_badges(b, in_room)).unwrap_or_default());
         push(
