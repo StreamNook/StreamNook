@@ -256,20 +256,6 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* The tint is only as solid as the theme's background color, and that color
-   can carry alpha (on the phone the You card's rows read straight through the
-   picture note at a 97% tint). So the tint is painted over an opaque base: the
-   theme's color is what shows, and the black under it only fills what that
-   color leaves see-through. Chained to beat the themes' own popover light. */
-.sn-mobile .sn-popover.sn-popover--static {
-  background:
-    linear-gradient(
-      color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent),
-      color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent)
-    ),
-    #000;
-}
-
 /* One menu for the phone: the platform menu, the badge sort and any other
    short list hung from a control. Menus portal into <body>, outside
    .sn-mobile, so these are not scoped under it. The surface is near-opaque
