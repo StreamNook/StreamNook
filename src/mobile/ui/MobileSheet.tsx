@@ -53,6 +53,13 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   // the ref in render would not re-render when the drag begins.
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef<number | null>(null);
+  // Content that has scrolled under the handle fades out (.sn-fade-top) rather
+  // than meeting it with a hard edge. At rest there is no fade. Only the flip
+  // re-renders, not every scroll frame.
+  const [scrolled, setScrolled] = useState(false);
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrolled(e.currentTarget.scrollTop > 1);
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragStart.current = e.clientY;
@@ -133,7 +140,12 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
               section label rather than the sheet's name. */}
           {title && <div className="mt-2 text-[16px] font-semibold leading-5 text-textPrimary">{title}</div>}
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">{children}</div>
+        <div
+          className={`flex-1 min-h-0 overflow-y-auto px-4 pb-4 ${scrolled ? 'sn-fade-top' : ''}`}
+          onScroll={onScroll}
+        >
+          {children}
+        </div>
       </motion.div>
     </motion.div>
   );
