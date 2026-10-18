@@ -159,7 +159,7 @@ import Testing
     }
 
     @Test func aMembersSheetWithoutTheMemberPartStillDecodes() throws {
-        let bare = #"{"user_id":"5","groups":[],"member_profile":{"stats":[{"key":"hours","label":"Hours watched","value":"3"}],"accolades":[{"id":"og","label":"OG","icon":"crown","colors":["#fbbf24","#d97706"]}],"top_emotes":[{"id":"e","name":"KEKW","provider":"bttv","url":"https://x/e","count":9}]}}"#
+        let bare = ##"{"user_id":"5","groups":[],"member_profile":{"stats":[{"key":"hours","label":"Hours watched","value":"3"}],"accolades":[{"id":"og","label":"OG","icon":"crown","colors":["#fbbf24","#d97706"]}],"top_emotes":[{"id":"e","name":"KEKW","provider":"bttv","url":"https://x/e","count":9}]}}"##
         let sheet = try JSONDecoder().decode(ProfileSheetData.self, from: Data(bare.utf8))
         #expect(sheet.memberProfile?.stats.count == 1 && sheet.memberProfile?.topEmotes.first?.count == 9)
         let none = try JSONDecoder().decode(ProfileSheetData.self, from: Data(#"{"user_id":"5"}"#.utf8))
