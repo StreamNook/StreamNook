@@ -13,6 +13,7 @@ import SNKit
 /// - `chatfail[:WHY]` shows the draft as a message Twitch did not take
 /// - `chatnotice:TEXT` prints a line only the viewer sees
 /// - `chatpickerlog` logs the picker's tabs and sections
+/// - `chatfocus[:off]` gives the box the keyboard (or takes it away)
 /// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `cheerlog` logs the cheer bar's
 ///   state. Send is ChatDrive's `chatsend`, which runs only on FakeCore (`chatlab:core:LOGIN`
 ///   under `fake:` gives the stage the fake wallet core)
@@ -36,6 +37,9 @@ enum ComposerDrive {
             composer?.debugFailure(value.isEmpty ? "same as your last message" : value)
         case "chatnotice":
             composer?.notice(value.isEmpty ? "Your message was not sent: your message was blocked by AutoMod" : value)
+        case "chatfocus":
+            composer?.requestFocus(value != "off")
+            try? await Task.sleep(for: .milliseconds(800))
         case "chatdraft":
             composer?.draft = value.replacingOccurrences(of: "_", with: " ")
             try? await Task.sleep(for: .milliseconds(600))
