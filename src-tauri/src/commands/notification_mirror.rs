@@ -89,8 +89,8 @@ pub enum NoticeAction {
     /// Open Settings on this tab.
     Settings { tab: String },
     /// Open the chat this mentions-inbox entry is in, at its message.
-    /// `channel` is the entry's room (a `startStream` key) for when the entry
-    /// is gone by the time the notification is clicked.
+    /// `channel` is the entry's `open_key` (a `startStream` key) for when the
+    /// entry is gone by the time the notification is clicked.
     Mention { id: String, channel: String },
 }
 

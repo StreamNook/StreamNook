@@ -59,8 +59,14 @@ pub struct MentionEntry {
     pub platform: String,
     /// Chat tab key: bare Twitch login, `provider:slug` otherwise.
     pub room: String,
-    /// The channel as chat addresses it (login or slug).
+    /// The channel as chat addresses it: a Twitch login (lowercased), else
+    /// the slug or id with its own case.
     pub channel_login: String,
+    /// What opens this chat (`startStream`): the bare Twitch login, else
+    /// `provider:channel` with the channel's own case, since a YouTube
+    /// channel id is case-sensitive. Older entries lack it; use `room`.
+    #[serde(default)]
+    pub open_key: String,
     #[serde(default)]
     pub channel_id: Option<String>,
     pub sender_id: String,
@@ -220,6 +226,21 @@ impl Inbox {
     }
 }
 
+/// The key that opens a message's chat: `room_key` without the lowercasing
+/// of anything but the provider and a Twitch login.
+pub fn open_key(provider: &str, channel: &str) -> String {
+    let ch = channel.trim().trim_start_matches('#');
+    let (p, c) = match ch.split_once(':') {
+        Some((p, c)) => (p.to_lowercase(), c.to_string()),
+        None => ((if provider.is_empty() { "twitch" } else { provider }).to_lowercase(), ch.to_string()),
+    };
+    if p == "twitch" {
+        c.to_lowercase()
+    } else {
+        format!("{p}:{c}")
+    }
+}
+
 /// Chat tab key for a message's channel.
 pub fn room_key(provider: &str, channel: &str) -> String {
     let key = channel_filter_key(provider, channel);
@@ -250,14 +271,13 @@ fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
 }
 
 pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEntry {
-    let channel_login = match msg.channel.trim_start_matches('#').split_once(':') {
-        Some((_, slug)) => slug.to_lowercase(),
-        None => msg.channel.trim_start_matches('#').to_lowercase(),
-    };
+    let open = open_key(&msg.provider, &msg.channel);
+    let channel_login = open.split_once(':').map(|(_, c)| c.to_string()).unwrap_or_else(|| open.clone());
     let platform = if msg.provider.is_empty() { "twitch".to_string() } else { msg.provider.to_lowercase() };
     MentionEntry {
         id: msg.id.clone(),
         room: room_key(&msg.provider, &msg.channel),
+        open_key: open,
         platform,
         channel_login,
         channel_id: msg.tags.get("room-id").cloned(),
@@ -597,6 +617,7 @@ mod tests {
             platform: "twitch".into(),
             room: room.into(),
             channel_login: room.into(),
+            open_key: room.into(),
             channel_id: None,
             sender_id: "1".into(),
             sender_login: "someone".into(),
@@ -675,6 +696,14 @@ mod tests {
         assert_eq!(room_key("twitch", "#XQC"), "xqc");
         assert_eq!(room_key("kick", "XQC"), "kick:xqc");
         assert_eq!(room_key("", "kick:Foo"), "kick:foo");
+    }
+
+    #[test]
+    fn open_keys_keep_a_case_sensitive_channel() {
+        assert_eq!(open_key("twitch", "#XQC"), "xqc");
+        assert_eq!(open_key("youtube", "UCabcDEF"), "youtube:UCabcDEF");
+        assert_eq!(open_key("", "youtube:UCabcDEF"), "youtube:UCabcDEF");
+        assert_eq!(room_key("youtube", "UCabcDEF"), "youtube:ucabcdef");
     }
 
     fn verdict(mentioned: bool, reply: bool, phrase: bool) -> Verdict {

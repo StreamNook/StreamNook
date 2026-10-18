@@ -12,7 +12,7 @@
 
 use crate::commands::notification_mirror::{MirroredNotice, NoticeAction, NoticeReply};
 use crate::models::chat_layout::ChatMessage;
-use crate::services::mention_inbox::{room_key, MentionKind};
+use crate::services::mention_inbox::{open_key, room_key, MentionKind};
 
 /// The notice for `msg`. `avatar` is the sender's picture when it was found.
 fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> MirroredNotice {
@@ -34,7 +34,7 @@ fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> M
         image_url: avatar,
         round_image: true,
         action_label: Some("Open chat".into()),
-        action: Some(NoticeAction::Mention { id: msg.id.clone(), channel: room.clone() }),
+        action: Some(NoticeAction::Mention { id: msg.id.clone(), channel: open_key(&msg.provider, &msg.channel) }),
         reply: twitch.then(|| NoticeReply::Chat {
             channel,
             broadcaster_id: msg.tags.get("room-id").cloned(),
