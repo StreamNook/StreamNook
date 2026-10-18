@@ -79,7 +79,7 @@ const MINI_GUTTER = 16;
 // (56 px, icons only, riding 14 px above the gesture strip).
 const BOTTOM_GAP = 104;
 // On the Chats tab the composer sits on the bar too; the box rests above it.
-const CHATS_COMPOSER_GAP = 66;
+const CHATS_COMPOSER_GAP = 49;
 
 // Where the mini player is ALLOWED to be.
 //

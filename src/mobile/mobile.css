@@ -110,7 +110,8 @@ body:has(.sn-mobile) .glass-input:focus {
 }
 
 /* A sheet's content once it has scrolled under the handle (MobileSheet adds
-   it): the top 24px fade out, so nothing meets the handle with a hard edge.
+   it), and a list that scrolls up under a header or the status bar (the Chats
+   tab): the top 24px fade out, so nothing meets the edge with a hard line.
    The iPhone's fitted sheets fade the same way. */
 .sn-fade-top {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);

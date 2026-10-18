@@ -68,7 +68,9 @@ function useReadingAwake(on: boolean, idleSecs: number): void {
   }, [hold]);
 }
 
-export const ChatsScreen: React.FC = () => {
+/** `active`: the tab is in front. It stays mounted behind the others (see
+ *  MobileApp), and while hidden it holds nothing awake and draws no rows. */
+export const ChatsScreen: React.FC<{ active?: boolean }> = ({ active = true }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
   const connection = useChatTabsStore((s) => s.connection);
@@ -81,12 +83,12 @@ export const ChatsScreen: React.FC = () => {
 
   // The first look joins the saved chats; a parked set comes back too.
   useEffect(() => {
-    if (connection !== 'connected') connect();
-  }, [connection, connect]);
+    if (active && connection !== 'connected') connect();
+  }, [active, connection, connect]);
 
-  useReadingAwake(keepOn && tabs.length > 0, idleSecs);
+  useReadingAwake(active && keepOn && tabs.length > 0, idleSecs);
 
-  const pinned = useRoomPins(tabs.length > 0);
+  const pinned = useRoomPins(active && tabs.length > 0);
   const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
@@ -135,7 +137,7 @@ export const ChatsScreen: React.FC = () => {
     >
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none]">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none] sn-fade-top">
           <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 64px) + 16px)" />
         </div>
       ) : (
@@ -152,7 +154,7 @@ export const ChatsScreen: React.FC = () => {
                 />
               </div>
             )}
-            <MobileChatPane strip={false} />
+            <MobileChatPane strip={false} paused={!active} />
           </div>
         </>
       )}
