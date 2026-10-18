@@ -14,6 +14,7 @@ import SNKit
 ///   `bsheet:INDEX` opens a tile's sheet; `bmissing:all` shows every missing row; `bstate` logs
 ///   the wall
 /// - `fakedrops:on`, `fakedrops:off` connect or disconnect FakeCore's drops
+/// - `rend` scrolls the tab to its last row (to check it clears the tab bar)
 /// - `wallet` opens the composer wallet on screen; `wreward:ID` opens it on one reward's detail;
 ///   `wstate` logs the wallet
 /// - `fakegain:N` (FakeCore) a points gain of N as the core announces it; `fakechest:N` the same
@@ -43,6 +44,8 @@ enum RewardsDrive {
                 push = fixtures.rewards.gainPush(login: wallet.login, amount: Int(value) ?? 50, chest: name == "fakechest")
             }
             fake.events.emit(name: "channel-state", payloadJSON: push, target: nil)
+        case "rend":
+            rewards.scrollToEnd = true
         case "rewards":
             rewards.segment = value == "badges" ? .badges : .drops
         case "dsearch":

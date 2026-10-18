@@ -23,6 +23,8 @@ final class RewardsStore {
     var campaignSheet: CampaignCard?
     /// A campaign the drop bar asked to show; taken once it is on screen.
     var focusCampaign: String?
+    /// The drive asked for the last row; taken by the screen.
+    var scrollToEnd = false
     /// The campaign ringed after a jump, for 1.8 s.
     private(set) var flashed: String?
     private var listening: Task<Void, Never>?

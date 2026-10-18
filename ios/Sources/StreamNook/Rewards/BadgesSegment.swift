@@ -12,7 +12,9 @@ struct BadgesSegment: View {
 
     var body: some View {
         @Bindable var rewards = rewards
-        Group {
+        // A stable container, not a Group: on a Group the modifiers below ride each branch, so
+        // every Loading -> wall switch re-ran the forced load and looped.
+        VStack(alignment: .leading, spacing: 0) {
             if let wall = rewards.wall, !wall.tiles.isEmpty {
                 content(wall)
             } else if rewards.wallLoading || rewards.wall?.loading ?? true {

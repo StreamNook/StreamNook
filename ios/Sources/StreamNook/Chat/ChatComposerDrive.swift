@@ -13,8 +13,9 @@ import SNKit
 /// - `chatfail[:WHY]` shows the draft as a message Twitch did not take
 /// - `chatnotice:TEXT` prints a line only the viewer sees
 /// - `chatpickerlog` logs the picker's tabs and sections
-/// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `chatsend` presses Send (use a
-///   cheering draft only on FakeCore); `cheerlog` logs the cheer bar's state
+/// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `cheerlog` logs the cheer bar's
+///   state. Send is ChatDrive's `chatsend`, which runs only on FakeCore (`chatlab:core:LOGIN`
+///   under `fake:` gives the stage the fake wallet core)
 @MainActor
 enum ComposerDrive {
     static func run(_ name: String, _ value: String, session: ChatSession?) async -> Bool {
@@ -38,14 +39,6 @@ enum ComposerDrive {
         case "chatdraft":
             composer?.draft = value.replacingOccurrences(of: "_", with: " ")
             try? await Task.sleep(for: .milliseconds(600))
-        case "chatsend":
-            // FakeCore only: on the real core this posts chat as the signed-in account, and a
-            // cheering draft would spend real bits.
-            guard session.core is FakeCore else {
-                log.error("drive chatsend refused: not FakeCore")
-                return true
-            }
-            await composer?.send()
         case "cheerlog":
             let flow = composer?.cheer
             log.notice("cheer draft \(flow?.draft?.total ?? -1) problems \(flow?.draft?.problems.count ?? -1) status \(String(describing: flow?.status.map { "\($0)" }), privacy: .public)")

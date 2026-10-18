@@ -22,7 +22,9 @@ struct BitsPane: View {
     }
 
     var body: some View {
-        Group {
+        // A stable container: on a Group the task rides each branch and re-runs when the
+        // spinner gives way to the pane.
+        VStack(alignment: .leading, spacing: 0) {
             if let state {
                 content(state)
             } else if failed {
