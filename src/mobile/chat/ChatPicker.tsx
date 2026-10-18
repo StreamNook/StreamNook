@@ -215,6 +215,9 @@ export const ChatPicker: React.FC<{
           autoCapitalize="off"
           autoCorrect="off"
           enterKeyHint="search"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur();
+          }}
         />
       </div>
       <div className="flex flex-col" style={{ paddingBottom: bottomClearance }}>
