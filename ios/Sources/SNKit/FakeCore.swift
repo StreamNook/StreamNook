@@ -21,6 +21,9 @@ public final class FakeCore: CoreBridge {
     /// Canned answers for the screens beyond the spike (settings, the home snapshot, the account),
     /// so their signed-in states can be drawn without a real account. Nil answers none of them.
     public let fixtures: FakeFixtures?
+    /// Polls and predictions, answered with or without fixtures so the fixture chat stage can
+    /// draw the cards too. Votes and predictions are only recorded.
+    public let liveVotes = FakeLiveVotes()
 
     public init(fixtures: FakeFixtures? = nil) {
         self.fixtures = fixtures
@@ -126,6 +129,17 @@ public final class FakeCore: CoreBridge {
             // A send needs a Twitch sign-in, which the fake never has.
             throw CoreFailure.command(json: #""Not signed in to Twitch""#)
         default:
+            if let reply = try liveVotes.answer(cmd, args) {
+                // The core confirms a vote or a prediction with its push a moment later.
+                if let push = reply.push {
+                    let events = events
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(250))
+                        events.emit(name: push.name, payloadJSON: push.payload, target: nil)
+                    }
+                }
+                return reply.json
+            }
             if let fixtures, let answer = try fixtures.answer(cmd, args) { return answer }
             throw CoreFailure.command(json: #""unknown command \#(cmd)""#)
         }

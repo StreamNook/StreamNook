@@ -51,10 +51,12 @@ struct ChatPanel: View {
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
                 // Under the tab strip, a short fade instead of a hard cut too.
                 .mask {
-                    if let rooms, !overlay, !rooms.activePins.isEmpty || rooms.showsStrip {
+                    let pinned = !overlay && !(rooms?.activePins.isEmpty ?? true)
+                    let cards = votes.map { !$0.slots.isEmpty } ?? false
+                    if pinned || cards || (!overlay && rooms?.showsStrip == true) {
                         VStack(spacing: 0) {
                             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: rooms.activePins.isEmpty ? 12 : 30)
+                                .frame(height: pinned || cards ? 30 : 12)
                             Color.black
                         }
                     } else {
@@ -69,6 +71,12 @@ struct ChatPanel: View {
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
                                 .padding(.horizontal, 10)
                                 .padding(.top, 6)
+                        }
+                        // The live poll and prediction, under the pins; never over landscape video.
+                        if let votes {
+                            LiveVotesStack(model: votes)
+                                .padding(.horizontal, 10)
+                                .padding(.top, rooms?.activePins.isEmpty ?? true ? 6 : 0)
                         }
                         if let toast {
                             Text(toast)
@@ -88,7 +96,25 @@ struct ChatPanel: View {
                 ChatComposer(session: session, onProfile: onProfile)
             }
         }
-        .onAppear { session.start() }
+        .onAppear {
+            session.start()
+            if let votes {
+                votes.onToast = { [rooms] text, success in
+                    // The app's toasts show only failures; a success speaks over the list.
+                    if !success, let toasts = rooms?.toasts {
+                        toasts.show(text, .error)
+                    } else {
+                        show(text)
+                    }
+                }
+                votes.start()
+            }
+        }
+    }
+
+    /// The room's poll and prediction cards, never in the read-only landscape overlay.
+    private var votes: LiveVotesModel? {
+        overlay ? nil : LiveVotesRegistry.shared.model(for: session)
     }
 
     private func show(_ text: String) {

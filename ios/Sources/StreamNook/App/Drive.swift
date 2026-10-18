@@ -54,6 +54,8 @@ import SwiftUI
 ///   low-latency knobs for the next stream (see `Watch`)
 /// - the chat steps in `ChatDrive` (`chatlab`, `chatperf`, ...) and the profile and cosmetics
 ///   steps in `CosmeticsDrive` (`profile:LOGIN`, `cosmetics:dump`, `wash:find`, ...)
+/// - the poll and prediction steps in `LiveVotesDrive` (`pollfake:open`, `predfake:locked`,
+///   `predbet:yes:250`, `predconfirm`, `liveVotesLog`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
@@ -202,6 +204,7 @@ enum Drive {
                 try? await Task.sleep(for: .seconds(5))
             default:
                 if !(await ChatDrive.run(name, value, model: model)),
+                   !(await LiveVotesDrive.run(name, value, model: model)),
                    !(await CosmeticsDrive.run(name, value, model: model)),
                    !(await RewardsDrive.run(name, value, model: model)),
                    !(await KickDrive.run(name, value, model: model)) {
