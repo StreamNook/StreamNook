@@ -13,6 +13,7 @@ public final class FakeRewards: Sendable {
         var balance: Int64 = 12_850
         var chest = false
         var gainSeq = 0
+        var cheers: [String] = []
     }
 
     private let state = Mutex(State())
@@ -66,6 +67,14 @@ public final class FakeRewards: Sendable {
             let id = args["rewardId"] as? String ?? ""
             state.withLock { $0.redeems.append(id) }
             return try FakeCore.json(FakeWallet.redeem(id, text: args["text"] as? String, emoteName: args["emoteName"] as? String))
+        case "check_cheer":
+            let check = Self.cheer(in: args["text"] as? String ?? "", channel: args["channelLogin"] as? String ?? "")
+            return try check.map { try FakeCore.json($0) } ?? "null"
+        case "send_cheer":
+            state.withLock { $0.cheers.append(args["text"] as? String ?? "") }
+            return try FakeCore.json(["sent": true, "balance": 250, "problem": NSNull(), "can_continue": false, "needs_bits": false] as [String: Any])
+        case "get_bits_state":
+            return try FakeCore.json(FakeWallet.bitsState)
         case "claim_channel_points":
             state.withLock { $0.chestClaims += 1; $0.chest = false; $0.balance += 50 }
             return "null"
@@ -75,6 +84,42 @@ public final class FakeRewards: Sendable {
     }
 
     // MARK: The wallet (FakeWallet answers; writes are only recorded)
+
+    /// Messages handed to `send_cheer`, oldest first. Nothing is spent: this is the fake.
+    public var cheers: [String] { state.withLock { $0.cheers } }
+
+    /// What Rust's cheer check would say of `text`: the fake's cheermotes are "Cheer" and
+    /// "Nook", the balance 300 bits. Nil when the text does not cheer.
+    static func cheer(in text: String, channel: String) -> [String: Any]? {
+        let words = text.split(separator: " ")
+        var total = 0
+        var plain: [Substring] = []
+        for word in words {
+            let lower = word.lowercased()
+            if let prefix = ["cheer", "nook"].first(where: { lower.hasPrefix($0) }),
+               let n = Int(lower.dropFirst(prefix.count)), n > 0 {
+                total += n
+            } else {
+                plain.append(word)
+            }
+        }
+        guard total > 0 else { return nil }
+        let balance = 300
+        let short = total > balance
+        return [
+            "channel": channel.lowercased(), "channel_id": "4242", "text": text, "total": total, "balance": balance,
+            "problems": short ? ["You have 300 bits. This cheer needs \(total)."] : [String](),
+            "needs_bits": short,
+            "icon_url": "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/\(total >= 100 ? 100 : 1)/2.gif",
+            "plain_text": plain.joined(separator: " "),
+        ]
+    }
+
+    /// Rust holds a message that cheers rather than sending it: the held answer, or nil.
+    public static func heldCheer(_ text: String, channel: String) -> String? {
+        guard let check = cheer(in: text, channel: channel) else { return nil }
+        return try? FakeCore.json(["is_sent": false, "message_id": NSNull(), "drop_reason": NSNull(), "cheer": check] as [String: Any])
+    }
 
     /// Reward ids handed to `redeem_reward`, oldest first.
     public var redeems: [String] { state.withLock { $0.redeems } }

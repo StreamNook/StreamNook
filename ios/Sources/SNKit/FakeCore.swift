@@ -120,6 +120,8 @@ public final class FakeCore: CoreBridge {
             return "null"
         case "send_chat_message":
             let text = args["message"] as? String ?? ""
+            // Rust holds a message that cheers rather than sending it, as the real core does.
+            if let held = FakeRewards.heldCheer(text, channel: args["targetChannel"] as? String ?? "") { return held }
             state.withLock { $0.sent.append(text) }
             // A send needs a Twitch sign-in, which the fake never has.
             throw CoreFailure.command(json: #""Not signed in to Twitch""#)
