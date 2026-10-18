@@ -19,7 +19,8 @@ struct GlazeSegments<Value: Hashable>: View {
     let segments: [Segment<Value>]
     @Binding var selection: Value?
     var allowsNone = false
-    /// Segments share the full width instead of hugging their labels.
+    /// Segments share the full width instead of hugging their labels: each gets the width its label
+    /// needs plus an equal share of what is left, so a long label never wraps beside short ones.
     var fill = false
     @Namespace private var pill
     @Environment(\.snStill) private var still
@@ -32,40 +33,55 @@ struct GlazeSegments<Value: Hashable>: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(segments) { segment in
-                let on = selection == segment.value
-                Button {
-                    let next: Value? = on && allowsNone ? nil : segment.value
-                    guard next != selection else { return }
-                    withAnimation(still ? SNMotion.run(.easeOut(duration: 0.15)) : SNMotion.run(SNMotion.glide)) { selection = next }
-                } label: {
-                    HStack(spacing: 6) {
-                        if let mark = segment.mark {
-                            PlatformMark(platform: mark, size: 15)
-                        } else if let symbol = segment.symbol {
-                            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
-                        }
-                        Text(segment.label).font(on ? .snLabelStrong : .snLabel)
-                    }
-                    // Unselected labels sit on the track's raised surface, where muted text falls
-                    // under 4.5:1, so they use secondary text.
-                    .foregroundStyle(on ? SN.textPrimary : SN.textSecondary)
-                    .padding(.horizontal, fill ? 4 : 14)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: fill ? .infinity : nil)
-                    .background {
-                        if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) }
-                    }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(segment.accessibility ?? segment.label)
-                .accessibilityAddTraits(on ? .isSelected : [])
+        Group {
+            if fill {
+                SegmentRow { buttons }
+            } else {
+                HStack(spacing: 4) { buttons }
             }
         }
         .padding(4)
         .background { SegmentTrack() }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        ForEach(segments) { segment in
+            let on = selection == segment.value
+            Button {
+                let next: Value? = on && allowsNone ? nil : segment.value
+                guard next != selection else { return }
+                withAnimation(still ? SNMotion.run(.easeOut(duration: 0.15)) : SNMotion.run(SNMotion.glide)) { selection = next }
+            } label: {
+                HStack(spacing: 6) {
+                    if let mark = segment.mark {
+                        PlatformMark(platform: mark, size: 15)
+                    } else if let symbol = segment.symbol {
+                        Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                    }
+                    // One line always; a label only shrinks when the row is narrower than every label.
+                    // The bold copy holds the width, so segments stay put as the selection moves.
+                    ZStack {
+                        Text(segment.label).font(.snLabelStrong).hidden()
+                        Text(segment.label).font(on ? .snLabelStrong : .snLabel)
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                }
+                // Unselected labels sit on the track's raised surface, where muted text falls
+                // under 4.5:1, so they use secondary text.
+                .foregroundStyle(on ? SN.textPrimary : SN.textSecondary)
+                .padding(.horizontal, fill ? 6 : 14)
+                .padding(.vertical, 7)
+                .frame(maxWidth: fill ? .infinity : nil)
+                .background {
+                    if on { GlazeSelected().matchedGeometryEffect(id: "pill", in: pill) }
+                }
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(segment.accessibility ?? segment.label)
+            .accessibilityAddTraits(on ? .isSelected : [])
+        }
     }
 }
 
