@@ -8,7 +8,7 @@
 // restores them at launch without joining). While it is in front it keeps the
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Play, Plus } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
@@ -20,6 +20,7 @@ import { useChatTabsStore, type ChatTab } from '../chat/chatTabsStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { holdScreenOn } from '../nativeBridge';
+import { useMobileNavStore } from '../navStore';
 import { formatViewerCount } from '../../utils/streamStats';
 
 /** The room on screen as the player's start reads it; Rust fills what a tab
@@ -100,6 +101,102 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const openAdd = useCallback(() => setAddOpen(true), []);
   const closeAdd = useCallback(() => setAddOpen(false), []);
 
+  // Leaving: the grabber (a tap), a slide down that starts on the header (the
+  // grabber row or the room strip), or back. The chat list is never a handle:
+  // a drag there is always a scroll.
+  const exitChats = useMobileNavStore((s) => s.exitChats);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    t: number;
+    dy: number;
+    vy: number;
+    live: boolean;
+  } | null>(null);
+  const swallowClick = useRef(false);
+
+  const settle = useCallback(
+    (from: number, leave: boolean) => {
+      const el = sheetRef.current;
+      if (!el) return;
+      const to = leave ? Math.max(window.innerHeight, 400) : 0;
+      el.style.transform = '';
+      const anim = el.animate([{ transform: `translateY(${from}px)` }, { transform: `translateY(${to}px)` }], {
+        duration: leave ? 200 : 240,
+        easing: leave ? 'cubic-bezier(0.4, 0, 1, 1)' : 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+        fill: leave ? 'forwards' : 'none',
+      });
+      if (leave) {
+        anim.onfinish = () => {
+          exitChats();
+          // Hidden now; the next showing starts from rest.
+          requestAnimationFrame(() => anim.cancel());
+        };
+      }
+    },
+    [exitChats],
+  );
+
+  const headerHandlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, dy: 0, vy: 0, live: false };
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const d = drag.current;
+      if (!d || d.id !== e.pointerId) return;
+      const dx = e.clientX - d.x;
+      const dy = e.clientY - d.y;
+      if (!d.live) {
+        // Sideways belongs to the room row's own scroll.
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+          drag.current = null;
+          return;
+        }
+        if (dy < 8 || dy < Math.abs(dx)) return;
+        d.live = true;
+        swallowClick.current = true;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }
+      const dt = Math.max(1, e.timeStamp - d.t);
+      d.vy = (dy - d.dy) / dt;
+      d.dy = Math.max(0, dy);
+      d.t = e.timeStamp;
+      if (sheetRef.current) sheetRef.current.style.transform = `translateY(${d.dy}px)`;
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const d = drag.current;
+      drag.current = null;
+      if (!d || d.id !== e.pointerId || !d.live) return;
+      settle(d.dy, d.dy > 120 || d.vy > 0.6);
+    },
+    onPointerCancel: () => {
+      const d = drag.current;
+      drag.current = null;
+      if (d?.live) settle(d.dy, false);
+    },
+    // A slide is not a tap on the room it started on.
+    onClickCapture: (e: React.MouseEvent) => {
+      if (!swallowClick.current) return;
+      swallowClick.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+  };
+
+  // The handle: a grabber at the top center, which also closes on a tap. Its
+  // row is the gap between the status bar and the rooms.
+  const grabber = (
+    <button
+      onClick={exitChats}
+      aria-label="Close chats"
+      className="mx-auto flex h-6 w-16 shrink-0 items-start justify-center pt-2"
+    >
+      <span className="block h-[5px] w-9 rounded-full bg-textMuted/45" />
+    </button>
+  );
+
   // The strip's own parts: the same 40 px glass as the rooms capsule, quieter
   // than the room it serves (secondary text, no red; the room's face already
   // says live). Each button keeps a 44 px touch area around its 40 px shape,
@@ -133,23 +230,20 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   );
 
   return (
-    <div
-      className="flex-1 min-h-0 flex flex-col"
-      style={
-        {
-          // The composer sits clear of the floating tab bar.
-          '--sn-composer-floor': 'calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 64px) + 10px)',
-        } as React.CSSProperties
-      }
-    >
+    <div ref={sheetRef} className="flex-1 min-h-0 flex flex-col">
+      {/* The header is the only drag handle (touch-action leaves vertical
+          moves to it; the room row still scrolls sideways). */}
+      <div className="shrink-0 flex flex-col [touch-action:pan-x]" {...headerHandlers}>
+        {grabber}
+        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} />}
+      </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none] sn-fade-top">
-          <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 64px) + 16px)" />
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-1 [scrollbar-width:none] sn-fade-top">
+          <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
         </div>
       ) : (
         <>
-          <ChatTabStrip always trailing={trailing} />
           <div className="flex-1 min-h-0 relative flex flex-col">
             {pinned.length > 0 && (
               <div className="absolute left-0 right-0 top-0 px-2.5 pt-1.5 pb-2 z-20 pointer-events-none flex flex-col gap-1">

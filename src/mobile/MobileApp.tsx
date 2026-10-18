@@ -29,7 +29,6 @@ import { YouScreen } from './screens/YouScreen';
 import { WatchScreen } from './screens/WatchScreen';
 import { ChatsScreen } from './screens/ChatsScreen';
 import { useChatsLifecycle } from './chat/useChatsLifecycle';
-import { useChatTabsStore } from './chat/chatTabsStore';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
@@ -65,8 +64,6 @@ const MobileApp: React.FC = () => {
   const setupComplete = useAppStore((s) => s.settings.setup_complete);
   const [wizardDismissed, setWizardDismissed] = useState(false);
   const activeTab = useMobileNavStore((s) => s.activeTab);
-  // The Chats tab with a chat open has its composer on the bar: no fade there.
-  const chatTabsOpen = useChatTabsStore((s) => s.tabs.length > 0);
 
   // Is the tab shell completely hidden behind the full-screen watch layer?
   //
@@ -120,15 +117,14 @@ const MobileApp: React.FC = () => {
   const chatsRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!chatsShown || !chatsRef.current) return;
+    // A surface over the tabs (no tab bar there), so it rises into place.
     chatsRef.current.animate(
       [
-        { opacity: 0, transform: `translateX(${28 * direction}px)` },
+        { opacity: 0, transform: 'translateY(32px)' },
         { opacity: 1, transform: 'none' },
       ],
-      { duration: 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      { duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     );
-    // Runs on showing only; the direction is read as it stands then.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatsShown]);
 
   useEffect(() => installBackHandler(), []);
@@ -202,7 +198,8 @@ const MobileApp: React.FC = () => {
             )}
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
-          <MobileTabBar hidden={shellCovered} floor={activeTab !== 'chats' || !chatTabsOpen} />
+          {/* Chats is a full-screen surface: no tab bar there. */}
+          <MobileTabBar hidden={shellCovered || chatsShown} />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />
