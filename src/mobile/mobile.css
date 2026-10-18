@@ -109,6 +109,49 @@ body:has(.sn-mobile) .glass-input:focus {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
+/* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
+   the chat wash at 70%, faded in from both sides and down from just under the
+   top to nothing well before the bottom, so no edge of the art ever shows.
+   The two masks multiply. Unscoped, because a chatter's profile sheet portals
+   into <body>. */
+.sn-atm-glow {
+  overflow: hidden;
+  opacity: 0.7;
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0%, #000 18%, #000 62%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 20%, rgba(0, 0, 0, 0.75) 50%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent 0%, #000 18%, #000 62%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 20%, rgba(0, 0, 0, 0.75) 50%, transparent 100%);
+  mask-composite: intersect;
+}
+/* The curtains breathe in opacity only (the chat drift's opacity curve and
+   periods, no travel): the compositor runs it at full frame rate with nothing
+   to repaint. */
+@keyframes sn-atm-breathe-1 {
+  0%, 100% { opacity: 0.78; }
+  50% { opacity: 1; }
+}
+@keyframes sn-atm-breathe-2 {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.92; }
+}
+.sn-atm-breathe-1 {
+  opacity: 0.78;
+  animation: sn-atm-breathe-1 9s ease-in-out infinite;
+}
+.sn-atm-breathe-2 {
+  opacity: 0.6;
+  animation: sn-atm-breathe-2 12s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sn-atm-breathe-1,
+  .sn-atm-breathe-2 {
+    animation: none;
+  }
+}
+
 /* Minimum touch target for interactive rows/buttons in the mobile tree. */
 .sn-touch {
   min-height: 44px;

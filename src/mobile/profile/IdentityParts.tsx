@@ -9,6 +9,7 @@ import { ProviderMark } from '../../components/ProviderLogo';
 import { SevenTVLogo } from '../../components/emotesets/SevenTVLogo';
 import { FallbackImage } from '../../components/FallbackImage';
 import { AtmosphereBackground } from '../../components/AtmosphereBackground';
+import type { AtmosphereWashData } from '../../components/overlay/AtmosphereChatWash';
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere } from '../../services/atmospheres';
 import type { PaintV4 } from '../../services/paintStyle';
@@ -85,12 +86,62 @@ export const AtmosphereBand: React.FC<{
 );
 
 /**
- * A picture set into the card's edge: a ring of the card's own surface around
- * it so it reads as cut out of the band, the StreamNook medal at its lower
- * right. It shows the one picture others see in chat (the 7TV one when there
- * is one, else the platform's), never one over the other; when it is the 7TV
- * one, 7TV's mark sits at its lower left. With `explains`, a tap says which
- * picture shows where.
+ * A member's Atmosphere as the air around their identity (Brandon: the band
+ * read like a cover, not an atmosphere): the chat row's own wash (its base,
+ * then the image defocused or the two curtains), held soft and low behind the
+ * picture and name and faded out at every edge, so it is a glow in the card
+ * and never a block of art across it. The curtains breathe in opacity only
+ * (`.sn-atm-breathe-*` in mobile.css), so nothing repaints. Without one, a
+ * faint glow of `tint`. It fills its positioned parent's top `height`.
+ */
+export const AtmosphereGlow: React.FC<{
+  atm?: AtmosphereWashData | null;
+  tint: string;
+  height: number;
+}> = ({ atm, tint, height }) => (
+  <div aria-hidden="true" className="sn-atm-glow pointer-events-none absolute inset-x-0 top-0" style={{ height }}>
+    {atm ? (
+      <>
+        <div className="absolute inset-0" style={{ backgroundColor: atm.baseColor, backgroundImage: atm.baseLayers, opacity: 0.85 }} />
+        {atm.image ? (
+          <div
+            className="absolute"
+            style={{
+              inset: atm.chatBlur ? -atm.chatBlur * 2 : 0,
+              backgroundImage: `url(${atm.image})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              filter: atm.chatBlur ? `blur(${atm.chatBlur}px)` : undefined,
+            }}
+          />
+        ) : (
+          <>
+            {atm.layers && (
+              <div className="sn-atm-breathe-1 absolute inset-0" style={{ backgroundImage: atm.layers, backgroundRepeat: 'repeat' }} />
+            )}
+            {atm.layers2 && (
+              <div className="sn-atm-breathe-2 absolute inset-0" style={{ backgroundImage: atm.layers2, backgroundRepeat: 'repeat' }} />
+            )}
+          </>
+        )}
+      </>
+    ) : (
+      <div
+        className="absolute inset-0"
+        style={{ backgroundImage: `radial-gradient(260px circle at 25% 30%, color-mix(in srgb, ${tint} 28%, transparent), transparent)` }}
+      />
+    )}
+  </div>
+);
+
+/**
+ * A person's picture, standing alone on a black disc (Brandon: black behind a
+ * clear picture, not gray), with a hairline edge and a soft shadow. It shows
+ * the one picture others see in chat (the 7TV one when there is one, else the
+ * platform's), never one over the other. No marks on your own: which accounts
+ * you hold and what you wear show in the card's rows. On another person's,
+ * their StreamNook badge sits on it as a medal (`medal`), because their card
+ * shows it nowhere else. With `explains`, a tap says which picture shows where.
  */
 export const CutoutAvatar: React.FC<{
   platformUrl?: string | null;
@@ -106,7 +157,6 @@ export const CutoutAvatar: React.FC<{
   const [failedFor, setFailedFor] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
   const host = useRef<HTMLDivElement>(null);
-  const ring = Math.max(3, Math.round(size * 0.05));
   const showsSevenTv = !localUrl && !!picture && failedFor !== picture.still;
 
   useEffect(() => {
@@ -140,7 +190,7 @@ export const CutoutAvatar: React.FC<{
   }
 
   return (
-    <div ref={host} className="relative" style={{ width: size + ring * 2, height: size + ring * 2 }}>
+    <div ref={host} className="relative" style={{ width: size, height: size }}>
       <button
         type="button"
         onClick={explains ? () => setExplaining((v) => !v) : undefined}
@@ -148,61 +198,34 @@ export const CutoutAvatar: React.FC<{
         aria-label={explains ? 'Which picture shows where' : undefined}
         aria-hidden={explains ? undefined : true}
         tabIndex={explains ? 0 : -1}
-        // Solid, not the theme's translucent tints: the ring is the card's own
-        // fill laid on the page, so it reads as a cut in the card, and the disc
-        // under the picture is the floor the tab-bar picture sits on. With the
-        // tints the banner showed through both, and a 7TV picture with
-        // transparent parts floated over the art.
-        className="block rounded-full"
+        className="block rounded-full overflow-hidden"
         style={{
-          padding: ring,
-          boxShadow: '0 4px 8px rgba(0,0,0,0.35)',
-          background: 'linear-gradient(var(--color-background-secondary), var(--color-background-secondary)), var(--color-background)',
+          width: size,
+          height: size,
+          background: '#000',
+          boxShadow: '0 4px 8px rgba(0,0,0,0.35), inset 0 0 0 0.5px rgba(255,255,255,0.1)',
         }}
       >
-        <span
-          className="block rounded-full overflow-hidden ring-1 ring-white/10"
-          style={{
-            width: size,
-            height: size,
-            background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background-tertiary)',
-          }}
-        >
-          {face}
-        </span>
+        {face}
       </button>
       {medal && (
-        // On a disc of the card's floor, so it reads as a medal, not a mark
-        // scratched on the photo.
+        // Another person's StreamNook badge, on a black disc like the
+        // picture's own, so it reads as a medal and not a mark scratched on
+        // the photo.
         <span
-          className="absolute flex items-center justify-center rounded-full bg-tertiary pointer-events-none"
+          className="absolute flex items-center justify-center rounded-full pointer-events-none"
           style={{
             width: size * 0.32,
             height: size * 0.32,
-            right: ring * 0.6,
-            bottom: ring * 0.6,
-            boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.4)',
+            right: -size * 0.02,
+            bottom: -size * 0.02,
+            background: '#000',
+            boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1)',
           }}
           role="img"
           aria-label={medalLabel}
         >
           <img src={medal} alt="" draggable={false} className="object-contain" style={{ width: size * 0.24, height: size * 0.24 }} />
-        </span>
-      )}
-      {showsSevenTv && (
-        <span
-          className="absolute flex items-center justify-center rounded-full bg-tertiary pointer-events-none"
-          style={{
-            width: size * 0.26,
-            height: size * 0.26,
-            left: ring * 0.6,
-            bottom: ring * 0.6,
-            boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.4)',
-          }}
-          role="img"
-          aria-label="7TV picture"
-        >
-          <BrandMark brand="seventv" size={Math.round(size * 0.11)} />
         </span>
       )}
       {explaining && <PictureNote sevenTv={showsSevenTv} />}
