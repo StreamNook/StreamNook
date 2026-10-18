@@ -448,7 +448,8 @@ pub fn begin_rewind(login: &str, video_id: &str, recorded_at: Option<&str>) {
     }
 }
 
-/// The main player's play state (`report_player_playing`).
+/// The main player's play state, once the earning gate has decided it
+/// (`report_player_state`).
 pub fn set_playing(playing: bool) {
     with_tracker(|t| t.set_playing(playing, now_ms()));
 }

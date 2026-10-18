@@ -20,6 +20,13 @@
 //! So the fragile part is never on the hot path, and if Kick ever changes it the
 //! imported list still works.
 
+// The phone's in-app web view: Android's login overlay, the iPhone's sheet.
+// Both expose the same helpers, so the sign-in and import below run one body.
+#[cfg(target_os = "android")]
+use crate::twitch_login_plugin as overlay;
+#[cfg(target_os = "ios")]
+use crate::services::ios_sheet as overlay;
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -85,16 +92,14 @@ pub async fn is_connected() -> bool {
 /// window closes itself. Non-interactive runs hidden and fails fast when there
 /// is no session yet.
 pub async fn import(interactive: bool) -> Result<KickImportReport> {
-    // The phone's overlay shares the app-global cookie jar, so a silent import
-    // is just a read of that jar; there is no window to run.
-    #[cfg(target_os = "android")]
+    // The phone's overlay (Android) or sheet (iPhone) shares the app's cookie
+    // jar, so a silent import is just a read of that jar; there is no window
+    // to run.
+    #[cfg(mobile)]
     {
         let _ = interactive;
         let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sync"))?;
-        let jar = without_edge_cookies(jar_from_header(&crate::twitch_login_plugin::cookies_for(
-            &app,
-            "https://kick.com",
-        )));
+        let jar = without_edge_cookies(jar_from_header(&overlay::cookies_for(&app, "https://kick.com")));
         return match follows_from_jar(&jar).await {
             Some(channels) => Ok(KickImportReport {
                 status: "ok".to_string(),
@@ -103,11 +108,6 @@ pub async fn import(interactive: bool) -> Result<KickImportReport> {
             }),
             None => Err(anyhow!("not signed in to kick.com")),
         };
-    }
-    #[cfg(all(mobile, not(target_os = "android")))]
-    {
-        let _ = interactive;
-        return Err(anyhow!("Kick account sync is not available on this platform"));
     }
     #[cfg(desktop)]
     {
@@ -565,13 +565,12 @@ pub async fn sign_in() -> Result<KickImportReport> {
 }
 
 /// The phone's sign-in: the same two legs as desktop, in the native login
-/// overlay. Site login first (consent at id.kick.com does not leave kick.com
-/// cookies), then consent in the same overlay, whose redirect the overlay
-/// catches and this function relays to `kick_auth_service`.
-#[cfg(target_os = "android")]
+/// overlay (Android) or sheet (iPhone). Site login first (consent at
+/// id.kick.com does not leave kick.com cookies), then consent in the same
+/// overlay, whose redirect the overlay catches and this function relays to
+/// `kick_auth_service`.
+#[cfg(mobile)]
 pub async fn sign_in() -> Result<KickImportReport> {
-    use crate::twitch_login_plugin as overlay;
-
     const TITLE: &str = "Sign in to Kick";
     let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sign-in"))?;
     overlay::open_overlay(&app, "https://kick.com/login", TITLE).map_err(|e| {
@@ -667,10 +666,6 @@ pub async fn sign_in() -> Result<KickImportReport> {
     }
 }
 
-#[cfg(all(mobile, not(target_os = "android")))]
-pub async fn sign_in() -> Result<KickImportReport> {
-    Err(anyhow!("Kick sign-in is not available on this platform"))
-}
 
 /// The follow list, read with the site session in the sign-in overlay's jar.
 /// Never with `stale`, the session the profile kept from before the sign-in

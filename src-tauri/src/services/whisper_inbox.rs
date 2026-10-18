@@ -39,6 +39,15 @@ const RESOLVE_CONCURRENCY: usize = 4;
 /// it is read as it arrives, so it never counts as unread.
 static ACTIVE: Mutex<Option<String>> = Mutex::new(None);
 
+/// Who whispered last since the app started, for `/r`: (login, display
+/// name, user id).
+static LAST_FROM: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+
+/// The sender of the newest whisper received, for `/r`.
+pub fn last_from() -> Option<(String, String, String)> {
+    LAST_FROM.lock().ok().and_then(|l| l.clone())
+}
+
 type Conversations = HashMap<String, StoredConversation>;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -246,6 +255,12 @@ fn update_for(
 /// Persist a whisper the socket just received and tell the windows. Runs off
 /// the socket's read loop, so a slow avatar lookup never delays keepalives.
 pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent, received_ms: i64) {
+    if !ev.from_user_login.is_empty() {
+        if let Ok(mut last) = LAST_FROM.lock() {
+            let name = if ev.from_user_name.is_empty() { ev.from_user_login.clone() } else { ev.from_user_name.clone() };
+            *last = Some((ev.from_user_login.clone(), name, ev.from_user_id.clone()));
+        }
+    }
     let lookup = WhisperStorageService::update_conversations(&app, &owner_id, |convs| {
         (needs_avatar(convs, &ev), false)
     });

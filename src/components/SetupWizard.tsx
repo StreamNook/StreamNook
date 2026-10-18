@@ -210,6 +210,25 @@ const waitForDropsLogin = (): Promise<void> =>
         ).then((u) => uns.push(u));
     });
 
+// Android: resolves true when the login overlay reports that Twitch redirected
+// back with the drops credential, false when the user closed the overlay or
+// the deadline passed. The deadline is long enough to sign in from scratch if
+// the session had lapsed.
+const waitForMobileDropsRedirect = (): Promise<boolean> =>
+    new Promise((resolve) => {
+        const done = (ok: boolean) => {
+            window.removeEventListener('sn:drops-redirect', onLanded);
+            window.removeEventListener('sn:login-cancelled', onCancelled);
+            clearTimeout(deadline);
+            resolve(ok);
+        };
+        const onLanded = () => done(true);
+        const onCancelled = () => done(false);
+        const deadline = setTimeout(() => done(false), 5 * 60 * 1000);
+        window.addEventListener('sn:drops-redirect', onLanded);
+        window.addEventListener('sn:login-cancelled', onCancelled);
+    });
+
 const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [isExtracting, setIsExtracting] = useState(false);
@@ -342,40 +361,27 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             // Subscribed BEFORE the window opens. An account that has already
             // authorized is redirected the moment the page loads, and a listener
             // attached afterwards would miss it.
-            const poll = waitForDropsLogin().then(() => 'done' as const);
+            //
+            // Android: nothing there emits `drops-login-complete`; that event
+            // belongs to the desktop overlay. The phone's login overlay is a
+            // native view that keeps the redirect's credential itself and
+            // announces the landing as `sn:drops-redirect`, after which Rust
+            // collects and stores it (`finish_mobile_drops_login`), the same
+            // way the Rewards screen connects drops. The user can also close
+            // the overlay with its X (`sn:login-cancelled`), which hands the
+            // step straight back instead of leaving it on "authorizing".
+            const landed = IS_MOBILE ? waitForMobileDropsRedirect() : null;
+            const poll = IS_MOBILE ? null : waitForDropsLogin();
 
             await openDropsVerificationWindow(url);
 
             try {
-
-                // Android only: the login overlay is a native view the user can
-                // close with its X, and the poll above then runs on for the
-                // several minutes until Twitch expires the code, with the step
-                // stuck on "authorizing" the whole time and no way out. Racing
-                // the dismissal hands the step straight back. `finally` below
-                // still tidies up either way.
-                if (IS_MOBILE) {
-                    const outcome = await new Promise<'done' | 'cancelled'>((resolve, reject) => {
-                        const onCancelled = () => resolve('cancelled');
-                        window.addEventListener('sn:login-cancelled', onCancelled, { once: true });
-                        // Both arms clear the listener and settle, so a poll
-                        // failure still reaches the catch below rather than
-                        // leaving this await pending forever.
-                        void poll.then(
-                            () => {
-                                window.removeEventListener('sn:login-cancelled', onCancelled);
-                                resolve('done');
-                            },
-                            (err) => {
-                                window.removeEventListener('sn:login-cancelled', onCancelled);
-                                reject(err);
-                            },
-                        );
-                    });
-                    if (outcome === 'cancelled') {
+                if (landed) {
+                    if (!(await landed)) {
                         setDropsAuthUrl(null);
                         return;
                     }
+                    await invoke('finish_mobile_drops_login');
                 } else {
                     await poll;
                 }

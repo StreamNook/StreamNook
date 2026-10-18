@@ -33,3 +33,19 @@ pub fn set_base(dir: PathBuf) {
 pub fn mobile_base() -> Option<PathBuf> {
     MOBILE_BASE.get().cloned()
 }
+
+static CACHE_BASE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Record the shell's cache dir. Set once at startup on iOS, where the data
+/// dir (Application Support) is backed up to iCloud and the cache dir
+/// (Library/Caches) is not and may be purged by the system, so everything
+/// that can be fetched again belongs there. Never set elsewhere.
+pub fn set_cache_base(dir: PathBuf) {
+    let _ = CACHE_BASE.set(dir);
+}
+
+/// The shell's cache dir when it has one apart from the data dir (iOS), or
+/// `None`, in which case caches live under the data dir as before.
+pub fn cache_base() -> Option<PathBuf> {
+    CACHE_BASE.get().cloned()
+}

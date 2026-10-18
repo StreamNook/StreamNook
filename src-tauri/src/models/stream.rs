@@ -27,6 +27,11 @@ pub struct TwitchStream {
     // normalize their enum spelling (FR, ZH_HK) to this form.
     #[serde(default)]
     pub language: Option<String>,
+    /// Watching this channel earns drops right now (an active campaign counts
+    /// in its category and is open to it). Stamped by Rust on the lists it
+    /// serves, from the Home snapshot's campaigns; false until they load.
+    #[serde(default)]
+    pub drops_earnable: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

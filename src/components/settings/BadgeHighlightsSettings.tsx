@@ -1,14 +1,22 @@
+import { EntryInput } from './entryInput';
+import { invoke } from '@tauri-apps/api/core';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import { Tooltip } from '../ui/Tooltip';
 import type { HighlightBadge } from '../../types';
 
-function newRuleId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
+/** One edit to the stored badge highlights; Rust makes new entries (a seed
+ *  item is merged over the default) and trims badge keys. Answers the list as
+ *  stored, or null when the edit failed. */
+async function editBadges(edit: Record<string, unknown>): Promise<HighlightBadge[] | null> {
+  try {
+    return await invoke<HighlightBadge[]>('edit_settings_list', { path: 'chat_highlights.badges', edit });
+  } catch (err) {
+    Logger.warn('[BadgeHighlights] edit failed:', err);
+    return null;
   }
-  return `b-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 // Quick-add presets — saves the user from typing exact badge keys.
@@ -23,33 +31,22 @@ const BADGE_PRESETS: Array<{ label: string; key: string; color: string }> = [
 ];
 
 const BadgeHighlightsSettings = () => {
-  const { settings, updateSettings } = useAppStore();
-  const badges: HighlightBadge[] = settings.chat_highlights?.badges ?? [];
+  const badges: HighlightBadge[] = useAppStore((s) => s.settings.chat_highlights?.badges) ?? [];
 
-  const writeBadges = (next: HighlightBadge[]) =>
-    updateSettings({
-      ...settings,
-      chat_highlights: {
-        phrases: settings.chat_highlights?.phrases ?? [],
-        ...settings.chat_highlights,
-        badges: next,
-      },
+  const addBadge = (preset?: typeof BADGE_PRESETS[number]) =>
+    void editBadges({
+      op: 'add',
+      ...(preset ? { item: { badge_key: preset.key, color: preset.color, label: preset.label } } : {}),
     });
 
-  const addBadge = (preset?: typeof BADGE_PRESETS[number]) => {
-    const seed = preset
-      ? { badge_key: preset.key, color: preset.color, label: preset.label }
-      : { badge_key: '', color: '#a855f7', label: '' };
-    writeBadges([
-      ...badges,
-      { id: newRuleId(), enabled: true, ...seed },
-    ]);
+  const patchBadge = (id: string, patch: Partial<HighlightBadge>) => void editBadges({ op: 'update', id, patch });
+
+  const saveField = (id: string, field: 'badge_key' | 'color') => async (text: string) => {
+    const stored = await editBadges({ op: 'update', id, patch: { [field]: text } });
+    return stored?.find((b) => b.id === id)?.[field];
   };
 
-  const patchBadge = (id: string, patch: Partial<HighlightBadge>) =>
-    writeBadges(badges.map((b) => (b.id === id ? { ...b, ...patch } : b)));
-
-  const removeBadge = (id: string) => writeBadges(badges.filter((b) => b.id !== id));
+  const removeBadge = (id: string) => void editBadges({ op: 'remove', id });
 
   return (
     <SettingsSection
@@ -107,19 +104,19 @@ const BadgeHighlightsSettings = () => {
                 />
               </button>
 
-              <input
+              <EntryInput
                 type="text"
                 value={b.badge_key}
-                onChange={(e) => patchBadge(b.id, { badge_key: e.target.value.trim() })}
+                save={saveField(b.id, 'badge_key')}
                 placeholder="moderator/1 or subscriber/*"
                 className="flex-1 glass-input text-textPrimary text-sm px-2.5 py-1.5 font-mono"
                 spellCheck={false}
               />
 
-              <input
+              <EntryInput
                 type="color"
                 value={b.color}
-                onChange={(e) => patchBadge(b.id, { color: e.target.value })}
+                save={saveField(b.id, 'color')}
                 className="w-8 h-8 rounded cursor-pointer bg-transparent border border-borderSubtle"
                 aria-label="Highlight color"
               />

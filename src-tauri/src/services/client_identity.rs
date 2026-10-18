@@ -83,6 +83,18 @@ pub struct ClientIdentity {
     pub channel: String,
 }
 
+/// The running build's version for logs, user agents and the version
+/// commands: the iPhone app's own version line (the one its shell passed to
+/// `start`), the crate version everywhere else. Reporters to the backend read
+/// [`current`] instead, which also gets Android's line right.
+pub fn build_version() -> &'static str {
+    #[cfg(target_os = "ios")]
+    if let Some(version) = tauri::host_version() {
+        return version;
+    }
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Read the running client's identity.
 ///
 /// Cheap and allocation-only: `package_info` is baked in at compile time by

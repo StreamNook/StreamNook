@@ -27,6 +27,13 @@ pub async fn initialize_badge_service() {
     debug!("[BadgeService] Service initialized and pre-warmed");
 }
 
+/// The third-party badges a chatter wears, without waiting on the service
+/// (see `BadgeService::worn_third_party_now`); empty before it is ready.
+pub fn third_party_worn_now(user_id: &str) -> Vec<crate::services::badge_service::UserBadge> {
+    let Ok(guard) = BADGE_SERVICE.try_read() else { return Vec::new() };
+    guard.as_ref().map(|s| s.worn_third_party_now(user_id)).unwrap_or_default()
+}
+
 pub async fn get_service() -> Result<Arc<RwLock<Option<BadgeService>>>, String> {
     Ok(BADGE_SERVICE.clone())
 }
@@ -358,6 +365,20 @@ pub async fn get_badge_standing(
     force: Option<bool>,
 ) -> Result<crate::services::badge_standing::BadgeStanding, String> {
     Ok(crate::services::badge_standing::get_standing(&app_handle, force.unwrap_or(false)).await)
+}
+
+/// The phones' badge wall (services/badge_wall.rs): the global catalogue with
+/// owned badges marked, each tile's status and sheet copy, in `sort`
+/// (`newest`, `available`, `soon`, `usage`, `oldest`), and the missing strip.
+/// `force` re-reads the account's collection in the background.
+#[tauri::command]
+pub async fn get_badge_wall(
+    app_handle: crate::rt::AppHandle,
+    sort: Option<String>,
+    force: Option<bool>,
+) -> Result<crate::services::badge_wall::BadgeWall, String> {
+    let sort = crate::services::badge_wall::Sort::parse(sort.as_deref().unwrap_or("newest"));
+    Ok(crate::services::badge_wall::get(&app_handle, sort, force.unwrap_or(false)).await)
 }
 
 /// One badge's earn window, for a surface that shows a single badge.

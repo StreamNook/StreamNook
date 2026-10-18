@@ -13,6 +13,8 @@ pub mod channel_panels;
 pub mod channel_state;
 pub mod chat;
 pub mod chat_burst;
+// The phone chat pane's tabs and its Add a chat sheet (registered on the phones only).
+pub mod chat_tabs;
 // The chats docked in the main window (desktop only).
 #[cfg(desktop)]
 pub mod chat_dock;
@@ -67,12 +69,17 @@ pub mod resub;
 pub mod screen_capture;
 pub mod session;
 pub mod slash_commands;
+pub mod slash_backend;
 pub mod settings;
+pub mod settings_fields;
+pub mod settings_lists;
+pub mod settings_extras;
 pub mod seventv;
 pub mod song_id;
 // Cosmetics (7TV paints/badges apply + auth status) are kept on mobile; only the
 // individual 7TV login *popup* functions inside are #[cfg(desktop)]-gated.
 pub mod seventv_cosmetics;
+pub mod sn_cosmetics;
 pub mod seventv_cosmetics_fetch;
 pub mod streamnook_api;
 pub mod streaming;

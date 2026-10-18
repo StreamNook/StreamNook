@@ -119,6 +119,11 @@ export interface RoomModeView {
   standing: string | null;
   /** The slow-mode wait that applies to you; 0 when none does. */
   slow_seconds: number;
+  /** The mode that certainly keeps you from sending (your badges or your
+   *  follow prove it), or null. Never set on a guess. */
+  blocked?: RoomModeKind | null;
+  /** What a disabled message box says while `blocked` is set. */
+  reason?: string | null;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -669,24 +674,6 @@ function bumpAllChannels() {
   bumpRevisionFor([...useChatConnectionStore.getState().channels.keys()]);
 }
 
-/**
- * Lazily-loaded per-message engines, resolved once and then called synchronously.
- *
- * These were `import()`ed inside the per-message path, so every single chat
- * message allocated two promises and queued two microtask hops even when no nuke
- * or reminder was armed. The module registry caches the module, but not the
- * promise/closure churn. First use still loads asynchronously (so the chunk stays
- * split); every message after that takes the synchronous branch.
- */
-type NukeEngine = typeof import('../utils/nukeEngine');
-let nukeEngineMod: NukeEngine | null = null;
-let nukeEnginePromise: Promise<NukeEngine> | null = null;
-
-function withNukeEngine(fn: (mod: NukeEngine) => void): void {
-  if (nukeEngineMod) { fn(nukeEngineMod); return; }
-  nukeEnginePromise ??= import('../utils/nukeEngine');
-  void nukeEnginePromise.then((mod) => { nukeEngineMod = mod; fn(mod); });
-}
 
 
 // --- Coalesced render flush ---------------------------------------------------
@@ -2652,8 +2639,22 @@ function handleWsMessage(raw: string) {
   handleRawIrcString(raw);
 }
 
+/** The msg-id of a NOTICE frame Rust writes into a room itself
+ *  (`slash_dispatch::LOCAL_NOTICE_ID`). */
+const LOCAL_NOTICE_ID = 'streamnook_notice';
+
 function handleNotice(parsed: any) {
   const msgId = parsed.msg_id as string | undefined;
+  // A line StreamNook writes into one room itself (a slash command's later
+  // result, a reminder that could not post): shown in that room only.
+  if (msgId === LOCAL_NOTICE_ID) {
+    const channel = typeof parsed.channel === 'string' ? parsed.channel : '';
+    if (channel && parsed.message) {
+      const key = channel.includes(':') ? channel : channel.toLowerCase();
+      injectSystemMessage(key, String(parsed.message), undefined, systemSourceFor(key));
+    }
+    return;
+  }
   const modActionMap: Record<string, string> = {
     host_on: 'host',
     host_off: 'unhost',
@@ -2967,20 +2968,8 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
     queueMessage(slice.channel, parsed);
   }
 
-  // Side effects run on every real chat message, including copies that repeat
-  // collapse folded out of the view. A copypasta wave is exactly what /nuke
-  // targets, so hiding copies from the engine would leave it actioning only the
-  // first one; a keyword reminder should fire on a folded message too.
-  // Gift-bomb children and TikTok likes are events, not chat, so they stay out.
-  if (slice.channel && !giftBombChildSuppressed && parsed.metadata?.msg_type !== 'tiktok_like') {
-    // No-op if no nukes are armed for this channel. Fire-and-forget; nuke
-    // action errors are logged inside the engine.
-    withNukeEngine((mod) => {
-      void mod.checkActiveNukesForMessage(slice.channel, parsed);
-    });
-
-    // Keyword reminders are matched in Rust (services/reminder_service.rs).
-  }
+  // A running /nuke window and keyword reminders see every recorded message
+  // in Rust (services/nuke.rs, services/reminder_service.rs).
 
   // Mirror non-chat channel events (subs, gifts, ... and future follows/raids/
   // hosts) into the MultiChat activity panel. Only synthesized event messages
@@ -3693,7 +3682,9 @@ export async function sendChannelMessage(
       });
       slice.seenMessageIds.delete(tempId);
       bumpRevisionFor([key]);
-      if (result.drop_reason) {
+      // The phone's composer says it beside the kept draft, with Retry and
+      // Discard, so a row here would say it twice.
+      if (result.drop_reason && !IS_MOBILE) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
       // Held, not dropped: the chat box showing this channel asks before any

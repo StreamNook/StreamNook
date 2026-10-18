@@ -9,7 +9,12 @@
 // Kept out of notifications.ts on purpose: that module is about the OS surface
 // (permission, channels, posting) and has no business reading the settings
 // store.
+//
+// Rust owns the list: a toggle is one edit it applies to the stored set
+// (logins trimmed and lowercased there), and every window's store re-reads it.
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
+import { Logger } from '../utils/logger';
 
 /** Twitch logins are already lowercase, but nothing guarantees a caller's is. */
 function key(login: string): string {
@@ -30,20 +35,18 @@ export async function toggleChannelMuted(login: string): Promise<boolean> {
   const id = key(login);
   if (!id) return false;
 
-  const { settings, updateSettings } = useAppStore.getState();
-  const current = settings.live_notifications;
-  // No settings loaded yet means the write would create a partial object that
-  // overwrites real values with defaults on the next save.
-  if (!current) return isChannelMuted(login);
+  // Before settings load there is no stored list to edit yet, so the current
+  // state is the answer.
+  if (!useAppStore.getState().settings.live_notifications) return isChannelMuted(login);
 
-  const list = current.muted_live_channels ?? [];
-  const nowMuted = !list.includes(id);
-  await updateSettings({
-    ...settings,
-    live_notifications: {
-      ...current,
-      muted_live_channels: nowMuted ? [...list, id] : list.filter((x) => x !== id),
-    },
-  });
-  return nowMuted;
+  try {
+    const stored = await invoke<string[]>('edit_settings_list', {
+      path: 'live_notifications.muted_live_channels',
+      edit: { op: 'toggle', value: id },
+    });
+    return stored.includes(id);
+  } catch (err) {
+    Logger.warn('[NotifyChannels] mute toggle failed:', err);
+    return isChannelMuted(login);
+  }
 }

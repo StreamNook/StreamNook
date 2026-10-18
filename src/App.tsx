@@ -45,7 +45,6 @@ import AnnouncementsBanner from './components/AnnouncementsBanner';
 import { TooltipManager } from './components/ui/TooltipManager';
 import { Tooltip } from './components/ui/Tooltip';
 import DropProgressController from './components/plugins/DropProgressController';
-import ReminderEngine from './components/ReminderEngine';
 import EmoteSpotlight from './components/EmoteSpotlight';
 import BadgeSpotlightHost from './components/BadgeSpotlightHost';
 import WhispersWidget from './components/WhispersWidget';
@@ -2437,7 +2436,6 @@ function App() {
       {dropsEverOpened && <Suspense fallback={null}><DropsOverlay /></Suspense>}
       {marketplaceEverOpened && <Suspense fallback={null}><MarketplaceOverlay /></Suspense>}
       <DropProgressController />
-      <ReminderEngine />
       {emoteSetsEverOpened && <Suspense fallback={null}><EmoteSetsOverlay /></Suspense>}
       <EmoteSpotlight />
       <BadgeSpotlightHost />

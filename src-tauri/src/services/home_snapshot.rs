@@ -75,7 +75,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::commands::hype_train::{get_bulk_hype_train_status, HypeTrainBulkStatus};
 use crate::commands::watch_streak::get_watch_streaks_batch;
-use crate::models::drops::{CampaignStatus, DropCampaign};
+use crate::models::drops::{earnable_here, CampaignStatus, DropCampaign};
 use crate::models::provider_stream::ProviderCategory;
 use crate::models::settings::{AppState, FavoriteChannel, ProviderFollow};
 use crate::models::stream::TwitchStream;
@@ -107,6 +107,9 @@ const STREAKS_PERIOD: Duration = Duration::from_secs(3600);
 const DROPS_PERIOD: Duration = Duration::from_secs(3600);
 /// Floor between two manual refreshes of the same section.
 const MIN_MANUAL_GAP: Duration = Duration::from_secs(15);
+/// A phone app coming back reloads the followed list once nobody has asked for
+/// it for this long.
+const RESUME_STALE: Duration = Duration::from_secs(60);
 /// Recommended page size Home shows before "load more".
 const RECOMMENDED_LIMIT: u32 = 20;
 /// Follow list page size for the offline roster (Home showed 100 before).
@@ -272,6 +275,8 @@ pub enum HomeUpdate {
         favorites: Vec<DiscoverRow>,
         live: Vec<DiscoverRow>,
         offline: Vec<DiscoverRow>,
+        followed_live: Vec<DiscoverRow>,
+        platforms: Vec<String>,
         at: u64,
     },
     /// The unified Categories tab's "On other platforms" row.
@@ -543,7 +548,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
         loop {
-            if !hype.app.webview_windows().is_empty() {
+            if crate::services::window_visibility::ui_exists(&hype.app) {
                 refresh_hype(&hype).await;
             }
             tokio::time::sleep(HYPE_PERIOD).await;
@@ -586,7 +591,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
                 let s = drops.snap.read().await;
                 (s.followed_live_at.is_some(), is_stale(s.drops_at, DROPS_PERIOD))
             };
-            if signed && stale && !drops.app.webview_windows().is_empty() {
+            if signed && stale && crate::services::window_visibility::ui_exists(&drops.app) {
                 refresh_drops(&drops).await;
             }
             tokio::time::sleep(if signed { DROPS_PERIOD } else { Duration::from_secs(15) }).await;
@@ -612,6 +617,34 @@ pub async fn set_extra_channels(ids: Vec<String>) {
     }
 }
 
+/// A phone app came back to the front. Who is live moves while it is away, so
+/// the followed list is reloaded when nobody has asked for it (a first load, a
+/// pull, an earlier resume) for `RESUME_STALE`, then hype trains and
+/// collaborations, each under its manual floor. The ask is stamped before
+/// anything is fetched, so a second resume during a slow request starts
+/// nothing. Signed out, nothing. Answers whether a reload started, so the shell
+/// can renew its previews; the lists land as `home-snapshot` updates.
+pub async fn note_app_resumed() -> bool {
+    let Some(inner) = SERVICE.get() else { return false };
+    if !signed_in().await {
+        return false;
+    }
+    {
+        let mut last = inner.last_manual.lock().await;
+        if last.get("followed_live").is_some_and(|t| t.elapsed() < RESUME_STALE) {
+            return false;
+        }
+        last.insert("followed_live", Instant::now());
+    }
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_followed(&inner).await;
+        let _ = refresh("hype_trains", None, None).await;
+        let _ = refresh("collaborations", None, None).await;
+    });
+    true
+}
+
 /// Append the next recommended page to the section (the cursor lives here).
 pub async fn load_more_recommended() -> Result<(), String> {
     let inner = SERVICE.get().ok_or("home snapshot not started")?;
@@ -619,7 +652,7 @@ pub async fn load_more_recommended() -> Result<(), String> {
     let Some(cursor) = cursor else { return Ok(()) };
     let state = app_state(&inner.app).ok_or("no app state")?;
     let (languages, personalized) = discovery_prefs(&state);
-    let (streams, next) = TwitchService::get_recommended_streams_paginated(
+    let (mut streams, next) = TwitchService::get_recommended_streams_paginated(
         &state,
         Some(cursor),
         RECOMMENDED_LIMIT,
@@ -631,6 +664,7 @@ pub async fn load_more_recommended() -> Result<(), String> {
     let at = now_secs();
     let (merged, next) = {
         let mut s = inner.snap.write().await;
+        stamp_drops_with(&s.drops_campaigns, &mut streams);
         let followed: HashSet<String> = s.followed_live.iter().map(|x| x.user_id.clone()).collect();
         let mut seen: HashSet<String> = s.recommended.iter().map(|x| x.user_id.clone()).collect();
         let mut streams = streams;
@@ -776,8 +810,8 @@ async fn rebuild_following(inner: &Inner) {
         return;
     }
     *last = Some(following.clone());
-    let Following { favorites, live, offline } = following_shown(following);
-    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, at: now_secs() });
+    let Following { favorites, live, offline, followed_live, platforms } = following_shown(following);
+    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, followed_live, platforms, at: now_secs() });
 }
 
 /// The "On other platforms" row as it stands: every other platform's cached
@@ -828,6 +862,7 @@ fn following_shown(mut f: Following) -> Following {
     retain_discover(&mut f.favorites, Realm::Follows);
     retain_discover(&mut f.live, Realm::Follows);
     retain_discover(&mut f.offline, Realm::Follows);
+    retain_discover(&mut f.followed_live, Realm::Follows);
     f
 }
 
@@ -1236,13 +1271,19 @@ async fn refresh_drops(inner: &Inner) {
         (campaigns, names)
     };
     let at = now_secs();
-    let changed = {
+    let (changed, followed, recommended) = {
         let mut s = inner.snap.write().await;
         let changed = !same(&s.drops_campaigns, &campaigns) || s.drops_active_game_names != active_game_names;
         s.drops_campaigns = campaigns.clone();
         s.drops_active_game_names = active_game_names.clone();
         s.drops_at = Some(at);
-        changed
+        // The held lists were stamped against the old campaigns.
+        let s = &mut *s;
+        let followed = stamp_drops_with(&s.drops_campaigns, &mut s.followed_live)
+            .then(|| (s.followed_live.clone(), s.followed_live_at.unwrap_or(at)));
+        let recommended = stamp_drops_with(&s.drops_campaigns, &mut s.recommended)
+            .then(|| (s.recommended.clone(), s.recommended_cursor.clone(), s.recommended_at.unwrap_or(at)));
+        (changed, followed, recommended)
     };
     if changed {
         emit(
@@ -1254,6 +1295,47 @@ async fn refresh_drops(inner: &Inner) {
             },
         );
     }
+    if let Some((streams, at)) = followed {
+        emit(&inner.app, HomeUpdate::FollowedLive { streams, at });
+    }
+    if let Some((streams, cursor, at)) = recommended {
+        emit(&inner.app, HomeUpdate::Recommended { streams, cursor, at });
+    }
+}
+
+/// Stamps whether each Twitch row earns drops from `campaigns`, answering
+/// whether any stamp changed. An offline channel (a search result) earns
+/// nothing, whatever category it last streamed.
+fn stamp_drops_with(campaigns: &[DropCampaign], streams: &mut [TwitchStream]) -> bool {
+    let mut changed = false;
+    for st in streams {
+        let earnable = st.is_live != Some(false)
+            && earnable_here(campaigns, &st.user_id, &st.user_login, &st.game_id, &st.game_name);
+        changed |= st.drops_earnable != earnable;
+        st.drops_earnable = earnable;
+    }
+    changed
+}
+
+/// Stamps whether each Twitch row earns drops, from the campaigns the snapshot
+/// holds, for the lists served outside it (a category, a search). Such a list
+/// asked for before the first drops pass (30 s after boot) brings that pass
+/// forward, waiting for it as long as a list waits for its groups; the held
+/// lists are re-stamped when it lands, a served one is not.
+pub async fn stamp_drops(streams: &mut [TwitchStream]) {
+    let Some(inner) = SERVICE.get() else { return };
+    let never = inner.snap.read().await.drops_at.is_none();
+    if never && signed_in().await && tokio::time::timeout(COLLAB_WAIT, refresh_drops(inner)).await.is_err() {
+        debug!("[HomeSnapshot] drops: no campaigns in {COLLAB_WAIT:?}, serving the list unstamped");
+    }
+    stamp_drops_with(&inner.snap.read().await.drops_campaigns, streams);
+}
+
+/// The followed live row for `login`, as Following last listed it.
+pub async fn followed_live_row(login: &str) -> Option<TwitchStream> {
+    let inner = SERVICE.get()?;
+    let snap = inner.snap.read().await;
+    snap.followed_live.iter().find(|s| s.user_login.eq_ignore_ascii_case(login)).cloned()
 }
 
 /// The whole snapshot, for a mounting Home.
@@ -1364,6 +1446,27 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
 }
 
 /// Manual refresh of one section, floored at `MIN_MANUAL_GAP` per section.
+/// Pull to refresh on a Following list: Twitch's followed list, a live re-check
+/// of every other platform you follow (at most once every 15 s each, so a run
+/// of pulls never hammers them), then hype trains. The lists arrive as the
+/// usual `home-snapshot` pushes, the cross-platform `following` section
+/// included.
+pub async fn refresh_following(app: AppHandle, state: crate::models::settings::AppState) -> Result<(), String> {
+    let now = std::time::Instant::now();
+    let providers: Vec<String> = provider_live_service::followed_providers(&state)
+        .into_iter()
+        .filter(|p| provider_live_service::manual_allowed(p, now))
+        .collect();
+    let others = async {
+        for provider in &providers {
+            provider_live_service::refresh_provider(app.clone(), state.clone(), provider).await;
+        }
+    };
+    let (twitch, ()) = tokio::join!(refresh("followed_live", None, None), others);
+    let _ = refresh("hype_trains", None, None).await;
+    twitch
+}
+
 pub async fn refresh(
     section: &str,
     languages: Option<Vec<String>>,
@@ -1449,10 +1552,11 @@ async fn refresh_followed(inner: &Inner) {
         return;
     }
     match TwitchService::get_followed_streams(&state).await {
-        Ok(streams) => {
+        Ok(mut streams) => {
             let at = now_secs();
             let changed = {
                 let mut s = inner.snap.write().await;
+                stamp_drops_with(&s.drops_campaigns, &mut streams);
                 let changed = !same(&s.followed_live, &streams);
                 s.followed_live = streams.clone();
                 s.followed_live_at = Some(at);
@@ -1490,7 +1594,7 @@ async fn refresh_followed(inner: &Inner) {
             if offline_never {
                 refresh_offline(inner).await;
             }
-            if drops_never && !inner.app.webview_windows().is_empty() {
+            if drops_never && crate::services::window_visibility::ui_exists(&inner.app) {
                 refresh_drops(inner).await;
             }
             if streaks_stale {
@@ -1604,6 +1708,7 @@ async fn refresh_recommended_with(
     let at = now_secs();
     let changed = {
         let mut s = inner.snap.write().await;
+        stamp_drops_with(&s.drops_campaigns, &mut streams);
         let changed = !same(&s.recommended, &streams) || s.recommended_cursor != cursor;
         s.recommended = streams.clone();
         s.recommended_cursor = cursor.clone();
@@ -1647,7 +1752,7 @@ async fn collaborations_before_list(inner: &Inner) {
 /// screen; a Home mount catches up. A channel whose batch failed keeps the
 /// group it had.
 async fn refresh_collaborations(inner: &Inner) {
-    if inner.app.webview_windows().is_empty() || crate::services::window_visibility::all_hidden() {
+    if !crate::services::window_visibility::ui_exists(&inner.app) || crate::services::window_visibility::all_hidden() {
         return;
     }
     spawn_shared_chats();
@@ -1711,7 +1816,7 @@ fn spawn_shared_chats() {
 /// group. Same gates as collaborations; a channel whose lookup failed keeps
 /// the session it had.
 async fn refresh_shared_chats(inner: &Inner) {
-    if inner.app.webview_windows().is_empty() || crate::services::window_visibility::all_hidden() {
+    if !crate::services::window_visibility::ui_exists(&inner.app) || crate::services::window_visibility::all_hidden() {
         return;
     }
     let ids = card_channel_ids(inner).await;

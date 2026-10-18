@@ -461,6 +461,7 @@ fn file_name_for(name: &str) -> String {
 
 /// A file dialog, modal to the window that asked on Windows and macOS, so the
 /// builder cannot change underneath it while it is open.
+#[cfg(not(target_os = "ios"))]
 fn file_dialog(app: &AppHandle, window: &Window) -> tauri_plugin_dialog::FileDialogBuilder<Rt> {
     use tauri_plugin_dialog::DialogExt;
     let dialog = app.dialog().file();
@@ -473,6 +474,7 @@ fn file_dialog(app: &AppHandle, window: &Window) -> tauri_plugin_dialog::FileDia
 
 /// Save an overlay's settings to a file the streamer picks. Returns the file
 /// name written, or None when the save dialog was cancelled.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn export_overlay_file(app: AppHandle, window: Window, name: String, style: Value) -> Result<Option<String>, String> {
     let text = build_overlay_file(&name, &style);
@@ -497,8 +499,15 @@ pub async fn export_overlay_file(app: AppHandle, window: Window, name: String, s
     Ok(Some(path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
 }
 
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn export_overlay_file(_app: AppHandle, _window: Window, _name: String, _style: Value) -> Result<Option<String>, String> {
+    Err(crate::ios_ffi::not_wired("Exporting overlay files"))
+}
+
 /// Open an overlay file the streamer picks and return its checked settings.
 /// None when the open dialog was cancelled.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn import_overlay_file(app: AppHandle, window: Window) -> Result<Option<ImportedOverlay>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -522,6 +531,12 @@ pub async fn import_overlay_file(app: AppHandle, window: Window) -> Result<Optio
     let bytes = tokio::fs::read(&path).await.map_err(|e| format!("Could not open that file: {e}"))?;
     let text = String::from_utf8(bytes).map_err(|_| "That file is not a StreamNook overlay file.".to_string())?;
     parse_overlay_file(&text).map(Some)
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn import_overlay_file(_app: AppHandle, _window: Window) -> Result<Option<ImportedOverlay>, String> {
+    Err(crate::ios_ffi::not_wired("Importing overlay files"))
 }
 
 #[cfg(test)]

@@ -150,7 +150,7 @@ pub async fn upload_image(request: tauri::ipc::Request<'_>) -> Result<String, St
     let client = crate::services::http::client().clone();
     let resp = client
         .post(&url)
-        .header("User-Agent", format!("StreamNook/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("StreamNook/{}", crate::services::client_identity::build_version()))
         .multipart(form)
         .send()
         .await

@@ -716,6 +716,7 @@ mod tests {
             original_name: None,
             owner_ref: None,
             width: None,
+            height: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,

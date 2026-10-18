@@ -69,12 +69,31 @@ pub async fn refresh_home_section(
     home_snapshot::refresh(&section, languages, personalized).await
 }
 
+/// Pull to refresh on a Following list (see `home_snapshot::refresh_following`):
+/// Twitch's followed list, a live re-check of the other platforms you follow,
+/// and hype trains, as `home-snapshot` pushes.
+#[tauri::command]
+pub async fn refresh_following(
+    app: crate::rt::AppHandle,
+    state: tauri::State<'_, crate::models::settings::AppState>,
+) -> Result<(), String> {
+    home_snapshot::refresh_following(app, (*state).clone()).await
+}
+
 /// Channel ids a Home has on screen beyond followed and recommended (category
 /// grid, search results), so the hype-train poll covers them too.
 #[tauri::command]
 pub async fn set_home_extra_channels(channel_ids: Vec<String>) -> Result<(), String> {
     home_snapshot::set_extra_channels(channel_ids).await;
     Ok(())
+}
+
+/// The phone app came back to the front: reloads the followed list when it is
+/// a minute old, then hype trains and collaborations. Answers whether a reload
+/// started. Allowed only by mobile-commands.toml.
+#[tauri::command]
+pub async fn note_app_resumed() -> Result<bool, String> {
+    Ok(home_snapshot::note_app_resumed().await)
 }
 
 /// Append the next recommended page. The result arrives as a `home-snapshot`

@@ -593,11 +593,7 @@ const PlayerSettings = () => {
 
         <SettingsRow
           title="Low latency"
-          onReset={thenRun(resetFor(['video_player.experimental_low_latency', true]), (n) => {
-            invoke('set_experimental_low_latency', {
-              enabled: n.video_player?.experimental_low_latency ?? true,
-            }).catch(() => {});
-          })}
+          onReset={resetFor(['video_player.experimental_low_latency', true])}
           description="Rides as close to live as the Twitch site on channels that support it. On by default."
           help="Off falls back to the wider whole-segment path. If a stream stutters or refuses to play, turn this off first."
           control={
@@ -609,7 +605,6 @@ const PlayerSettings = () => {
                   ...settings,
                   video_player: { ...videoPlayer, experimental_low_latency: next },
                 });
-                invoke('set_experimental_low_latency', { enabled: next }).catch(() => {});
               }}
             />
           }

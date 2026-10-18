@@ -18,6 +18,12 @@ fn main() {
         // without them still compiles (Kick connect just reports "not configured").
         "KICK_APP_CLIENT_ID",
         "KICK_APP_CLIENT_SECRET",
+        // StreamNook's own database address and its publishable (bundle-shipped,
+        // not secret) key: the core reads the member and cosmetics registries
+        // itself (services::streamnook_backend). option_env! there, so a build
+        // without them still compiles and simply reads nothing.
+        "VITE_SUPABASE_URL",
+        "VITE_SUPABASE_ANON_KEY",
     ];
 
     // Try loading from project root .env file
@@ -65,7 +71,29 @@ fn main() {
 
     link_cef_next_to_the_executable();
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
+        declare_ios_cfg_aliases();
+        return;
+    }
+
     tauri_build::build()
+}
+
+/// iOS only: the cfg aliases `tauri_build::build()` would declare.
+///
+/// The iOS core builds without the real `tauri` (see the iOS table in
+/// Cargo.toml), and tauri-build cannot run without it: it reads the
+/// `DEP_TAURI_DEV` value only a direct dependent of `tauri` receives, and
+/// panics when it is missing. Its manifest and ACL steps have nothing to do
+/// there either. What the crate still needs from it are the aliases that
+/// `#[cfg(desktop)]` / `#[cfg(mobile)]` sites test, with the values Tauri
+/// gives a mobile target. `dev` is declared and never set: the iOS core is a
+/// release library with no dev server.
+fn declare_ios_cfg_aliases() {
+    println!("cargo:rustc-check-cfg=cfg(desktop)");
+    println!("cargo:rustc-check-cfg=cfg(mobile)");
+    println!("cargo:rustc-check-cfg=cfg(dev)");
+    println!("cargo:rustc-cfg=mobile");
 }
 
 /// Linux only: let the executable find `libcef.so` in its own directory.

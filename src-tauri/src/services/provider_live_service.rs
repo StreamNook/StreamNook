@@ -270,6 +270,34 @@ async fn look(
 }
 
 /// The app's own follow list for one platform.
+/// Every platform besides Twitch the follow list holds at least one channel on.
+pub fn followed_providers(state: &AppState) -> Vec<String> {
+    let mut providers: Vec<String> = state
+        .settings
+        .lock()
+        .map(|s| s.provider_follows.iter().map(|f| f.provider.clone()).collect())
+        .unwrap_or_default();
+    providers.sort();
+    providers.dedup();
+    providers
+}
+
+/// The last manual re-check per platform, so a run of pulls re-asks a platform
+/// at most once every `MANUAL_FLOOR`.
+static MANUAL: std::sync::Mutex<Option<HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
+const MANUAL_FLOOR: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Whether a manual re-check of `provider` may run now (and records it).
+pub fn manual_allowed(provider: &str, now: std::time::Instant) -> bool {
+    let mut guard = MANUAL.lock().unwrap_or_else(|p| p.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.get(provider).is_some_and(|at| now.duration_since(*at) < MANUAL_FLOOR) {
+        return false;
+    }
+    map.insert(provider.to_string(), now);
+    true
+}
+
 fn followed_channels(state: &AppState, provider: &str) -> Option<Vec<String>> {
     match state.settings.lock() {
         Ok(s) => Some(
@@ -400,6 +428,16 @@ async fn prune_provider(provider: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_of_pulls_rechecks_a_platform_once_per_floor() {
+        let now = std::time::Instant::now();
+        // A provider name no other test uses, so the shared floor table is ours.
+        assert!(manual_allowed("floor-test", now));
+        assert!(!manual_allowed("floor-test", now + std::time::Duration::from_secs(5)));
+        assert!(manual_allowed("floor-test-other", now), "each platform has its own floor");
+        assert!(manual_allowed("floor-test", now + std::time::Duration::from_secs(16)));
+    }
 
     fn row(provider: &str, channel: &str) -> ProviderStream {
         ProviderStream {

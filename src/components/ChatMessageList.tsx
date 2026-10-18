@@ -21,6 +21,14 @@ import { IS_MAC, IS_MOBILE } from '../utils/platform';
  */
 const NEWEST_ROWS_PAINTED = 40;
 
+/** On the phone the list meets the player band at its top edge: rows fade in
+ *  over 24px there instead of being cut by a hard line. On the list's box, so
+ *  the scroller inside keeps its own composited scrolling. */
+const PHONE_TOP_FADE: React.CSSProperties = {
+  WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, #000 24px)',
+  maskImage: 'linear-gradient(to bottom, transparent 0, #000 24px)',
+};
+
 /**
  * How long the pointer can be off a mod target (a line's buttons, a row with
  * the hover dock, the slider grip) before the hover hold lets go: long enough
@@ -850,7 +858,7 @@ const ChatMessageList = memo(function ChatMessageList({
   );
 
   return (
-    <div className="relative h-full">
+    <div className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
       <div
         ref={containerRef}
         className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin"

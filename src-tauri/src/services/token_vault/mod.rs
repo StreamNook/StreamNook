@@ -13,8 +13,11 @@
 //! request the user denied) the key is kept in `.token_vault_key` beside the
 //! credentials instead, owner-only on Unix. That stops nothing a local reader of
 //! the data dir could not undo; it exists so those users stay signed in, and
-//! Settings says so (`credential_storage`). Mobile always uses this file key,
-//! because the app-private sandbox is the protection there.
+//! Settings says so (`credential_storage`). Android always uses this file key,
+//! because the app-private sandbox is the protection there. On the iPhone the
+//! Keychain plays the credential store: the shell keeps the key there and
+//! passes it to `start`, and a key file an earlier build wrote is retired once
+//! every credential it sealed has moved to the Keychain key.
 //!
 //! Every sealed file records which key sealed it. A credential store that is
 //! briefly unavailable (a Secret Service that starts after the app) therefore
@@ -120,7 +123,12 @@ pub fn credential_storage() -> CredentialStorage {
         key_on_disk: !os_store::system().reachable(),
         system_store: os_store::STORE_NAME,
     };
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(target_os = "ios")]
+    return CredentialStorage {
+        key_on_disk: crate::ios_ffi::vault_key().is_none(),
+        system_store: "the iPhone Keychain",
+    };
+    #[cfg(target_os = "android")]
     return CredentialStorage {
         key_on_disk: false,
         system_store: "the app's private storage",
@@ -238,7 +246,13 @@ impl Keys for SystemKeys {
     fn os(&self, create: bool) -> Option<Key> {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         return os_store::system().key(create);
-        #[cfg(any(target_os = "android", target_os = "ios"))]
+        // The Keychain-held key the shell passed to `start`.
+        #[cfg(target_os = "ios")]
+        {
+            let _ = create;
+            crate::ios_ffi::vault_key()
+        }
+        #[cfg(target_os = "android")]
         {
             let _ = create;
             None
@@ -501,6 +515,12 @@ fn ensure_migrated() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     os_store::system().remove_legacy_entries();
 
+    #[cfg(target_os = "ios")]
+    if retire_file_key(&SystemKeys, &dir) {
+        *FILE_KEY.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        debug!("[VAULT] every credential is under the Keychain key; removed the key file");
+    }
+
     // The earlier mobile store kept a plaintext copy of each credential under
     // `secure/`, always beside a file this pass has now sealed.
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -573,6 +593,33 @@ fn migrate_dir(keys: &dyn Keys, dir: &Path) {
             debug!("[VAULT] left {name} as it is: {e:#}");
         }
     }
+}
+
+/// Delete the key file once the credential store's key answers and no sealed
+/// file in `dir` still names the file key. True when it was deleted. A file the
+/// migration could not move (its name unknown to it, or unreadable) keeps the
+/// key file, so nothing is ever orphaned.
+#[cfg(any(target_os = "ios", test))]
+fn retire_file_key(keys: &dyn Keys, dir: &Path) -> bool {
+    let key_file = dir.join(KEY_FILE_NAME);
+    if !key_file.exists() || keys.os(false).is_none() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == KEY_FILE_NAME || !entry.path().is_file() {
+            continue;
+        }
+        let Ok(raw) = fs::read(entry.path()) else {
+            return false;
+        };
+        if is_sealed(&raw) && raw[5] == TAG_FILE {
+            return false;
+        }
+    }
+    fs::remove_file(&key_file).is_ok()
 }
 
 #[cfg(test)]
@@ -778,6 +825,30 @@ mod tests {
         migrate_dir(&keys, &dir.0);
         assert_eq!(tag_of(&path), TAG_OS);
         assert_eq!(load(&keys, &path).unwrap().unwrap(), b"{\"s\":2}");
+    }
+
+    #[test]
+    fn the_key_file_is_retired_only_after_every_credential_moved() {
+        let dir = TempDir::new("retire");
+        let keys = TestKeys::new(false);
+        let path = dir.0.join(".kick_token");
+        store(&keys, &path, b"{\"k\":1}").unwrap();
+        fs::write(dir.0.join(KEY_FILE_NAME), [1u8; 32]).unwrap();
+        // A sealed file outside the migration's names still needs the key file.
+        let stray = dir.0.join(".some_new_credential");
+        write_private(&stray, &seal(&keys.file(false).unwrap(), TAG_FILE, file_name(&stray), b"{}").unwrap()).unwrap();
+
+        assert!(!retire_file_key(&keys, &dir.0), "no store key yet");
+        keys.os_up.store(true, Ordering::SeqCst);
+        migrate_dir(&keys, &dir.0);
+        assert_eq!(tag_of(&path), TAG_OS);
+        assert!(!retire_file_key(&keys, &dir.0), "the stray file still names the file key");
+        assert!(dir.0.join(KEY_FILE_NAME).exists());
+
+        fs::remove_file(&stray).unwrap();
+        assert!(retire_file_key(&keys, &dir.0));
+        assert!(!dir.0.join(KEY_FILE_NAME).exists());
+        assert_eq!(load(&keys, &path).unwrap().unwrap(), b"{\"k\":1}");
     }
 
     #[test]

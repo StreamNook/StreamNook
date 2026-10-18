@@ -31,6 +31,7 @@ pub async fn modroom_status() -> Result<ModRoomStatus, String> {
 }
 
 /// Run the one-time scoped consent in the system browser and store the token.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn modroom_connect(app: AppHandle) -> Result<ModRoomStatus, String> {
     use tauri_plugin_opener::OpenerExt;
@@ -69,6 +70,12 @@ pub async fn modroom_connect(app: AppHandle) -> Result<ModRoomStatus, String> {
         connected: true,
         login: Some(cred.login),
     })
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn modroom_connect(_app: AppHandle) -> Result<ModRoomStatus, String> {
+    Err(crate::ios_ffi::not_wired("Connecting Mod Room in the browser"))
 }
 
 /// Forget the scoped credential.

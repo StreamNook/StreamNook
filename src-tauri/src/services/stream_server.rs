@@ -94,13 +94,37 @@ async fn resign_blocking(stale: &str) -> Option<String> {
     Some(fresh)
 }
 
+/// The upstream media playlist on the whole-segment path even while the
+/// low-latency origin owns `stream.m3u8`. AVPlayer plays it when it cannot run
+/// Apple's low-latency mode, and the origin's edge reader keeps running beside
+/// it, so `relay_probe` measures both paths against the same edge.
+const PLAIN_PLAYLIST: &str = "plain.m3u8";
+
+/// A one-variant master over `plain.m3u8` that declares the stream as AAC
+/// audio only. Played for the `audio_only` rendition on the iPhone: given the
+/// bare media playlist, AVPlayer cannot tell there is no video and keeps a
+/// video pipeline it then tears down in the background.
+#[cfg(any(target_os = "ios", test))]
+const AUDIO_PLAYLIST: &str = "audio.m3u8";
+
+/// The audio-only master's text. The query rides along to `plain.m3u8`, so the
+/// directives a player appends (`promote=1`, the cache stamp) still reach it.
+#[cfg(any(target_os = "ios", test))]
+fn audio_only_master(raw_query: &str) -> String {
+    let query = if raw_query.is_empty() { String::new() } else { format!("?{raw_query}") };
+    format!(
+        "#EXTM3U\n#EXT-X-INDEPENDENT-SEGMENTS\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\"\n{PLAIN_PLAYLIST}{query}\n"
+    )
+}
+
 /// Local request path -> upstream url, against a given manifest url.
 ///
 /// Pulled out of the handler so the same mapping can be re-applied to a freshly
 /// re-signed manifest on retry; the query string carries the upstream's auth and
 /// must ride along on variant and chunk requests too.
 fn map_upstream_url(manifest_url: &str, request_path: &str) -> String {
-    if request_path == "stream.m3u8" || request_path.is_empty() {
+    if request_path == "stream.m3u8" || request_path == PLAIN_PLAYLIST || request_path.is_empty() {
         return manifest_url.to_string();
     }
     let (url_without_query, query) = match manifest_url.find('?') {
@@ -148,10 +172,17 @@ pub fn ad_state() -> AdDetectionState {
     AD_STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Whether the solo relay has served a stabilized whole-segment playlist for
+/// the current upstream: the condition for splicing a rendition switch into
+/// it (`adapt_upstream`).
+static SOLO_STABILIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn reset_ad_state() {
+    SOLO_STABILIZED.store(false, std::sync::atomic::Ordering::Relaxed);
     *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
     crate::services::ll_origin::stop();
+    crate::services::relay_probe::reset();
     // Drop the stable-projection segment map for the old stream so a synthetic
     // `vseg/<sn>.ts` can never resolve to a previous stream's segment.
     crate::services::hls_projection::reset(SOLO_STREAM_ID);
@@ -559,11 +590,7 @@ pub async fn swap_upstream(playlist_url: String) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no live solo relay session"))?;
     let port = StreamServer::start_proxy_server(playlist_url).await?;
     if let Some(app) = APP_HANDLE.get() {
-        let url = format!(
-            "http://localhost:{}/stream.m3u8?t={}",
-            port,
-            chrono::Utc::now().timestamp_millis()
-        );
+        let url = crate::commands::streaming::local_player_url(port);
         let _ = app.emit(
             "ad-pivot",
             serde_json::json!({ "url": url, "channel": channel }),
@@ -574,6 +601,49 @@ pub async fn swap_upstream(playlist_url: String) -> Result<()> {
         channel
     );
     Ok(())
+}
+
+/// Tell the player what `link_adapt` decided (`playback-adapt`).
+pub fn emit_playback_adapt(event: &crate::services::link_adapt::AdaptEvent) {
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit("playback-adapt", event);
+    }
+}
+
+/// Move the live solo stream to another rendition of the same broadcast.
+///
+/// On the whole-segment path the switch is spliced into the playlist the
+/// player is already polling (`hls_projection::begin_switch`): no reload, the
+/// segments after the last one it fetched simply come from the new rendition.
+/// That needs a stabilized
+/// playlist, the parts origin off, and the same decoder (`same_decoder`).
+/// Otherwise the relay restarts on the new rendition and the returned URL is
+/// the one the player reloads on.
+pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Option<String>> {
+    if !solo_session_active() {
+        anyhow::bail!("no live solo relay session");
+    }
+    let splice = same_decoder
+        && SOLO_STABILIZED.load(std::sync::atomic::Ordering::Relaxed)
+        && !crate::services::ll_origin::is_active();
+    if splice {
+        crate::services::hls_projection::begin_switch(SOLO_STREAM_ID);
+        *PROXY_URL.lock().await = Some(playlist_url.to_string());
+        // Record the new rendition's segments now rather than at the player's
+        // next poll, so a fetch in between already gets them. Skipped during
+        // an ad break: the next poll records them through the ad filter.
+        if !ad_state().ads_present {
+            if let Ok(res) = HTTP_CLIENT.get(playlist_url).send().await {
+                if let Ok(text) = res.text().await {
+                    let base = crate::services::hls_projection::base_url_of(playlist_url);
+                    let _ = crate::services::hls_projection::stabilize(SOLO_STREAM_ID, &text, &base);
+                }
+            }
+        }
+        return Ok(None);
+    }
+    let port = StreamServer::start_proxy_server(playlist_url.to_string()).await?;
+    Ok(Some(crate::commands::streaming::local_player_url(port)))
 }
 
 impl StreamServer {
@@ -671,6 +741,56 @@ impl StreamServer {
 
         Ok(port)
     }
+
+    /// Bring the relay's listener back after iOS suspended the app and
+    /// reclaimed its sockets. A loopback connect tells a live listener from a
+    /// defunct one (its accept loop can keep running on a dead socket); only a
+    /// dead one is replaced, on the same port, so the player's URL still works.
+    /// True when it re-bound.
+    #[cfg(target_os = "ios")]
+    pub async fn rebind_if_dead() -> Result<bool> {
+        let _init_guard = SOLO_START_LOCK.lock().await;
+        let Some(port) = *CURRENT_PORT.lock().await else {
+            return Ok(false);
+        };
+        let finished = SERVER_HANDLE
+            .lock()
+            .await
+            .as_ref()
+            .map(|h| h.is_finished())
+            .unwrap_or(true);
+        let answers = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
+        if answers && !finished {
+            return Ok(false);
+        }
+        if let Some(old) = SERVER_HANDLE.lock().await.take() {
+            old.abort();
+        }
+        let proxy_url_clone = PROXY_URL.clone();
+        let proxy = warp::path::full()
+            .and(warp::method())
+            .and(opt_raw_query())
+            .and(warp::any().map(move || proxy_url_clone.clone()))
+            .and_then(Self::dynamic_proxy_handler)
+            .boxed();
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.set_reuseaddr(true)?;
+        socket.bind(SocketAddr::from(([127, 0, 0, 1], port)))?;
+        let listener = socket.listen(1024)?;
+        let handle = tokio::spawn(async move {
+            warp::serve(proxy).incoming(listener).run().await;
+        });
+        *SERVER_HANDLE.lock().await = Some(handle);
+        warn!("[StreamServer] relay listener on {port} was dead after a resume; re-bound it");
+        Ok(true)
+    }
+
     async fn dynamic_proxy_handler(
         path: warp::path::FullPath,
         method: warp::http::Method,
@@ -711,13 +831,25 @@ impl StreamServer {
 
         let request_path = path.as_str().trim_start_matches('/');
 
+        #[cfg(target_os = "ios")]
+        if request_path == AUDIO_PLAYLIST {
+            let master = audio_only_master(&raw_query).into_bytes();
+            return finish_playlist_response(warp::http::StatusCode::OK, request_path, master);
+        }
+
         // ── LL-HLS origin path (active only on low-latency channels) ──
         // When the origin is live it owns the media playlist, parts, and complete
         // segments (served from memory). This must come before the non-LL stable-URL
         // redirect, which shares the `seg/` prefix.
         if crate::services::ll_origin::is_active() {
+            // AVPlayer's requests carry `apple=1` (see `ll_origin::render_apple`).
+            let apple = parse_directive(&raw_query, "apple") == Some(1);
+            let probing = crate::services::relay_probe::is_active();
             // Origin-generated init segment (TS transmux path).
             if request_path == "init.mp4" {
+                if probing {
+                    crate::services::relay_probe::note_fetch("init".into());
+                }
                 if let Some(bytes) = crate::services::ll_origin::get_init() {
                     crate::services::ll_diagnostics::event(&format!(
                         "\"ev\":\"o_init\",\"len\":{}",
@@ -729,7 +861,20 @@ impl StreamServer {
             }
             if let Some(rest) = request_path.strip_prefix("part/") {
                 if let Some((sn, k)) = parse_part_path(rest) {
-                    if let Some(bytes) = crate::services::ll_origin::get_part(sn, k) {
+                    let t0 = std::time::Instant::now();
+                    let found = if apple {
+                        crate::services::ll_origin::get_part_apple(sn, k).await
+                    } else {
+                        crate::services::ll_origin::get_part(sn, k)
+                    };
+                    if probing {
+                        crate::services::relay_probe::note_fetch(format!(
+                            "part {sn}/{k}{} {}ms",
+                            if found.is_some() { "" } else { " miss" },
+                            t0.elapsed().as_millis()
+                        ));
+                    }
+                    if let Some(bytes) = found {
                         let h = if crate::services::ll_diagnostics::is_active() {
                             crate::services::ll_diagnostics::quick_hash(bytes.as_ref())
                         } else {
@@ -749,6 +894,9 @@ impl StreamServer {
             }
             if let Some(rest) = request_path.strip_prefix("seg/") {
                 if let Some(sn) = rest.strip_suffix(".ts").and_then(|s| s.parse::<u64>().ok()) {
+                    if probing {
+                        crate::services::relay_probe::note_fetch(format!("seg {sn}"));
+                    }
                     if let Some(bytes) = crate::services::ll_origin::get_segment(sn) {
                         // Whole-segment fetch (the suspected A/V-skew trigger): record sn
                         // and size so it correlates with the frontend append burst.
@@ -772,7 +920,25 @@ impl StreamServer {
                 // budget; this measures whether the server ever actually exceeds
                 // it, separating origin-side delay from client-side accounting.
                 let t0 = std::time::Instant::now();
-                if let Some(pl) = crate::services::ll_origin::serve_playlist(msn, part).await {
+                let served = if apple {
+                    let port = CURRENT_PORT.lock().await.unwrap_or_default();
+                    let base = format!("http://127.0.0.1:{port}/");
+                    let hold = parse_directive(&raw_query, "apple_hold")
+                        .unwrap_or(crate::services::ll_origin::APPLE_HOLD_BACK_PARTS)
+                        .clamp(2, crate::services::ll_origin::APPLE_HOLD_BACK_PARTS);
+                    crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await
+                } else {
+                    crate::services::ll_origin::serve_playlist(msn, part).await
+                };
+                if probing {
+                    crate::services::relay_probe::note_fetch(format!(
+                        "pl {}/{} {}ms",
+                        msn.map(|v| v as i64).unwrap_or(-1),
+                        part.map(|v| v as i64).unwrap_or(-1),
+                        t0.elapsed().as_millis()
+                    ));
+                }
+                if let Some(pl) = served {
                     if crate::services::ll_diagnostics::is_active() {
                         crate::services::ll_diagnostics::event(&format!(
                             "\"ev\":\"o_pl\",\"ms\":{},\"msn\":{},\"part\":{}",
@@ -793,6 +959,9 @@ impl StreamServer {
         // re-signs the real URL. Handled before any upstream fetch. The LL origin
         // owns `seg/` when active; this scheme uses a distinct `vseg/` prefix.
         if let Some((sid, sn)) = crate::services::hls_projection::parse_vseg_path(request_path) {
+            if crate::services::relay_probe::is_active() {
+                crate::services::relay_probe::note_fetch(format!("vseg {sn}"));
+            }
             return Ok(match crate::services::hls_projection::redirect_target(&sid, sn) {
                 Some(url) => warp::http::Response::builder()
                     .status(302)
@@ -973,9 +1142,9 @@ impl StreamServer {
                     return finish_playlist_response(status, request_path, bytes);
                 }
                 detect_ads_in_playlist(text);
-                #[cfg(target_os = "android")]
+                #[cfg(mobile)]
                 let filtered = crate::services::ad_bypass::filter_and_escalate(text);
-                #[cfg(target_os = "android")]
+                #[cfg(mobile)]
                 let text = filtered.as_str();
                 // Lower the over-declared TARGETDURATION, then (LIVE only) pin every
                 // segment URL stable across refreshes so Twitch re-signing a path
@@ -993,10 +1162,40 @@ impl StreamServer {
                 // past the projection's retention window (GitHub #216).
                 let is_live = crate::services::hls_kind::classify(text)
                     == crate::services::hls_kind::PlaylistKind::Live;
-                let stabilize_ok = is_live && crate::services::ll_origin::engine_disabled();
-                let work: String = crate::services::ad_detect::retarget_playlist(text)
+                // `plain.m3u8` never meets the engine's `seg/` scheme, so it
+                // stabilizes even while the engine runs.
+                let plain = request_path == PLAIN_PLAYLIST;
+                let stabilize_ok =
+                    is_live && (plain || crate::services::ll_origin::engine_disabled());
+                let mut work: String = crate::services::ad_detect::retarget_playlist(text)
                     .unwrap_or_else(|| text.to_string());
+                // `promote=1`: AVPlayer on the whole-segment path rides the
+                // in-progress segment too (never during an ad break).
+                if is_live
+                    && parse_directive(&raw_query, "promote") == Some(1)
+                    && !ad_state().ads_present
+                {
+                    if let Some(promoted) =
+                        crate::services::ad_detect::promote_oldest_prefetch(&work)
+                    {
+                        work = promoted;
+                    }
+                }
+                if plain && crate::services::relay_probe::is_active() {
+                    // The newest listed sequence number, comparable with `vseg`.
+                    let first: i64 = work
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(-1);
+                    let listed = work.matches("#EXTINF:").count() as i64;
+                    crate::services::relay_probe::note_fetch(format!(
+                        "plain newest {}",
+                        first + listed - 1
+                    ));
+                }
                 bytes = if stabilize_ok {
+                    SOLO_STABILIZED.store(true, std::sync::atomic::Ordering::Relaxed);
                     let base = crate::services::hls_projection::base_url_of(&manifest_url);
                     crate::services::hls_projection::stabilize(SOLO_STREAM_ID, &work, &base)
                         .into_bytes()
@@ -1118,6 +1317,7 @@ impl StreamServer {
         *CURRENT_PORT.lock().await = None;
         reset_ad_state();
         set_solo_session(None);
+        crate::services::link_adapt::end();
         Ok(())
     }
 
@@ -1132,6 +1332,17 @@ impl StreamServer {
 #[cfg(test)]
 mod relay_rewrite_tests {
     use super::*;
+
+    #[test]
+    fn the_audio_only_master_declares_aac_alone_over_the_plain_playlist() {
+        let master = audio_only_master("t=1&promote=1");
+        assert!(master.starts_with("#EXTM3U\n"));
+        assert!(master.contains("CODECS=\"mp4a.40.2\""));
+        assert!(!master.contains("avc1") && !master.contains("RESOLUTION"));
+        assert!(master.trim_end().ends_with("\nplain.m3u8?t=1&promote=1"));
+        assert!(audio_only_master("").trim_end().ends_with("\nplain.m3u8"));
+        assert_eq!(AUDIO_PLAYLIST, "audio.m3u8");
+    }
 
     #[test]
     fn the_init_named_by_ext_x_map_comes_through_the_relay_too() {

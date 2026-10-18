@@ -27,6 +27,23 @@ pub enum SignInReason {
     NewPermissions,
 }
 
+impl SignInReason {
+    /// The reason spoken to the viewer as a full sentence, for a signed-out
+    /// screen.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            SignInReason::NewPermissions => "Twitch needs you to sign in again for new features.",
+        }
+    }
+
+    /// The reason as a short line, for a row that already says "Twitch".
+    pub fn short(self) -> &'static str {
+        match self {
+            SignInReason::NewPermissions => "Sign in again for new features",
+        }
+    }
+}
+
 /// Plain JSON beside the token files. Not a secret: it names a reason, never a
 /// credential.
 const FILE_NAME: &str = ".twitch_signin_reason";
@@ -144,5 +161,12 @@ mod tests {
     fn reason_reaches_the_page_in_snake_case() {
         let json = serde_json::to_string(&SignInReason::NewPermissions).unwrap();
         assert_eq!(json, "\"new_permissions\"");
+    }
+
+    #[test]
+    fn every_reason_has_both_wordings() {
+        let reason = SignInReason::NewPermissions;
+        assert_eq!(reason.sentence(), "Twitch needs you to sign in again for new features.");
+        assert_eq!(reason.short(), "Sign in again for new features");
     }
 }

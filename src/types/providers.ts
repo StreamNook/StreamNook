@@ -156,4 +156,7 @@ export interface ProviderCategory {
   thumbnail: string;
   viewer_count: number;
   channel_count: number;
+  /** The tile's words for `viewer_count`, from Rust's one compact format
+   *  (services/count_text.rs): "No live streams", "1 viewer", "353K viewers". */
+  viewers_line?: string;
 }

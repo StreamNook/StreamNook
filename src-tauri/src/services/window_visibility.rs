@@ -40,6 +40,44 @@ pub fn all_hidden() -> bool {
     !ANY_ON_SCREEN.load(Ordering::Relaxed)
 }
 
+/// Some surface exists that can show what the UI pollers fetch: a webview
+/// window on desktop and Android. The iPhone app draws natively and has no
+/// webview window at all, so there it is the app being in front.
+pub fn ui_exists(app: &AppHandle) -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        !all_hidden()
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        !app.webview_windows().is_empty()
+    }
+}
+
+/// The window labelled `label` is still open, for state a command keeps per
+/// calling window. The iPhone shell has no webview windows: every command it
+/// calls gets a placeholder window labelled `main`, which stands for the shell
+/// and lasts as long as the core does.
+pub fn window_open(app: &AppHandle, label: &str) -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        label == "main"
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        app.get_webview_window(label).is_some()
+    }
+}
+
+/// The iPhone app moved to the front (`true`) or the background (`false`).
+/// Its shell has no window for the poller below to read, so it says so itself.
+#[cfg(target_os = "ios")]
+pub fn set_native_shell_shown(shown: bool) {
+    ANY_ON_SCREEN.store(shown, Ordering::Relaxed);
+}
+
 #[derive(Serialize, Clone)]
 struct Visibility {
     hidden: bool,

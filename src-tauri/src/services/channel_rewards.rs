@@ -358,6 +358,7 @@ fn snapshot(
         .filter(|r| !(r.is_hidden_for_subs && ctx.viewer_is_sub == Some(true)))
         .map(|mut r| {
             r.availability = reward_availability(&r, ctx, now_ms);
+            r.view = crate::services::reward_redeem::view_of(&r);
             r
         })
         .collect();
@@ -703,6 +704,7 @@ mod tests {
             is_hidden_for_subs: false,
             description: None,
             availability: RewardAvailability::default(),
+            view: Default::default(),
         }
     }
 

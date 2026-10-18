@@ -1,48 +1,56 @@
 import { describe, it, expect } from 'vitest';
-import { mergeFollowedLive } from './followingMerge';
-import type { TwitchStream } from '../types';
-import type { ProviderStreamRow } from '../stores/followsStore';
+import { followsKick, phoneFollowedLive } from './followingMerge';
+import type { FollowingLists, TwitchStream } from '../types';
 import type { ProviderId } from '../types/providers';
 
 const tw = (login: string, viewers: number): TwitchStream =>
   ({ id: `t-${login}`, user_id: '1', user_login: login, user_name: login, viewer_count: viewers }) as TwitchStream;
 
-const row = (provider: ProviderId, login: string, viewers: number, isLive = true): ProviderStreamRow =>
+const row = (provider: ProviderId, login: string, viewers: number): TwitchStream =>
   ({
     id: `${provider}-${login}`,
     user_id: '1',
     user_login: login,
     user_name: login,
     viewer_count: viewers,
-    is_live: isLive,
+    is_live: true,
     provider,
     key: `${provider}:${login}`,
     watch_url: '',
-  }) as ProviderStreamRow;
+  }) as unknown as TwitchStream;
 
-describe('mergeFollowedLive', () => {
-  it('keeps Twitch xqc and Kick xqc as two rows in their own key spaces', () => {
-    const out = mergeFollowedLive([tw('xqc', 10)], { 'kick:xqc': row('kick', 'xqc', 5) });
-    expect(out.map((s) => `${s.provider ?? 'twitch'}:${s.user_login}`)).toEqual(['twitch:xqc', 'kick:xqc']);
-  });
+const lists = (followed_live: TwitchStream[], platforms: string[] = []): FollowingLists => ({
+  favorites: [],
+  live: [],
+  offline: [],
+  followed_live,
+  platforms,
+});
 
-  it('drops Kick rows that are not live', () => {
-    const out = mergeFollowedLive([tw('a', 1)], { 'kick:b': row('kick', 'b', 9, false) });
-    expect(out).toHaveLength(1);
+describe('phoneFollowedLive', () => {
+  it("keeps Rust's order and both xqc rows in their own key spaces", () => {
+    const out = phoneFollowedLive(lists([tw('xqc', 10), row('kick', 'xqc', 10), tw('small', 1)]));
+    expect(out.map((s) => `${s.provider ?? 'twitch'}:${s.user_login}`)).toEqual([
+      'twitch:xqc',
+      'kick:xqc',
+      'twitch:small',
+    ]);
   });
 
   it('leaves out platforms the phone cannot watch', () => {
-    const out = mergeFollowedLive([tw('a', 1)], { 'youtube:b': row('youtube', 'b', 9) });
-    expect(out).toHaveLength(1);
+    const out = phoneFollowedLive(lists([tw('a', 1), row('youtube', 'b', 9), row('tiktok', 'c', 9)]));
+    expect(out.map((s) => s.user_login)).toEqual(['a']);
   });
 
-  it('returns the Twitch list itself when there is nothing to add', () => {
-    const list = [tw('a', 1)];
-    expect(mergeFollowedLive(list, {})).toBe(list);
+  it('is empty before Rust has built the list', () => {
+    expect(phoneFollowedLive({ favorites: [], live: [], offline: [] })).toEqual([]);
   });
+});
 
-  it('orders the merged list by viewers', () => {
-    const out = mergeFollowedLive([tw('big', 100), tw('small', 1)], { 'kick:mid': row('kick', 'mid', 50) });
-    expect(out.map((s) => s.user_login)).toEqual(['big', 'mid', 'small']);
+describe('followsKick', () => {
+  it('reads the platforms Rust says you follow on', () => {
+    expect(followsKick(lists([], ['twitch', 'kick']))).toBe(true);
+    expect(followsKick(lists([], ['twitch']))).toBe(false);
+    expect(followsKick({ favorites: [], live: [], offline: [] })).toBe(false);
   });
 });

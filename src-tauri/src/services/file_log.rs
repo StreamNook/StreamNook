@@ -195,7 +195,7 @@ pub fn record_now(category: &str, summary: &str, detail_title: &str, detail: &st
         let block = format!(
             "\n========== {} ==========\nApp {} on {}\nERROR [{}] {}\n\n-- {} --\n{}\n",
             stamp.to_rfc3339(),
-            env!("CARGO_PKG_VERSION"),
+            crate::services::client_identity::build_version(),
             std::env::consts::OS,
             category,
             summary,
@@ -325,7 +325,7 @@ fn ensure_writer() {
                             0,
                             format!(
                                 "==== StreamNook {} started ====",
-                                env!("CARGO_PKG_VERSION")
+                                crate::services::client_identity::build_version()
                             ),
                         );
                         banner_pending = false;

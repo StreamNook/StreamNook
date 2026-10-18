@@ -149,6 +149,15 @@ pub fn current_target() -> Option<WatchTarget> {
     with_session(|s| s.as_ref().filter(|s| !s.target.offline).map(|s| s.target.clone()))
 }
 
+/// The Twitch broadcaster id of the session (live or an offline room), if any.
+pub fn twitch_channel_id() -> Option<String> {
+    with_session(|s| {
+        s.as_ref()
+            .filter(|s| s.target.provider == "twitch" && !s.target.user_id.is_empty())
+            .map(|s| s.target.user_id.clone())
+    })
+}
+
 /// The channel whose offline room is open, if one is.
 pub fn offline_room_login() -> Option<String> {
     with_session(|s| s.as_ref().filter(|s| s.target.offline).map(|s| s.target.login.to_lowercase()))
@@ -266,6 +275,9 @@ mod discord {
 
 /// Begin (or replace) the session for what the main window now plays.
 pub async fn start(app: AppHandle, target: WatchTarget) {
+    // Whatever opened this session (an offline room, a provider stream) wins
+    // over a Twitch start still resolving.
+    crate::services::watch_start::supersede();
     let seq = SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let previous = with_session(|s| {
         // A raid's cooldown outlives the raided session: the channel just left
@@ -360,6 +372,7 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
 /// watch socket stays on it until the grid declares its focus
 /// (`set_grid_focus`), and the grid publishes its own presence.
 pub async fn stop(app: AppHandle, preserve_backend: bool) {
+    crate::services::watch_start::supersede();
     let previous = with_session(|s| s.take());
     crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
     let Some(prev) = previous else { return };

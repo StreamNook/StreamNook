@@ -36,12 +36,12 @@
 //! regardless of the experimental setting. The two cannot both own the
 //! playlist, so `LlOrigin::start` returns inactive while `active()` is true.
 
-// Android builds only. The unit tests run against the Android target too (built
-// with `cargo test --target aarch64-linux-android` and executed on the device),
-// so there is no reason to let this compile into a desktop test build and every
-// reason not to: a desktop `cargo test` is the one place a supposedly frozen
-// build could still break.
-#![cfg(target_os = "android")]
+// Phone builds only (Android and iPhone). The unit tests run against the
+// Android target too (built with `cargo test --target aarch64-linux-android`
+// and executed on the device), so there is no reason to let this compile into
+// a desktop test build and every reason not to: a desktop `cargo test` is the
+// one place a supposedly frozen build could still break.
+#![cfg(mobile)]
 
 pub mod filter;
 pub mod master;

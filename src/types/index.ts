@@ -535,9 +535,10 @@ export interface ChatCustomizationSettings {
 
 // User-defined slash command. Trigger is the bare word matched at the start
 // (and optionally end) of a message. Expansion is the templated message body.
-// See `expandUserCommand` in utils/chatCommands.ts for the full placeholder
-// grammar — {N}, {N+}, {*}, {{ }}, and dotted fields (user.name, user.id,
-// channel.name, channel.id, stream.title, stream.game, stream.uptime).
+// Rust expands it (`expand_user_command` in services/slash_dispatch.rs, the
+// full placeholder grammar): {N}, {N+}, {*}, {{ }}, and dotted fields
+// (user.name, user.id, channel.name, channel.id, stream.title, stream.game,
+// stream.uptime).
 export interface UserSlashCommand {
   id: string;
   trigger: string;
@@ -1602,6 +1603,8 @@ export interface Collaboration {
   /** Unique viewers across every member. */
   shared_viewers: number;
   members: Collaborator[];
+  /** The group in plain words, built by Rust: "1,500 watching together with A and B". */
+  label: string;
 }
 
 /** Twitch's Shared Chat outside a Shared Viewership group (Rust
@@ -1609,6 +1612,8 @@ export interface Collaboration {
  *  their own viewers; `is_leader` marks the session's host. At least two. */
 export interface SharedChat {
   members: Collaborator[];
+  /** The session in plain words, built by Rust: "Sharing chat with A and B". */
+  label: string;
 }
 
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
@@ -1735,6 +1740,11 @@ export interface FollowingLists {
   favorites: TwitchStream[];
   live: TwitchStream[];
   offline: TwitchStream[];
+  /** Every live follow on every platform, favourite or not, most watched
+   *  first: the phones' Following list (they keep the platforms they play). */
+  followed_live?: TwitchStream[];
+  /** The platforms you follow at least one channel on, in platform order. */
+  platforms?: string[];
 }
 
 /** One card in Home's Continue Watching row. Rust builds these from the local
@@ -1775,7 +1785,15 @@ export type HomeSnapshotUpdate =
   /** The Sidebar's second section, built in Rust for `scope` ('all' or one
    *  provider id): ranked, minus what its Favourites and Followed show. */
   | { section: 'sidebar_discover'; scope: string; streams: TwitchStream[]; at: number }
-  | { section: 'following'; favorites: TwitchStream[]; live: TwitchStream[]; offline: TwitchStream[]; at: number }
+  | {
+      section: 'following';
+      favorites: TwitchStream[];
+      live: TwitchStream[];
+      offline: TwitchStream[];
+      followed_live?: TwitchStream[];
+      platforms?: string[];
+      at: number;
+    }
   | { section: 'other_categories'; categories: ProviderCategory[]; at: number }
   | { section: 'favorite_categories'; categories: TwitchCategory[]; at: number };
 
@@ -1808,6 +1826,8 @@ export interface TwitchStream {
   provider?: ProviderId;
   /** Canonical platform watch URL, set by provider rows; drives `start_stream`. */
   watch_url?: string;
+  /** Watching here earns drops right now; stamped by Rust on the Twitch lists it serves. */
+  drops_earnable?: boolean;
 }
 
 /** Platform-neutral alias for new code; identical to `TwitchStream`. */
@@ -2052,6 +2072,9 @@ export interface TwitchGame {
 
 export interface TwitchCategory extends TwitchGame {
   viewer_count?: number;
+  /** The tile's words for `viewer_count`, from Rust's one compact format
+   *  (services/count_text.rs); absent when nobody counted. */
+  viewers_line?: string;
   tags?: string[];
 }
 
@@ -2276,6 +2299,35 @@ export interface ChannelReward {
   description?: string | null;
   /** Rust's verdict on whether the viewer can redeem it right now. */
   availability: RewardAvailability;
+  /** How it is redeemed and what its controls say (services/reward_redeem.rs). */
+  view: RewardView;
+}
+
+/** What redeeming a reward involves, from its built-in type (Rust). */
+export type RewardKind = 'highlight' | 'sub_message' | 'random_emote' | 'choose_emote' | 'modify_emote' | 'input' | 'standard';
+
+/** Rust's words for a reward's controls (models/drops.rs RewardView). */
+export interface RewardView {
+  kind: RewardKind;
+  /** The redeem carries the viewer's typed text. */
+  takes_text: boolean;
+  /** "950", "3k", "2.5k", "1.2M". */
+  cost_label: string;
+  /** "Redeem", "Send highlighted", "Send", "Choose emote". */
+  action: string;
+  /** "Redeeming...", "Sending...". */
+  busy: string;
+  placeholder: string | null;
+  /** "Can't be undone". */
+  hint: string | null;
+}
+
+/** `redeem_reward`: what a redeem came to, with the toast to show. */
+export interface RedeemOutcome {
+  success: boolean;
+  message: string;
+  new_balance: number | null;
+  unlocked_emote: UnlockedEmote | null;
 }
 
 /** Why Rust judged a reward not redeemable (models/drops.rs RewardBlock). */

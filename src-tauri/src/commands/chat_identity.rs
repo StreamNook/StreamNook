@@ -254,6 +254,11 @@ async fn try_gql_badge_fetch(username: &str) -> Result<Option<Vec<ChatIdentityBa
         })
         .collect();
 
+    // Twitch has been seen listing a badge twice; one tile per set and version.
+    let mut seen = std::collections::HashSet::new();
+    let badges: Vec<ChatIdentityBadge> =
+        badges.into_iter().filter(|b| seen.insert((b.id.clone(), b.version.clone()))).collect();
+
     // Sort: selected first, then alphabetically by title
     let mut sorted_badges = badges;
     sorted_badges.sort_by(|a, b| {
@@ -353,7 +358,7 @@ pub struct BadgeScrapeResult {
     pub badges: Vec<ChatIdentityBadge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatIdentityBadge {
     pub id: String,
     pub version: String,
@@ -375,7 +380,7 @@ pub struct ChatIdentityBadge {
 // `is_drops_authenticated` first and says so plainly.
 
 /// Global badges you can wear, and which one you are wearing.
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn fetch_chat_identity_badges_gql(
     username: String,
@@ -387,7 +392,7 @@ pub async fn fetch_chat_identity_badges_gql(
 }
 
 /// Wear a global badge. `badge_version` comes back with the badge from the fetch.
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn update_chat_identity_gql(
     badge_id: String,

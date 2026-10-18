@@ -257,6 +257,26 @@ pub fn promote_prefetch(playlist: &str) -> Option<String> {
     }
 }
 
+/// `promote_prefetch` limited to the OLDEST hint. Twitch's newer hint names the
+/// segment after the in-progress one, which has not begun producing; a player
+/// that downloads promoted segments whole (AVPlayer) reaches for it, waits on a
+/// response that cannot come yet, and stalls. Same ad-free precondition.
+pub fn promote_oldest_prefetch(playlist: &str) -> Option<String> {
+    let mut seen = false;
+    let mut kept = String::with_capacity(playlist.len());
+    for line in playlist.lines() {
+        let trimmed = line.trim();
+        let hint = trimmed.starts_with("#EXT-X-TWITCH-PREFETCH:");
+        if seen && (hint || trimmed.starts_with("#EXT-X-PREFETCH-DISCONTINUITY")) {
+            continue;
+        }
+        seen |= hint;
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    promote_prefetch(&kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,5 +580,22 @@ https://cdn/seg100.ts\n\
         assert_eq!(segs.iter().find(|(sn, _, _)| *sn == 301).unwrap().2, 8);
         // Promoted tail: seg302 cc=9 (the translated prefetch-discontinuity).
         assert_eq!(segs.iter().find(|(sn, _, _)| *sn == 302).unwrap().2, 9);
+    }
+
+    #[test]
+    fn oldest_promotion_drops_the_newer_hint_and_its_discontinuity() {
+        let pl = "#EXTM3U\n\
+#EXT-X-TARGETDURATION:2\n\
+#EXTINF:2.000,live\n\
+https://cdn/seg1.ts\n\
+#EXT-X-TWITCH-PREFETCH:https://cdn/seg2.ts\n\
+#EXT-X-PREFETCH-DISCONTINUITY\n\
+#EXT-X-TWITCH-PREFETCH:https://cdn/seg3.ts\n";
+        let out = promote_oldest_prefetch(pl).expect("promotes");
+        assert!(out.contains("#EXTINF:2.000,live\nhttps://cdn/seg2.ts"));
+        assert!(!out.contains("seg3.ts"));
+        assert!(!out.contains("#EXT-X-DISCONTINUITY"));
+        assert_eq!(out.matches("#EXTINF:").count(), 2);
+        assert!(promote_oldest_prefetch("#EXTM3U\n#EXTINF:2.000,live\na.ts\n").is_none());
     }
 }

@@ -43,6 +43,7 @@ pub async fn get_credential_storage() -> Result<CredentialStorage, String> {
 /// or writes the primary's cached token, and `add_secondary` rejects the attempt
 /// if the chosen account is already the primary. Resolves with the linked
 /// account, or an error string the UI can surface (cancelled, timed out, etc.).
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn add_twitch_account(app: AppHandle) -> Result<StoredAccount, String> {
     use tauri_plugin_opener::OpenerExt;
@@ -88,6 +89,12 @@ pub async fn add_twitch_account(app: AppHandle) -> Result<StoredAccount, String>
         .map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn add_twitch_account(_app: AppHandle) -> Result<StoredAccount, String> {
+    Err(crate::ios_ffi::not_wired("Linking an account in the browser"))
+}
+
 /// Unlink a secondary account (removes its stored token and registry entry).
 /// The primary cannot be removed here.
 #[tauri::command]
@@ -130,6 +137,7 @@ pub async fn set_active_twitch_account(
 /// returned, or drops to the logged-out state when it is null.
 #[tauri::command]
 pub async fn sign_out_active_twitch_account(
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<StoredAccount>, String> {
     let result = AccountStore::sign_out_active()
@@ -148,6 +156,16 @@ pub async fn sign_out_active_twitch_account(
         // The outgoing account's drops/points credential is now wrong whether we
         // promoted another account or fully signed out; clear it.
         let _ = crate::services::drops_auth_service::DropsAuthService::logout().await;
+        // The phone's sign-in browser still holds the outgoing account's
+        // twitch.tv session, which the web-session reads and writes ride. Wiped
+        // on every sign-out, promoted or full, so nothing acts as the account
+        // that left and the next sign-in starts at Twitch's login page.
+        #[cfg(target_os = "android")]
+        if let Err(e) = crate::twitch_login_plugin::clear_mobile_login_cookies(app).await {
+            log::warn!("[accounts] sign-out could not clear the sign-in browser: {e}");
+        }
     }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
     result
 }

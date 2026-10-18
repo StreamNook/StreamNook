@@ -1,0 +1,6 @@
+version: 1
+bundleID: app.streamnook
+product: StreamNook
+infoPath: Resources/Info.plist
+iconPath: Resources/AppIcon.png
+entitlementsPath: Resources/StreamNook.entitlements

@@ -12,11 +12,15 @@ import { useAppStore } from '../../stores/AppStore';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
 import { PullToRefresh } from '../ui/PullToRefresh';
-import { SkeletonCards } from '../ui/SkeletonCards';
+import { SkeletonCards, SkeletonTiles } from '../ui/SkeletonCards';
+import { CategoryTile } from '../ui/CategoryTile';
+import { TILE_GRID_CLASS } from '../ui/categoryTileLayout';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { Logger } from '../../utils/logger';
 import { streamKey } from '../../utils/streamProvider';
 import { bumpPreviewStamp } from '../followRefresh';
+import { EmptyNote } from '../ui/EmptyNote';
+import { OfflineChannelsGroup } from './OfflineChannelsGroup';
 import type { TwitchStream } from '../../types';
 import type { ProviderCategory } from '../../types/providers';
 import type { StreamViewMode } from './FollowingScreen';
@@ -41,6 +45,7 @@ export const KickBrowseBody: React.FC<{
   onClearCategory: () => void;
 }> = ({ mode, query, view, category, onPickCategory, onClearCategory }) => {
   const startStream = useAppStore((s) => s.startStream);
+  const openKick = (row: TwitchStream) => void startStream(row.user_login, { ...row, provider: 'kick' });
   const [streams, setStreams] = useState<TwitchStream[] | null>(null);
   const [categories, setCategories] = useState<ProviderCategory[] | null>(kickCategoriesCache);
   const [loading, setLoading] = useState(false);
@@ -106,7 +111,10 @@ export const KickBrowseBody: React.FC<{
   const shownCategories = (categories ?? []).filter(
     (c) => !trimmed || c.name.toLowerCase().includes(trimmed.toLowerCase()),
   );
-  const shownStreams = streams ?? [];
+  // A search can find a channel that is not streaming (Rust settles it from
+  // Kick's own live answer): it goes in the offline list, never a live card.
+  const shownStreams = (streams ?? []).filter((s) => s.is_live !== false);
+  const offlineStreams = (streams ?? []).filter((s) => s.is_live === false);
 
   const streamsSettled = useSettleIn(
     !loading && shownStreams.length > 0,
@@ -132,62 +140,51 @@ export const KickBrowseBody: React.FC<{
               </span>
             </div>
           )}
-          {streams === null || (loading && shownStreams.length === 0) ? (
+          {streams === null || (loading && shownStreams.length === 0 && offlineStreams.length === 0) ? (
             <SkeletonCards />
+          ) : shownStreams.length === 0 && offlineStreams.length > 0 ? (
+            <OfflineChannelsGroup className="pt-1 sn-tabbar-clearance" channels={offlineStreams} onOpen={openKick} />
           ) : shownStreams.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-1">
-              <div className="text-sm text-textMuted">
-                {trimmed ? 'No Kick channels found.' : 'Nothing live on Kick right now.'}
-              </div>
-              <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
-            </div>
+            <EmptyNote text={trimmed ? 'No Kick channels found.' : 'Nothing live on Kick right now.'} />
           ) : (
-            <AdaptiveGrid
-              variant={view === 'list' ? 'row' : 'card'}
-              gap={view === 'list' ? 8 : 12}
-              className="px-4 sn-tabbar-clearance"
-            >
-              {shownStreams.map((s, i) => (
-                <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
-                  <MobileStreamCard
-                    stream={s}
-                    onPress={(row) => void startStream(row.user_login, { ...row, provider: 'kick' })}
-                    variant={view === 'list' ? 'row' : 'card'}
-                    showPlatform={false}
-                  />
-                </SettleIn>
-              ))}
-            </AdaptiveGrid>
+            // The clearance wraps both groups, as on Twitch, so offline
+            // channels follow the live cards instead of a tab bar's height
+            // further down.
+            <div className="sn-tabbar-clearance">
+              <AdaptiveGrid variant={view === 'list' ? 'row' : 'card'} gap={view === 'list' ? 8 : 12} className="px-4">
+                {shownStreams.map((s, i) => (
+                  <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
+                    <MobileStreamCard
+                      stream={s}
+                      onPress={openKick}
+                      variant={view === 'list' ? 'row' : 'card'}
+                      showPlatform={false}
+                    />
+                  </SettleIn>
+                ))}
+              </AdaptiveGrid>
+              {offlineStreams.length > 0 && (
+                <OfflineChannelsGroup className="mt-5" channels={offlineStreams} onOpen={openKick} />
+              )}
+            </div>
           )}
         </>
       ) : categories === null || (loading && shownCategories.length === 0) ? (
-        <SkeletonCards />
+        <SkeletonTiles />
       ) : shownCategories.length === 0 ? (
-        <div className="flex items-center justify-center py-20 text-sm text-textMuted">
-          {trimmed ? 'No categories found.' : 'No categories yet, pull to refresh.'}
-        </div>
+        <EmptyNote text={trimmed ? 'No categories found.' : 'No categories yet, pull to refresh.'} hint={null} />
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-4 sn-tabbar-clearance">
+        <div className={`${TILE_GRID_CLASS} px-4 sn-tabbar-clearance`}>
           {shownCategories.map((c, i) => (
             <SettleIn key={c.id} index={i} settled={categoriesSettled}>
-              <button
-                onClick={() => onPickCategory(c)}
-                className="glass-panel media-card p-2 text-left active:opacity-80 transition-opacity w-full"
-              >
-                {c.thumbnail ? (
-                  <img
-                    loading="lazy"
-                    decoding="async"
-                    src={c.thumbnail}
-                    alt=""
-                    className="w-full aspect-[3/4] object-cover rounded mb-1.5"
-                    draggable={false}
-                  />
-                ) : (
-                  <div className="w-full aspect-[3/4] rounded mb-1.5 bg-surface" />
-                )}
-                <div className="text-[13px] font-medium text-textPrimary line-clamp-1">{c.name}</div>
-              </button>
+              <CategoryTile
+                name={c.name}
+                art={c.thumbnail}
+                viewers={c.viewer_count}
+                viewersText={c.viewers_line}
+                twoLineName={!!trimmed}
+                onPress={() => onPickCategory(c)}
+              />
             </SettleIn>
           ))}
         </div>

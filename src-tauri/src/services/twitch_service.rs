@@ -20,6 +20,16 @@ const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 const CLIENT_SECRET: &str = env!("TWITCH_APP_CLIENT_SECRET");
 const TWITCH_GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
+/// How long a web sign-in's `state` stays good for its redirect.
+const WEB_LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// The `state` of the web sign-in in progress and when it began.
+fn pending_web_login() -> &'static std::sync::Mutex<Option<(String, std::time::Instant)>> {
+    static PENDING: std::sync::Mutex<Option<(String, std::time::Instant)>> =
+        std::sync::Mutex::new(None);
+    &PENDING
+}
+
 /// How recently someone must have chatted to count as present in a viewers list.
 const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 // Adding ANY scope here invalidates every stored token at once (see the
@@ -70,6 +80,294 @@ pub(crate) fn live_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream
         is_live: Some(true),
         tags: None,
         language: None,
+        drops_earnable: false,
+    })
+}
+
+/// "partner" or "affiliate" from a GQL `roles` node (GQL `User` has no
+/// `broadcasterType`).
+fn broadcaster_type_from_roles(roles: Option<&serde_json::Value>) -> Option<String> {
+    let has = |key: &str| roles.and_then(|r| r.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+    if has("isPartner") {
+        Some("partner".to_string())
+    } else if has("isAffiliate") {
+        Some("affiliate".to_string())
+    } else {
+        None
+    }
+}
+
+/// A Helix-shaped live row from a GQL `Stream` node (recommendations, a
+/// category's streams, tag-filtered streams). The node's own `game` wins;
+/// `fallback_game` (id, name) names the category when the query did not ask
+/// for it. `None` when the node has no broadcaster.
+pub(crate) fn stream_row_from_gql_node(
+    node: &serde_json::Value,
+    fallback_game: (&str, &str),
+) -> Option<TwitchStream> {
+    let broadcaster = node.get("broadcaster").filter(|b| !b.is_null())?;
+    let s = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let user_login = s(broadcaster, "login");
+    let user_name = Some(s(broadcaster, "displayName")).filter(|n| !n.is_empty()).unwrap_or_else(|| user_login.clone());
+    let tags: Vec<String> = node
+        .get("freeformTags")
+        .and_then(|t| t.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from)).collect())
+        .unwrap_or_default();
+    let (game_id, game_name) = match node.get("game").filter(|g| !g.is_null()) {
+        Some(g) => (
+            s(g, "id"),
+            g.get("displayName")
+                .and_then(|v| v.as_str())
+                .filter(|n| !n.is_empty())
+                .or_else(|| g.get("name").and_then(|v| v.as_str()))
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        None => (fallback_game.0.to_string(), fallback_game.1.to_string()),
+    };
+    Some(TwitchStream {
+        id: s(node, "id"),
+        user_id: s(broadcaster, "id"),
+        user_name,
+        user_login,
+        title: s(node, "title"),
+        viewer_count: node.get("viewersCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        game_id,
+        game_name,
+        thumbnail_url: s(node, "previewImageURL"),
+        started_at: s(node, "createdAt"),
+        broadcaster_type: broadcaster_type_from_roles(broadcaster.get("roles")),
+        profile_image_url: broadcaster.get("profileImageURL").and_then(|v| v.as_str()).map(String::from),
+        is_live: Some(true),
+        tags: if tags.is_empty() { None } else { Some(tags) },
+        language: node.get("language").and_then(|v| v.as_str()).map(normalize_gql_language),
+        drops_earnable: false,
+    })
+}
+
+/// Signed-out cursors carry this prefix, so a list paged from the public GQL
+/// keeps paging there even when a token appears mid-scroll: Helix cannot read
+/// a GQL cursor, nor GQL a Helix one.
+const PUBLIC_CURSOR: &str = "gql:";
+
+/// The GQL cursor inside a signed-out cursor, or `None` for a Helix one.
+fn public_cursor(cursor: Option<&str>) -> Option<&str> {
+    cursor.and_then(|c| c.strip_prefix(PUBLIC_CURSOR))
+}
+
+/// The next signed-out cursor for a GQL connection: its last edge's cursor
+/// while `pageInfo.hasNextPage` holds.
+fn public_next_cursor(connection: Option<&serde_json::Value>) -> Option<String> {
+    let connection = connection?;
+    let has_next = connection.pointer("/pageInfo/hasNextPage").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !has_next {
+        return None;
+    }
+    connection
+        .get("edges")
+        .and_then(|e| e.as_array())
+        .and_then(|e| e.last())
+        .and_then(|e| e.get("cursor"))
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .map(|c| format!("{PUBLIC_CURSOR}{c}"))
+}
+
+/// Whether `s` could be a Twitch login (lowercase letters, digits and
+/// underscores, 1 to 25 long), so it is safe to ask GQL for that user.
+fn is_twitch_login(s: &str) -> bool {
+    (1..=25).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The nodes of a GQL connection's edges, nulls skipped.
+fn gql_nodes(connection: Option<&serde_json::Value>) -> Vec<&serde_json::Value> {
+    connection
+        .and_then(|c| c.get("edges"))
+        .and_then(|e| e.as_array())
+        .map(|edges| edges.iter().filter_map(|e| e.get("node").filter(|n| !n.is_null())).collect())
+        .unwrap_or_default()
+}
+
+/// A category as the category directory and category search answer it, under
+/// Helix's `games` field names so every caller reads it as before.
+/// `viewer_count` is Twitch's own live total for the category
+/// (`Game.viewersCount`, 0 when nobody is live), so the directory and search
+/// always show the same number; it is absent only when GQL was unreachable and
+/// the answer came from Helix, which carries no viewers. The box art keeps the
+/// `{width}x{height}` template.
+///
+/// Serialized with `viewers_line`, the tile's words for `viewer_count`
+/// (`count_text::viewers_line`), so no shell formats the number itself.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CategoryRow {
+    pub id: String,
+    pub name: String,
+    pub box_art_url: String,
+    #[serde(default)]
+    pub viewer_count: Option<u64>,
+}
+
+impl Serialize for CategoryRow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut row = serializer.serialize_struct("CategoryRow", 5)?;
+        row.serialize_field("id", &self.id)?;
+        row.serialize_field("name", &self.name)?;
+        row.serialize_field("box_art_url", &self.box_art_url)?;
+        match self.viewer_count {
+            Some(viewers) => row.serialize_field("viewer_count", &viewers)?,
+            None => row.skip_field("viewer_count")?,
+        }
+        match crate::services::count_text::viewers_line(self.viewer_count) {
+            Some(line) => row.serialize_field("viewers_line", &line)?,
+            None => row.skip_field("viewers_line")?,
+        }
+        row.end()
+    }
+}
+
+impl CategoryRow {
+    /// A row from a GQL `Game` node; a null `viewersCount` means nobody is live.
+    fn from_gql(node: &serde_json::Value) -> Option<Self> {
+        let id = node.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
+        let name = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|n| !n.is_empty())
+            .or_else(|| node.get("displayName").and_then(|v| v.as_str()))?;
+        Some(Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            box_art_url: node.get("boxArtURL").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            viewer_count: Some(node.get("viewersCount").and_then(|v| v.as_u64()).unwrap_or(0)),
+        })
+    }
+
+    /// A row from a Helix `search/categories` or `games` row, which carries no viewers.
+    fn from_helix(row: &serde_json::Value) -> Option<Self> {
+        let id = row.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
+        let name = row.get("name").and_then(|v| v.as_str()).filter(|n| !n.is_empty())?;
+        Some(Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            box_art_url: row.get("box_art_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            viewer_count: None,
+        })
+    }
+}
+
+/// A `games` page from the public GQL: its rows and the next signed-out cursor.
+fn top_games_page(resp: &serde_json::Value) -> (Vec<CategoryRow>, Option<String>) {
+    let games = resp.pointer("/data/games");
+    (gql_nodes(games).into_iter().filter_map(CategoryRow::from_gql).collect(), public_next_cursor(games))
+}
+
+/// A category search from the public GQL: the category named exactly what was
+/// typed (`exact`), then the fuzzy results. Unranked; repeats are left in.
+fn search_page(resp: &serde_json::Value) -> Vec<CategoryRow> {
+    resp.pointer("/data/exact")
+        .filter(|v| !v.is_null())
+        .into_iter()
+        .chain(gql_nodes(resp.pointer("/data/searchCategories")))
+        .filter_map(CategoryRow::from_gql)
+        .collect()
+}
+
+/// A category name as search compares it: trimmed, lowercase, with Latin
+/// accents folded, so "pokemon" typed on any keyboard matches "Pokémon".
+fn fold_category_name(s: &str) -> String {
+    s.trim()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
+            'ç' | 'ć' | 'č' => 'c',
+            'ď' | 'đ' => 'd',
+            'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => 'e',
+            'ğ' => 'g',
+            'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' => 'i',
+            'ł' => 'l',
+            'ñ' | 'ń' | 'ň' => 'n',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => 'o',
+            'ř' => 'r',
+            'ś' | 'š' | 'ş' => 's',
+            'ť' => 't',
+            'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ź' | 'ż' | 'ž' => 'z',
+            c => c,
+        })
+        .collect()
+}
+
+/// Category search order: the category named exactly what was typed first
+/// (ignoring case and accents), then names that start with it, then the rest; within
+/// each, the most live viewers first, and Twitch's own order on a tie. Repeats
+/// of an id keep their first place (the exact lookup and the search can both
+/// return the same category). Cut to `limit`.
+pub fn rank_category_results(query: &str, rows: Vec<CategoryRow>, limit: usize) -> Vec<CategoryRow> {
+    let q = fold_category_name(query);
+    let mut seen = std::collections::HashSet::new();
+    let mut rows: Vec<CategoryRow> = rows.into_iter().filter(|r| seen.insert(r.id.clone())).collect();
+    let tier = |r: &CategoryRow| -> u8 {
+        let name = fold_category_name(&r.name);
+        if name == q {
+            0
+        } else if name.starts_with(&q) {
+            1
+        } else {
+            2
+        }
+    };
+    rows.sort_by(|a, b| {
+        tier(a)
+            .cmp(&tier(b))
+            .then_with(|| b.viewer_count.unwrap_or(0).cmp(&a.viewer_count.unwrap_or(0)))
+    });
+    rows.truncate(limit);
+    rows
+}
+
+/// A Helix `search/channels`-shaped row from a GQL `User` node: a live
+/// channel carries its stream id, preview and start time, an offline one its
+/// user id and avatar, and both the channel title and category.
+pub(crate) fn channel_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream> {
+    let s = |v: Option<&serde_json::Value>, key: &str| {
+        v.and_then(|v| v.get(key)).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+    };
+    let user_id = s(Some(user), "id");
+    let user_login = s(Some(user), "login");
+    if user_id.is_empty() || user_login.is_empty() {
+        return None;
+    }
+    let stream = user.get("stream").filter(|v| !v.is_null());
+    let settings = user.get("broadcastSettings").filter(|v| !v.is_null());
+    let game = stream
+        .and_then(|st| st.get("game"))
+        .filter(|g| !g.is_null())
+        .or_else(|| settings.and_then(|b| b.get("game")).filter(|g| !g.is_null()));
+    let avatar = s(Some(user), "profileImageURL");
+    Some(TwitchStream {
+        id: stream.map(|st| s(Some(st), "id")).filter(|id| !id.is_empty()).unwrap_or_else(|| user_id.clone()),
+        user_name: Some(s(Some(user), "displayName")).filter(|n| !n.is_empty()).unwrap_or_else(|| user_login.clone()),
+        user_id,
+        user_login,
+        title: s(settings, "title"),
+        viewer_count: stream.and_then(|st| st.get("viewersCount")).and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        game_id: s(game, "id"),
+        game_name: s(game, "displayName"),
+        thumbnail_url: match stream {
+            Some(st) => s(Some(st), "previewImageURL"),
+            None => avatar.clone(),
+        },
+        started_at: s(stream, "createdAt"),
+        broadcaster_type: broadcaster_type_from_roles(user.get("roles")),
+        profile_image_url: Some(avatar).filter(|a| !a.is_empty()),
+        is_live: Some(stream.is_some()),
+        tags: None,
+        language: None,
+        drops_earnable: false,
     })
 }
 
@@ -500,47 +798,7 @@ impl TwitchService {
                         expires_at: expires_at.timestamp(),
                     };
 
-                    let store_result = Self::persist_primary_token(&storable_token).await;
-
-                    // The web-session reads (stream resolver, follow/unfollow,
-                    // entitlement checks) gate on a logged_out flag that
-                    // twitch_logout sets. A fresh login has to clear it and drop
-                    // the stale cache, otherwise the next get_token() short-
-                    // circuits to "not logged in" and every web-session feature
-                    // stays dead until restart. This poller is the only place the
-                    // primary login actually completes, so it owns the reset.
-                    {
-                        use tauri::Manager;
-                        app_handle
-                            .state::<crate::models::settings::AppState>()
-                            .twitch_auth
-                            .on_account_changed()
-                            .await;
-                    }
-
-                    match store_result {
-                        Ok(()) => {
-                            debug!("[LOGIN] Token stored");
-                            // This token was granted every scope in SCOPES, so a
-                            // sign-in StreamNook asked for is no longer owed.
-                            crate::services::twitch_signin::clear();
-
-                            // Emit success event
-                            debug!("[LOGIN] Emitting twitch-login-complete event...");
-                            if let Err(e) = app_handle.emit("twitch-login-complete", ()) {
-                                error!("[LOGIN] Failed to emit login-complete event: {}", e);
-                            } else {
-                                debug!("[LOGIN] Event emitted successfully");
-                            }
-                        }
-                        Err(e) => {
-                            error!("[LOGIN] Failed to store token: {:?}", e);
-                            let _ = app_handle.emit(
-                                "twitch-login-error",
-                                format!("Failed to store token: {}", e),
-                            );
-                        }
-                    }
+                    Self::complete_primary_login(&app_handle, storable_token).await;
                 }
                 Err(e) => {
                     error!("[LOGIN] Token polling failed: {}", e);
@@ -552,6 +810,129 @@ impl TwitchService {
         // Return the verification URI and the matching user code for the frontend
         // to open/display. Both come from the single device flow polled above.
         Ok((verification_uri, user_code))
+    }
+
+    /// Finish a primary sign-in once Twitch has handed over its token, however
+    /// it was obtained (the device-code poll, or the web sign-in's code
+    /// exchange): seal it into the primary slot, reset the web-session reads,
+    /// and announce the result with `twitch-login-complete` /
+    /// `twitch-login-error`.
+    pub(crate) async fn complete_primary_login(
+        app_handle: &crate::rt::AppHandle,
+        storable_token: StorableToken,
+    ) {
+        let store_result = Self::persist_primary_token(&storable_token).await;
+
+        // The web-session reads (stream resolver, follow/unfollow, entitlement
+        // checks) gate on a logged_out flag that twitch_logout sets. A fresh
+        // login has to clear it and drop the stale cache, otherwise the next
+        // get_token() short-circuits to "not logged in" and every web-session
+        // feature stays dead until restart. Every primary login completes here,
+        // so this owns the reset.
+        {
+            use tauri::Manager;
+            app_handle
+                .state::<crate::models::settings::AppState>()
+                .twitch_auth
+                .on_account_changed()
+                .await;
+        }
+
+        match store_result {
+            Ok(()) => {
+                debug!("[LOGIN] Token stored");
+                // This token was granted every scope in SCOPES, so a sign-in
+                // StreamNook asked for is no longer owed.
+                crate::services::twitch_signin::clear();
+
+                // Emit success event
+                debug!("[LOGIN] Emitting twitch-login-complete event...");
+                if let Err(e) = app_handle.emit("twitch-login-complete", ()) {
+                    error!("[LOGIN] Failed to emit login-complete event: {}", e);
+                } else {
+                    debug!("[LOGIN] Event emitted successfully");
+                }
+            }
+            Err(e) => {
+                error!("[LOGIN] Failed to store token: {:?}", e);
+                let _ = app_handle.emit(
+                    "twitch-login-error",
+                    format!("Failed to store token: {}", e),
+                );
+            }
+        }
+    }
+
+    /// Where a web sign-in's authorize page redirects with its result.
+    pub(crate) fn web_login_redirect() -> &'static str {
+        REDIRECT_URI
+    }
+
+    /// Start a primary sign-in on Twitch's own web pages: the authorize URL for
+    /// an in-app sheet to load, with a fresh CSRF `state` kept here for
+    /// `finish_web_login` to check. `force_verify` is off, so a twitch.tv
+    /// session the sheet already holds goes straight to the Authorize page. A
+    /// second start replaces the first, whose redirect then fails the check.
+    pub(crate) fn begin_web_login() -> Result<String> {
+        let state = format!("{:032x}", rand::random::<u128>());
+        let url = Self::authorize_url(&state, false)?;
+        *pending_web_login().lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((state, std::time::Instant::now()));
+        Ok(url)
+    }
+
+    /// Finish a web sign-in from its redirect (`code` and `state`, or `error`):
+    /// check the state, exchange the code and complete the primary login
+    /// exactly as the device-code poll does. A failure is announced with
+    /// `twitch-login-error` as well as returned.
+    pub(crate) async fn finish_web_login(
+        app_handle: &crate::rt::AppHandle,
+        code: Option<String>,
+        state: Option<String>,
+        error: Option<String>,
+    ) -> Result<()> {
+        let result = Self::web_login_token(code, state, error).await;
+        match result {
+            Ok(token) => {
+                Self::complete_primary_login(app_handle, token).await;
+                Ok(())
+            }
+            Err(e) => {
+                error!("[LOGIN] Web sign-in failed: {}", e);
+                let _ = app_handle.emit("twitch-login-error", e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    async fn web_login_token(
+        code: Option<String>,
+        state: Option<String>,
+        error: Option<String>,
+    ) -> Result<StorableToken> {
+        // Taken either way: a state answers one redirect only.
+        let pending = pending_web_login()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(error) = error {
+            return Err(anyhow::anyhow!("Sign-in was cancelled or failed: {}", error));
+        }
+        let Some((expected, started)) = pending else {
+            return Err(anyhow::anyhow!("No sign-in is waiting. Please try again."));
+        };
+        if started.elapsed() > WEB_LOGIN_TIMEOUT {
+            return Err(anyhow::anyhow!("The sign-in took too long. Please try again."));
+        }
+        if state.as_deref() != Some(expected.as_str()) {
+            return Err(anyhow::anyhow!(
+                "Sign-in could not be verified (state mismatch). Please try again."
+            ));
+        }
+        let code = code.filter(|c| !c.is_empty()).ok_or_else(|| {
+            anyhow::anyhow!("Twitch did not return an authorization code.")
+        })?;
+        Self::exchange_code_for_token(&code).await
     }
 
     // Device code flow methods (kept for backward compatibility if needed)
@@ -600,6 +981,10 @@ impl TwitchService {
     /// opaque CSRF token the caller verifies against the redirect. This reads
     /// nothing from the primary's cached token.
     pub(crate) fn build_authorize_url(state: &str) -> Result<String> {
+        Self::authorize_url(state, true)
+    }
+
+    fn authorize_url(state: &str, force_verify: bool) -> Result<String> {
         let url = reqwest::Url::parse_with_params(
             "https://id.twitch.tv/oauth2/authorize",
             &[
@@ -607,7 +992,7 @@ impl TwitchService {
                 ("redirect_uri", REDIRECT_URI),
                 ("response_type", "code"),
                 ("scope", SCOPES),
-                ("force_verify", "true"),
+                ("force_verify", if force_verify { "true" } else { "false" }),
                 ("state", state),
             ],
         )?;
@@ -1607,117 +1992,13 @@ impl TwitchService {
         Ok(streams)
     }
 
-    /// Map GQL `recommendedStreams` edges into the app's stream shape,
-    /// mirroring the get_streams_by_game_with_tags mapping.
+    /// Map GQL `recommendedStreams` edges into the app's stream shape.
     fn map_recommended_edges(edges: &[serde_json::Value]) -> Vec<TwitchStream> {
-        let mut streams: Vec<TwitchStream> = Vec::new();
-        {
-            for edge in edges {
-                let node = match edge.get("node") {
-                    Some(n) if !n.is_null() => n,
-                    _ => continue,
-                };
-                let broadcaster = match node.get("broadcaster") {
-                    Some(b) if !b.is_null() => b,
-                    _ => continue,
-                };
-
-                let user_login = broadcaster
-                    .get("login")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let user_name = broadcaster
-                    .get("displayName")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&user_login)
-                    .to_string();
-                let roles = broadcaster.get("roles");
-                let broadcaster_type = if roles
-                    .and_then(|r| r.get("isPartner"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    Some("partner".to_string())
-                } else if roles
-                    .and_then(|r| r.get("isAffiliate"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    Some("affiliate".to_string())
-                } else {
-                    None
-                };
-
-                let stream_tags: Vec<String> = node
-                    .get("freeformTags")
-                    .and_then(|t| t.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|t| {
-                                t.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let game = node.get("game").filter(|g| !g.is_null());
-                let game_name = game
-                    .and_then(|g| {
-                        g.get("displayName")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                            .or_else(|| g.get("name").and_then(|v| v.as_str()))
-                    })
-                    .unwrap_or("")
-                    .to_string();
-
-                streams.push(TwitchStream {
-                    id: node.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    user_id: broadcaster
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    user_name,
-                    user_login,
-                    title: node.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    viewer_count: node
-                        .get("viewersCount")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32,
-                    game_id: game
-                        .and_then(|g| g.get("id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    game_name,
-                    thumbnail_url: node
-                        .get("previewImageURL")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    started_at: node
-                        .get("createdAt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    broadcaster_type,
-                    profile_image_url: broadcaster
-                        .get("profileImageURL")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    is_live: Some(true),
-                    tags: if stream_tags.is_empty() { None } else { Some(stream_tags) },
-                    language: node
-                        .get("language")
-                        .and_then(|v| v.as_str())
-                        .map(normalize_gql_language),
-                });
-            }
-        }
-        streams
+        edges
+            .iter()
+            .filter_map(|edge| edge.get("node").filter(|n| !n.is_null()))
+            .filter_map(|node| stream_row_from_gql_node(node, ("", "")))
+            .collect()
     }
 
     /// Helix top-live-streams list (the pre-recommendations Discover source),
@@ -1729,8 +2010,14 @@ impl TwitchService {
         limit: u32,
         languages: &[String],
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
-        // Try to get token, but don't fail if not authenticated
         let token = Self::get_token().await.ok();
+        let public = |after: Option<String>| async move {
+            let (streams, next) = Self::top_streams_public(after.as_deref(), limit, languages).await?;
+            Ok::<_, anyhow::Error>((streams, next.map(|c| format!("helix:{c}"))))
+        };
+        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
+            return public(public_cursor(cursor.as_deref()).map(String::from)).await;
+        }
         let client = crate::services::http::client().clone();
 
         // Build URL with pagination
@@ -1754,7 +2041,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[Discovery] top streams: HTTP {}, asking the public GQL", response.status());
+            return public(None).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         // Get pagination cursor
         let next_cursor = response
@@ -1828,118 +2120,63 @@ impl TwitchService {
         Ok(streams)
     }
 
-    pub async fn get_top_games(_state: &AppState, limit: u32) -> Result<Vec<serde_json::Value>> {
+    pub async fn get_top_games(_state: &AppState, limit: u32) -> Result<Vec<CategoryRow>> {
         let (games, _) = Self::get_top_games_paginated(_state, None, limit).await?;
         Ok(games)
     }
 
+    /// The category directory, most-watched first, each with Twitch's own live
+    /// total (the number category search shows too): the public GQL, signed in
+    /// or out. Helix's `games/top` answers when GQL fails on the first page, or
+    /// for a Helix cursor, without viewers.
     pub async fn get_top_games_paginated(
         _state: &AppState,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
-        let token = Self::get_token().await.ok();
+    ) -> Result<(Vec<CategoryRow>, Option<String>)> {
+        let limit = limit.clamp(1, 100);
+        match (cursor.as_deref(), public_cursor(cursor.as_deref())) {
+            (Some(helix), None) => Self::top_games_helix(Some(helix), limit).await,
+            (_, after) => match Self::top_games_public(after, limit).await {
+                Ok(page) => Ok(page),
+                Err(e) if after.is_none() => {
+                    debug!("[TwitchService] top games over GQL failed ({e}), asking Helix");
+                    Self::top_games_helix(None, limit).await
+                }
+                Err(e) => Err(e),
+            },
+        }
+    }
+
+    /// A Helix `games/top` page (signed in), in Twitch's order, without viewers.
+    async fn top_games_helix(after: Option<&str>, limit: u32) -> Result<(Vec<CategoryRow>, Option<String>)> {
+        let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
-
         let mut url = format!("https://api.twitch.tv/helix/games/top?first={}", limit);
-        if let Some(cursor) = cursor {
-            url.push_str(&format!("&after={}", cursor));
+        if let Some(after) = after {
+            url.push_str(&format!("&after={}", urlencoding::encode(after)));
         }
-
-        let mut request = client.get(&url).header("Client-Id", CLIENT_ID);
-
-        if let Some(token) = &token {
-            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Helix top games: HTTP {}", response.status()));
         }
-
-        let response = request.send().await?.json::<serde_json::Value>().await?;
-
-        // Get pagination cursor
-        let next_cursor = response
-            .get("pagination")
-            .and_then(|p| p.get("cursor"))
+        let response = response.json::<serde_json::Value>().await?;
+        let next = response
+            .pointer("/pagination/cursor")
             .and_then(|c| c.as_str())
-            .map(|s| s.to_string());
-
-        let data = response.get("data").and_then(|d| d.as_array());
-
-        match data {
-            Some(arr) => {
-                // Each top game needs a viewer-count total, which comes from a
-                // second Helix call per game (streams?game_id=...). Fire them
-                // concurrently (bounded) instead of one-at-a-time: a page of 40
-                // games was doing 40 sequential round-trips, which is what made
-                // the Categories view take many seconds to load. `buffered` keeps
-                // the original top-games order while capping in-flight requests.
-                use futures_util::StreamExt;
-                const MAX_CONCURRENT: usize = 10;
-
-                let mut games_with_viewers: Vec<serde_json::Value> =
-                    futures_util::stream::iter(arr.iter().cloned().map(|game| {
-                        let client = client.clone();
-                        let token = token.clone();
-                        async move {
-                            let mut game_data = game.clone();
-
-                            if let Some(game_id) = game.get("id").and_then(|id| id.as_str()) {
-                                let streams_url = format!(
-                                    "https://api.twitch.tv/helix/streams?game_id={}&first=100",
-                                    game_id
-                                );
-
-                                let mut streams_request =
-                                    client.get(&streams_url).header("Client-Id", CLIENT_ID);
-
-                                if let Some(token) = &token {
-                                    streams_request = streams_request
-                                        .header(AUTHORIZATION, format!("Bearer {}", token));
-                                }
-
-                                if let Ok(streams_response) = streams_request.send().await {
-                                    if let Ok(streams_json) =
-                                        streams_response.json::<serde_json::Value>().await
-                                    {
-                                        if let Some(streams_data) =
-                                            streams_json.get("data").and_then(|d| d.as_array())
-                                        {
-                                            let total_viewers: i64 = streams_data
-                                                .iter()
-                                                .filter_map(|s| {
-                                                    s.get("viewer_count").and_then(|v| v.as_i64())
-                                                })
-                                                .sum();
-
-                                            if let Some(obj) = game_data.as_object_mut() {
-                                                obj.insert(
-                                                    "viewer_count".to_string(),
-                                                    serde_json::json!(total_viewers),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            game_data
-                        }
-                    }))
-                    .buffered(MAX_CONCURRENT)
-                    .collect()
-                    .await;
-
-                // Order each page by the viewer totals we just summed, highest
-                // first. Twitch's games/top is only roughly viewer-ordered; this
-                // makes the Categories grid strictly descending within the page.
-                games_with_viewers.sort_by(|a, b| {
-                    let va = a.get("viewer_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let vb = b.get("viewer_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    vb.cmp(&va)
-                });
-
-                Ok((games_with_viewers, next_cursor))
-            }
-            None => Ok((Vec::new(), None)),
-        }
+            .filter(|c| !c.is_empty())
+            .map(String::from);
+        let rows = response
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|rows| rows.iter().filter_map(CategoryRow::from_helix).collect())
+            .unwrap_or_default();
+        Ok((rows, next))
     }
 
     /// Live streams in any of several categories, most-watched first, in one
@@ -1971,6 +2208,9 @@ impl TwitchService {
         limit: u32,
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
         let token = Self::get_token().await.ok();
+        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
+            return Self::game_streams_public(game_id, public_cursor(cursor.as_deref()), limit).await;
+        }
         let client = crate::services::http::client().clone();
 
         let mut url = format!(
@@ -1987,7 +2227,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category streams: HTTP {}, asking the public GQL", response.status());
+            return Self::game_streams_public(game_id, None, limit).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let next_cursor = response
             .get("pagination")
@@ -2051,6 +2296,9 @@ impl TwitchService {
 
     pub async fn search_channels(_state: &AppState, query: &str) -> Result<Vec<TwitchStream>> {
         let token = Self::get_token().await.ok();
+        if token.is_none() {
+            return Self::search_channels_public(query).await;
+        }
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -2064,7 +2312,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] channel search: HTTP {}, asking the public GQL", response.status());
+            return Self::search_channels_public(query).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response.get("data").and_then(|d| d.as_array());
 
@@ -2127,6 +2380,7 @@ impl TwitchService {
                             is_live: channel.get("is_live").and_then(|v| v.as_bool()),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         });
                     }
                 }
@@ -2155,6 +2409,7 @@ impl TwitchService {
                             is_live: Some(false),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         };
                         user_ids.push(synthesize.user_id.clone());
                         streams.insert(0, synthesize);
@@ -2166,6 +2421,11 @@ impl TwitchService {
                     // Map of user_id -> live stream data, filled across chunks.
                     let mut stream_data_map: std::collections::HashMap<String, serde_json::Value> =
                         std::collections::HashMap::new();
+                    // The ids whose chunk Helix answered. For these the streams
+                    // answer is the truth about liveness; search's own `is_live`
+                    // lags and kept channels that had ended "live".
+                    let mut checked: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
 
                     // Helix takes at most 100 `user_id` params per call, and defaults
                     // `first` to 20. Without it a fully-live page of search results
@@ -2191,12 +2451,20 @@ impl TwitchService {
                         }
 
                         if let Ok(streams_response) = streams_request.send().await {
+                            if !streams_response.status().is_success() {
+                                debug!(
+                                    "[TwitchService] channel search: streams HTTP {}, liveness left to search",
+                                    streams_response.status()
+                                );
+                                continue;
+                            }
                             if let Ok(streams_json) =
                                 streams_response.json::<serde_json::Value>().await
                             {
                                 if let Some(streams_data) =
                                     streams_json.get("data").and_then(|d| d.as_array())
                                 {
+                                    checked.extend(chunk.iter().cloned());
                                     for stream_data in streams_data {
                                         if let Some(uid) =
                                             stream_data.get("user_id").and_then(|v| v.as_str())
@@ -2210,10 +2478,11 @@ impl TwitchService {
                         }
                     }
 
+                    mark_search_liveness(&mut streams, &stream_data_map, &checked);
+
                     // Update our streams with actual stream data
                     for stream in &mut streams {
                         if let Some(stream_data) = stream_data_map.get(&stream.user_id) {
-                            stream.is_live = Some(true);
                             // Update viewer count
                             if let Some(viewer_count) =
                                 stream_data.get("viewer_count").and_then(|v| v.as_u64())
@@ -2542,6 +2811,10 @@ impl TwitchService {
             })
         }).collect();
         newest_pin_first(&mut pinned_messages);
+        // A native shell draws the sender as its chat rows do, with art Rust resolved.
+        if crate::services::chat_row_view::enabled() {
+            crate::services::chat_row_view::stamp_pins(&mut pinned_messages, channel_id);
+        }
 
         debug!(
             "[get_pinned_chat] Found {} pinned messages for channel {}",
@@ -2620,6 +2893,7 @@ impl TwitchService {
                             is_live: Some(false),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         });
                     }
                 }
@@ -2925,6 +3199,7 @@ impl TwitchService {
                 is_live: if probe_failed { None } else { Some(false) },
                 tags: None,
                 language: None,
+                drops_earnable: false,
             },
         }
     }
@@ -2980,6 +3255,9 @@ impl TwitchService {
     /// Get the game ID by game name
     pub async fn get_game_id_by_name(game_name: &str) -> Result<Option<String>> {
         let token = Self::get_token().await.ok();
+        if token.is_none() {
+            return Self::game_id_by_name_public(game_name).await;
+        }
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -2993,7 +3271,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category lookup: HTTP {}, asking the public GQL", response.status());
+            return Self::game_id_by_name_public(game_name).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let game_id = response
             .get("data")
@@ -3036,10 +3319,33 @@ impl TwitchService {
             .unwrap_or_default())
     }
 
-    /// Search for categories by name (uses Twitch search API for fuzzy matching)
-    /// Returns a list of matching categories with id, name, and box_art_url
-    pub async fn search_categories(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
-        let token = Self::get_token().await.ok();
+    /// Categories matching what was typed, ranked by `rank_category_results`,
+    /// each with its live viewers. One public GQL request answers both Twitch's
+    /// fuzzy search and the category named exactly what was typed, which the
+    /// search alone can miss or bury ("art" lists "Artifact" before "Art"). It
+    /// needs no account. When GQL fails, Helix's search answers (signed in),
+    /// with the exact name looked up beside it, and without viewers.
+    pub async fn search_categories(query: &str, limit: u32) -> Result<Vec<CategoryRow>> {
+        let query = query.trim();
+        let limit = limit.clamp(1, 100);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = match Self::search_categories_public(query, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                debug!("[TwitchService] category search over GQL failed ({e}), asking Helix");
+                let exact = Self::categories_by_name(&[query.to_string()]).await.unwrap_or_default();
+                let fuzzy = Self::search_categories_helix(query, limit).await?;
+                exact.iter().chain(fuzzy.iter()).filter_map(CategoryRow::from_helix).collect()
+            }
+        };
+        Ok(rank_category_results(query, rows, limit as usize))
+    }
+
+    /// Helix's fuzzy category search, as raw rows (no viewers).
+    async fn search_categories_helix(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -3048,13 +3354,16 @@ impl TwitchService {
             limit
         );
 
-        let mut request = client.get(&url).header("Client-Id", CLIENT_ID);
-
-        if let Some(token) = &token {
-            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Helix category search: HTTP {}", response.status()));
         }
-
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response
             .get("data")
@@ -3163,6 +3472,16 @@ impl TwitchService {
         limit: u32,
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
         let token = Self::get_token().await.ok();
+        let public = |after: Option<String>| async move {
+            let (mut streams, next) = Self::game_streams_public(game_id, after.as_deref(), limit).await?;
+            if let Some(exclude_login) = exclude_user_login {
+                streams.retain(|s| !s.user_login.eq_ignore_ascii_case(exclude_login));
+            }
+            Ok::<_, anyhow::Error>((streams, next))
+        };
+        if token.is_none() || public_cursor(cursor).is_some() {
+            return public(public_cursor(cursor).map(String::from)).await;
+        }
         let client = crate::services::http::client().clone();
 
         let mut url = format!(
@@ -3180,7 +3499,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category streams: HTTP {}, asking the public GQL", response.status());
+            return public(None).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response.get("data").and_then(|d| d.as_array());
 
@@ -3442,6 +3766,7 @@ impl TwitchService {
                         .get("language")
                         .and_then(|v| v.as_str())
                         .map(normalize_gql_language),
+                    drops_earnable: false,
                 });
             }
         }
@@ -3564,6 +3889,180 @@ impl TwitchService {
         }
 
         Ok(resp)
+    }
+
+    /// The category directory with no account, most-watched first, each with
+    /// its live total: what `get_top_games_paginated` answers, signed in or out.
+    /// `after` is the GQL cursor (without the signed-out prefix).
+    async fn top_games_public(after: Option<&str>, limit: u32) -> Result<(Vec<CategoryRow>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookTopGames",
+            "query": "query StreamNookTopGames($first: Int!, $after: Cursor) { \
+                games(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                    edges { cursor node { id name displayName boxArtURL viewersCount } } \
+                    pageInfo { hasNextPage } } }",
+            "variables": { "first": limit.clamp(1, 100), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(top_games_page(&resp))
+    }
+
+    /// A category's live streams with no account, most-watched first: the
+    /// signed-out answer for `get_streams_by_game` and the by-id and by-name
+    /// variants. `game_id` may join several ids with `&game_id=` (the Helix
+    /// form `get_streams_in_categories` builds); those are read one by one,
+    /// merged by viewers and answered as a single page.
+    async fn game_streams_public(
+        game_id: &str,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let ids: Vec<&str> = game_id.split("&game_id=").filter(|id| !id.is_empty()).collect();
+        if ids.len() > 1 {
+            let mut streams = Vec::new();
+            for id in ids.iter().take(25) {
+                match Self::game_streams_public_one(id, None, limit).await {
+                    Ok((rows, _)) => streams.extend(rows),
+                    Err(e) => debug!("[TwitchService] public streams for category {id}: {e}"),
+                }
+            }
+            streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+            streams.truncate(limit as usize);
+            return Ok((streams, None));
+        }
+        match ids.first() {
+            Some(id) => Self::game_streams_public_one(id, after, limit).await,
+            None => Ok((Vec::new(), None)),
+        }
+    }
+
+    async fn game_streams_public_one(
+        game_id: &str,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookGameStreams",
+            "query": "query StreamNookGameStreams($id: ID!, $first: Int!, $after: Cursor) { \
+                game(id: $id) { id name \
+                    streams(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                        edges { cursor node { id title viewersCount createdAt type language previewImageURL \
+                            freeformTags { name } \
+                            broadcaster { id login displayName profileImageURL(width: 70) roles { isPartner isAffiliate } } } } \
+                        pageInfo { hasNextPage } } } }",
+            "variables": { "id": game_id, "first": limit.clamp(1, 100), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        let game = resp.pointer("/data/game").filter(|g| !g.is_null());
+        let id = game.and_then(|g| g.get("id")).and_then(|v| v.as_str()).unwrap_or(game_id);
+        let name = game.and_then(|g| g.get("name")).and_then(|v| v.as_str()).unwrap_or_default();
+        let connection = game.and_then(|g| g.get("streams"));
+        let rows = gql_nodes(connection)
+            .into_iter()
+            .filter_map(|node| stream_row_from_gql_node(node, (id, name)))
+            .collect();
+        Ok((rows, public_next_cursor(connection)))
+    }
+
+    /// Live streams across Twitch with no account, most-watched first: the
+    /// signed-out continuation of the Discover feed after its first page.
+    /// Languages filter here, as in the recommendations read.
+    async fn top_streams_public(
+        after: Option<&str>,
+        limit: u32,
+        languages: &[String],
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookTopStreams",
+            "query": "query StreamNookTopStreams($first: Int!, $after: Cursor) { \
+                streams(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                    edges { cursor node { id title viewersCount createdAt type language previewImageURL \
+                        freeformTags { name } game { id name displayName } \
+                        broadcaster { id login displayName profileImageURL(width: 70) roles { isPartner isAffiliate } } } } \
+                    pageInfo { hasNextPage } } }",
+            // Twitch refuses more than 30 here.
+            "variables": { "first": limit.clamp(1, 30), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        let connection = resp.pointer("/data/streams");
+        let mut rows: Vec<TwitchStream> = gql_nodes(connection)
+            .into_iter()
+            .filter_map(|node| stream_row_from_gql_node(node, ("", "")))
+            .collect();
+        if !languages.is_empty() {
+            let wanted: Vec<String> = languages.iter().map(|l| l.to_ascii_lowercase()).collect();
+            rows.retain(|s| s.language.as_deref().is_some_and(|l| wanted.iter().any(|w| w == l)));
+        }
+        Ok((rows, public_next_cursor(connection)))
+    }
+
+    /// Channel search with no account: the signed-out answer for
+    /// `search_channels`, ranked the same way. The exact login rides the same
+    /// request, so a channel Twitch's search leaves out still leads.
+    async fn search_channels_public(query: &str) -> Result<Vec<TwitchStream>> {
+        let trimmed = query.trim();
+        let login = trimmed.trim_start_matches('@').to_lowercase();
+        let fields = "id login displayName profileImageURL(width: 300) roles { isPartner isAffiliate } \
+            broadcastSettings { title game { id displayName } } \
+            stream { id viewersCount createdAt previewImageURL game { id displayName } }";
+        let body = if is_twitch_login(&login) {
+            serde_json::json!({
+                "operationName": "StreamNookSearchChannels",
+                "query": format!(
+                    "query StreamNookSearchChannels($query: String!, $login: String!) {{ \
+                     searchUsers(userQuery: $query, first: 60) {{ edges {{ node {{ {fields} }} }} }} \
+                     exact: user(login: $login) {{ {fields} }} }}"
+                ),
+                "variables": { "query": trimmed, "login": login },
+            })
+        } else {
+            serde_json::json!({
+                "operationName": "StreamNookSearchChannels",
+                "query": format!(
+                    "query StreamNookSearchChannels($query: String!) {{ \
+                     searchUsers(userQuery: $query, first: 60) {{ edges {{ node {{ {fields} }} }} }} }}"
+                ),
+                "variables": { "query": trimmed },
+            })
+        };
+        let resp = Self::gql_public_read(body).await?;
+        let mut rows: Vec<TwitchStream> = gql_nodes(resp.pointer("/data/searchUsers"))
+            .into_iter()
+            .filter_map(channel_row_from_gql)
+            .collect();
+        if let Some(exact) = resp.pointer("/data/exact").and_then(channel_row_from_gql) {
+            if !rows.iter().any(|r| r.user_id == exact.user_id) {
+                rows.insert(0, exact);
+            }
+        }
+        rank_search_results(query, &mut rows);
+        Ok(rows)
+    }
+
+    /// Category search with no account, in one request: the category named
+    /// exactly `query` (`game(name:)` ignores case) first, then Twitch's fuzzy
+    /// search, every row with its live viewers. Unranked; repeats are left in.
+    async fn search_categories_public(query: &str, limit: u32) -> Result<Vec<CategoryRow>> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookSearchCategories",
+            "query": "query StreamNookSearchCategories($query: String!, $first: Int!) { \
+                exact: game(name: $query) { id name displayName boxArtURL viewersCount } \
+                searchCategories(query: $query, first: $first) { edges { node { id name displayName boxArtURL viewersCount } } } }",
+            "variables": { "query": query, "first": limit },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(search_page(&resp))
+    }
+
+    /// A category's id from its exact name, with no account.
+    async fn game_id_by_name_public(name: &str) -> Result<Option<String>> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookGameId",
+            "query": "query StreamNookGameId($name: String!) { game(name: $name) { id } }",
+            "variables": { "name": name },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(resp.pointer("/data/game/id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()).map(String::from))
     }
 
     /// Shared Viewership for a batch of Twitch channel ids, one aliased
@@ -4863,6 +5362,23 @@ impl TwitchService {
         Ok(())
     }
 
+    /// A user's Twitch bio (Helix `description`); empty when they have none.
+    pub async fn get_user_bio(user_id: &str) -> Result<String> {
+        let token = Self::get_token().await?;
+        let response = crate::services::http::client()
+            .get("https://api.twitch.tv/helix/users")
+            .query(&[("id", user_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Twitch did not answer for that user ({})", response.status()));
+        }
+        let body: serde_json::Value = response.json().await?;
+        Ok(body.pointer("/data/0/description").and_then(|v| v.as_str()).unwrap_or_default().to_string())
+    }
+
     /// Update User Chat Color
     pub async fn update_user_chat_color(user_id: &str, color: &str) -> Result<()> {
         let token = Self::get_token().await?;
@@ -5259,19 +5775,27 @@ impl TwitchService {
     /// Helix lists answer only the broadcaster): `{ moderators, vips }`, each
     /// member `{ id, login, displayName }`, plus `moderators_listed` and
     /// `vips_listed`, false when Twitch would not list that group to anyone
-    /// the app could ask as.
+    /// the app could ask as, and `moderators_error` / `vips_error` set to what
+    /// the viewer reads instead, so a refusal is never shown as "no moderators".
     pub async fn get_chatters_by_role(
         channel_login: &str,
         auth: Option<&TwitchAuthService>,
     ) -> Result<serde_json::Value> {
         let callers = role_list_callers(auth).await;
-        let moderators = Self::channel_role_members(channel_login, ChannelRole::Moderators, &callers).await?;
-        let vips = Self::channel_role_members(channel_login, ChannelRole::Vips, &callers).await?;
+        let signed_in = callers.iter().any(GqlCaller::is_signed_in);
+        let (moderators, vips) = tokio::join!(
+            Self::channel_role_members(channel_login, ChannelRole::Moderators, &callers),
+            Self::channel_role_members(channel_login, ChannelRole::Vips, &callers),
+        );
+        let moderators = role_members_or_error(moderators, "moderators", "moderator list", signed_in);
+        let vips = role_members_or_error(vips, "VIPs", "VIP list", signed_in);
         Ok(serde_json::json!({
-            "moderators_listed": moderators.is_some(),
-            "vips_listed": vips.is_some(),
-            "moderators": moderators.unwrap_or_default(),
-            "vips": vips.unwrap_or_default(),
+            "moderators_listed": moderators.is_ok(),
+            "vips_listed": vips.is_ok(),
+            "moderators": moderators.as_ref().cloned().unwrap_or_default(),
+            "vips": vips.as_ref().cloned().unwrap_or_default(),
+            "moderators_error": moderators.err(),
+            "vips_error": vips.err(),
         }))
     }
 
@@ -5530,11 +6054,17 @@ impl TwitchService {
             }
         }
 
-        // 2. Role sets from the GQL Mods/VIPs lookup (best-effort; an empty result
-        //    just means everyone falls into the viewers bucket).
+        // 2. Role sets from the GQL Mods/VIPs lookup (best-effort: a list that
+        //    could not be read leaves those chatters among the viewers, and is
+        //    logged rather than taken for "no moderators").
         let mut mod_logins: HashSet<String> = HashSet::new();
         let mut vip_logins: HashSet<String> = HashSet::new();
         if let Ok(roles) = Self::get_chatters_by_role(channel_login, auth).await {
+            for key in ["moderators_error", "vips_error"] {
+                if let Some(e) = roles.get(key).and_then(|e| e.as_str()) {
+                    warn!("[TwitchService] chatters roles for {channel_login}: {e}");
+                }
+            }
             if let Some(mods) = roles.get("moderators").and_then(|m| m.as_array()) {
                 for m in mods {
                     if let Some(login) = m.get("login").and_then(|l| l.as_str()) {
@@ -6222,6 +6752,46 @@ pub(crate) fn vod_refresh_from_node(
     }
 }
 
+/// One role list (`mods` or `vips`) from a GQL answer: the users, or why there
+/// is none to show. A list that is present but empty is a real "none"; a
+/// missing list is Twitch's refusal (its `errors` message) or an unknown
+/// channel, never an empty list.
+fn role_list(answer: &serde_json::Value, field: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let user = answer.pointer("/data/user").filter(|u| !u.is_null());
+    if let Some(edges) = user.and_then(|u| u.pointer(&format!("/{field}/edges"))).and_then(|e| e.as_array()) {
+        return Ok(edges.iter().filter_map(|e| e.get("node").cloned()).collect());
+    }
+    if let Some(message) = answer.pointer("/errors/0/message").and_then(|m| m.as_str()) {
+        return Err(message.to_string());
+    }
+    Err(if user.is_some() { format!("no {field} list in the answer") } else { "channel not found".to_string() })
+}
+
+/// What a viewer reads when a role list could not be loaded.
+fn role_error_text(what: &str, error: &str, signed_in: bool) -> String {
+    if !signed_in && error.eq_ignore_ascii_case("unauthenticated") {
+        format!("Sign in to Twitch to see this channel's {what}.")
+    } else {
+        format!("Couldn't load this channel's {what} (Twitch: {error}).")
+    }
+}
+
+/// One `channel_role_members` answer as the members, or what the viewer reads
+/// when Twitch would not list the group (`what` names it, `list` its list).
+fn role_members_or_error(
+    read: Result<Option<Vec<serde_json::Value>>>,
+    what: &str,
+    list: &str,
+    signed_in: bool,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
+    match read {
+        Ok(Some(members)) => Ok(members),
+        Ok(None) if signed_in => Err(format!("Twitch would not share this channel's {list}.")),
+        Ok(None) => Err(role_error_text(what, "unauthenticated", false)),
+        Err(e) => Err(role_error_text(what, &e.to_string(), signed_in)),
+    }
+}
+
 /// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -6491,6 +7061,95 @@ mod discovery_tests {
         assert_eq!(second.broadcaster_type.as_deref(), Some("affiliate"));
         assert_eq!(second.game_name, "");
     }
+
+    #[test]
+    fn signed_out_categories_read_like_helix_games() {
+        let games = serde_json::json!({
+            "edges": [
+                { "cursor": "c1", "node": { "id": "509658", "name": "Just Chatting", "displayName": "Just Chatting",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/509658-{width}x{height}.jpg", "viewersCount": 247184 } },
+                { "cursor": "c2", "node": null },
+                { "cursor": "c3", "node": { "id": "", "name": "no id" } }
+            ],
+            "pageInfo": { "hasNextPage": true }
+        });
+        let (rows, next) = top_games_page(&serde_json::json!({ "data": { "games": games } }));
+        assert_eq!(rows.len(), 1, "null and id-less nodes are skipped");
+        assert_eq!(rows[0].id, "509658");
+        assert_eq!(rows[0].name, "Just Chatting");
+        assert_eq!(rows[0].viewer_count, Some(247184));
+        assert!(rows[0].box_art_url.ends_with("509658-{width}x{height}.jpg"));
+        assert_eq!(next.as_deref(), Some("gql:c3"));
+    }
+
+    #[test]
+    fn signed_out_cursors_page_only_on_the_public_side() {
+        assert_eq!(public_cursor(Some("gql:abc")), Some("abc"));
+        assert_eq!(public_cursor(Some("eyJiIjp7")), None, "a Helix cursor stays on Helix");
+        assert_eq!(public_cursor(None), None);
+        let last_page = serde_json::json!({ "edges": [{ "cursor": "z", "node": {} }], "pageInfo": { "hasNextPage": false } });
+        assert_eq!(public_next_cursor(Some(&last_page)), None);
+        assert_eq!(public_next_cursor(None), None);
+    }
+
+    #[test]
+    fn signed_out_category_streams_carry_the_category() {
+        let node = serde_json::json!({
+            "id": "320736562012", "title": "news", "viewersCount": 25168, "createdAt": "2026-10-13T18:08:56Z",
+            "type": "live", "language": "EN",
+            "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_hasanabi-{width}x{height}.jpg",
+            "broadcaster": { "id": "207813352", "login": "hasanabi", "displayName": "HasanAbi",
+                "profileImageURL": "https://x/p.jpeg", "roles": { "isPartner": true, "isAffiliate": false } }
+        });
+        let row = stream_row_from_gql_node(&node, ("509658", "Just Chatting")).expect("a row");
+        assert_eq!((row.game_id.as_str(), row.game_name.as_str()), ("509658", "Just Chatting"));
+        assert_eq!((row.user_login.as_str(), row.viewer_count), ("hasanabi", 25168));
+        assert_eq!(row.broadcaster_type.as_deref(), Some("partner"));
+        assert_eq!(row.language.as_deref(), Some("en"));
+        assert!(row.thumbnail_url.contains("{width}x{height}"));
+        assert!(stream_row_from_gql_node(&serde_json::json!({ "id": "1", "broadcaster": null }), ("", "")).is_none());
+    }
+
+    #[test]
+    fn signed_out_channel_search_rows_read_like_helix_search() {
+        let live = serde_json::json!({
+            "id": "71092938", "login": "xqc", "displayName": "xQc", "profileImageURL": "https://x/xqc-300x300.jpeg",
+            "roles": { "isPartner": true, "isAffiliate": false },
+            "broadcastSettings": { "title": "LOCK IN", "game": { "id": "32982", "displayName": "Grand Theft Auto V" } },
+            "stream": { "id": "320737343964", "viewersCount": 26948, "createdAt": "2026-10-13T19:31:06Z",
+                "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_xqc-{width}x{height}.jpg",
+                "game": { "id": "32982", "displayName": "Grand Theft Auto V" } }
+        });
+        let row = channel_row_from_gql(&live).expect("a row");
+        assert_eq!((row.id.as_str(), row.user_id.as_str()), ("320737343964", "71092938"));
+        assert_eq!((row.is_live, row.viewer_count), (Some(true), 26948));
+        assert_eq!(row.title, "LOCK IN");
+        assert!(row.thumbnail_url.contains("live_user_xqc"));
+        assert_eq!(row.profile_image_url.as_deref(), Some("https://x/xqc-300x300.jpeg"));
+
+        let offline = serde_json::json!({
+            "id": "251183247", "login": "xqcisoffline", "displayName": "", "profileImageURL": "https://x/d.png",
+            "roles": { "isPartner": false, "isAffiliate": false },
+            "broadcastSettings": { "title": "f", "game": { "id": "509658", "displayName": "Just Chatting" } },
+            "stream": null
+        });
+        let row = channel_row_from_gql(&offline).expect("a row");
+        assert_eq!((row.id.as_str(), row.user_name.as_str()), ("251183247", "xqcisoffline"));
+        assert_eq!((row.is_live, row.started_at.as_str()), (Some(false), ""));
+        assert_eq!((row.game_name.as_str(), row.thumbnail_url.as_str()), ("Just Chatting", "https://x/d.png"));
+        assert_eq!(row.broadcaster_type, None);
+        assert!(channel_row_from_gql(&serde_json::json!({ "id": "", "login": "x" })).is_none());
+    }
+
+    #[test]
+    fn only_login_shaped_queries_ask_for_the_exact_user() {
+        assert!(is_twitch_login("xqc"));
+        assert!(is_twitch_login("some_user_42"));
+        assert!(!is_twitch_login("two words"));
+        assert!(!is_twitch_login(""));
+        assert!(!is_twitch_login("UPPER"));
+        assert!(!is_twitch_login(&"a".repeat(26)));
+    }
 }
 
 #[cfg(test)]
@@ -6561,6 +7220,26 @@ mod resolve_stream_tests {
     }
 }
 
+/// Settles each channel search row's liveness from Helix's streams answer.
+/// A row the answer lists is live. A row whose lookup was answered but which
+/// it leaves out has ended: Helix search keeps `is_live` true for a while after
+/// a stream stops, and such a row drew as a live card with 0 viewers that
+/// opened onto nothing. A row whose lookup failed keeps search's word.
+pub fn mark_search_liveness(
+    rows: &mut [TwitchStream],
+    live: &std::collections::HashMap<String, serde_json::Value>,
+    checked: &std::collections::HashSet<String>,
+) {
+    for row in rows {
+        if live.contains_key(&row.user_id) {
+            row.is_live = Some(true);
+        } else if checked.contains(&row.user_id) {
+            row.is_live = Some(false);
+            row.viewer_count = 0;
+        }
+    }
+}
+
 /// Order Twitch channel-search rows by how well they answer what was typed.
 ///
 /// Helix returns its own order, which is not "best match first": a live
@@ -6598,6 +7277,97 @@ pub fn rank_search_results(query: &str, rows: &mut [TwitchStream]) {
 }
 
 #[cfg(test)]
+mod category_rank_tests {
+    use super::{rank_category_results, search_page, top_games_page, CategoryRow};
+
+    #[test]
+    fn the_directory_and_search_show_one_viewer_total() {
+        let node = serde_json::json!({ "id": "32982", "name": "Grand Theft Auto V", "displayName": "Grand Theft Auto V",
+            "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/32982_IGDB-{width}x{height}.jpg", "viewersCount": 41803 });
+        let (directory, _) = top_games_page(&serde_json::json!({ "data": { "games": {
+            "edges": [{ "cursor": "c1", "node": node.clone() }], "pageInfo": { "hasNextPage": false } } } }));
+        let searched = search_page(&serde_json::json!({ "data": { "exact": node.clone(),
+            "searchCategories": { "edges": [{ "node": node }] } } }));
+        assert_eq!(directory[0], searched[0], "the same category reads the same in both answers");
+        assert_eq!(directory[0].viewer_count, Some(41803), "Twitch's total, not a sum of some streams");
+    }
+
+    #[test]
+    fn a_category_nobody_streams_reads_zero_and_a_missing_exact_match_is_skipped() {
+        let searched = search_page(&serde_json::json!({ "data": { "exact": null, "searchCategories": { "edges": [
+            { "node": { "id": "1", "name": "Just Cause 3", "boxArtURL": "", "viewersCount": null } }] } } }));
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].viewer_count, Some(0));
+    }
+
+    fn row(id: &str, name: &str, viewers: Option<u64>) -> CategoryRow {
+        CategoryRow { id: id.into(), name: name.into(), box_art_url: String::new(), viewer_count: viewers }
+    }
+
+    fn names(rows: &[CategoryRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_exact_name_leads_ignoring_case() {
+        let rows = vec![row("1", "Artifact", Some(28)), row("2", "Art Alive", Some(0)), row("3", "Art", Some(7419))];
+        assert_eq!(names(&rank_category_results("art", rows, 40))[0], "Art");
+        let rows = vec![row("1", "VALORANT Mobile", Some(2)), row("2", "VALORANT", Some(27043))];
+        assert_eq!(names(&rank_category_results(" valorant ", rows, 40))[0], "VALORANT");
+    }
+
+    #[test]
+    fn prefix_beats_the_rest_and_viewers_order_each_tier() {
+        let rows = vec![
+            row("1", "Tom Clancy's Rainbow Six", Some(2)),
+            row("2", "Rainbow Six Mobile", Some(0)),
+            row("3", "Tom Clancy's Rainbow Six Extraction", Some(40)),
+            row("4", "Rainbow Six Siege", Some(6792)),
+        ];
+        assert_eq!(
+            names(&rank_category_results("rainbow six", rows, 40)),
+            ["Rainbow Six Siege", "Rainbow Six Mobile", "Tom Clancy's Rainbow Six Extraction", "Tom Clancy's Rainbow Six"]
+        );
+    }
+
+    #[test]
+    fn accents_do_not_hide_the_names_that_match() {
+        let rows = vec![
+            row("1", "Pokemon Auto Chess", Some(25)),
+            row("2", "Pokémon Community Game", Some(2700)),
+            row("3", "Pocket Monster", Some(0)),
+            row("4", "Pokémon", Some(527)),
+            row("5", "Pokémon FireRed/LeafGreen", Some(2000)),
+        ];
+        assert_eq!(
+            names(&rank_category_results("pokemon", rows, 40)),
+            ["Pokémon", "Pokémon Community Game", "Pokémon FireRed/LeafGreen", "Pokemon Auto Chess", "Pocket Monster"]
+        );
+    }
+
+    #[test]
+    fn ties_keep_twitchs_order_and_missing_viewers_count_as_none_live() {
+        let rows = vec![row("1", "Just Cause 3", None), row("2", "Just Cause 4", Some(0)), row("3", "Just Chess", None)];
+        assert_eq!(names(&rank_category_results("just", rows, 40)), ["Just Cause 3", "Just Cause 4", "Just Chess"]);
+    }
+
+    #[test]
+    fn a_repeated_id_keeps_its_first_place_and_the_limit_cuts() {
+        let rows = vec![row("9", "Art", Some(7419)), row("1", "Artifact", Some(28)), row("9", "Art", Some(7419)), row("2", "Artisan TD", Some(0))];
+        let ranked = rank_category_results("art", rows, 2);
+        assert_eq!(names(&ranked), ["Art", "Artifact"]);
+    }
+
+    #[test]
+    fn rows_serialize_under_helix_field_names() {
+        let json = serde_json::to_value(row("509660", "Art", Some(7419))).unwrap();
+        assert_eq!(json["box_art_url"], "");
+        assert_eq!(json["viewer_count"], 7419);
+        assert!(serde_json::to_value(row("1", "A", None)).unwrap().get("viewer_count").is_none());
+    }
+}
+
+#[cfg(test)]
 mod search_rank_tests {
     use super::{rank_search_results, TwitchStream};
 
@@ -6618,6 +7388,7 @@ mod search_rank_tests {
             is_live: Some(live),
             tags: None,
             language: None,
+            drops_earnable: false,
         }
     }
 
@@ -6643,6 +7414,106 @@ mod search_rank_tests {
         ];
         rank_search_results("moon", &mut rows);
         assert_eq!(logins(&rows), ["moonbig", "moonlive", "moonoffline", "themoonfan"]);
+    }
+
+    #[test]
+    fn the_streams_answer_settles_liveness_search_got_wrong() {
+        use super::mark_search_liveness;
+        use std::collections::{HashMap, HashSet};
+        // Search still calls `dnd` live after its stream ended; streams does not list it.
+        let mut rows = vec![row("dnd", true, 0), row("onair", false, 0), row("unasked", true, 0)];
+        let live: HashMap<_, _> = [("onair".to_string(), serde_json::json!({}))].into();
+        let checked: HashSet<_> = ["dnd".to_string(), "onair".to_string()].into();
+        mark_search_liveness(&mut rows, &live, &checked);
+        assert_eq!(rows[0].is_live, Some(false));
+        assert_eq!(rows[1].is_live, Some(true));
+        // Its lookup failed, so search's word stands.
+        assert_eq!(rows[2].is_live, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod web_login_tests {
+    use super::TwitchService;
+
+    fn state_of(url: &str) -> String {
+        reqwest::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .unwrap()
+    }
+
+    // One test, in order: the pending state is process-wide.
+    #[tokio::test]
+    async fn a_redirect_is_only_taken_with_the_state_it_was_sent_with() {
+        let url = TwitchService::begin_web_login().unwrap();
+        assert!(url.contains("force_verify=false"), "an existing session goes straight to Authorize");
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback"));
+        let state = state_of(&url);
+
+        let wrong = TwitchService::web_login_token(Some("c".into()), Some("other".into()), None).await;
+        assert!(wrong.unwrap_err().to_string().contains("state mismatch"));
+        // A state answers one redirect: the right one now finds nothing waiting.
+        let replay = TwitchService::web_login_token(Some("c".into()), Some(state), None).await;
+        assert!(replay.unwrap_err().to_string().contains("No sign-in is waiting"));
+
+        let url = TwitchService::begin_web_login().unwrap();
+        let declined =
+            TwitchService::web_login_token(None, Some(state_of(&url)), Some("access_denied".into())).await;
+        assert!(declined.unwrap_err().to_string().contains("access_denied"));
+
+        let url = TwitchService::begin_web_login().unwrap();
+        let no_code = TwitchService::web_login_token(None, Some(state_of(&url)), None).await;
+        assert!(no_code.unwrap_err().to_string().contains("authorization code"));
+    }
+}
+
+#[cfg(test)]
+mod role_list_answer_tests {
+    use super::{role_error_text, role_list};
+    use serde_json::json;
+
+    #[test]
+    fn a_listed_role_comes_back_as_its_users() {
+        let answer = json!({"data": {"user": {"id": "1", "mods": {"edges": [
+            {"node": {"id": "2", "login": "nightbot"}},
+            {"node": {"id": "3", "login": "streamelements"}}
+        ]}}}});
+        let mods = role_list(&answer, "mods").unwrap();
+        assert_eq!(mods.iter().map(|m| m["login"].as_str().unwrap()).collect::<Vec<_>>(), ["nightbot", "streamelements"]);
+    }
+
+    #[test]
+    fn an_empty_list_is_a_real_none() {
+        let answer = json!({"data": {"user": {"id": "1", "vips": {"edges": []}}}});
+        assert_eq!(role_list(&answer, "vips").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_refused_list_is_an_error_never_an_empty_list() {
+        // What Twitch answers an anonymous Mods query today.
+        let answer = json!({
+            "errors": [{"message": "unauthenticated", "path": ["user", "mods"], "extensions": {"code": "Unauthenticated"}}],
+            "data": {"user": {"id": "71092938", "mods": null}}
+        });
+        assert_eq!(role_list(&answer, "mods").unwrap_err(), "unauthenticated");
+    }
+
+    #[test]
+    fn an_unknown_channel_says_so() {
+        assert_eq!(role_list(&json!({"data": {"user": null}}), "mods").unwrap_err(), "channel not found");
+    }
+
+    #[test]
+    fn the_viewer_reads_why_the_list_is_missing() {
+        assert_eq!(role_error_text("moderators", "unauthenticated", false), "Sign in to Twitch to see this channel's moderators.");
+        assert_eq!(
+            role_error_text("moderators", "unauthenticated", true),
+            "Couldn't load this channel's moderators (Twitch: unauthenticated)."
+        );
+        assert!(!role_error_text("VIPs", "service error", true).contains("no VIPs"));
     }
 }
 

@@ -4,8 +4,9 @@
 // they need no network call. Search covers everyone else, and deliberately
 // includes offline channels: chat is joinable whether or not the channel is
 // streaming, which is exactly the case for moderating a friend's quiet room.
-// `search_channels` already passes `live_only=false` and returns `is_live` plus
-// `profile_image_url`, so offline results need no extra call.
+// Rust answers the search (`search_chat_rooms`: Twitch and Kick together, one
+// failing never emptying the other, live rooms first) and reads pasted Kick
+// links (`chat_room_from_link`), the same answers the iPhone app shows.
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MagnifyingGlass, UsersThree } from 'phosphor-react';
@@ -14,60 +15,62 @@ import { useAppStore } from '../../stores/AppStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
+import type { ProviderId } from '../../types/providers';
 import { ProviderMark } from '../../components/ProviderLogo';
-import { useFollowsStore } from '../../stores/followsStore';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
-import { mergeFollowedLive } from '../followingMerge';
-import { orderSearchResults } from './searchOrder';
+import { phoneFollowedLive } from '../followingMerge';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
-/** A Kick slug from a pasted kick.com link or a `kick:slug` / `kick/slug` prefix. */
-function parseKickLink(input: string): string | null {
-  const s = input.trim();
-  const m =
-    s.match(/^(?:https?:\/\/)?(?:www\.)?kick\.com\/(@?[a-z0-9_-]+)/i) ||
-    s.match(/^kick[:/](@?[a-z0-9_-]+)$/i);
-  return m ? m[1].replace(/^@/, '').toLowerCase() : null;
+/** A channel as `search_chat_rooms` and `chat_room_from_link` answer it. */
+interface ChatRoomRow {
+  provider: ProviderId;
+  key: string;
+  user_login: string;
+  user_id: string;
+  user_name: string;
+  profile_image_url: string | null;
+  is_live: boolean;
+  viewer_count: number;
+  game_name: string;
+  pasted: boolean;
+}
+
+/** The row in the shape the list draws, beside the live follows. */
+function asStream(row: ChatRoomRow): TwitchStream {
+  return {
+    id: row.key,
+    user_id: row.user_id,
+    user_login: row.user_login,
+    user_name: row.user_name,
+    title: '',
+    viewer_count: row.viewer_count,
+    game_name: row.game_name,
+    thumbnail_url: '',
+    started_at: '',
+    profile_image_url: row.profile_image_url ?? undefined,
+    provider: row.provider,
+    is_live: row.is_live,
+  } as TwitchStream;
 }
 
 export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
   onClose,
 }) => {
-  const followedStreams = useAppStore((s) => s.followedStreams);
   const openTabs = useChatTabsStore((s) => s.tabs);
   const addTab = useChatTabsStore((s) => s.addTab);
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TwitchStream[]>([]);
   const [searching, setSearching] = useState(false);
-
-  // Live Kick follows sit beside the Twitch ones.
-  const providerLive = useFollowsStore((s) => s.liveByKey);
-  const liveNow = useMemo(() => mergeFollowedLive(followedStreams, providerLive), [followedStreams, providerLive]);
   // A pasted kick.com link (or `kick:slug`) opens that room directly, live or
   // not, without a search round trip.
-  const kickLink = parseKickLink(query);
-  const pasted = useMemo<TwitchStream | null>(
-    () =>
-      kickLink
-        ? ({
-            id: `kick:${kickLink}`,
-            user_id: '',
-            user_login: kickLink,
-            user_name: kickLink,
-            title: '',
-            viewer_count: 0,
-            game_name: '',
-            thumbnail_url: '',
-            started_at: '',
-            provider: 'kick',
-            is_live: false,
-          } as TwitchStream)
-        : null,
-    [kickLink],
-  );
+  const [pasted, setPasted] = useState<TwitchStream | null>(null);
+
+  // Live Kick follows sit beside the Twitch ones (merged in Rust).
+  const following = useAppStore((s) => s.following);
+  const liveNow = useMemo(() => phoneFollowedLive(following), [following]);
 
   const openSet = useMemo(
     () => new Set(openTabs.map((t) => t.channel)),
@@ -75,33 +78,32 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   );
 
   useEffect(() => {
+    let cancelled = false;
+    void invoke<ChatRoomRow | null>('chat_room_from_link', { query })
+      .then((row) => {
+        if (!cancelled) setPasted(row ? asStream(row) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setPasted(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [query]);
+
+  useEffect(() => {
     const q = query.trim();
-    if (q.length < 2 || parseKickLink(q)) {
+    if (q.length < 2 || pasted) {
       setResults([]);
+      setSearching(false);
       return;
     }
     let cancelled = false;
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        // Both platforms, settled independently so one failing never empties
-        // the other.
-        const [tw, kick] = await Promise.allSettled([
-          invoke<TwitchStream[]>('search_channels', { query: q }),
-          invoke<{ streams: TwitchStream[] }>('provider_search', { provider: 'kick', query: q }),
-        ]);
-        if (tw.status === 'rejected') Logger.warn('[AddChat] twitch search failed:', tw.reason);
-        if (kick.status === 'rejected') Logger.warn('[AddChat] kick search failed:', kick.reason);
-        if (!cancelled) {
-          setResults(
-            orderSearchResults([
-              ...(tw.status === 'fulfilled' ? (tw.value ?? []) : []),
-              ...(kick.status === 'fulfilled'
-                ? (kick.value?.streams ?? []).map((st) => ({ ...st, provider: 'kick' as const }))
-                : []),
-            ]),
-          );
-        }
+        const rows = await invoke<ChatRoomRow[]>('search_chat_rooms', { query: q });
+        if (!cancelled) setResults((rows ?? []).map(asStream));
       } catch (err) {
         Logger.warn('[AddChat] search failed:', err);
         if (!cancelled) setResults([]);
@@ -113,7 +115,7 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, pasted]);
 
   const pick = (stream: TwitchStream) => {
     addTab(

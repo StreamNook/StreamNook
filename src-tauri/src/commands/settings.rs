@@ -70,7 +70,10 @@ pub fn write_settings_to_disk_sync(settings: &Settings) -> Result<(), String> {
     let settings_path = get_settings_path()?;
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))
+    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))?;
+    // Today's copy, which a settings.json that later fails to load is rebuilt from.
+    crate::services::settings_backups::snapshot_if_due(settings);
+    Ok(())
 }
 
 /// Persist settings to settings.json, debounced. Callers have already updated
@@ -141,15 +144,38 @@ pub async fn patch_settings(
     if patch.is_empty() {
         return Ok(());
     }
-    let keys: Vec<String> = patch.keys().cloned().collect();
-    let (settings, favorites_changed, role_art_changed) = {
+    commit_settings_patch(&app, &state, source, |_| Ok(patch))
+}
+
+/// Apply a top-level patch built from the canonical settings (under its lock,
+/// so the build reads what Rust holds right now), then run every save's side
+/// effects, write it and tell every window which keys changed.
+pub(crate) fn commit_settings_patch(
+    app: &AppHandle,
+    state: &AppState,
+    source: Option<String>,
+    build: impl FnOnce(&Settings) -> Result<serde_json::Map<String, serde_json::Value>, String>,
+) -> Result<(), String> {
+    let (settings, keys, favorites_changed, role_art_changed, source) = {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let patch = build(&state_settings)?;
+        if patch.is_empty() {
+            return Ok(());
+        }
+        let keys: Vec<String> = patch.keys().cloned().collect();
+        let sent_themes = patch.get("custom_themes").filter(|v| !v.is_null()).cloned();
         let next = apply_settings_patch(&state_settings, patch)?;
+        // Custom themes come back with their muted text lifted to the contrast
+        // floor; when that changed what the window sent, it has to re-read too.
+        let source = match sent_themes {
+            Some(sent) if next.extra.get("custom_themes") != Some(&sent) => None,
+            _ => source,
+        };
         let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
         let role_art_changed = state_settings.chat_design.ffz_custom_role_badges
             != next.chat_design.ffz_custom_role_badges;
         *state_settings = next.clone();
-        (next, favorites_changed, role_art_changed)
+        (next, keys, favorites_changed, role_art_changed, source)
     };
     after_settings_change(&settings, favorites_changed);
     state.layout_service.set_gif_scale(settings.chat_design.gif_scale);
@@ -162,14 +188,82 @@ pub async fn patch_settings(
     Ok(())
 }
 
+/// What a shell needs before it draws its first screen, in one answer.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BootState {
+    /// The first-run setup has not been finished on this install.
+    pub needs_setup: bool,
+    /// A Twitch sign-in is stored.
+    pub signed_in: bool,
+    /// Why StreamNook signed the viewer out of Twitch, when it did so itself.
+    pub sign_in_reason: Option<crate::services::twitch_signin::SignInReason>,
+    /// That reason worded for the viewer, or `None` when none is owed.
+    pub sign_in_text: Option<SignInText>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SignInText {
+    /// A full sentence, for a signed-out screen.
+    pub sentence: &'static str,
+    /// A short line, for a row that already says "Twitch".
+    pub short: &'static str,
+}
+
+fn boot_state(settings: &Settings, signed_in: bool) -> BootState {
+    let reason = crate::services::twitch_signin::current();
+    BootState {
+        needs_setup: !settings.setup_complete,
+        signed_in,
+        sign_in_reason: reason,
+        sign_in_text: reason.map(|r| SignInText { sentence: r.sentence(), short: r.short() }),
+    }
+}
+
+/// The boot answer: whether the first-run setup is owed, whether Twitch is
+/// signed in and, when StreamNook signed the viewer out itself, why.
+#[tauri::command]
+pub async fn get_boot_state(state: State<'_, AppState>) -> Result<BootState, String> {
+    let signed_in = crate::services::twitch_service::TwitchService::has_stored_credentials().await;
+    let settings = state.settings.lock().map_err(|e| e.to_string())?;
+    Ok(boot_state(&settings, signed_in))
+}
+
+/// What finishing the first-run setup changed.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SetupCompleted {
+    /// Setup was finished for the first time on this install (not a re-run),
+    /// so notices meant for existing users should be marked seen rather than
+    /// shown.
+    pub baseline_announcements: bool,
+}
+
+/// Finish the first-run setup: records `setup_complete` and writes it to disk
+/// at once, so closing the app right after cannot bring the wizard back.
+#[tauri::command]
+pub async fn complete_setup(app: AppHandle, state: State<'_, AppState>) -> Result<SetupCompleted, String> {
+    let (settings, first_time) = {
+        let mut current = state.settings.lock().map_err(|e| e.to_string())?;
+        let first_time = !current.setup_complete;
+        current.setup_complete = true;
+        (current.clone(), first_time)
+    };
+    write_settings_to_disk(&settings)?;
+    flush_settings_now()?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["setup_complete".to_string()] },
+    );
+    Ok(SetupCompleted { baseline_announcements: first_time })
+}
+
 /// What a fresh install starts with: the values the settings page's reset
 /// arrows compare against and restore. `Settings::default()` carries the
-/// first-run look and, on a phone build, the phone's own values. Groups the
-/// frontend owns are absent here, so resetting one of their keys removes it
-/// and the page's own fallback applies, exactly as on a fresh install.
+/// first-run look and, on a phone build, the phone's own values; the groups
+/// the frontend owns carry the defaults `frontend_owned_defaults` declares.
 #[tauri::command]
 pub fn get_default_settings() -> Settings {
-    Settings::default()
+    serde_json::from_value(crate::commands::settings_fields::default_settings_value())
+        .unwrap_or_default()
 }
 
 /// Hide (or unhide) one chatter's messages, everywhere (`channel_key` None) or
@@ -518,6 +612,7 @@ fn apply_settings_patch(
     // is written by the follow commands, `drops` by the drops service, and
     // `channel_links` by the link service. A patch never overrides them.
     next.adopt_backend_owned(current);
+    next.lift_custom_theme_muted();
     Ok(next)
 }
 
@@ -526,6 +621,9 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Detailed logging, from whichever window saved it. Applied only when the
     // saved value changes, so a save of anything else never resets the level.
     crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
+    // The low-latency engine's switch, so no shell has to call it after a save.
+    crate::services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
+    crate::services::ll_origin::set_target_gap(settings.video_player.ll_target_latency);
     // Recompile chat rules if their groups changed (hash-gated, cheap).
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
@@ -538,6 +636,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Spawns or aborts the gifted-membership poll with the master switch.
     crate::services::membership_gifts::refresh(settings);
     crate::services::reminder_service::refresh(settings);
+    #[cfg(target_os = "ios")]
+    crate::services::twitch_resolver::refresh_device_codecs(settings);
     crate::services::hidden_channels::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
@@ -552,7 +652,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
 /// the active account, the onboarding flag, and the last-seen version. Everything
 /// else (theme, chat design, keybindings, highlights, custom commands, custom
 /// themes, ...) is a portable preference and is included.
-const NON_PORTABLE_KEYS: &[&str] = &[
+pub(crate) const NON_PORTABLE_KEYS: &[&str] = &[
     "accounts",
     "current_account",
     "setup_complete",
@@ -570,6 +670,7 @@ pub async fn get_settings_dir() -> Result<String, String> {
 
 /// Open the settings folder in the OS file browser. Routed through the opener
 /// plugin from Rust (so it needs no extra JS-side capability).
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_settings_folder(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -578,6 +679,12 @@ pub async fn open_settings_folder(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<String>)
         .map_err(|e| format!("Failed to open settings folder: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_settings_folder(_app: AppHandle) -> Result<(), String> {
+    Err(crate::ios_ffi::not_wired("Opening the settings folder"))
 }
 
 /// Write the user's portable preferences to `path` (chosen via a save dialog on
@@ -607,20 +714,31 @@ pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result
 /// settings. On success the in-memory state and settings.json are both updated;
 /// the frontend reloads to re-apply everything.
 #[tauri::command]
-pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn import_settings(app: AppHandle, path: String, state: State<'_, AppState>) -> Result<(), String> {
     let contents =
         fs::read_to_string(&path).map_err(|e| format!("Couldn't read that file: {}", e))?;
     let incoming: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
+    apply_imported_settings(&app, &state, &incoming)
+}
+
+/// Put every portable key of a backup over the live settings (session and
+/// login keys stay), then save, refresh and tell every window.
+pub(crate) fn apply_imported_settings(
+    app: &AppHandle,
+    state: &AppState,
+    incoming: &serde_json::Value,
+) -> Result<(), String> {
     let incoming_obj = incoming
         .as_object()
         .ok_or_else(|| "That file isn't a valid StreamNook settings backup.".to_string())?;
 
     // Start from the live settings so session/login keys survive, then overlay
     // every portable key the backup provides.
-    let current = { state.settings.lock().unwrap().clone() };
+    let current = { state.settings.lock().map_err(|e| e.to_string())?.clone() };
     let mut merged = serde_json::to_value(&current)
         .map_err(|e| format!("Failed to read current settings: {}", e))?;
+    let mut keys = Vec::new();
     {
         let merged_obj = merged
             .as_object_mut()
@@ -630,15 +748,17 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
                 continue;
             }
             merged_obj.insert(key.clone(), val.clone());
+            keys.push(key.clone());
         }
     }
 
-    let imported: Settings = serde_json::from_value(merged)
+    let mut imported: Settings = serde_json::from_value(merged)
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
+    imported.lift_custom_theme_muted();
 
     let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {
-        let mut state_settings = state.settings.lock().unwrap();
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         *state_settings = imported.clone();
     }
     // The same refresh set as every other write path, so imported reminders,
@@ -648,7 +768,7 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
-
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
     Ok(())
 }
 
@@ -829,8 +949,7 @@ pub async fn get_latest_app_version() -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_current_app_version() -> Result<String, String> {
-    // Get the version from Cargo.toml at compile time
-    Ok(env!("CARGO_PKG_VERSION").to_string())
+    Ok(crate::services::client_identity::build_version().to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -1064,8 +1183,34 @@ mod patch_tests {
     }
 
     #[test]
+    fn a_saved_custom_theme_keeps_muted_text_at_the_floor() {
+        let current = Settings::default();
+        let dim = json!([{ "id": "custom-dim", "name": "Dim", "palette": {
+            "background": { "value": "#0c0c0d", "opacity": 100 },
+            "textMuted": { "value": "#97b1b9", "opacity": 40 },
+        }}]);
+        let next = apply_settings_patch(&current, patch(json!({ "custom_themes": dim }))).unwrap();
+        assert_eq!(next.extra["custom_themes"][0]["palette"]["textMuted"]["opacity"], 68);
+    }
+
+    #[test]
     fn a_malformed_value_is_refused_not_half_applied() {
         let current = Settings::default();
         assert!(apply_settings_patch(&current, patch(json!({ "favorite_streamers": "nope" }))).is_err());
+    }
+
+    #[test]
+    fn boot_state_owes_setup_until_it_is_finished() {
+        let mut settings = Settings::default();
+        settings.setup_complete = false;
+        assert!(boot_state(&settings, false).needs_setup);
+        settings.setup_complete = true;
+        let state = boot_state(&settings, true);
+        assert!(!state.needs_setup);
+        assert!(state.signed_in);
+        let json = serde_json::to_value(&state).unwrap();
+        for key in ["needs_setup", "signed_in", "sign_in_reason", "sign_in_text"] {
+            assert!(json.get(key).is_some(), "{key} reaches the shell");
+        }
     }
 }

@@ -22,6 +22,14 @@
 #![allow(clippy::manual_flatten)]
 #![allow(clippy::collapsible_match)]
 
+// iOS has no Tauri runtime: the Swift app drives the core through ios_ffi,
+// and sn-tauri-headless stands in for the `tauri` crate (see Cargo.toml).
+#[cfg(target_os = "ios")]
+extern crate sn_tauri_headless as tauri;
+
+#[cfg(target_os = "ios")]
+uniffi::setup_scaffolding!();
+
 use commands::chat_query::{
     get_chat_history_stats, get_chat_rule_errors, search_chat, validate_chat_filter,
     validate_chat_phrase,
@@ -38,8 +46,8 @@ use commands::{
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
-    resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
-    seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
+    resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
+    seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
     user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
@@ -64,6 +72,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+#[cfg(not(target_os = "ios"))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -337,6 +346,8 @@ mod android_notify;
 #[cfg(target_os = "android")]
 mod cast_plugin;
 mod commands;
+#[cfg(target_os = "ios")]
+mod ios_ffi;
 /// Process entry for the CEF-based Linux build; `main.rs` calls `enter`
 /// before anything else.
 #[cfg(target_os = "linux")]
@@ -365,13 +376,22 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     }
 
     let json = std::fs::read_to_string(&settings_path)?;
-    let mut settings: Settings = serde_json::from_str(&json)?;
+    let mut settings: Settings = match serde_json::from_str(&json) {
+        Ok(settings) => settings,
+        // A file that no longer loads is rebuilt from the newest daily copy
+        // rather than replaced by a fresh install's settings.
+        Err(e) => match services::settings_backups::recover(&settings_path, &e.to_string()) {
+            Some(settings) => settings,
+            None => return Err(e.into()),
+        },
+    };
     repair_protocol_relative_avatars(&mut settings);
     settings.retire_legacy_live_edge_gap();
     settings.enable_low_latency_engine_once();
     settings.scope_blend_header_marks_once();
     settings.move_room_modes_to_prompt_once();
     settings.adopt_first_run_look_once();
+    settings.lift_custom_theme_muted();
     Ok(settings)
 }
 
@@ -492,9 +512,16 @@ fn cleanup_legacy_streamlink_bundle() {
 /// pasteboard read blocks until the app that owns the clipboard delivers its
 /// promised data. A hung source app then hung our window (macOS). The
 /// clipboard plugin's own `read_text` command is async for the same reason.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 async fn read_clipboard_text_native(app: crate::rt::AppHandle) -> Result<String, String> {
     app.clipboard().read_text().map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn read_clipboard_text_native(_app: crate::rt::AppHandle) -> Result<String, String> {
+    Err(ios_ffi::not_wired("Reading the clipboard"))
 }
 
 /// Development builds only: `StreamNook --print-credential <file name>` prints
@@ -601,6 +628,21 @@ mod webview_args_tests {
             "--disable-features=A,B,C --force-color-profile=srgb --disable-direct-composition-video-overlays"
         );
     }
+}
+
+/// Flush every debounced store before the process dies; each is a no-op when
+/// nothing is dirty. The run loop's `Exit` arm calls it, and on iOS so does
+/// the move to the background, after which the app may be ended unseen.
+pub(crate) fn flush_debounced_stores() {
+    let _ = commands::settings::flush_settings_now();
+    let _ = services::universal_cache_service::flush_manifest_now();
+    let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
+    let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::vod_progress_service::flush_now();
+    #[cfg(desktop)]
+    let _ = commands::popout_window::flush_now();
+    let _ = services::activity_history_service::flush_now();
+    let _ = services::chat_logger_service::ChatLoggerService::flush_all();
 }
 
 /// Shared app entry point. Desktop's `main.rs` calls this directly; on mobile
@@ -830,6 +872,9 @@ pub fn run() {
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
+    // The low-latency engine follows the saved switch from the first stream on.
+    services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
+    services::ll_origin::set_target_gap(settings.video_player.ll_target_latency);
 
     // Initialize drops service with persisted settings (including priority_games for favorites)
     let drops_service = Arc::new(TokioMutex::new(DropsService::new_with_settings(
@@ -891,6 +936,8 @@ pub fn run() {
     } else {
         builder
     };
+    // iOS registers no plugins: the Swift app is the shell there.
+    #[cfg(not(target_os = "ios"))]
     let builder = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init());
@@ -946,7 +993,8 @@ pub fn run() {
     // endpoint live in tauri.windows.conf.json, the only config that has them.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-    builder
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -954,7 +1002,8 @@ pub fn run() {
         // Native OS notifications. Cross-platform: on Android this is the system
         // notification shade, which is where live alerts belong on a phone rather
         // than the in-app Dynamic Island the desktop uses.
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    builder
         .manage(live_notification_service.clone())
         .manage(whisper_service.clone())
         .manage(layout_service.clone())
@@ -1005,6 +1054,30 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 services::app_paths::set_base(dir);
             }
+            // iOS backs up Application Support, so every cache goes under the
+            // shell's Library/Caches instead; caches an older build left in
+            // the data dir are removed once.
+            #[cfg(target_os = "ios")]
+            if let Ok(dir) = app.path().app_cache_dir() {
+                services::app_paths::set_cache_base(dir);
+                log::info!(
+                    "[Startup] data dir {:?}, cache dir {:?}",
+                    services::cache_service::get_app_data_dir().ok(),
+                    services::cache_service::get_cache_dir().ok()
+                );
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let old_cache = data.join("cache");
+                        if old_cache.is_dir() {
+                            match std::fs::remove_dir_all(&old_cache) {
+                                Ok(()) => log::info!("[Startup] removed the old cache from the data dir"),
+                                Err(e) => log::warn!("[Startup] old cache in the data dir not removed: {e}"),
+                            }
+                        }
+                        let _ = std::fs::remove_file(data.join("seventv_cosmetic_catalog.json"));
+                    });
+                }
+            }
             #[cfg(mobile)]
             services::token_vault::warm_up();
             // Before anything can start a stream: a Cast session the SDK
@@ -1021,6 +1094,8 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(loaded) = load_settings_from_file() {
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
+                services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
+                services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1033,6 +1108,11 @@ pub fn run() {
                         .update_settings(drops_settings)
                         .await;
                 });
+            }
+            // The phone's hardware decoders decide which codec tiers it may play.
+            #[cfg(target_os = "ios")]
+            if let Ok(s) = settings_arc.lock() {
+                services::twitch_resolver::refresh_device_codecs(&s);
             }
             // Runtime stall detector: measures backend freezes (tokio-blocked vs
             // whole-process) and records them to the capture file. Started here,
@@ -1180,9 +1260,12 @@ pub fn run() {
             // recreates the activity lands in a fresh page the same way. So on
             // mobile every link is stashed first, and the event only tells a
             // mounted shell to drain it; the one take decides who opens it.
+            //
+            // iOS has no deep-link plugin; the Swift app receives the links.
+            app.manage(PendingWatchLink::default());
+            #[cfg(not(target_os = "ios"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.manage(PendingWatchLink::default());
 
                 let watch_handle = app_handle.clone();
                 app.deep_link().on_open_url(move |event| {
@@ -1274,7 +1357,7 @@ pub fn run() {
 
             // Clone the app_state before managing it (only the desktop live
             // notification spawn below consumes it)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             let app_state_for_live_notif = app_state.clone();
             let app_state_for_provider_live = app_state.clone();
             let app_state_for_favorite_live = app_state.clone();
@@ -1308,6 +1391,16 @@ pub fn run() {
             // being destroyed on close-to-tray. Both shells run it: the phone has
             // the same staleness problem and no devtools to notice it with.
             services::version_report::start(app_handle.clone());
+
+            // StreamNook's member, cosmetics and Atmosphere registries, and every
+            // member's theme: read once here for every window and both phone
+            // shells, kept fresh by the realtime feed. Own accounts first, so
+            // their saved theme paints before anything is read.
+            services::member_theme::register_own(
+                &services::account_store::AccountStore::list().into_iter().map(|a| a.user_id).collect::<Vec<_>>(),
+            );
+            services::cosmetics_registry::start();
+            services::member_theme::start();
 
             // Twitch Recap hours for the signed-in member, published so the profile
             // can count the watching they did before joining. Daily, and a no-op
@@ -1350,8 +1443,8 @@ pub fn run() {
             // Start live notification service. Desktop only: on Android the
             // WorkManager worker (android_notify.rs) is the single delivery
             // lane, and this unthrottled 60s poll is exactly the background
-            // churn it replaces.
-            #[cfg(not(target_os = "android"))]
+            // churn it replaces; the iPhone gets push alerts instead.
+            #[cfg(desktop)]
             {
                 let live_notif_service = live_notification_service.clone();
                 let live_app_handle = app_handle.clone();
@@ -1571,8 +1664,14 @@ pub fn run() {
             twitch_login_plugin::finish_mobile_drops_login,
             #[cfg(target_os = "android")]
             twitch_login_plugin::clear_mobile_login_cookies,
-            #[cfg(target_os = "android")]
+            #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "ios")]
+            services::ios_sheet::open_drops_sheet,
+            #[cfg(target_os = "ios")]
+            services::ios_sheet::sheet_redirected,
+            #[cfg(target_os = "ios")]
+            services::ios_sheet::sheet_closed,
             #[cfg(target_os = "android")]
             android_notify::push_register,
             #[cfg(target_os = "android")]
@@ -1659,6 +1758,8 @@ pub fn run() {
             read_clipboard_text_native,
             // Twitch commands
             twitch_login,
+            begin_twitch_web_login,
+            finish_twitch_web_login,
             create_clip,
             get_live_broadcast,
             create_vod_clip,
@@ -1676,8 +1777,7 @@ pub fn run() {
             open_twitch_login_window,
             #[cfg(desktop)]
             open_drops_login_window,
-            // Two bodies: a desktop panel, and the Android login overlay.
-            #[cfg(any(desktop, target_os = "android"))]
+            // Two bodies: a desktop panel, and the phone's login overlay or sheet.
             open_subscribe_window,
             #[cfg(any(desktop, target_os = "android"))]
             open_bits_window,
@@ -1727,6 +1827,7 @@ pub fn run() {
             get_channel_vips,
             follow_channel,
             unfollow_channel,
+            channel_relationship,
             check_following_status,
             get_all_followed_channels,
             get_offline_last_broadcasts,
@@ -1761,6 +1862,7 @@ pub fn run() {
             get_ad_detection,
             get_stream_low_latency,
             get_stream_prefetch_present,
+            get_relay_live_distance,
             set_experimental_low_latency,
             set_codec_preference,
             // Allowed only by mobile-commands.toml (a phone caps its rendition
@@ -1768,6 +1870,10 @@ pub fn run() {
             // would just be a command the ACL denies.
             #[cfg(mobile)]
             set_max_video_height,
+            #[cfg(mobile)]
+            report_playback_health,
+            #[cfg(mobile)]
+            get_live_edge_cushion,
             start_ll_diag,
             append_ll_diag,
             stop_ll_diag,
@@ -1826,6 +1932,7 @@ pub fn run() {
             debug_unjoin_channel,
             nudge_chat_channels,
             send_chat_message,
+            commands::chat::command_catalog,
             commands::chat_burst::run_chat_burst,
             commands::chat_burst::stop_chat_burst,
             commands::chat_burst::get_chat_burst,
@@ -1926,6 +2033,11 @@ pub fn run() {
             remove_channel_vip,
             update_suspicious_user_status,
             update_user_chat_color,
+            get_twitch_bio,
+            update_twitch_bio,
+            update_twitch_display_name,
+            upload_seventv_profile_picture,
+            upload_twitch_profile_image,
             get_user_chat_colors,
             block_user,
             unblock_user,
@@ -1964,12 +2076,29 @@ pub fn run() {
             load_settings,
             patch_settings,
             get_default_settings,
+            get_boot_state,
+            complete_setup,
             set_chat_user_hidden,
             set_favorite_category,
             set_channel_hidden,
             set_hidden_channel_blocked,
             set_hidden_channel_realms,
             set_chat_user_override,
+            get_settings_view,
+            set_settings_fields,
+            reset_settings,
+            edit_settings_list,
+            get_community_invite,
+            get_followed_channels_for_alerts,
+            add_custom_sound,
+            delete_custom_sound,
+            get_theme_catalog,
+            get_active_theme,
+            lift_custom_theme,
+            search_settings,
+            get_changed_settings,
+            list_settings_backups,
+            restore_settings_backup,
             get_settings_dir,
             open_settings_folder,
             export_settings,
@@ -2016,6 +2145,7 @@ pub fn run() {
             get_discovered_bttv_pro_badges,
             ingest_badge_drops,
             get_badge_standing,
+            get_badge_wall,
             get_badge_window,
             get_badge_drop_campaign,
             get_badge_earn_guide,
@@ -2094,7 +2224,7 @@ pub fn run() {
             start_drops_monitoring,
             stop_drops_monitoring,
             update_monitoring_channel,
-            report_player_playing,
+            report_player_state,
             // Automation commands
             // Drops Authentication commands
             start_drops_login,
@@ -2115,6 +2245,7 @@ pub fn run() {
             get_channel_rewards,
             get_cached_channel_rewards,
             redeem_channel_reward,
+            redeem_reward,
             send_highlighted_message,
             send_sub_mode_message,
             unlock_random_emote,
@@ -2164,10 +2295,32 @@ pub fn run() {
             get_ivr_user_summary,
             get_ivr_subage_summary,
             get_sub_standing,
+            // StreamNook cosmetics, Atmospheres and the profile surfaces
+            sn_registry_snapshot,
+            sn_refresh_registries,
+            sn_atmospheres,
+            get_profile_prefs,
+            get_accolades,
+            is_stripe_subscriber,
+            get_member_theme,
+            register_own_member_themes,
+            equip_streamnook_badge,
+            set_profile_theme,
+            set_chat_atmosphere,
+            user_profile_sheet,
+            user_profile_sheet_cached,
+            own_identity_header,
+            own_identity_header_cached,
+            cosmetics_picker_state,
+            external_cosmetics_state,
             // Server-controlled client switches
             get_client_config,
             // Drops page model
             get_drops_overview,
+            // The phones' Rewards tab, Drops segment
+            get_rewards_drops,
+            // The phones' in-player drop bar
+            get_watch_drop,
             // 7TV cosmetics, resolved once for every window
             seventv_user_cosmetics,
             seventv_user_inventory,
@@ -2175,6 +2328,9 @@ pub fn run() {
             seventv_invalidate_cosmetics,
             seventv_clear_cosmetics,
             // Main-window watch session
+            watch_start,
+            watch_stop,
+            watch_open_room,
             watch_session_start,
             watch_session_stop,
             watch_session_resolve_offline,
@@ -2190,6 +2346,7 @@ pub fn run() {
             match_emote_tokens,
             emote_credit,
             personal_emote_overrides,
+            emote_picker,
             clear_emote_cache,
             get_gif_picker_status,
             search_gifs,
@@ -2268,11 +2425,11 @@ pub fn run() {
             receive_badge_data,
             #[cfg(desktop)]
             receive_update_result,
-            // Same feature on Android, GQL only — there is no second webview to
-            // fall back to, so the scrape half simply does not exist there.
-            #[cfg(target_os = "android")]
+            // Same feature on the phones, GQL only — there is no second webview
+            // to fall back to, so the scrape half simply does not exist there.
+            #[cfg(mobile)]
             fetch_chat_identity_badges_gql,
-            #[cfg(target_os = "android")]
+            #[cfg(mobile)]
             update_chat_identity_gql,
             // StreamNook Identity (badge loadout) commands
             get_streamnook_identity,
@@ -2289,7 +2446,28 @@ pub fn run() {
             get_home_snapshot,
             set_home_mounted,
             refresh_home_section,
+            refresh_following,
             set_home_extra_channels,
+            // The phones' resume refresh (desktop windows reload on mount).
+            #[cfg(mobile)]
+            note_app_resumed,
+            // The phone chat pane's tabs and its Add a chat sheet.
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_get,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_sync_stream,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_add,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_remove,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_set_active,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_room_from_link,
+            #[cfg(mobile)]
+            commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
+            commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
             load_more_home_recommended,
             // Per-channel chat state + user history watches (Rust-owned polls)
@@ -2359,6 +2537,10 @@ pub fn run() {
             commands::slash_commands::slash_inject_fake_message,
             commands::slash_commands::slash_run_program,
             commands::slash_commands::slash_copy_text,
+            commands::slash_commands::run_slash_command,
+            commands::slash_commands::nuke_preview,
+            commands::slash_commands::nuke_active,
+            commands::slash_commands::nuke_stop,
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,
@@ -2615,24 +2797,14 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 services::app_exit::on_run_exit();
                 let shutdown_started = std::time::Instant::now();
-                // Flush every debounced store before the process dies; each is
-                // a no-op when nothing is dirty.
-                let _ = commands::settings::flush_settings_now();
-                let _ = services::universal_cache_service::flush_manifest_now();
-                let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
-                let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
                 // Quitting mid-stream is a close too: file where the viewer
                 // left before the progress store is written.
                 services::live_bookmark::end(services::live_bookmark::EndKind::Sync);
-                let _ = services::vod_progress_service::flush_now();
+                flush_debounced_stores();
                 // Send an unsent VOD position to the viewer's other devices.
                 // Started here so it runs alongside the plugin shutdown below;
                 // waited on after it, bounded.
                 let vod_sync_done = services::vod_sync::start_exit_sync();
-                #[cfg(desktop)]
-                let _ = commands::popout_window::flush_now();
-                let _ = services::activity_history_service::flush_now();
-            let _ = services::chat_logger_service::ChatLoggerService::flush_all();
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit
                 // gracefully (stragglers are killed with the supervisor).

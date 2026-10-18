@@ -77,26 +77,32 @@ static MANIFEST_DIRTY: AtomicBool = AtomicBool::new(false);
 const MANIFEST_FLUSH_DEBOUNCE_SECS: u64 = 30;
 
 // Background flush task is started lazily on first write so we don't spawn
-// anything if the app never modifies the manifest (read-only sessions).
-static FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+// anything if the app never modifies the manifest (read-only sessions). The
+// handle, not a flag: Android's notification worker writes from a short-lived
+// runtime of its own, and a task on a runtime that has since been dropped is
+// gone. A flag would still read "started", and the app reusing that process
+// would never persist the manifest again.
+static FLUSH_TASK: Lazy<StdMutex<Option<tokio::task::JoinHandle<()>>>> = Lazy::new(|| StdMutex::new(None));
 
 fn ensure_flush_task() {
-    if FLUSH_TASK_STARTED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
+    let Ok(mut task) = FLUSH_TASK.lock() else {
+        return;
+    };
+    if task.as_ref().is_some_and(|t| !t.is_finished()) {
+        return;
+    }
     {
         // The flush loop needs a Tokio runtime. Some callers (e.g. the one-time
         // emote-cache migration invoked from main() before the async runtime is
         // built) would panic here with "no reactor running". When there's no
-        // runtime yet, reset the flag and bail: MANIFEST_DIRTY stays set, so the
-        // next save once the runtime is up starts the task and flushes nothing is
-        // lost. Callers that must persist before then write through to disk
-        // directly (see migrate_emote_cache_on_version_change).
+        // runtime yet, bail: MANIFEST_DIRTY stays set, so the next save once
+        // the runtime is up starts the task and nothing is lost. Callers that
+        // must persist before then write through to disk directly (see
+        // migrate_emote_cache_on_version_change).
         if tokio::runtime::Handle::try_current().is_err() {
-            FLUSH_TASK_STARTED.store(false, Ordering::SeqCst);
             return;
         }
-        tokio::spawn(async {
+        *task = Some(tokio::spawn(async {
             let mut consecutive_failures: u32 = 0;
             loop {
                 // Every flush rewrites the whole manifest (tens of thousands of
@@ -146,7 +152,7 @@ fn ensure_flush_task() {
                     consecutive_failures = 0;
                 }
             }
-        });
+        }));
     }
 }
 

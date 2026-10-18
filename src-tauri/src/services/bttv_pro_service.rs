@@ -51,6 +51,11 @@ struct CacheEntry {
 static CACHE: Lazy<Mutex<LruCache<String, CacheEntry>>> =
     Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(2000).unwrap())));
 
+/// Forget every looked-up badge; the next profile open asks again.
+pub async fn clear_cache() {
+    CACHE.lock().await.clear();
+}
+
 /// Resolve a user's BTTV Pro loyalty badge, or `None` if they don't have Pro
 /// (or the socket didn't answer in time). Cached with a TTL; negative answers
 /// are cached too so non-Pro users aren't re-queried on every profile open.

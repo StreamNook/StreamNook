@@ -122,7 +122,7 @@ fn admit(lane: &mut Lane, items: Vec<AssetRequest>, priority: bool) -> usize {
 
 fn bursting(app: &AppHandle, state: &mut State) -> bool {
     // A window that closed with a picker open never said so; drop it here.
-    state.burst_owners.retain(|label, _| app.get_webview_window(label).is_some());
+    state.burst_owners.retain(|label, _| crate::services::window_visibility::window_open(app, label));
     !state.burst_owners.is_empty()
 }
 

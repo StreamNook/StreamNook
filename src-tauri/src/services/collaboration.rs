@@ -48,6 +48,40 @@ pub struct Collaboration {
     /// Unique viewers across every member, which can be less than the sum.
     pub shared_viewers: u64,
     pub members: Vec<Collaborator>,
+    /// The group in plain words, for screen readers: "1,500 watching together
+    /// with A, B and C".
+    pub label: String,
+}
+
+impl Collaboration {
+    fn new(shared_viewers: u64, members: Vec<Collaborator>) -> Self {
+        let label = format!("{} watching together with {}", grouped(shared_viewers), others_phrase(&members));
+        Self { shared_viewers, members, label }
+    }
+}
+
+/// The others in a group, never the channel itself: "A", "A and B",
+/// "A, B and C".
+pub fn others_phrase(members: &[Collaborator]) -> String {
+    let others: Vec<&str> = members.iter().filter(|m| !m.is_self).map(|m| m.display_name.as_str()).collect();
+    match others.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// A count with thousands separators: 12345 reads "12,345".
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 type Cache = HashMap<String, (Instant, Option<Collaboration>)>;
@@ -134,7 +168,7 @@ fn parse(user: &serde_json::Value) -> Option<Collaboration> {
             .cmp(&a.is_self)
             .then(b.viewer_count.cmp(&a.viewer_count))
     });
-    Some(Collaboration { shared_viewers, members })
+    Some(Collaboration::new(shared_viewers, members))
 }
 
 #[cfg(test)]
@@ -167,6 +201,25 @@ mod tests {
         assert!(c.members[0].is_self);
         assert!(c.members[2].is_leader);
         assert_eq!(c.members[1].display_name, "BIG");
+        assert_eq!(c.label, "1,500 watching together with BIG and SMALL");
+    }
+
+    #[test]
+    fn label_names_the_others_in_plain_words() {
+        let m = |name: &str, is_self: bool| Collaborator {
+            user_id: name.into(),
+            login: name.into(),
+            display_name: name.into(),
+            avatar_url: None,
+            viewer_count: 1,
+            is_leader: false,
+            is_self,
+        };
+        assert_eq!(others_phrase(&[m("me", true), m("A", false)]), "A");
+        assert_eq!(others_phrase(&[m("me", true), m("A", false), m("B", false), m("C", false)]), "A, B and C");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1000), "1,000");
+        assert_eq!(grouped(1234567), "1,234,567");
     }
 
     #[test]

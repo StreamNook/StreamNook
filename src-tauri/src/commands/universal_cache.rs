@@ -15,6 +15,9 @@ use tauri::command;
 /// so this launches the platform file manager directly.
 #[command]
 pub async fn open_universal_cache_folder() -> Result<(), String> {
+    if cfg!(target_os = "ios") {
+        return Err("Opening folders is not available on iPhone".into());
+    }
     let dir = get_universal_cache_dir().map_err(|e| e.to_string())?;
     let program = if cfg!(target_os = "windows") {
         "explorer"

@@ -14,11 +14,49 @@
 // the clip sheet mounts its own <video>, so a DOM query for "the video" would
 // be ambiguous exactly when it matters.
 
+import { useSyncExternalStore } from 'react';
+
 let liveVideo: HTMLVideoElement | null = null;
+
+// Whether the viewer has the live element paused, for the watch layer's
+// keep-awake: a paused stream lets the screen sleep like any other paused
+// video. Driven by `play`/`pause` (intent), not `paused` (which is also true
+// while a start is still resolving, when the screen should stay on).
+let paused = false;
+const pausedListeners = new Set<() => void>();
+function setPaused(next: boolean): void {
+  if (paused === next) return;
+  paused = next;
+  pausedListeners.forEach((l) => l());
+}
+const onPlay = () => setPaused(false);
+const onPause = () => setPaused(true);
 
 /** Called by MobilePlayer's ref callback. Null on unmount. */
 export function setLiveVideo(el: HTMLVideoElement | null): void {
+  if (liveVideo === el) return;
+  if (liveVideo) {
+    liveVideo.removeEventListener('play', onPlay);
+    liveVideo.removeEventListener('pause', onPause);
+  }
   liveVideo = el;
+  // A fresh element is about to play; nothing is paused until it says so.
+  setPaused(false);
+  if (el) {
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+  }
+}
+
+/** True while the live element is paused by the viewer (or the system). */
+export function useLiveVideoPaused(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      pausedListeners.add(listener);
+      return () => pausedListeners.delete(listener);
+    },
+    () => paused,
+  );
 }
 
 export function getLiveVideo(): HTMLVideoElement | null {

@@ -153,6 +153,11 @@ static CATALOG_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 fn catalog_path() -> Option<std::path::PathBuf> {
+    // A copy of 7TV's public catalog: with a separate cache dir (iOS) it goes
+    // there, so it is never backed up.
+    if crate::services::app_paths::cache_base().is_some() {
+        return crate::services::cache_service::get_cache_dir().ok().map(|d| d.join(CATALOG_FILE));
+    }
     crate::services::cache_service::get_app_data_dir()
         .ok()
         .map(|d| d.join(CATALOG_FILE))
@@ -766,6 +771,100 @@ fn start_drain(immediate: bool) {
     });
 }
 
+/// Puts a chatter's cosmetics in the cache as if 7TV had answered.
+#[cfg(test)]
+pub(crate) fn remember_for_test(id: &str, data: UserCosmetics) {
+    remember(id, &CosmeticsLookup { data, hard_fail: false }, true);
+}
+
+/// What a chatter is wearing when the cache already knows, without asking
+/// 7TV. A failed lookup reads as unknown so the caller asks again.
+pub fn peek(id: &str) -> Option<UserCosmetics> {
+    let data = {
+        let guard = USERS.lock().ok()?;
+        let entry = guard.as_ref()?.peek(id)?;
+        let ttl = if entry.hard_fail { HARD_FAIL_TTL } else { USER_TTL };
+        (!entry.hard_fail && entry.at.elapsed() < ttl).then(|| entry.data.clone())?
+    };
+    Some(with_pick(id, data, false))
+}
+
+// ---- The viewer's own picks ----------------------------------------------------
+
+/// How long a paint or badge the viewer just chose wins over 7TV's answers.
+/// 7TV's reads lag its own writes by seconds, so a re-read straight after a
+/// change would bring the previous pick back.
+const PICK_HOLD: Duration = Duration::from_secs(120);
+
+/// A pick the viewer made: `Some(None)` took the item off.
+#[derive(Clone, Debug)]
+struct Pick {
+    paint: Option<Option<String>>,
+    badge: Option<Option<String>>,
+    at: Instant,
+}
+
+static PICKS: Mutex<Option<HashMap<String, Pick>>> = Mutex::new(None);
+
+/// Records the paint or badge the viewer just chose for their own account, so
+/// every surface (their chat rows, header, the picker) shows it at once and a
+/// lagging 7TV read cannot undo it. `None` leaves that slot as 7TV says.
+pub fn note_own_pick(id: &str, paint: Option<Option<&str>>, badge: Option<Option<&str>>) {
+    if let Ok(mut guard) = PICKS.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        let pick = map.entry(id.to_string()).or_insert(Pick { paint: None, badge: None, at: Instant::now() });
+        if let Some(paint) = paint {
+            pick.paint = Some(paint.map(String::from));
+        }
+        if let Some(badge) = badge {
+            pick.badge = Some(badge.map(String::from));
+        }
+        pick.at = Instant::now();
+    }
+}
+
+fn current_pick(id: &str) -> Option<Pick> {
+    let mut guard = PICKS.lock().ok()?;
+    let map = guard.as_mut()?;
+    map.retain(|_, p| p.at.elapsed() < PICK_HOLD);
+    map.get(id).cloned()
+}
+
+/// An answer with the viewer's recent pick laid over it. An inventory keeps
+/// every item and moves the `selected` mark; a worn answer becomes the picked
+/// definition alone (or nothing).
+fn with_pick(id: &str, mut data: UserCosmetics, inventory: bool) -> UserCosmetics {
+    let Some(pick) = current_pick(id) else { return data };
+    let catalog = CATALOG.read().ok();
+    let catalog = catalog.as_ref().and_then(|c| c.as_ref());
+    let apply = |list: &mut Vec<Value>, chosen: &Option<String>, defs: Option<&HashMap<String, Value>>| {
+        if inventory {
+            for item in list.iter_mut() {
+                let on = chosen.as_deref().is_some_and(|c| item.get("id").and_then(Value::as_str) == Some(c));
+                if let Some(obj) = item.as_object_mut() {
+                    if on {
+                        obj.insert("selected".into(), Value::Bool(true));
+                    } else {
+                        obj.remove("selected");
+                    }
+                }
+            }
+        } else {
+            let def = chosen.as_deref().and_then(|c| {
+                list.iter().find(|v| v.get("id").and_then(Value::as_str) == Some(c)).cloned().or_else(|| defs?.get(c).cloned())
+            });
+            *list = def.map(selected).into_iter().collect();
+        }
+    };
+    if let Some(paint) = &pick.paint {
+        apply(&mut data.paints, paint, catalog.map(|c| &c.paints));
+    }
+    if let Some(badge) = &pick.badge {
+        apply(&mut data.badges, badge, catalog.map(|c| &c.badges));
+    }
+    data
+}
+
 /// What one chatter is wearing. Cached for every window; concurrent asks for
 /// the same chatter share one lookup.
 pub async fn resolve(id: String) -> CosmeticsLookup {
@@ -780,7 +879,7 @@ async fn resolve_as(id: String, chatter: bool) -> CosmeticsLookup {
         if note {
             note_personal_set(&id, &hit.data);
         }
-        return hit;
+        return CosmeticsLookup { data: with_pick(&id, hit.data, false), hard_fail: hit.hard_fail };
     }
     let (tx, rx) = oneshot::channel();
     match enqueue(&id, tx) {
@@ -796,7 +895,7 @@ async fn resolve_as(id: String, chatter: bool) -> CosmeticsLookup {
     if chatter {
         note_personal_set(&id, &lookup.data);
     }
-    lookup
+    CosmeticsLookup { data: with_pick(&id, lookup.data, false), hard_fail: lookup.hard_fail }
 }
 
 /// Drop one chatter from the cache so the next lookup asks 7TV again.
@@ -818,6 +917,13 @@ pub fn clear() {
         *guard = None;
     }
     if let Ok(mut guard) = INVENTORIES.lock() {
+        *guard = None;
+    }
+}
+
+/// Drop every cached profile picture; the next lookup asks 7TV again.
+pub fn clear_pictures() {
+    if let Ok(mut guard) = PICTURES.lock() {
         *guard = None;
     }
 }
@@ -943,9 +1049,10 @@ pub async fn profile_pictures(ids: Vec<String>) -> HashMap<String, Option<Profil
         .collect()
 }
 
-/// The owned cosmetics alone, as the picker reads them.
+/// The owned cosmetics alone, as the picker reads them, with the viewer's
+/// recent pick marked.
 pub async fn inventory(id: &str) -> Option<UserCosmetics> {
-    owned(id).await.map(|i| i.cosmetics)
+    owned(id).await.map(|i| with_pick(id, i.cosmetics, true))
 }
 
 #[cfg(test)]
@@ -954,6 +1061,21 @@ mod tests {
 
     fn ids(n: usize, from: usize) -> Vec<String> {
         (from..from + n).map(|i| i.to_string()).collect()
+    }
+
+    #[test]
+    fn a_recent_own_pick_wins_over_a_lagging_answer() {
+        let paints = vec![json!({ "id": "p1", "name": "One", "selected": true }), json!({ "id": "p2", "name": "Two" })];
+        note_own_pick("pick-test", Some(Some("p2")), None);
+        let inv = with_pick("pick-test", UserCosmetics { paints: paints.clone(), ..Default::default() }, true);
+        assert!(inv.paints[0].get("selected").is_none());
+        assert_eq!(inv.paints[1]["selected"], true);
+        let worn = with_pick("pick-test", UserCosmetics { paints: paints.clone(), ..Default::default() }, false);
+        assert_eq!(worn.paints.len(), 1);
+        assert_eq!(worn.paints[0]["id"], "p2");
+        note_own_pick("pick-test", Some(None), None);
+        let off = with_pick("pick-test", UserCosmetics { paints, ..Default::default() }, false);
+        assert!(off.paints.is_empty());
     }
 
     #[test]

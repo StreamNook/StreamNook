@@ -10,12 +10,25 @@ import type { TwitchCategory } from '../types';
 
 export type MobileTab = 'following' | 'browse' | 'rewards' | 'you';
 
+/** Where an opened settings page should land: a section by its heading, and
+ *  the row inside it when the page draws one by that title. */
+export interface SettingsTarget {
+  section: string;
+  title?: string;
+}
+
 interface MobileNavState {
   activeTab: MobileTab;
   /** Open sheet ids, bottom-most first. Sheets self-register on open. */
   sheetStack: string[];
   /** Settings panel: the open tab id, or null (the section list lives on You). */
   settingsView: string | null;
+  /** The section the open settings page scrolls to once it has drawn. Cleared
+   *  by the page when it lands (or gives up on a page without anchors). */
+  settingsTarget: SettingsTarget | null;
+  /** The settings page a page was opened FROM (Changed settings opening a
+   *  row's page), so back returns there instead of out to the You tab. */
+  settingsReturn: string | null;
   /** Browse category drill: the open category's streams screen, or null. */
   browseCategory: TwitchCategory | null;
   /** The cosmetics (equip) screen. */
@@ -34,8 +47,11 @@ interface MobileNavState {
   clearDropFocus: () => void;
   pushSheet: (id: string) => void;
   popSheet: (id?: string) => void;
-  openSettings: (tab: string) => void;
+  openSettings: (tab: string, target?: SettingsTarget) => void;
+  /** Back out of the open settings page: to the page it was opened from, if
+   *  any, else to the You tab. */
   closeSettings: () => void;
+  clearSettingsTarget: () => void;
   openBrowseCategory: (category: TwitchCategory | null) => void;
   setCosmeticsOpen: (open: boolean) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
@@ -51,6 +67,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   activeTab: startTab(),
   sheetStack: [],
   settingsView: null,
+  settingsTarget: null,
+  settingsReturn: null,
   browseCategory: null,
   cosmeticsOpen: false,
   playerMode: 'full',
@@ -74,8 +92,17 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       sheetStack: id ? s.sheetStack.filter((x) => x !== id) : s.sheetStack.slice(0, -1),
     })),
 
-  openSettings: (tab) => set({ settingsView: tab }),
-  closeSettings: () => set({ settingsView: null }),
+  openSettings: (tab, target) =>
+    set((s) => ({
+      settingsView: tab,
+      settingsTarget: target ?? null,
+      // One step of return is all the pages need: only Changed settings opens
+      // another page from inside the layer.
+      settingsReturn: s.settingsView && s.settingsView !== tab ? s.settingsView : null,
+    })),
+  closeSettings: () =>
+    set((s) => ({ settingsView: s.settingsReturn, settingsReturn: null, settingsTarget: null })),
+  clearSettingsTarget: () => set({ settingsTarget: null }),
   openBrowseCategory: (category) => set({ browseCategory: category }),
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
   setPlayerMode: (mode) => set({ playerMode: mode }),
@@ -89,7 +116,7 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       return true;
     }
     if (settingsView) {
-      set({ settingsView: null });
+      get().closeSettings();
       return true;
     }
     if (cosmeticsOpen) {

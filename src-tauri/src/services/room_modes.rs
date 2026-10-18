@@ -16,6 +16,11 @@
 //! when the caller knows it (`OwnFollow`): a long enough follow spares the
 //! viewer, and a missing or too recent one turns the prompt into what to do
 //! ("Follow to chat", "You can chat in 4 minutes").
+//!
+//! The phone composers also take `blocked` and `reason`: set only when the
+//! viewer's standing or follow PROVES a mode keeps them from sending, so the
+//! field can be disabled with one line saying why. An unknown standing or
+//! follow never blocks.
 
 use serde::Serialize;
 
@@ -104,6 +109,11 @@ pub struct RoomModeView {
     pub standing: Option<String>,
     /// The slow-mode wait that applies to the viewer; 0 when none does.
     pub slow_seconds: u64,
+    /// The mode that certainly keeps the viewer from sending (sub-only, then
+    /// emote-only, then followers-only), or `None` when nothing proves it.
+    pub blocked: Option<ModeKind>,
+    /// What a disabled message box says while `blocked` is set.
+    pub reason: Option<String>,
 }
 
 /// The longest full label the prompt uses; past it the compact form reads
@@ -195,7 +205,9 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
     let mut follow_need: Option<Option<i64>> = None;
     if m.followers_only_minutes >= 0 {
         let need_secs = m.followers_only_minutes * 60;
-        let applies = if privileged {
+        // Subscribers are spared followers-only chat like the privileged.
+        let subscribed = matches!(standing, Standing::Viewer { is_sub: true });
+        let applies = if privileged || subscribed {
             Some(false)
         } else {
             match follow {
@@ -291,8 +303,8 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
             Standing::Moderator => "a moderator",
             Standing::Vip => "a VIP",
             // Only sub-only and followers-only chat can spare a viewer.
-            Standing::Viewer { .. } if m.subs_only => "a subscriber",
-            Standing::Viewer { .. } => "a follower",
+            Standing::Viewer { is_sub: true } => "a subscriber",
+            Standing::Viewer { is_sub: false } => "a follower",
             Standing::Unknown => "",
         };
         (!as_what.is_empty()).then(|| format!("You can chat as {as_what}"))
@@ -304,7 +316,21 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
         .find(|r| r.kind == ModeKind::Slow && r.applies_to_you != Some(false))
         .map(|_| m.slow_seconds)
         .unwrap_or(0);
-    RoomModeView { modes, chip, exempt, prompt, prompt_short, standing: standing_line, slow_seconds }
+    // Only the modes that refuse a message outright can block the box; slow
+    // mode and unique chat let the viewer type. Proven only, never guessed.
+    let proven = |kind: ModeKind| modes.iter().any(|r| r.kind == kind && r.applies_to_you == Some(true));
+    let blocked = [ModeKind::SubsOnly, ModeKind::EmoteOnly, ModeKind::FollowersOnly]
+        .into_iter()
+        .find(|kind| proven(*kind));
+    let reason = blocked.map(|kind| match kind {
+        ModeKind::SubsOnly => "Subscribers only".to_string(),
+        ModeKind::EmoteOnly => "Emote-only: pick an emote".to_string(),
+        _ => match follow_need.flatten() {
+            Some(secs) => format!("You can chat in {}", follow_age((secs + 59) / 60).0),
+            None => "Follow to chat".to_string(),
+        },
+    });
+    RoomModeView { modes, chip, exempt, prompt, prompt_short, standing: standing_line, slow_seconds, blocked, reason }
 }
 
 #[cfg(test)]
@@ -457,6 +483,7 @@ mod tests {
         assert_eq!(v.prompt.as_deref(), Some("Emote-only"));
         assert_eq!(v.standing, None);
         assert_eq!(v.slow_seconds, 5, "the wait still counts down");
+        assert_eq!(v.blocked, None, "an unknown standing never blocks");
     }
 
     #[test]
@@ -467,6 +494,7 @@ mod tests {
         assert!(v.exempt);
         assert_eq!(v.prompt, None, "the box keeps Send a message");
         assert_eq!(v.standing.as_deref(), Some("You can chat as a follower"));
+        assert_eq!(v.blocked, None);
     }
 
     #[test]
@@ -477,6 +505,8 @@ mod tests {
         assert_eq!(v.prompt.as_deref(), Some("Follow to chat"));
         assert_eq!(v.prompt_short.as_deref(), Some("Follow to chat"));
         assert!(!v.exempt);
+        assert_eq!(v.blocked, Some(ModeKind::FollowersOnly));
+        assert_eq!(v.reason.as_deref(), Some("Follow to chat"));
     }
 
     #[test]
@@ -486,6 +516,7 @@ mod tests {
         let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(390));
         assert_eq!(v.prompt.as_deref(), Some("You can chat in 4 minutes"));
         assert_eq!(v.prompt_short.as_deref(), Some("Chat in 4m"));
+        assert_eq!(v.reason.as_deref(), Some("You can chat in 4 minutes"));
         // Seconds from the end it still says a minute, never zero.
         let v = describe_with(&modes, viewer(), OwnFollow::ForSecs(599));
         assert_eq!(v.prompt.as_deref(), Some("You can chat in 1 minute"));
@@ -497,14 +528,51 @@ mod tests {
         let any = ModesIn { followers_only_minutes: 0, ..Default::default() };
         let v = describe_with(&any, viewer(), OwnFollow::ForSecs(0));
         assert!(v.exempt);
+        assert_eq!(v.prompt, None);
+        assert_eq!(v.blocked, None);
         // A moderator is spared whatever their follow.
         let ten = ModesIn { followers_only_minutes: 10, ..Default::default() };
         let v = describe_with(&ten, Standing::Moderator, OwnFollow::NotFollowing);
         assert_eq!(v.prompt, None);
+        assert_eq!(v.blocked, None);
         assert_eq!(v.standing.as_deref(), Some("You can chat as a moderator"));
-        // A followed viewer in slow mode is still told about slow mode.
+        // A followed viewer in slow mode is still told about slow mode, and
+        // slow mode never disables the box.
         let slow = ModesIn { followers_only_minutes: 10, slow_seconds: 30, ..Default::default() };
         let v = describe_with(&slow, viewer(), OwnFollow::ForSecs(86_400));
         assert_eq!(v.prompt.as_deref(), Some("Slow mode (30 seconds)"));
+        assert_eq!(v.blocked, None);
+    }
+
+    #[test]
+    fn an_unknown_follow_never_blocks() {
+        let modes = ModesIn { followers_only_minutes: 0, ..Default::default() };
+        let v = describe_with(&modes, viewer(), OwnFollow::Unknown);
+        assert_eq!(v.blocked, None);
+        assert_eq!(v.reason, None);
+    }
+
+    #[test]
+    fn blocks_name_the_most_limiting_proven_mode() {
+        // Sub-only beats emote-only beats followers-only.
+        let all = ModesIn { subs_only: true, emote_only: true, followers_only_minutes: 0, ..Default::default() };
+        let v = describe_with(&all, viewer(), OwnFollow::NotFollowing);
+        assert_eq!(v.blocked, Some(ModeKind::SubsOnly));
+        assert_eq!(v.reason.as_deref(), Some("Subscribers only"));
+        // A subscriber is spared sub-only, so emote-only is next.
+        let v = describe_with(&all, Standing::Viewer { is_sub: true }, OwnFollow::NotFollowing);
+        assert_eq!(v.blocked, Some(ModeKind::EmoteOnly));
+        assert_eq!(v.reason.as_deref(), Some("Emote-only: pick an emote"));
+        // Emote-only off: the follow decides, and a subscriber is spared it.
+        let follow = ModesIn { followers_only_minutes: 0, ..Default::default() };
+        let v = describe_with(&follow, viewer(), OwnFollow::NotFollowing);
+        assert_eq!(v.blocked, Some(ModeKind::FollowersOnly));
+        let v = describe_with(&follow, Standing::Viewer { is_sub: true }, OwnFollow::NotFollowing);
+        assert_eq!(v.blocked, None);
+        assert_eq!(v.standing.as_deref(), Some("You can chat as a subscriber"));
+        // Privileged viewers are never blocked.
+        for standing in [Standing::Broadcaster, Standing::Moderator, Standing::Vip] {
+            assert_eq!(describe_with(&all, standing, OwnFollow::NotFollowing).blocked, None);
+        }
     }
 }

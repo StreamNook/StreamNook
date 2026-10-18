@@ -8,7 +8,6 @@ import { useAppStore } from '../../stores/AppStore';
 // settings stop offering knobs that quietly do nothing.
 import { IS_MOBILE } from '../../utils/platform';
 import PanelChannelList from '../plugins/PanelChannelList';
-import { trustableHost } from '../../services/linkPreviewService';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
 import HighlightPhrasesSettings from './HighlightPhrasesSettings';
@@ -45,6 +44,15 @@ import { filterChannelKey } from '../../utils/chatFilters';
 import { Logger } from '../../utils/logger';
 import { parseKey } from '../../utils/providerKey';
 import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
+import { ProviderMark } from '../ProviderLogo';
+import EmoteProviderLogo from '../chat/EmoteProviderLogo';
+import streamNookMark from '../../assets/streamnook-logo-128.webp';
+import chatterinoLogo from '../../assets/chatterino-logo.svg';
+import homiesLogo from '../../assets/homies-logo.png';
+import moltorinoLogo from '../../assets/moltorino-logo.svg';
+import chatsenLogo from '../../assets/chatsen-logo.png';
+import chattyLogo from '../../assets/chatty-logo.png';
+import dankchatLogo from '../../assets/dankchat-logo.png';
 
 /** Platforms that can join a combined feed. Derived from the chat-capability
  *  flags rather than hand-listed, so a newly chat-enabled platform appears here
@@ -221,26 +229,36 @@ const EmoteHoverDemo = ({ hoverSize, emoteScale }: { hoverSize: number; emoteSca
   );
 };
 
+/** One edit to a settings list Rust owns (see `edit_settings_list`). A refused
+ *  edit, such as a site that is not an address, is shown as a toast; answers
+ *  whether the edit went through. */
+async function editSettingsList(path: string, edit: Record<string, unknown>): Promise<boolean> {
+  try {
+    await invoke('edit_settings_list', { path, edit });
+    return true;
+  } catch (err) {
+    useAppStore.getState().addToast(typeof err === 'string' ? err : 'Could not save that change.', 'error');
+    return false;
+  }
+}
+
 // Manage the user's own trusted-source list: an add input plus removable chips.
 // The built-in allowlist isn't listed (it'd be noise); a short note names the
-// kinds of sites that are trusted out of the box. Hosts are normalized through
-// `trustableHost` so a pasted URL becomes a clean registrable host.
-const TrustedSourcesEditor = ({
-  domains,
-  onChange,
-}: {
-  domains: string[];
-  onChange: (next: string[]) => void;
-}) => {
+// kinds of sites that are trusted out of the box. Rust stores what is typed as
+// its host, so a pasted URL becomes a clean registrable host, and refuses text
+// that is not a site.
+const TrustedSourcesEditor = ({ domains }: { domains: string[] }) => {
   const [input, setInput] = useState('');
-  const pending = trustableHost(input.trim());
+  const pending = input.trim();
 
-  const add = () => {
+  const add = async () => {
     if (!pending) return;
-    if (!domains.includes(pending)) onChange([...domains, pending]);
-    setInput('');
+    if (await editSettingsList('chat_design.link_preview_trusted_domains', { op: 'add', item: pending })) {
+      setInput('');
+    }
   };
-  const remove = (host: string) => onChange(domains.filter((d) => d !== host));
+  const remove = (host: string) =>
+    void editSettingsList('chat_design.link_preview_trusted_domains', { op: 'remove', value: host });
 
   return (
     <div className="space-y-3">
@@ -253,14 +271,14 @@ const TrustedSourcesEditor = ({
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              add();
+              void add();
             }
           }}
           placeholder="example.com"
           className="glass-input min-w-0 flex-1 rounded-lg px-3 py-2 text-sm text-textPrimary placeholder:text-textMuted"
         />
         <button
-          onClick={add}
+          onClick={() => void add()}
           disabled={!pending}
           className="flex-shrink-0 rounded-lg bg-accent/15 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -366,6 +384,41 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'dankchat', label: 'DankChat' },
 ];
 
+/** The chat clients' own icons, bundled like the Badges gallery's. */
+const SERVICE_ICONS: Record<string, string> = {
+  streamnook: streamNookMark,
+  chatterino: chatterinoLogo,
+  homies: homiesLogo,
+  'homies-custom': homiesLogo,
+  moltorino: moltorinoLogo,
+  chatsen: chatsenLogo,
+  chatty: chattyLogo,
+  dankchat: dankchatLogo,
+};
+
+/** A badge service's or emote provider's mark, drawn beside its name. The
+ *  three emote services are vectors; FFZ takes the text color because its
+ *  brand white would vanish on a light theme. */
+const ServiceMark = ({ id, size = 13 }: { id: string; size?: number }) => {
+  if (id === '7tv' || id === 'bttv' || id === 'ffz') {
+    return (
+      <span className="flex shrink-0" style={{ width: size, height: size }}>
+        <EmoteProviderLogo provider={id} tinted={id !== 'ffz'} className="h-full w-full" />
+      </span>
+    );
+  }
+  const src = SERVICE_ICONS[id];
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      className="shrink-0 object-contain"
+      style={{ width: size, height: size }}
+    />
+  );
+};
 /** The Reply sound picker's value: a sound of its own, 'none', or 'same'
  *  (follows the mention sound; the older replies switch off reads as 'none'). */
 function replySoundChoice(cd: { reply_sound?: string; mention_sound_replies?: boolean }): string {
@@ -386,9 +439,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     updateSettings({ ...settings, chat_events: { ...settings.chat_events, ...patch } });
   const hiddenEvents = chatEvents.hidden_provider_events ?? [];
   const toggleHiddenEvent = (key: string) =>
-    setEvents({
-      hidden_provider_events: hiddenEvents.includes(key) ? hiddenEvents.filter((k) => k !== key) : [...hiddenEvents, key],
-    });
+    void editSettingsList('chat_events.hidden_provider_events', { op: 'toggle', value: key });
   // The option under the pointer in a visual setting, shown in its preview
   // before it is picked; null falls back to the saved value.
   const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
@@ -413,15 +464,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const [commandDraft, setCommandDraft] = useState('');
   const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
   const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
-  const setCommandFilters = (next: CommandFilter[], hide?: boolean) =>
-    updateSettings({
-      ...settings,
-      chat_filters: {
-        ...settings.chat_filters,
-        command_filters: next,
-        ...(hide === undefined ? {} : { hide_commands: hide }),
-      },
-    });
+  const setHideCommands = (hide: boolean) =>
+    updateSettings({ ...settings, chat_filters: { ...settings.chat_filters, hide_commands: hide } });
+  // Rust trims and caps the pattern; an empty one is not added.
+  const addCommandFilter = () => {
+    if (!commandDraft.trim()) return;
+    void editSettingsList('chat_filters.command_filters', { op: 'add', item: { value: commandDraft, mode: commandMode } });
+    setCommandDraft('');
+  };
+  const removeCommandFilter = (index: number) =>
+    void editSettingsList('chat_filters.command_filters', { op: 'remove', index });
 
   const stored = settings.chat_design;
   const cd = {
@@ -500,11 +552,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   };
   const badgeProviderHidden = (id: string) => cd.hidden_badge_providers.includes(id);
   const toggleBadgeProvider = (id: string) =>
-    setDesign({
-      hidden_badge_providers: badgeProviderHidden(id)
-        ? cd.hidden_badge_providers.filter((k) => k !== id)
-        : [...cd.hidden_badge_providers, id],
-    });
+    void editSettingsList('chat_design.hidden_badge_providers', { op: 'toggle', value: id });
 
   // The stored group goes first so a field `cd` does not list (the ones the
   // Moderation tab owns: grab cursor, slider steps, bucket timeout) survives a
@@ -920,6 +968,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                             })
                           }
                         />
+                        <ProviderMark provider={p} size={13} />
                         {PROVIDERS[p].label}
                       </label>
                     ))}
@@ -934,6 +983,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       <SettingsSection
         id="settings-section-youtube-chat"
         label="YouTube Chat"
+        // The phone names the platform with its mark, as the iPhone page does;
+        // the desktop's section strip and search keep the written name.
+        logo={IS_MOBILE ? <ProviderMark provider="youtube" size={14} /> : undefined}
+        shownLabel={IS_MOBILE ? 'Chat' : undefined}
         description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
       >
         <SettingsRow
@@ -1216,7 +1269,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <div className="flex flex-col gap-2 w-full">
             {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).map((provider) => (
               <div key={provider} className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[12px] text-textSecondary w-16 shrink-0">{PROVIDER_LABELS[provider] ?? provider}</span>
+                <span className="flex w-[78px] shrink-0 items-center gap-1 text-[12px] text-textSecondary">
+                  <ProviderMark provider={provider} size={13} />
+                  {PROVIDER_LABELS[provider] ?? provider}
+                </span>
                 {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
                   const key = `${provider}:${cat}`;
                   const on = !hiddenEvents.includes(key);
@@ -1617,10 +1673,15 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                           type="button"
                           aria-pressed={on}
                           onClick={() => toggleBadgeProvider(p.id)}
-                          className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
                             on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
                           }`}
                         >
+                          {/* The service's own mark, dimmed with its chip while
+                              that service's badges are hidden. */}
+                          <span className={`flex transition-opacity ${on ? '' : 'opacity-45'}`}>
+                            <ServiceMark id={p.id} size={14} />
+                          </span>
                           {p.label}
                         </button>
                       );
@@ -1921,7 +1982,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         )}
 
         <SettingsRow
-          title="7TV paint"
+          title={IS_MOBILE ? 'Paint' : '7TV paint'}
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.paint_mentions_in_body', true])}
           description="Draws a mentioned name in that person's 7TV paint instead of a flat color."
           help="Off shows mentions in the chatter's plain name color."
@@ -1995,10 +2057,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 title="Trusted sites"
                 stacked
                 control={
-                  <TrustedSourcesEditor
-                    domains={cd.link_preview_trusted_domains}
-                    onChange={(next) => setDesign({ link_preview_trusted_domains: next })}
-                  />
+                  <TrustedSourcesEditor domains={cd.link_preview_trusted_domains} />
                 }
               />
             </SubControls>
@@ -2064,6 +2123,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Personal emotes"
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.show_personal_emotes', true])}
           description="Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead."
           control={
@@ -2213,7 +2273,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="7TV notices"
+          title={IS_MOBILE ? 'Notices' : '7TV notices'}
+          logo={IS_MOBILE ? <ServiceMark id="7tv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.seventv_emote_notices', true])}
           description="Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel."
           help="The new emote is usable right away either way."
@@ -2230,8 +2291,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Emote Effects"
         description="Emotes that change the emote beside them, and Twitch's giant power-up emotes."
       >
+        {/* On the phone the service's mark stands in for its name, as on the
+            iPhone page and in the settings search; desktop search still lands
+            on the written titles. */}
         <SettingsRow
-          title="FFZ effects"
+          title={IS_MOBILE ? 'Effects' : 'FFZ effects'}
+          logo={IS_MOBILE ? <ServiceMark id="ffz" size={14} /> : undefined}
           onReset={resetFor(['chat_design.ffz_emote_effects', true])}
           description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
           help="Off shows modifier emotes as plain overlay emotes."
@@ -2244,7 +2309,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="BetterTTV modifiers"
+          title={IS_MOBILE ? 'Modifiers' : 'BetterTTV modifiers'}
+          logo={IS_MOBILE ? <ServiceMark id="bttv" size={14} /> : undefined}
           onReset={resetFor(['chat_design.bttv_emote_modifiers', true])}
           description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
           help="Off shows the modifiers as plain emotes."
@@ -2858,7 +2924,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           control={
             <Toggle
               enabled={settings.chat_filters?.hide_commands ?? false}
-              onChange={() => setCommandFilters(commandFilters, !(settings.chat_filters?.hide_commands ?? false))}
+              onChange={() => setHideCommands(!(settings.chat_filters?.hide_commands ?? false))}
             />
           }
         >
@@ -2877,7 +2943,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         <button
                           key={`${f.mode}:${f.value}:${i}`}
                           type="button"
-                          onClick={() => setCommandFilters(commandFilters.filter((_, j) => j !== i))}
+                          onClick={() => removeCommandFilter(i)}
                           title="Remove"
                           className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
                         >
@@ -2896,10 +2962,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         maxLength={40}
                         className="glass-input flex-1 min-w-0 px-3 py-2 text-[13px] font-mono text-textPrimary placeholder:text-textMuted"
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && commandDraft.trim()) {
-                            setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                            setCommandDraft('');
-                          }
+                          if (e.key === 'Enter') addCommandFilter();
                         }}
                       />
                       <SegmentedSelect<'prefix' | 'exact'>
@@ -2913,10 +2976,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                       <button
                         type="button"
                         disabled={!commandDraft.trim()}
-                        onClick={() => {
-                          setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                          setCommandDraft('');
-                        }}
+                        onClick={addCommandFilter}
                         className="glass-button px-3 py-2 text-[13px] font-medium text-textPrimary disabled:opacity-50"
                       >
                         Add

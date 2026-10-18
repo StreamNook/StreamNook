@@ -26,6 +26,10 @@
 //! the same deadline, never on the main thread. Windows keeps its hand-rolled
 //! `ICoreWebView2CookieManager` path inside the auth services and never
 //! calls into here.
+//!
+//! iOS has no webview in the core at all. The Swift shell's sign-in sheet
+//! hands its cookies over (`platform::shell_cookies`), and every read here
+//! answers from that one jar, whatever window label it names.
 
 /// The slice of a cookie the auth services consume.
 #[derive(Debug, Clone)]
@@ -74,7 +78,7 @@ pub async fn cookies_for_origin(
 /// domain cookie (with or without the leading dot) matches the host and
 /// every subdomain of it.
 #[cfg_attr(windows, allow(dead_code))]
-fn domain_matches(cookie_domain: &str, host: &str) -> bool {
+pub(crate) fn domain_matches(cookie_domain: &str, host: &str) -> bool {
     let d = cookie_domain.trim_start_matches('.').to_ascii_lowercase();
     if d.is_empty() {
         return false;
@@ -217,7 +221,15 @@ pub async fn delete_site_cookies(
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "ios")]
+async fn all_cookies(
+    _app: &crate::rt::AppHandle,
+    _window_label: &str,
+) -> anyhow::Result<Vec<CookieRow>> {
+    Ok(super::shell_cookies::rows())
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
 async fn all_cookies(
     app: &crate::rt::AppHandle,
     window_label: &str,

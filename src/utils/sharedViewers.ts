@@ -10,11 +10,10 @@ export function isTogether(group: ChannelGroup): group is Collaboration {
   return 'shared_viewers' in group;
 }
 
-/** Plain-language summary of a group, for screen readers. */
+/** Plain-language summary of a group, for screen readers. Rust builds it with
+ *  the group, so every app reads the same words. */
 export function collabLabel(collab: ChannelGroup): string {
-  return isTogether(collab)
-    ? `${collab.shared_viewers.toLocaleString()} watching together with ${collabNames(collab, Infinity)}`
-    : `Sharing chat with ${collabNames(collab, Infinity)}`;
+  return collab.label;
 }
 
 /** The whole group as a word: "both" for two, "all 3" from three up. */

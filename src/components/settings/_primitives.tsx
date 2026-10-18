@@ -10,6 +10,11 @@ interface SettingsSectionProps {
   children: ReactNode;
   id?: string;
   bare?: boolean;
+  /** A brand mark leading the heading, for a section about one platform. */
+  logo?: ReactNode;
+  /** The words drawn when the logo already names the brand ("Chat" beside
+   *  YouTube's mark). `label` stays the section's name for anchors and search. */
+  shownLabel?: string;
 }
 
 export { sectionIdFromLabel };
@@ -20,11 +25,17 @@ export const SettingsSection = ({
   children,
   id,
   bare = false,
+  logo,
+  shownLabel,
 }: SettingsSectionProps) => (
   <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
     <div className="px-1 pb-2.5">
-      <h3 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary">
-        {label}
+      <h3
+        className={`text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary ${logo ? 'flex items-center gap-1.5' : ''}`}
+        aria-label={shownLabel ? label : undefined}
+      >
+        {logo}
+        {shownLabel ?? label}
       </h3>
       {description && (
         <p className="mt-1 text-[12px] leading-relaxed text-textMuted">
@@ -58,6 +69,9 @@ export const ResetArrow = ({ onReset }: { onReset: () => void }) => (
 
 interface SettingsRowProps {
   title: ReactNode;
+  /** A brand mark leading the title, for a row about one service. Kept apart
+   *  from `title` so the title stays the plain string search lands on. */
+  logo?: ReactNode;
   /** Small inline element after the title (e.g. a source-scope indicator). */
   titleBadge?: ReactNode;
   description?: string;
@@ -76,6 +90,7 @@ interface SettingsRowProps {
 
 export const SettingsRow = ({
   title,
+  logo,
   titleBadge,
   description,
   help,
@@ -100,6 +115,13 @@ export const SettingsRow = ({
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-medium text-textPrimary">
+          {/* Dropped 2px under the baseline so a 14px mark centers on the
+              title's capitals rather than riding above them. */}
+          {logo && (
+            <span className="mr-1.5 inline-flex" style={{ verticalAlign: '-2px' }} aria-hidden>
+              {logo}
+            </span>
+          )}
           {title}
           {titleBadge && <span className="ml-1.5 align-middle">{titleBadge}</span>}
           {help && IS_MOBILE ? (

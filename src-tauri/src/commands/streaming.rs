@@ -482,11 +482,20 @@ fn channel_from_url(url: &str) -> Option<String> {
 /// The localhost URL the player polls, with a cache-busting timestamp.
 pub(crate) fn local_player_url(port: u16) -> String {
     format!(
-        "http://localhost:{}/stream.m3u8?t={}",
+        "http://{}:{}/stream.m3u8?t={}",
+        LOOPBACK_HOST,
         port,
         chrono::Utc::now().timestamp_millis()
     )
 }
+
+/// The relay's host in player URLs. The webview players and their CSP name
+/// `localhost`; AVPlayer gets the address itself, so the iPhone never resolves
+/// a name or tries IPv6 first for a relay bound to IPv4.
+#[cfg(not(target_os = "ios"))]
+const LOOPBACK_HOST: &str = "localhost";
+#[cfg(target_os = "ios")]
+const LOOPBACK_HOST: &str = "127.0.0.1";
 
 /// Resolve a Twitch clip to its signed MP4 URL WITHOUT touching any global live-
 /// stream state (no solo-session reset, no proxy server, no `currentStream`
@@ -634,11 +643,11 @@ async fn start_stream_inner(
     )
     .await;
 
-    // Android can't host a resolution plugin (it would be a spawned native
+    // A phone can't host a resolution plugin (it would be a spawned native
     // process), so ad-free playback occupies the same seam in-core. It obeys
     // the same contract: it declines the entitled case and any failure, and
     // declining means the core resolution serves.
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     let resolved = match resolved {
         Some(r) => Some(r),
         None => {
@@ -668,13 +677,30 @@ async fn start_stream_inner(
         r.available
     );
     auth_proxy::set_status(r.status.clone());
-    let port = StreamServer::start_proxy_server(r.url)
+    // On the phones the link decides the rung from here on ("Auto" only); a
+    // link that just failed to hold this rung starts lower.
+    let serve_url = crate::services::link_adapt::begin(
+        &tr::parse_master(&r.master),
+        &r.url,
+        r.quality == "best",
+    );
+    let port = StreamServer::start_proxy_server(serve_url)
         .await
         .map_err(|e| e.to_string())?;
     // Register the live solo session AFTER the relay is serving it, so the
     // plugin protocol's "solo" stream id (set_upstream, on_ad_window) always
     // addresses a live relay.
     crate::services::stream_server::set_solo_session(Some(channel.clone()));
+    // The iPhone plays the audio-only rendition through a master that says it
+    // is audio only (see `stream_server::AUDIO_PLAYLIST`).
+    #[cfg(target_os = "ios")]
+    let url = if r.quality.contains("audio") {
+        local_player_url(port).replacen("/stream.m3u8", "/audio.m3u8", 1)
+    } else {
+        local_player_url(port)
+    };
+    #[cfg(not(target_os = "ios"))]
+    let url = local_player_url(port);
     let resume = state
         .settings
         .lock()
@@ -682,7 +708,7 @@ async fn start_stream_inner(
         .unwrap_or(false);
     crate::services::live_bookmark::begin_live(&channel, resume);
     Ok(StreamStartResult {
-        url: local_player_url(port),
+        url,
         quality: r.quality,
         mode: Some(r.status.mode),
         entitled: r.status.entitled,
@@ -997,6 +1023,19 @@ pub fn get_stream_prefetch_present() -> bool {
     crate::services::ll_origin::upstream_has_prefetch()
 }
 
+/// How far the player sits behind the relay's live edge, for a player that
+/// cannot measure it itself (AVPlayer): it passes the programme date of the
+/// frame it shows, in Unix milliseconds. With `target_ms` the answer carries a
+/// catch-up rate toward that distance. Also drains the relay's record of the
+/// player's requests since the previous call.
+#[tauri::command]
+pub fn get_relay_live_distance(
+    player_pdt_ms: Option<f64>,
+    target_ms: Option<i64>,
+) -> crate::services::relay_probe::LiveDistance {
+    crate::services::relay_probe::report(player_pdt_ms, target_ms)
+}
+
 /// Enable or disable the experimental parts-based low-latency origin at runtime.
 /// Default is DISABLED: the stable whole-segment path serves every stream, which plays
 /// cleanly on all channels and hardware. Turning this on lets the synthesized spec
@@ -1040,6 +1079,38 @@ pub fn set_codec_preference(prefs: Vec<String>) {
 #[tauri::command]
 pub fn set_max_video_height(height: u32) {
     crate::services::twitch_resolver::set_max_video_height(height);
+}
+
+/// The phone player's view of the link, for `link_adapt`: the core decides
+/// the rendition and the cushion, the player only reports what it saw.
+///
+/// - `frag`: a whole segment the player downloaded itself (`bytes` in `ms`).
+///   Only the whole-segment path sends these; on the parts path the player
+///   reads from the relay over loopback and the origin's own reads count.
+/// - `stall`: playback has been frozen `ms` so far (sent while it lasts).
+/// - `stall_end`: a stall ended after `ms`.
+///
+/// Decisions come back as the `playback-adapt` event.
+#[tauri::command]
+pub fn report_playback_health(event: String, bytes: Option<u64>, ms: Option<f64>) {
+    let secs = ms.unwrap_or(0.0).max(0.0) / 1000.0;
+    match event.as_str() {
+        "frag" => {
+            if let Some(bytes) = bytes {
+                crate::services::link_adapt::note_throughput(bytes, secs);
+            }
+        }
+        "stall" => crate::services::link_adapt::note_stall(secs, false),
+        "stall_end" => crate::services::link_adapt::note_stall(secs, true),
+        _ => {}
+    }
+}
+
+/// Extra seconds behind the live edge the player should keep right now, read
+/// when a player is built (later changes arrive as `playback-adapt`).
+#[tauri::command]
+pub fn get_live_edge_cushion() -> f64 {
+    crate::services::link_adapt::extra_cushion()
 }
 
 /// Start a low-latency diagnostic recording session. Returns the full path of the

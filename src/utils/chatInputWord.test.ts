@@ -10,9 +10,7 @@ import assert from 'node:assert/strict';
 import {
   insertAtCaret,
   emoteSearchTrigger,
-  withChatterCandidates,
   wrapIndex,
-  TAB_CYCLE_LIMIT,
   tokenizeForSpellcheck,
   getSpellcheckTarget,
 } from './chatInputWord.ts';
@@ -111,39 +109,6 @@ test('wrapIndex wraps both ways', () => {
   assert.equal(wrapIndex(0, -1, 3), 2);
   assert.equal(wrapIndex(0, 7, 3), 1);
   assert.equal(wrapIndex(0, 1, 0), 0);
-});
-
-test('chatters follow the emotes and skip names an emote already has', () => {
-  const emotes = [{ name: 'lol', priority: 0 }];
-  const users = [
-    { username: 'lol', displayName: 'LOL' },
-    { username: 'lorenzo', displayName: 'Lorenzo' },
-    { username: 'bob', displayName: 'Bob' },
-  ];
-  const out = withChatterCandidates(emotes, 'lo', users, 'starts_with');
-  assert.deepEqual(out.map((c) => c.name), ['lol', 'Lorenzo']);
-  assert.equal(out[1].chatter?.username, 'lorenzo');
-});
-
-test('an @ query completes to @name and a colon query is emote-only', () => {
-  const users = [{ username: 'lorenzo', displayName: 'Lorenzo' }];
-  assert.deepEqual(withChatterCandidates([], '@lo', users, 'starts_with').map((c) => c.name), ['@Lorenzo']);
-  assert.equal(withChatterCandidates([], ':lo', users, 'starts_with').length, 0);
-});
-
-test('the cycle never grows past its limit', () => {
-  const emotes = Array.from({ length: TAB_CYCLE_LIMIT + 5 }, (_, i) => ({ name: `e${i}`, priority: i }));
-  const out = withChatterCandidates(emotes, 'e', [{ username: 'eve' }], 'starts_with');
-  assert.equal(out.length, TAB_CYCLE_LIMIT);
-});
-
-test('the limit never splits names that differ only by case', () => {
-  // Rust sends LULE right after lule; with lule on the last row, LULE comes too.
-  const emotes = Array.from({ length: TAB_CYCLE_LIMIT - 1 }, (_, i) => ({ name: `e${i}`, priority: i }));
-  emotes.push({ name: 'lule', priority: 98 }, { name: 'LULE', priority: 99 }, { name: 'zz', priority: 100 });
-  const out = withChatterCandidates(emotes, 'e', [{ username: 'eve' }], 'starts_with');
-  assert.deepEqual(out.slice(-2).map((c) => c.name), ['lule', 'LULE']);
-  assert.equal(out.length, TAB_CYCLE_LIMIT + 1);
 });
 
 // The emote menu (in the chat or popped out into its own window) puts its

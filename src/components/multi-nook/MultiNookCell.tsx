@@ -122,32 +122,21 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
   // StreamNook watch time: Rust registers this tile as a source when its
   // stream starts and drops it when the tile stops; the media element's
-  // play/pause is the one thing only the page knows. A pause reports after a
-  // grace window, like the main player, so a quality swap's transient pause
-  // never gates the minute off.
+  // play/pause is the one thing only the page knows; Rust's earning gate
+  // (services/earning_gate.rs) waits out a pause's grace, so a quality swap's
+  // transient pause never gates the minute off.
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !streamUrl) return;
-    let pausedTimer: ReturnType<typeof setTimeout> | null = null;
-    const onPlaying = () => {
-      if (pausedTimer) {
-        clearTimeout(pausedTimer);
-        pausedTimer = null;
-      }
-      invoke('report_player_playing', { playing: true, slot: id }).catch(() => {});
-    };
-    const onPause = () => {
-      if (pausedTimer) clearTimeout(pausedTimer);
-      pausedTimer = setTimeout(() => {
-        pausedTimer = null;
-        invoke('report_player_playing', { playing: false, slot: id }).catch(() => {});
-      }, 6000);
-    };
+    const report = (state: 'playing' | 'paused' | 'teardown') =>
+      invoke('report_player_state', { state, slot: id }).catch(() => {});
+    const onPlaying = () => report('playing');
+    const onPause = () => report('paused');
     if (!el.paused && el.readyState > 2) onPlaying();
     el.addEventListener('playing', onPlaying);
     el.addEventListener('pause', onPause);
     return () => {
-      if (pausedTimer) clearTimeout(pausedTimer);
+      report('teardown');
       el.removeEventListener('playing', onPlaying);
       el.removeEventListener('pause', onPause);
     };

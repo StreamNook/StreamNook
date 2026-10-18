@@ -320,7 +320,7 @@ fn connect_one(transport: IrcTransport, ep: &Endpoints) -> ConnectFuture {
 /// WebSocket uses on this platform: the OS's own (schannel, Security.framework,
 /// OpenSSL) on desktop, so a corporate or antivirus CA the system trusts works
 /// on both routes alike.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn tls_connect(host: &str, tcp: TcpStream) -> anyhow::Result<IrcStream> {
     let connector = tokio_native_tls::native_tls::TlsConnector::new()?;
     let tls = tokio_native_tls::TlsConnector::from(connector)
@@ -329,9 +329,9 @@ async fn tls_connect(host: &str, tcp: TcpStream) -> anyhow::Result<IrcStream> {
     Ok(Box::new(tls))
 }
 
-/// Android: rustls with the bundled Mozilla roots, as the WebSocket uses, so
-/// the cross-compile never links OpenSSL.
-#[cfg(target_os = "android")]
+/// Android and iOS: rustls with the bundled Mozilla roots, as the WebSocket
+/// uses, so the cross-compiles never link OpenSSL.
+#[cfg(any(target_os = "android", target_os = "ios"))]
 async fn tls_connect(host: &str, tcp: TcpStream) -> anyhow::Result<IrcStream> {
     use tokio_rustls::rustls;
     let mut roots = rustls::RootCertStore::empty();

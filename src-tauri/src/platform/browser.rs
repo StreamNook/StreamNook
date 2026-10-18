@@ -20,7 +20,13 @@ use anyhow::{anyhow, Result};
 /// - **macOS** uses `/usr/bin/open`, which has no such quoting hazard because
 ///   the URL arrives as one `argv` entry.
 /// - **Linux** uses `xdg-open`, same reasoning.
+/// - **iOS** asks the shell, which hands the link to the system.
 pub fn open_in_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "ios")]
+    {
+        return crate::ios_ffi::open_url(url).map_err(|e| anyhow!("couldn't open the browser: {e}"));
+    }
+
     #[cfg(windows)]
     {
         // NOT `cmd /C start`: cmd treats the `&` between OAuth query params as a
@@ -42,7 +48,7 @@ pub fn open_in_browser(url: &str) -> Result<()> {
         return Ok(());
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
     {
         std::process::Command::new("xdg-open")
             .arg(url)

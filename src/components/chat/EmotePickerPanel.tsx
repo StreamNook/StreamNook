@@ -15,12 +15,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { ExternalLink, Lock, Settings, Smile, SquareSlash } from 'lucide-react';
+import { Clock, ExternalLink, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
+import { invoke } from '@tauri-apps/api/core';
 import {
   type Emote,
   type EmoteSet,
+  enhanceRustEmotes,
   getCachedEmoteUrl,
   queueEmoteForDisplayCaching,
   setEmoteCacheBurst,
@@ -30,7 +32,6 @@ import {
 import {
   loadFavoriteEmotes,
   isFavoriteEmote,
-  getAvailableFavorites,
   addFavoriteEmote,
   removeFavoriteEmote,
 } from '../../services/favoriteEmoteService';
@@ -64,6 +65,7 @@ import { Logger } from '../../utils/logger';
 import { MOD_PREFIX, staticModifierStyle } from '../../utils/emoteModifiers';
 import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
+import { SearchField } from '../../mobile/ui/SearchField';
 import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
@@ -141,6 +143,52 @@ function hoverImageUrl(emote: Emote): string {
   return emote.localUrl || emote.url;
 }
 
+/** What leads a section header on the phone: the tab's provider logo, a clock
+ *  on Recently used, a star on the rest of Favorites. The logo already names
+ *  the provider, so the header keeps only the section's own title beside it.
+ *  FrankerFaceZ's brand is white, so it takes the text color and reads in
+ *  both themes. */
+function SectionMark({ tab, sectionKey }: { tab: ProviderTab; sectionKey: string }) {
+  if (tab === 'favorites') {
+    return sectionKey === 'recent' ? (
+      <Clock className="w-[11px] h-[11px] shrink-0" strokeWidth={2.75} aria-hidden="true" />
+    ) : (
+      <Star className="w-[11px] h-[11px] shrink-0 text-yellow-400" fill="currentColor" strokeWidth={0} aria-hidden="true" />
+    );
+  }
+  if (tab === 'emoji' || tab === 'gifs') return null;
+  return <EmoteProviderLogo provider={tab} tinted={tab !== 'ffz'} className="w-[11px] h-[11px] shrink-0" />;
+}
+
+/** The viewer's personal emote that shows instead of a channel emote of the
+ *  same name in their own messages. */
+interface ReplacedBy {
+  id: string;
+  url: string;
+}
+
+/** One picker cell as Rust sends it (`emote_picker.rs`), shaped for the page. */
+type PickerCell = Emote & { favorite?: boolean; replaced_by?: ReplacedBy };
+
+/** A section of the selected tab, in the order Rust put it. */
+interface PickerGroup {
+  key: string;
+  title: string;
+  /** Grid columns (7, or 4 and 3 for wide and ultra wide emotes). */
+  columns: number;
+  emotes: PickerCell[];
+}
+
+/** Rust's answer for the open picker. */
+interface PickerAnswer {
+  ready: boolean;
+  tabs: { id: string; count: number }[];
+  tab: string;
+  sections: { key: string; title: string; columns: number; emotes: unknown[] }[];
+}
+
+const GRID_COLS: Record<number, string> = { 3: 'grid-cols-3', 4: 'grid-cols-4', 7: 'grid-cols-7' };
+
 // ── swapping smiley (shared trigger icon) ────────────────────────────────────
 const SMILEY_POOL = ['😀', '😄', '😁', '😆', '🤣', '😂', '😊', '😇', '🙂', '😉', '😌', '😍', '🥰', '😜', '🤪', '😎', '🤩', '🥳', '😏', '😋', '🤗', '🫠', '🫡', '😺'];
 
@@ -182,7 +230,7 @@ const EmoteGridItem = memo(
     /** Draw the first frame (see `LazyEmoteBlock`); hovering still animates it. */
     still: boolean;
     /** Your personal emote that shows instead when you type this name. */
-    replacedBy?: PersonalOverride;
+    replacedBy?: ReplacedBy;
     onInsert: () => void;
     onToggleFavorite: () => void;
     /** The room the menu is open for, so the credit can come from its sets. */
@@ -488,7 +536,6 @@ export interface EmotePickerPanelProps {
   channelId?: string;
   channelLogin?: string;
   isLoadingEmotes?: boolean;
-  channelNameCache?: Map<string, string>;
   onInsert: (text: string) => void;
   onManageEmotes?: () => void;
   /** Moves the menu into a window of its own beside the chat. Absent where
@@ -528,7 +575,6 @@ export function EmotePickerPanel({
   channelId,
   channelLogin,
   isLoadingEmotes = false,
-  channelNameCache,
   onInsert,
   onManageEmotes,
   onPopOut,
@@ -567,7 +613,12 @@ export function EmotePickerPanel({
   // Kept with the query it answers. The last answer stays on screen until the
   // next one lands, so narrowing a search never flickers.
   const [searchResult, setSearchResult] = useState<(EmoteMatchResult & { query: string }) | null>(null);
-  const [favoriteEmotes, setFavoriteEmotes] = useState<Emote[]>([]);
+  const onSearchChange = (next: string) => {
+    // A fresh search looks everywhere, except from the Emoji tab, where the
+    // person is plainly after an emoji.
+    if (!searchQuery.trim() && next.trim()) setSearchScope(selectedProvider === 'emoji' ? 'emoji' : 'all');
+    setSearchQuery(next);
+  };
   const scrollRef = useRef<HTMLDivElement>(null);
   // Fit the default popover into the room above the message box. A host that
   // positions the menu itself (the pop-out window) sizes it itself.
@@ -668,65 +719,44 @@ export function EmotePickerPanel({
     [channelId, searchQuery, sendingGifId, onClose],
   );
 
-  // Channel emotes your own 7TV personal emote of the same name replaces when
-  // you type them, so those tiles can say so. Asked again when the set changes.
-  const [overrides, setOverrides] = useState<Map<string, PersonalOverride> | null>(null);
-  useEffect(() => {
-    if (!open || !isTwitch || !channelLogin) return;
-    let cancelled = false;
-    void personalEmoteOverrides(channelLogin, channelId).then((map) => {
-      if (!cancelled) setOverrides(map);
-    });
-    return () => { cancelled = true; };
-  }, [open, isTwitch, channelLogin, channelId, emotes]);
-
-  // Aggressive disk caching while the picker is open; polite trickle on close.
-  useEffect(() => {
-    if (!open) return;
-    setEmoteCacheBurst(true);
-    return () => setEmoteCacheBurst(false);
-  }, [open]);
-
-  // Load favorites once the picker opens.
-  useEffect(() => {
-    if (!open) return;
-    loadFavoriteEmotes().then(() => {
-      if (emotes) {
-        const all = [...emotes.twitch, ...emotes.bttv, ...emotes['7tv'], ...emotes.ffz, ...emotes.kick, ...emotes.youtube];
-        setFavoriteEmotes(getAvailableFavorites(all));
-      }
-    });
-  }, [open, emotes]);
-
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [selectedProvider, searchQuery]);
-
-  const [emojiData, setEmojiData] = useState<EmojiData | null>(emojiDataCache);
-  useEffect(() => {
-    if (!open || emojiData) return;
-    let alive = true;
-    void import('../../services/emojiCategories').then((mod) => {
-      emojiDataCache = mod;
-      if (alive) setEmojiData(mod);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [open, emojiData]);
-
-  const allEmojis = useMemo(
-    () =>
-      emojiData
-        ? Object.entries(emojiData.EMOJI_CATEGORIES).flatMap(([category, emojis]) =>
-            emojis.map((emoji) => ({ emoji, category })),
-          )
-        : [],
-    [emojiData],
-  );
-
+  // The tabs, their counts, the selected tab's sections and every cell's
+  // flags (favorite, locked, replaced by your personal emote) come from Rust
+  // (`emote_picker`), asked again whenever the tab, the search, the room's set
+  // or your favorites change. YouTube emoji are not in Rust's set yet, so the
+  // YouTube tab still groups its own below.
+  const pickerProvider = isTwitch ? 'twitch' : isKick ? 'kick' : isYouTube ? 'youtube' : null;
+  const rustTab = selectedProvider !== 'emoji' && selectedProvider !== 'gifs' && selectedProvider !== 'youtube';
   const trimmedQuery = searchQuery.trim();
+  // A typed query searches every source (below), so the tab's own answer is
+  // only ever asked for unfiltered.
   const searching = trimmedQuery.length > 0 && selectedProvider !== 'gifs';
+  const pickerQuery = rustTab && !searching ? searchQuery : '';
+  const [favoritesVersion, setFavoritesVersion] = useState(0);
+  const pickerKey = `${pickerProvider}|${channelLogin ?? ''}|${channelId ?? ''}|${rustTab ? selectedProvider : ''}|${pickerQuery}|${favoritesVersion}`;
+  const [picker, setPicker] = useState<{ key: string; answer: PickerAnswer } | null>(null);
+  useEffect(() => {
+    if (!open || !pickerProvider || !channelLogin) return;
+    let cancelled = false;
+    void invoke<PickerAnswer>('emote_picker', {
+      provider: pickerProvider,
+      channel: channelLogin,
+      channelId: channelId || null,
+      tab: rustTab ? selectedProvider : null,
+      query: pickerQuery,
+      tier: inlineEmoteTier(),
+    })
+      .then((answer) => {
+        if (!cancelled) setPicker({ key: pickerKey, answer });
+      })
+      .catch((err) => Logger.warn('[EmotePicker] emote_picker failed:', err));
+    return () => {
+      cancelled = true;
+    };
+    // `emotes` is a dependency on purpose: a new or changed set means new rows.
+  }, [open, pickerProvider, channelLogin, channelId, rustTab, selectedProvider, pickerQuery, pickerKey, emotes]);
+  const answer = picker?.answer ?? null;
+  const rustTabCount = (id: string) => answer?.tabs.find((t) => t.id === id)?.count ?? 0;
+
   const matchTarget = useMemo<EmoteMatchChannel | null>(
     () =>
       channelLogin
@@ -757,6 +787,21 @@ export function EmotePickerPanel({
     };
   }, [open, searching, trimmedQuery, matchTarget, emotes]);
 
+  // Channel emotes your own 7TV personal emote of the same name replaces when
+  // you type them, so the search results can say so (the tabs' cells carry it
+  // from Rust's picker answer). Asked again when the set changes.
+  const [overrides, setOverrides] = useState<Map<string, PersonalOverride> | null>(null);
+  useEffect(() => {
+    if (!open || !searching || !isTwitch || !channelLogin) return;
+    let cancelled = false;
+    void personalEmoteOverrides(channelLogin, channelId).then((map) => {
+      if (!cancelled) setOverrides(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, searching, isTwitch, channelLogin, channelId, emotes]);
+
   const heldEmotes = useMemo(() => {
     const map = new Map<string, Emote>();
     if (!emotes) return map;
@@ -774,162 +819,136 @@ export function EmotePickerPanel({
           ? all.filter(({ emote }) => isFavoriteEmote(emote.id))
           : all.filter(({ row }) => row.provider === searchScope);
     return scoped.map(({ emote }) => emote);
-  }, [searching, searchResult, heldEmotes, searchScope]);
+    // `favoritesVersion` re-reads the stars after a toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, searchResult, heldEmotes, searchScope, favoritesVersion]);
 
-  const filteredEmotes = useMemo((): Emote[] => {
-    // Emoji and GIFs are not EmoteSet-backed: both render their own pane.
-    if (selectedProvider === 'emoji' || selectedProvider === 'gifs') return [];
-    if (selectedProvider === 'favorites') {
-      if (!searchQuery) return favoriteEmotes;
-      const query = searchQuery.toLowerCase();
-      return favoriteEmotes.filter((e) => e.name.toLowerCase().includes(query));
-    }
-    if (!emotes) return [];
-    const providerEmotes = emotes[selectedProvider] || [];
-    if (!searchQuery) return providerEmotes;
-    const query = searchQuery.toLowerCase();
-    return providerEmotes.filter((e) => e.name.toLowerCase().includes(query));
-  }, [selectedProvider, favoriteEmotes, searchQuery, emotes]);
+  // Aggressive disk caching while the picker is open; polite trickle on close.
+  useEffect(() => {
+    if (!open) return;
+    setEmoteCacheBurst(true);
+    return () => setEmoteCacheBurst(false);
+  }, [open]);
 
-  const groupedWidthEmotes = useMemo(() => {
-    const groups = new Map<string, { label: string; emotes: Emote[]; gridCols: string; cols: number }>();
-    groups.set('standard', { label: 'Standard', emotes: [], gridCols: 'grid-cols-7', cols: 7 });
-    groups.set('wide', { label: 'Wide', emotes: [], gridCols: 'grid-cols-4', cols: 4 });
-    groups.set('ultrawide', { label: 'Ultra Wide', emotes: [], gridCols: 'grid-cols-3', cols: 3 });
-    for (const emote of filteredEmotes) {
-      const width = emote.width || 32;
-      if (width <= 48) groups.get('standard')!.emotes.push(emote);
-      else if (width <= 80) groups.get('wide')!.emotes.push(emote);
-      else groups.get('ultrawide')!.emotes.push(emote);
-    }
-    for (const group of groups.values()) {
-      group.emotes.sort((a, b) => {
-        if (a.isZeroWidth && !b.isZeroWidth) return -1;
-        if (!a.isZeroWidth && b.isZeroWidth) return 1;
-        const wA = a.width || 32;
-        const wB = b.width || 32;
-        if (wA !== wB) return wA - wB;
-        return a.name.localeCompare(b.name);
-      });
-    }
-    return groups;
-  }, [filteredEmotes]);
+  // The stars read the saved favorites; load them once the picker opens.
+  useEffect(() => {
+    if (!open) return;
+    void loadFavoriteEmotes().then(() => setFavoritesVersion((v) => v + 1));
+  }, [open]);
 
-  const groupedTwitchEmotes = useMemo((): Map<string, { name: string; emotes: Emote[] }> => {
-    const groups = new Map<string, { name: string; emotes: Emote[] }>();
-    for (const emote of filteredEmotes) {
-      const type = emote.emote_type || 'globals';
-      const ownerId = emote.owner_id || 'twitch';
-      let groupKey: string;
-      let groupName: string;
-      if (type === 'globals' || !emote.owner_id) {
-        groupKey = 'globals';
-        groupName = 'Global Emotes';
-      } else if (type === 'subscriptions') {
-        groupKey = `sub-${ownerId}`;
-        groupName = channelNameCache?.get(ownerId) || `Channel ${ownerId}`;
-      } else if (type === 'bitstier') {
-        groupKey = 'bits';
-        groupName = 'Bits Emotes';
-      } else if (type === 'follower') {
-        groupKey = `follower-${ownerId}`;
-        groupName = 'Follower Emotes';
-      } else if (type === 'channelpoints') {
-        groupKey = `points-${ownerId}`;
-        groupName = 'Channel Points Emotes';
-      } else {
-        groupKey = type;
-        groupName = type.charAt(0).toUpperCase() + type.slice(1);
-      }
-      if (!groups.has(groupKey)) groups.set(groupKey, { name: groupName, emotes: [] });
-      groups.get(groupKey)!.emotes.push(emote);
-    }
-    const sortedGroups = new Map<string, { name: string; emotes: Emote[] }>();
-    const keys = Array.from(groups.keys()).sort((a, b) => {
-      if (channelId) {
-        const aCur = a === `sub-${channelId}`;
-        const bCur = b === `sub-${channelId}`;
-        if (aCur && !bCur) return -1;
-        if (!aCur && bCur) return 1;
-      }
-      if (a === 'globals') return -1;
-      if (b === 'globals') return 1;
-      if (a.startsWith('points-') && !b.startsWith('points-')) return -1;
-      if (!a.startsWith('points-') && b.startsWith('points-')) return 1;
-      if (a.startsWith('sub-') && !b.startsWith('sub-')) return -1;
-      if (!a.startsWith('sub-') && b.startsWith('sub-')) return 1;
-      const nameA = groups.get(a)?.name || a;
-      const nameB = groups.get(b)?.name || b;
-      return nameA.localeCompare(nameB);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [selectedProvider, searchQuery]);
+
+  const [emojiData, setEmojiData] = useState<EmojiData | null>(emojiDataCache);
+  useEffect(() => {
+    if (!open || emojiData) return;
+    let alive = true;
+    void import('../../services/emojiCategories').then((mod) => {
+      emojiDataCache = mod;
+      if (alive) setEmojiData(mod);
     });
-    for (const key of keys) sortedGroups.set(key, groups.get(key)!);
-    return sortedGroups;
-  }, [filteredEmotes, channelNameCache, channelId]);
+    return () => {
+      alive = false;
+    };
+  }, [open, emojiData]);
 
-  const groupedKickEmotes = useMemo((): Map<string, { name: string; emotes: Emote[] }> => {
-    const groups = new Map<string, { name: string; emotes: Emote[] }>();
-    for (const emote of filteredEmotes) {
-      const label = emote.emote_type || 'Emotes';
-      if (!groups.has(label)) groups.set(label, { name: label, emotes: [] });
-      groups.get(label)!.emotes.push(emote);
-    }
-    return groups;
-  }, [filteredEmotes]);
+  // The emoji tab's sections after the search, computed once and read by both
+  // the grid and its empty state, so the two can never disagree (they did: the
+  // empty check knew keywords and the grid did not, so "heart" drew a blank
+  // pane). A query matches a category name, an emoji's keywords, or the emoji
+  // itself when one is pasted in. Categories left empty are dropped.
+  const emojiSections = useMemo((): [string, string[]][] => {
+    if (!emojiData) return [];
+    const query = searchQuery.trim().toLowerCase();
+    return Object.entries(emojiData.EMOJI_CATEGORIES)
+      .map(([category, emojis]): [string, string[]] =>
+        !query || category.toLowerCase().includes(query)
+          ? [category, emojis]
+          : [
+              category,
+              emojis.filter(
+                (emoji) =>
+                  emoji.includes(query) ||
+                  (emojiData.EMOJI_KEYWORDS[emoji]?.some((k) => k.includes(query)) ?? false),
+              ),
+            ],
+      )
+      .filter(([, emojis]) => emojis.length > 0);
+  }, [emojiData, searchQuery]);
+  // The same matches as one list, for the cross-source search results.
+  const filteredEmojis = useMemo(
+    () => emojiSections.flatMap(([category, emojis]) => emojis.map((emoji) => ({ emoji, category }))),
+    [emojiSections],
+  );
+
+  // The selected tab's sections. Rust's answer is used once it is for this
+  // tab; until then (or for YouTube, see below) the groups come from here.
+  const rustGroups = useMemo((): PickerGroup[] | null => {
+    if (!rustTab || !answer || answer.tab !== selectedProvider) return null;
+    const tier = inlineEmoteTier();
+    return answer.sections.map((section) => ({
+      key: section.key,
+      title: section.title,
+      columns: section.columns,
+      emotes: enhanceRustEmotes(section.emotes, tier) as PickerCell[],
+    }));
+  }, [rustTab, answer, selectedProvider]);
+
+  const youtubeEmotes = useMemo((): Emote[] => {
+    if (selectedProvider !== 'youtube') return [];
+    const all = emotes?.youtube ?? [];
+    if (!searchQuery) return all;
+    const query = searchQuery.toLowerCase();
+    return all.filter((e) => e.name.toLowerCase().includes(query));
+  }, [selectedProvider, emotes, searchQuery]);
 
   // Two sections, fixed order: the channel's own emoji first (the reason anyone
   // opens this tab), then YouTube's shared live-chat set. `emote_type` is set
   // when the set is seeded, from YouTube's `isCustomEmoji` flag.
-  const groupedYouTubeEmotes = useMemo((): Map<string, { name: string; emotes: Emote[] }> => {
+  const groupedYouTubeEmotes = useMemo((): PickerGroup[] => {
     const custom: Emote[] = [];
     const global: Emote[] = [];
-    for (const emote of filteredEmotes) {
+    for (const emote of youtubeEmotes) {
       (emote.emote_type === 'youtube' ? global : custom).push(emote);
     }
-    const groups = new Map<string, { name: string; emotes: Emote[] }>();
-    if (custom.length) groups.set('custom', { name: 'Channel emoji', emotes: custom });
-    if (global.length) groups.set('youtube', { name: 'YouTube emoji', emotes: global });
+    const groups: PickerGroup[] = [];
+    if (custom.length) groups.push({ key: 'custom', title: 'Channel emoji', columns: 7, emotes: custom });
+    if (global.length) groups.push({ key: 'youtube', title: 'YouTube emoji', columns: 7, emotes: global });
     return groups;
-  }, [filteredEmotes]);
+  }, [youtubeEmotes]);
 
-  const filteredEmojis = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return allEmojis;
-    return allEmojis.filter(({ emoji, category }) => {
-      if (emoji.includes(query) || category.toLowerCase().includes(query)) return true;
-      const keywords = emojiData?.EMOJI_KEYWORDS[emoji];
-      return keywords ? keywords.some((k) => k.includes(query)) : false;
-    });
-  }, [searchQuery, allEmojis, emojiData]);
+  const groups: PickerGroup[] = selectedProvider === 'youtube' ? groupedYouTubeEmotes : (rustGroups ?? []);
+  const waitingForRust = rustTab && !rustGroups && !!pickerProvider;
+  // Twitch, Kick and YouTube cells keep their names under the image on desktop.
+  const namedCells = selectedProvider === 'twitch' || selectedProvider === 'kick' || selectedProvider === 'youtube';
 
   const toggleFavorite = useCallback(
     async (emote: Emote, isFavorited: boolean) => {
       try {
         if (isFavorited) {
           await removeFavoriteEmote(emote.id);
-          setFavoriteEmotes((prev) => prev.filter((e) => e.id !== emote.id));
           useAppStore.getState().addToast(`Removed ${emote.name} from favorites`, 'info');
         } else {
           await addFavoriteEmote(emote);
-          if (emotes) {
-            const all = [...emotes.twitch, ...emotes.bttv, ...emotes['7tv'], ...emotes.ffz, ...emotes.kick, ...emotes.youtube];
-            setFavoriteEmotes(getAvailableFavorites(all));
-          }
           useAppStore.getState().addToast(`Added ${emote.name} to favorites`, 'success');
         }
+        // Rust lists the Favorites tab from the saved list: ask again.
+        setFavoritesVersion((v) => v + 1);
       } catch (err) {
         Logger.error('Failed to toggle favorite:', err);
         useAppStore.getState().addToast('Failed to update favorites', 'error');
       }
     },
-    [emotes],
+    [],
   );
 
   if (!mounted) return null;
 
-  // Each source's tab wears ITS OWN brand colour when active, rather than one
+  // Each source's tab wears ITS OWN brand color when active, rather than one
   // green for all of them. Green happens to read as Kick, which made the YouTube
   // tab look like the wrong platform. Sources with no brand of their own (the
-  // favourites star, emoji) keep the accent green.
+  // favorites star, emoji) keep the accent green.
   const TAB_ACCENT: Record<string, string> = {
     twitch: PROVIDERS.twitch.color,
     kick: PROVIDERS.kick.color,
@@ -940,14 +959,14 @@ export function EmotePickerPanel({
   };
   const tabClass = (active: boolean) =>
     `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
-  /** Inline colour for an active tab; undefined leaves the class-driven default. */
+  /** Inline color for an active tab; undefined leaves the class-driven default. */
   const tabStyle = (active: boolean, key?: string): React.CSSProperties => ({
     borderRadius: '8px',
     ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
   });
 
   // While searching, the tabs filter the ranked results and count the hits in
-  // each source; otherwise they pick a source and count what it holds.
+  // each source; otherwise they pick a source and count what Rust says it holds.
   const activeTab: SearchScope = searching ? searchScope : selectedProvider;
   const pickTab = (tab: ProviderTab) => (searching ? setSearchScope(tab) : setSelectedProvider(tab));
   const emojiHits = searching ? filteredEmojis.length : 0;
@@ -959,9 +978,9 @@ export function EmotePickerPanel({
       if (tab === 'emoji') return emojiHits;
       return counts[tab as EmoteSource] ?? 0;
     }
-    if (tab === 'favorites') return favoriteEmotes.length;
+    if (tab === 'youtube') return emotes?.youtube.length || 0;
     if (tab === 'all' || tab === 'emoji' || tab === 'gifs') return 0;
-    return emotes?.[tab]?.length || 0;
+    return rustTabCount(tab);
   };
 
   type Section = 'emotes' | 'gifs' | 'commands';
@@ -1016,7 +1035,13 @@ export function EmotePickerPanel({
 
   const renderEmojiButton = (emoji: string, key: string) => (
     <Tooltip key={key} content={emoji}>
-      <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
+      <button
+        onClick={() => onInsert(emoji)}
+        // An emoji with no image falls back to its character (onError below).
+        // On the phone that text gets the image's 24px box, not the panel's
+        // inherited size.
+        className={`flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors${IS_MOBILE ? ' text-[20px] leading-6' : ''}`}
+      >
         <img
           src={getAppleEmojiUrl(emoji)}
           alt={emoji}
@@ -1164,19 +1189,23 @@ export function EmotePickerPanel({
       >
       <div className="p-2 border-b border-borderSubtle">
         <div className="flex items-center gap-1.5">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => {
-              const next = e.target.value;
-              // A fresh search looks everywhere, except from the Emoji tab,
-              // where the person is plainly after an emoji.
-              if (!searchQuery.trim() && next.trim()) setSearchScope(selectedProvider === 'emoji' ? 'emoji' : 'all');
-              setSearchQuery(next);
-            }}
-            placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
-            className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
-          />
+          {IS_MOBILE ? (
+            // The phone's one search field (magnifier, clear button, 44px).
+            <SearchField
+              value={searchQuery}
+              onChange={onSearchChange}
+              placeholder={selectedProvider === 'gifs' ? 'Search GIFs…' : 'Search emotes…'}
+              className="flex-1 min-w-0"
+            />
+          ) : (
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
+              className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
+            />
+          )}
           {onPopOut && (
             <Tooltip content="Pop out" side="top">
               <button
@@ -1253,8 +1282,8 @@ export function EmotePickerPanel({
           {isYouTube && (
             <Tooltip
               content={
-                emotes?.youtube.length
-                  ? `YouTube (${emotes.youtube.length})`
+                searching || emotes?.youtube.length
+                  ? `YouTube (${tabCount('youtube')})`
                   : 'YouTube (sign in to load this channel’s emoji)'
               }
               side="top"
@@ -1287,7 +1316,11 @@ export function EmotePickerPanel({
         </div>
         )}
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
+      {/* On the phone the grid fades out against the Emotes/GIFs bar. */}
+      <div
+        ref={scrollRef}
+        className={`flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin ${IS_MOBILE ? 'sn-fade-bottom' : ''}`}
+      >
         {searching ? (
           renderSearchResults()
         ) : selectedProvider === 'gifs' ? (
@@ -1349,13 +1382,15 @@ export function EmotePickerPanel({
             </div>
           )
         ) : selectedProvider === 'emoji' ? (
-          filteredEmojis.length === 0 ? (
+          !emojiData ? (
+            // The emoji set loads on first open; say so instead of a brief
+            // "No emojis found" for a set that has not arrived yet.
+            <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">Loading emojis...</p></div>
+          ) : emojiSections.length === 0 ? (
             <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">No emojis found</p></div>
           ) : (
             <div className="flex flex-col gap-4 pt-2">
-              {Object.entries(emojiData?.EMOJI_CATEGORIES ?? {}).map(([category, emojis]) => {
-                const filteredCategoryEmojis = emojis;
-                if (filteredCategoryEmojis.length === 0) return null;
+              {emojiSections.map(([category, filteredCategoryEmojis]) => {
                 return (
                   <div key={category} className="flex flex-col">
                     <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>{category}</h3>
@@ -1371,27 +1406,7 @@ export function EmotePickerPanel({
                         animate={false}
                       >
                         {() =>
-                          block.map((emoji, idx) => (
-                            <Tooltip key={`${category}-${bi}-${idx}`} content={emoji}>
-                              <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
-                                <img
-                                  src={getAppleEmojiUrl(emoji)}
-                                  alt={emoji}
-                                  className="w-6 h-6 object-contain"
-                                  onError={(e) => {
-                                    const t = e.currentTarget;
-                                    if (!t.dataset.fe0f && t.src.endsWith('.png') && !t.src.includes('-fe0f')) {
-                                      t.dataset.fe0f = '1';
-                                      t.src = t.src.replace(/\.png$/, '-fe0f.png');
-                                      return;
-                                    }
-                                    t.style.display = 'none';
-                                    if (t.nextSibling?.textContent !== emoji) t.insertAdjacentText('afterend', emoji);
-                                  }}
-                                />
-                              </button>
-                            </Tooltip>
-                          ))
+                          block.map((emoji, idx) => renderEmojiButton(emoji, `${category}-${bi}-${idx}`))
                         }
                       </LazyEmoteBlock>
                     ))}
@@ -1400,9 +1415,9 @@ export function EmotePickerPanel({
               })}
             </div>
           )
-        ) : isLoadingEmotes ? (
+        ) : isLoadingEmotes || waitingForRust || (rustTab && answer && !answer.ready) ? (
           <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">Loading emotes...</p></div>
-        ) : filteredEmotes.length === 0 ? (
+        ) : groups.length === 0 ? (
           <div className="flex items-center justify-center h-32 px-6">
             <p className="text-xs text-textSecondary text-center leading-relaxed">
               {selectedProvider === 'youtube' && !searchQuery
@@ -1415,12 +1430,13 @@ export function EmotePickerPanel({
                 : 'No emotes found'}
             </p>
           </div>
-        ) : selectedProvider === 'twitch' || selectedProvider === 'kick' || selectedProvider === 'youtube' ? (
+        ) : namedCells ? (
           <div className="flex flex-col gap-4 pt-2">
-            {Array.from((selectedProvider === 'kick' ? groupedKickEmotes : selectedProvider === 'youtube' ? groupedYouTubeEmotes : groupedTwitchEmotes).entries()).map(([groupKey, group]) => (
+            {groups.map((group) => ({ groupKey: group.key, group: { name: group.title, emotes: group.emotes } })).map(({ groupKey, group }) => (
               <div key={groupKey} className="flex flex-col">
-                <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
-                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
+                <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                  {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={groupKey} />}
+                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
                 </h3>
                 {chunkArray(group.emotes, TWITCH_COLS * TWITCH_BLOCK_ROWS).map((block, bi) => {
                   const rows = Math.ceil(block.length / TWITCH_COLS);
@@ -1467,7 +1483,8 @@ export function EmotePickerPanel({
                                         provider={emote.provider}
                                         id={emote.id}
                                         name={emote.name}
-                                        ownerHint={emote.owner_name ?? (emote.owner_id ? channelNameCache?.get(emote.owner_id) : undefined)}
+                                        ownerHint={emote.owner_name}
+                                        originalHint={emote.original_name}
                                         channelLogin={channelLogin}
                                         channelId={channelId}
                                       />
@@ -1519,18 +1536,19 @@ export function EmotePickerPanel({
           </div>
         ) : (
           <div className="flex flex-col gap-4 pt-2">
-            {Array.from(groupedWidthEmotes.values())
-              .filter((g) => g.emotes.length > 0)
+            {groups
+              .map((g) => ({ label: g.title, key: g.key, emotes: g.emotes, cols: g.columns, gridCols: GRID_COLS[g.columns] ?? 'grid-cols-7' }))
               .map((group) => (
-                <div key={group.label} className="flex flex-col">
-                  <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
-                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
+                <div key={group.key} className="flex flex-col">
+                  <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                    {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={group.key} />}
+                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
                   </h3>
                   {chunkArray(group.emotes, group.cols * WIDTH_BLOCK_ROWS).map((block, bi) => {
                     const rows = Math.ceil(block.length / group.cols);
                     return (
                       <LazyEmoteBlock
-                        key={`${group.label}-blk-${bi}`}
+                        key={`${group.key}-blk-${bi}`}
                         scrollRef={scrollRef}
                         estimatedHeight={rows * WIDTH_ROW_PX}
                         gridClass={`grid ${group.gridCols} gap-2 px-1`}
@@ -1541,7 +1559,7 @@ export function EmotePickerPanel({
                         }}
                       >
                         {(still) =>
-                          block.map((emote: Emote, idx: number) => {
+                          block.map((emote: PickerCell, idx: number) => {
                             const isFavorited = isFavoriteEmote(emote.id);
                             return (
                               <EmoteGridItem
@@ -1549,7 +1567,7 @@ export function EmotePickerPanel({
                                 emote={emote}
                                 isFavorited={isFavorited}
                                 still={still}
-                                replacedBy={emote.provider !== 'twitch' ? overrides?.get(emote.name) : undefined}
+                                replacedBy={emote.replaced_by}
                                 onInsert={() => onInsert(emote.insertText ?? emote.name)}
                                 onToggleFavorite={() => void toggleFavorite(emote, isFavorited)}
                                 channelLogin={channelLogin}

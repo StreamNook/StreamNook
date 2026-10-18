@@ -382,6 +382,8 @@ pub async fn kick_disconnect(app: crate::rt::AppHandle, state: State<'_, AppStat
     // a profile directory. Expire only Kick's cookies so Twitch stays signed in.
     #[cfg(target_os = "android")]
     crate::twitch_login_plugin::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
+    #[cfg(target_os = "ios")]
+    crate::services::ios_sheet::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("kick", &state) {
         log::warn!("[Kick] could not clear imported follows: {}", e);
     }
@@ -467,6 +469,7 @@ pub async fn kick_chat_history(
                 None
             } else {
                 m.metadata.from_backfill = true;
+                crate::services::chat_row_view::stamp(&mut m);
                 Some(m)
             }
         })
@@ -575,7 +578,10 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
 /// `account-roster-changed`; this is the first read.
 #[tauri::command]
 pub async fn get_account_roster() -> crate::services::account_roster::AccountRoster {
-    crate::services::account_roster::build().await
+    let roster = crate::services::account_roster::build().await;
+    // Every read reports what changed (linked accounts dedupe on their own).
+    crate::services::linked_accounts::on_roster(&roster);
+    roster
 }
 
 /// Which StreamNook member, if any, is behind each of these chat identities.
@@ -751,6 +757,12 @@ pub async fn send_chat_message(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // The picker offers the emotes you just used first.
+    if sent.is_sent {
+        if let Some(channel) = target_channel.as_deref() {
+            crate::services::recent_emotes::record(channel, &message).await;
+        }
+    }
     let pin_error = if pin_after_send.unwrap_or(false) {
         pin_sent(&sent, broadcaster_id.as_deref()).await.err()
     } else {
@@ -1034,7 +1046,11 @@ pub async fn load_channel_history(
     // providers answer. It shows now and is re-stamped when the table lands
     // (`spawn_history_restamp`), rather than waiting for a slow provider.
     let restamp_lines = (!seeded).then(|| raw.clone());
-    let parsed = IrcService::parse_historical_messages(raw).await;
+    let parsed = IrcService::parse_historical_messages(raw.clone()).await;
+    // A native shell draws each row from its stamped view and only has these
+    // rows once this answer returns, so the backlog waits briefly for its
+    // authors' cosmetics and patches in the rest (`history_cosmetics`).
+    let parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }
@@ -1114,4 +1130,31 @@ pub async fn build_own_chat_message(
     message: crate::services::irc_service::OwnMessage,
 ) -> Option<ChatMessage> {
     IrcService::build_own_message(message).await
+}
+
+/// The chat commands a composer lists for the room: the built-in table with
+/// each row's lock for the viewer's role there, then the viewer's own slash
+/// commands, filtered by `query`. `platform` "desktop" keeps the
+/// desktop-only commands a phone leaves out.
+#[tauri::command]
+pub fn command_catalog(
+    channel: String,
+    platform: Option<String>,
+    query: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::command_catalog::CatalogRow>, String> {
+    use crate::services::chat_send_limiter::Role;
+    let own = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        crate::services::command_catalog::user_commands(settings.extra.get("chat_commands"))
+    };
+    let key = channel.trim().trim_start_matches('#').to_lowercase();
+    let role = crate::services::chat_send_limiter::budget(&key).role;
+    Ok(crate::services::command_catalog::catalog(
+        platform.as_deref() != Some("desktop"),
+        matches!(role, Role::Moderator | Role::Broadcaster),
+        matches!(role, Role::Broadcaster),
+        &own,
+        query.as_deref().unwrap_or_default(),
+    ))
 }

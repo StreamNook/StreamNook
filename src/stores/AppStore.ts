@@ -25,6 +25,21 @@ import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
 
+/** `watch_open_room`: the room, or the live row for a stale card. */
+type RoomOpenResult = {
+  superseded: boolean;
+  room?: OfflineRoom;
+  live?: TwitchStream;
+  row?: TwitchStream;
+};
+
+/** `watch_start`: a superseded start carries nothing else. */
+type WatchStartResult = {
+  superseded: boolean;
+  row?: TwitchStream;
+  stream?: StreamStartResult;
+};
+
 export type StreamStartResult = {
   url: string;
   quality: string;
@@ -557,6 +572,11 @@ interface AppState {
    *  confirmation toast, for a reload the viewer did not ask for. */
   restartStream: (options?: { quiet?: boolean }) => Promise<void>;
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
+  /** Phone only: why a provider stream has no picture while its chat keeps
+   *  running (it ended, is offline, or failed to start). Keyed by the stream's
+   *  `makeKey`, so it can only ever describe the stream it was written for;
+   *  the player shows it while `streamUrl` is the `'offline'` marker. */
+  playbackNotice: { key: string; message: string } | null;
   reloadStreamAndChat: () => Promise<void>;  // Hard refresh: restart the stream AND reconnect/reload chat
   getAvailableQualities: () => Promise<string[]>;
   changeStreamQuality: (quality: string) => Promise<void>;
@@ -735,20 +755,6 @@ type OfflineDecision =
   | { action: 'stop'; notice: OfflineNotice | null }
   | { action: 'switch_to'; stream: TwitchStream; notice: OfflineNotice | null };
 
-function watchTargetOf(info: TwitchStream, provider: ProviderId, login: string, authenticated: boolean) {
-  return {
-    provider,
-    login,
-    user_id: info.user_id || '',
-    user_name: info.user_name || login,
-    title: info.title || '',
-    game_id: info.game_id || null,
-    game_name: info.game_name || '',
-    started_at: info.started_at || '',
-    authenticated,
-  };
-}
-
 let watchSessionListening = false;
 
 /** Subscribe once to the session's events, in the window that plays streams. */
@@ -760,10 +766,17 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
   // size): startStream backfills the rest from the target's live row.
   void listen<{ reason: 'raid'; target: TwitchStream }>('watch-session://redirect', async (event) => {
     const { target } = event.payload;
+    // Phone: a raid follows a stream that is open. One closed before the
+    // notice (or during it) stays closed; the raid must not reopen the layer.
+    if (IS_MOBILE && !get().currentStream) return;
     Logger.debug(`[WatchSession] Raid detected, joining ${target.user_login}`);
     get().addToast(`Raid starting! Joining ${target.user_login}...`, 'info');
     // Long enough to read the notice before the stream changes under it.
     await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (IS_MOBILE && !get().currentStream) {
+      Logger.debug('[WatchSession] Stream closed during the raid notice; not following');
+      return;
+    }
     await get().startStream(target.user_login, target);
   });
 
@@ -907,6 +920,14 @@ async function applyOfflineDecision(
     case 'switch_to':
       // A provider stream that really ended goes back Home with a note.
       if (decision.action === 'stop' && streamProvider(ended) !== 'twitch') {
+        // Phone: the picture ends, the room does not. The band says so and
+        // chat keeps running until the viewer leaves; no toast, the band is
+        // the one place it is said.
+        if (IS_MOBILE) {
+          const name = ended.user_name || ended.user_login;
+          await keepProviderChat(ended, `${name} went offline. Chat keeps running.`, set);
+          return;
+        }
         await get().stopStream();
         set({ isHomeActive: true });
         say(decision.notice);
@@ -914,15 +935,12 @@ async function applyOfflineDecision(
       }
       set({ isAutoSwitching: true });
       try {
-        await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
+        // The relay, the watch session, drops and channel points (services/watch_start.rs).
+        await invoke('watch_stop', { preserveBackend: false }).catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
         await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
-        await invoke('stop_drops_monitoring').catch((e) => Logger.warn('[AutoSwitch] Error stopping drops monitoring:', e));
         set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
         say(decision.notice);
-        if (decision.action === 'stop') {
-          await invoke('watch_session_stop', { preserveBackend: false }).catch(() => {});
-          return;
-        }
+        if (decision.action === 'stop') return;
         // A beat between the old stream closing and the new one opening.
         await new Promise((resolve) => setTimeout(resolve, 500));
         await get().startStream(decision.stream.user_login, decision.stream);
@@ -975,6 +993,117 @@ async function settleTransientSwap(): Promise<void> {
  *  releases the loader freeze it set itself. */
 let lastSwapSeq = 0;
 
+/** Every start on either path takes a number, so only the latest one clears
+ *  the loading flag on the phone. The phone drops the old URL at the tap
+ *  (`showSwitchAtOnce`), which leaves `isLoading` as the only thing holding
+ *  the watch layer open; an older start finishing first (a Twitch start a
+ *  Kick tap overtook, or the reverse) must not close it under the newer one.
+ *  The per-path tickets above cannot see across the two paths. */
+let startLoadSeq = 0;
+
+/** Whether `stream` is `channel` on `provider` (Twitch `xqc` and Kick `xqc` are
+ *  two channels). */
+function isSameChannel(stream: TwitchStream | null, provider: ProviderId, channel: string): boolean {
+  return (
+    !!stream &&
+    streamProvider(stream) === provider &&
+    stream.user_login.toLowerCase() === channel.toLowerCase()
+  );
+}
+
+/**
+ * Phone only: a start for another channel shows that channel at once. The
+ * header takes the seed row (what the tapped card, raid or Together member
+ * already knows), and the old video is dropped before `watch_start` answers,
+ * so the band runs the loading mark instead of the previous stream under the
+ * new name. The start's ticket rules are untouched: this writes nothing the
+ * winning start does not overwrite with Rust's completed row.
+ *
+ * The same channel already playing live is left alone; its offline room, a
+ * VOD in that room, or a failure gives way like any other switch.
+ *
+ * Desktop keeps its own switch (VideoPlayer hands the old player over to the
+ * new URL), so this is a no-op there.
+ */
+function showSwitchAtOnce(
+  provider: ProviderId,
+  channel: string,
+  seed: TwitchStream | undefined,
+  set: StoreSet,
+  get: StoreGet,
+): void {
+  if (!IS_MOBILE) return;
+  const state = get();
+  if (
+    isSameChannel(state.currentStream, provider, channel) &&
+    state.currentMediaType === 'live' &&
+    !!state.streamUrl &&
+    state.streamUrl !== 'offline'
+  ) {
+    return;
+  }
+  const twitch = provider === 'twitch';
+  const row: TwitchStream = seed
+    ? { ...seed, user_login: seed.user_login || channel, provider: twitch ? seed.provider : provider }
+    : {
+        id: '',
+        user_id: '',
+        user_name: channel,
+        user_login: channel,
+        title: '',
+        viewer_count: 0,
+        game_name: '',
+        thumbnail_url: '',
+        // Never fabricated: an empty start shows no uptime until Rust's row.
+        started_at: '',
+        provider: twitch ? undefined : provider,
+      };
+  set({
+    streamUrl: null,
+    activeQuality: null,
+    availableQualities: [],
+    adSource: null,
+    currentStream: row,
+    currentMediaType: 'live',
+    currentHypeTrain: null,
+    vodPlayback: null,
+    liveRewind: null,
+    liveRewindAvailable: null,
+    liveRewindAnchor: null,
+    offlineRoom: null,
+    offlineRoomLive: null,
+    offlineRoomJoining: false,
+    playbackNotice: null,
+    isHomeActive: false,
+    // The layer is shown while a start loads, so dropping the URL never
+    // closes it between the tap and the answer.
+    isLoading: true,
+  });
+}
+
+/**
+ * Phone only: a provider stream with no picture keeps its chat. The band says
+ * why (`message`), the player is let go of before the core stops the relay,
+ * and `watch_stop` ends the relay, the live check and any Twitch earning the
+ * previous stream left aimed. The provider chat slice is the store's own
+ * (`mainProviderChatKey`) and stays acquired.
+ */
+async function keepProviderChat(stream: TwitchStream, message: string, set: StoreSet): Promise<void> {
+  set({
+    streamUrl: 'offline',
+    activeQuality: null,
+    availableQualities: [],
+    adSource: null,
+    currentStream: stream,
+    currentMediaType: 'live',
+    isHomeActive: false,
+    playbackNotice: { key: makeKey(streamProvider(stream), stream.user_login), message },
+  });
+  await invoke('watch_stop', { preserveBackend: false }).catch((e) =>
+    Logger.warn('[Provider] Could not stop the watch session:', e),
+  );
+}
+
 /**
  * Watch a stream on a non-Twitch platform.
  *
@@ -998,75 +1127,19 @@ async function startProviderStream(
   // is still awaiting immediately invalidates everything below.
   const seq = ++providerStartSeq;
   const superseded = () => seq !== providerStartSeq;
+  const loadTicket = ++startLoadSeq;
+  showSwitchAtOnce(provider, channel, seed, set, get);
   set({ isLoading: true });
   trackActivity(`Started watching: ${key}`);
 
-  // Tear down whatever was playing before, Twitch or provider. The Twitch
-  // teardown lives in stopStream; here we only need its session bits gone so a
-  // Twitch EventSub subscription doesn't keep firing over a Kick stream.
+  // Tear down the previous provider stream's chat. Drops and channel points
+  // letting go of a Twitch channel before is Rust's (services/watch_start.rs).
   await teardownProviderSession();
-  // The session start below drops the Twitch EventSub subscription.
-  const previous = get().currentStream;
-  if (previous && streamProvider(previous) === 'twitch') {
-    invoke('stop_drops_monitoring').catch(() => {});
-  }
 
-  try {
-    const requestedQuality = get().settings.quality;
-    const result = preResolved
-      ?? await invoke<StreamStartResult>('start_stream', {
-        url: buildProviderUrl(provider, channel),
-        quality: requestedQuality,
-      });
-    if (!preResolved) logQualityFallback(requestedQuality, result.quality);
-
-    // Seed from the row the user clicked, then enrich from the platform. The
-    // metadata call is best-effort: a resolved stream must never fail to play
-    // because a secondary lookup hiccuped.
-    let info: TwitchStream = seed
-      ? { ...seed, provider, user_login: channel }
-      : {
-          id: '',
-          user_id: '',
-          user_name: channel,
-          user_login: channel,
-          title: '',
-          viewer_count: 0,
-          game_name: '',
-          thumbnail_url: '',
-          started_at: new Date().toISOString(),
-          provider,
-        };
-    try {
-      const meta = await invoke<TwitchStream>('provider_channel_meta', { provider, channel });
-      info = { ...info, ...meta, provider, user_login: channel };
-    } catch (e) {
-      Logger.warn(`[${provider}] Could not load channel metadata:`, e);
-    }
-
-    // A newer start won while we were resolving. Its `start_stream` has already
-    // replaced the single relay, so there is nothing of ours left to stop — but
-    // publishing this result would point the player at the losing stream.
-    if (superseded()) {
-      Logger.debug(`[${provider}] start for ${channel} superseded; discarding result`);
-      return;
-    }
-
-    set({
-      streamUrl: result.url,
-      activeQuality: result.quality,
-      availableQualities: result.available ?? [],
-      playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls',
-      // No ad-source badge: entitlement routing is a Twitch concept.
-      adSource: null,
-      currentStream: info,
-      currentMediaType: 'live',
-      originalMediaUrl: null,
-      isHomeActive: false,
-    });
-
-    // Chat through the shared provider path. The main window is now a real
-    // consumer of the `provider:channel` slice, exactly like a MultiChat pane.
+  // Chat through the shared provider path. The main window is a real consumer
+  // of the `provider:channel` slice, exactly like a MultiChat pane. Shared by
+  // a start that plays and (on the phone) one that keeps only chat.
+  const acquireChat = async (info: TwitchStream): Promise<void> => {
     try {
       const { acquireChannel, releaseChannel } = await import('./chatConnectionStore');
       await acquireChannel(channel, info.user_id || null, provider);
@@ -1091,14 +1164,77 @@ async function startProviderStream(
       }
       Logger.warn(`[${provider}] Could not connect chat for ${channel}:`, e);
     }
+  };
+
+  // Phone: the start failed, but chat does not depend on playback. The band
+  // says which of the two happened and the room keeps running. A channel the
+  // platform already called offline (a search hit) is offline, not a failure.
+  // Only while this start still owns the screen: a newer start on either path
+  // has already put its own channel up.
+  const keepChatOnFailure = async (signInOffered: boolean): Promise<boolean> => {
+    if (!IS_MOBILE || superseded() || !isSameChannel(get().currentStream, provider, channel)) return false;
+    // The same channel still playing (a repeat tap whose start failed) keeps
+    // playing; only a start that dropped the old picture owes the band line.
+    const url = get().streamUrl;
+    if (url && url !== 'offline') return false;
+    const shown = get().currentStream as TwitchStream;
+    const name = shown.user_name || shown.user_login || channel;
+    const offline = seed?.is_live === false;
+    if (!offline && !signInOffered) get().addToast('Playback unavailable - showing chat only', 'error');
+    await keepProviderChat(
+      shown,
+      offline ? `${name} is offline. Chat keeps running.` : 'Playback unavailable. Chat keeps running.',
+      set,
+    );
+    if (superseded()) return true;
+    await acquireChat(shown);
+    return true;
+  };
+
+  try {
+    const requestedQuality = get().settings.quality;
+    // The watch session's events must be heard before Rust starts it.
+    ensureWatchSessionListeners(set, get);
+    // One Rust call resolves the relay on the platform's watch URL, completes
+    // the row from the platform's channel facts (best effort, never a made-up
+    // start time), lets drops and points go of any Twitch channel and starts
+    // the watch session's live check. A promoted tile's relay already serves
+    // the channel, so only the rest runs for it.
+    const started = await invoke<WatchStartResult>('watch_start', {
+      login: channel,
+      provider,
+      seed: seed ?? null,
+      quality: requestedQuality,
+      relayReady: !!preResolved,
+    });
+    // A newer start won while we were resolving. Rust touched nothing, and
+    // publishing this result would point the player at the losing stream.
+    if (started.superseded || superseded() || !started.row) {
+      Logger.debug(`[${provider}] start for ${channel} superseded; discarding result`);
+      return;
+    }
+    const result = preResolved ?? started.stream;
+    if (!result) throw new Error('No stream to play');
+    if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+    const info: TwitchStream = { ...started.row, provider, user_login: started.row.user_login || channel };
+
+    set({
+      streamUrl: result.url,
+      activeQuality: result.quality,
+      availableQualities: result.available ?? [],
+      playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls',
+      // No ad-source badge: entitlement routing is a Twitch concept.
+      adSource: null,
+      currentStream: info,
+      currentMediaType: 'live',
+      originalMediaUrl: null,
+      isHomeActive: false,
+    });
+
+    await acquireChat(info);
 
     // Presence, and the live check standing in for Twitch's `stream.offline`,
-    // are the watch session's. Guarded: a newer start already owns the session.
-    if (superseded()) return;
-    ensureWatchSessionListeners(set, get);
-    await invoke('watch_session_start', {
-      target: watchTargetOf(info, provider, channel, false),
-    }).catch((e) => Logger.warn(`[${provider}] Could not start the watch session:`, e));
+    // are the watch session's, which `watch_start` already started.
   } catch (e) {
     if (superseded()) return;
     // A stream the platform serves only to a signed-in account (an 18+ TikTok
@@ -1122,15 +1258,18 @@ async function startProviderStream(
           })();
         },
       });
+      // The phone keeps the room up under the offer, rather than closing on it.
+      await keepChatOnFailure(true);
       return;
     }
     const message = e instanceof Error ? e.message : String(e);
     Logger.error(`Failed to start ${provider} stream:`, message);
+    if (await keepChatOnFailure(false)) return;
     get().addToast(`Failed to start stream: ${message}`, 'error');
   } finally {
     // Only the winning start owns the spinner. A superseded call clearing it
     // here would blank the loading state while the real start is still running.
-    if (!superseded()) set({ isLoading: false });
+    if (!superseded() && (!IS_MOBILE || loadTicket === startLoadSeq)) set({ isLoading: false });
   }
 }
 
@@ -1291,11 +1430,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingMore: false,
   unifiedDiscover: [],
   sidebarDiscover: null,
-  following: { favorites: [], live: [], offline: [] },
+  following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [] },
   otherCategories: [],
   favoriteCategories: [],
   streamUrl: null,
   isRestartingStream: false,
+  playbackNotice: null,
   activeQuality: null,
   availableQualities: [],
   adSource: null,
@@ -1551,7 +1691,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ sidebarDiscover: { scope: update.scope, streams: update.streams } });
         break;
       case 'following':
-        set({ following: { favorites: update.favorites, live: update.live, offline: update.offline } });
+        set({
+          following: {
+            favorites: update.favorites,
+            live: update.live,
+            offline: update.offline,
+            followed_live: update.followed_live ?? [],
+            platforms: update.platforms ?? [],
+          },
+        });
         break;
       case 'other_categories':
         set({ otherCategories: update.categories });
@@ -1785,15 +1933,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // it needs the user's emote scale. Desktop keeps its DPR ladder and ignores
     // this. Must run before chat renders, or the first frame picks the default.
     setInlineEmoteScale(settings.chat_design?.emote_scale ?? 1);
-
-    // Sync the low-latency engine switch to the backend runtime kill switch. On by
-    // default (the parts origin, level with twitch.tv). Must run before a stream
-    // resolves so the origin probe honors it at the next start.
-    invoke('set_experimental_low_latency', {
-      enabled: settings.video_player?.experimental_low_latency ?? true,
-    }).catch((e) => {
-      Logger.warn('[Playback] Failed to sync experimental low latency:', e);
-    });
 
     // Connect to Discord if enabled. Fire-and-forget: boot waits on
     // loadSettings, and a Discord whose pipe never answers must not hold the
@@ -2233,14 +2372,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       // relay teardown below can't race a still-live provider session.
       await teardownProviderSession();
 
-      await invoke('stop_stream');
-
       // preserveBackend: handing the channel off to MultiNook, which keeps
       // watching it. Leave the chat bridge, EventSub, drops monitoring and
       // active-channel registration running so MultiNook inherits them intact.
       // Tearing the chat bridge down here would race MultiNook's re-acquire of
       // the same channel and leave chat stuck "connecting" (the IRC connection
       // would already be gone — hence the "IRC connection not established" PART).
+      // The relay, then the watch session (its polls always, its EventSub
+      // subscription and presence unless MultiNook is taking the channel
+      // over), then drops and channel points unless MultiNook keeps them: one
+      // Rust call (services/watch_start.rs).
+      await invoke('watch_stop', { preserveBackend }).catch((e) =>
+        Logger.warn('Could not stop watching:', e),
+      );
+
       // Handing a rewound session to MultiNook: the rewind cleared the watch
       // heartbeat target (a recording is not the live broadcast) and the grid
       // inherits drops monitoring as-is, so re-arm it for the live channel.
@@ -2251,28 +2396,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Ends the watch session: its polls always, its EventSub subscription and
-      // presence unless MultiNook is taking the channel over.
-      await invoke('watch_session_stop', { preserveBackend }).catch((e) =>
-        Logger.warn('Could not stop the watch session:', e),
-      );
-
       if (!preserveBackend) {
         await invoke('stop_chat');
-
-        // Stop drops monitoring
-        try {
-          await invoke('stop_drops_monitoring');
-          Logger.debug('Stopped drops monitoring');
-        } catch (e) {
-          Logger.warn('Could not stop drops monitoring:', e);
-        }
-
-        const currentStream = get().currentStream;
-        if (currentStream?.user_id) {
-           invoke('unregister_active_channel', { channelId: currentStream.user_id }).catch(() => {});
-        }
-
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
@@ -2668,6 +2793,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     channel = parsed.channel;
 
+    // Phone: the new channel's header now, the old video gone now.
+    const loadTicket = ++startLoadSeq;
+    showSwitchAtOnce('twitch', channel, providedStreamInfo, set, get);
+
     // Leaving a provider stream for a Twitch one: drop its chat + offline poll
     // before the Twitch session sets up its own.
     await teardownProviderSession();
@@ -2710,72 +2839,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       // An audio-only swap still resolving would otherwise land AFTER this
       // start and re-point the relay at the channel we just left.
       await settleTransientSwap();
-      const result = preResolved
-        ?? await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
+      // The watch session's events must be heard before Rust starts it.
+      ensureWatchSessionListeners(set, get);
+      // One Rust call resolves the relay, completes the row (Following's own
+      // row, else this seed with its gaps filled by one lookup, never a
+      // made-up start time), aims drops and channel points at the channel and
+      // starts the watch session (services/watch_start.rs). A promoted tile's
+      // relay already serves the channel, so only the rest runs for it.
+      const seed = providedStreamInfo;
+      const started = await invoke<WatchStartResult>('watch_start', {
+        login: channel,
+        seed: seed ?? null,
+        quality: requestedQuality,
+        relayReady: !!preResolved,
+      });
+      // A newer start (or a stop) won while this one resolved: Rust touched
+      // nothing, and neither does the store.
+      if (started.superseded || superseded() || !started.row) return;
+      const result = preResolved ?? started.stream;
+      if (!result) throw new Error('No stream to play');
       if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+      // The row is Rust's; only the unified lists' provider marks ride along.
+      const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
 
-      // Use the provided stream info, or find it from followed streams, or fetch it
-      let info: TwitchStream;
-      
-      // First try to find it in followed streams as it has the most complete, live data
-      const followedStreamInfo = get().followedStreams.find(s => s.user_login.toLowerCase() === channel.toLowerCase());
-      
-      if (followedStreamInfo) {
-        info = followedStreamInfo;
-      } else {
-        // Anything that is not a full row from a list: a raid seed (ids and
-        // the raiding party's size), a notification tap or a deep link (a bare
-        // login), a search hit (no viewer count), a favourite. One Rust lookup
-        // returns the row the way Following would have handed it over, so the
-        // overlay, the lock-screen card and the chat tab show the same avatar,
-        // partner mark, title, category, viewers and start time however the
-        // stream was opened. Each field is taken from the seed first and the
-        // lookup second, so a complete seed is never overwritten and a failed
-        // lookup leaves exactly what the caller knew.
-        const seed = providedStreamInfo;
-        const seededGaps =
-          !seed ||
-          !seed.user_id ||
-          !seed.title?.trim() ||
-          !seed.game_name?.trim() ||
-          !seed.profile_image_url?.trim() ||
-          !seed.started_at?.trim();
-        const resolved = seededGaps
-          ? await invoke<TwitchStream>('resolve_stream_for_login', { login: channel }).catch((e) => {
-              Logger.warn(`Could not resolve stream row for ${channel}:`, e);
-              return undefined;
-            })
-          : undefined;
-        const keep = (mine?: string, theirs?: string) => (mine?.trim() ? mine : (theirs || ''));
-        info = {
-          id: seed?.id || resolved?.id || '',
-          user_id: seed?.user_id || resolved?.user_id || '',
-          user_name: seed?.user_name || resolved?.user_name || channel,
-          user_login: channel.toLowerCase(),
-          title: keep(seed?.title, resolved?.title) || `Watching ${channel}`,
-          // A seed's count is the raiding party or a search placeholder; the
-          // live row's is the channel's own audience.
-          viewer_count: resolved?.viewer_count ?? seed?.viewer_count ?? 0,
-          game_id: seed?.game_id || resolved?.game_id,
-          game_name: keep(seed?.game_name, resolved?.game_name),
-          thumbnail_url: keep(seed?.thumbnail_url, resolved?.thumbnail_url),
-          // Never fabricated as "now": a made-up start makes uptime count from
-          // zero on a stream that has been live for hours. Empty renders as
-          // no uptime, which is the honest reading.
-          started_at: resolved?.started_at || seed?.started_at || '',
-          profile_image_url: keep(seed?.profile_image_url, resolved?.profile_image_url),
-          broadcaster_type: seed?.broadcaster_type ?? resolved?.broadcaster_type,
-          is_live: resolved?.is_live ?? seed?.is_live,
-          tags: seed?.tags ?? resolved?.tags,
-          language: seed?.language ?? resolved?.language,
-          provider: seed?.provider,
-          watch_url: seed?.watch_url,
-        };
-      }
-
-      // Same guard on the success path: a slow start that finally resolves
-      // must not replace the stream the user has since switched to.
-      if (superseded()) return;
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
       // Can this broadcast be rewound? One cached Rust lookup per live start;
@@ -2786,41 +2872,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null, liveLeftOffSecs: r.left_off_secs ?? null });
         })
         .catch(() => {});
-
-      // Start drops and channel points monitoring
-      try {
-        const channelId = info.user_id || '';
-        const channelName = info.user_login || channel;
-
-        if (channelId && channelName) {
-          await invoke('start_drops_monitoring', {
-            channelId,
-            channelName
-          });
-          Logger.debug('Started drops monitoring for', channelName);
-
-          invoke('register_active_channel', { channelId }).catch(() => {});
-        } else {
-          // No broadcaster id, so the watch heartbeat cannot be retargeted.
-          // Silently skipping leaves it aimed at the PREVIOUS channel, which
-          // then keeps collecting watch minutes for a stream nobody is on.
-          // Stopping is the honest outcome: this session earns nothing, which
-          // it was going to regardless, but no other channel is credited for
-          // it either. Reachable when the get_channel_info fallback throws.
-          Logger.warn(`[Stream] No broadcaster id for ${channelName}; drops and points monitoring off for this session`);
-          await invoke('stop_drops_monitoring').catch(() => {});
-        }
-      } catch (e) {
-        Logger.warn('Could not start drops monitoring:', e);
-        // Non-critical, stream can still work
-      }
-
-      // EventSub for this channel, the hype-train poll, Discord presence, raid
-      // redirects and the offline decision are the watch session's (Rust).
-      ensureWatchSessionListeners(set, get);
-      await invoke('watch_session_start', {
-        target: watchTargetOf(info, 'twitch', channel, get().isAuthenticated),
-      }).catch((e) => Logger.warn('[WatchSession] Could not start:', e));
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : String(e);
       Logger.error('Failed to start stream:', errorMessage);
@@ -2848,7 +2899,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         Logger.error('[Stream] Chat-only fallback failed:', fallbackErr);
       }
     } finally {
-      set({ isLoading: false });
+      // Phone: only the latest start lets go of the loading flag (see
+      // startLoadSeq); desktop keeps its unconditional clear.
+      if (!IS_MOBILE || loadTicket === startLoadSeq) set({ isLoading: false });
     }
   },
   startOfflineChat: async (channel, providedStreamInfo?, opts?) => {
@@ -2864,41 +2917,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       .then((m) => m.stopVodReplay())
       .catch(() => {});
     try {
-      // Everything the room shows, in one Rust answer (cached, public, works
-      // signed out). A failed lookup still opens the room with what we have.
-      let room: OfflineRoom | null = null;
-      try {
-        room = await invoke<OfflineRoom>('open_offline_room', { login });
-      } catch (e) {
-        Logger.warn(`[Offline room] Could not load ${login}:`, e);
-      }
-      if (superseded()) return;
+      // One Rust call (services/watch_start.rs `open_room`): the room's facts
+      // (cached, public, works signed out; a failed lookup still opens the room
+      // with what we have), whatever played stops, and the watch session waits
+      // for the channel to go live (not for chatOnly: the channel is live and
+      // its playback is what failed). A stale card for a live channel answers
+      // with the live row instead.
+      ensureWatchSessionListeners(set, get);
+      const opened = await invoke<RoomOpenResult>('watch_open_room', {
+        login,
+        seed: providedStreamInfo ?? null,
+        chatOnly: !!opts?.chatOnly,
+      });
+      if (opened.superseded || superseded()) return;
+      const room = opened.room ?? null;
 
-      // The card that opened the room was stale and the channel is live: watch
-      // it. Not when its playback just failed (chatOnly), or this would loop.
-      if (room?.live && !opts?.chatOnly) {
-        await get().startStream(login, { ...room.live, profile_image_url: room.live.profile_image_url || room.avatar_url || undefined });
+      if (opened.live) {
+        await get().startStream(login, opened.live);
         return;
       }
 
-      // Whatever the main view was playing (an ended stream, another VOD) stops.
-      if (get().streamUrl && get().streamUrl !== 'offline') {
-        await invoke('stop_stream').catch((e) => Logger.warn('[Offline room] Error stopping playback:', e));
-      }
-
-      const info: TwitchStream = {
-        id: '',
-        user_id: room?.user_id || providedStreamInfo?.user_id || '',
-        user_name: room?.display_name || providedStreamInfo?.user_name || login,
-        user_login: login,
-        title: room?.last_title || providedStreamInfo?.title || '',
-        viewer_count: 0,
-        game_name: room?.last_category || providedStreamInfo?.game_name || '',
-        thumbnail_url: '',
-        started_at: '',
-        profile_image_url: room?.avatar_url || providedStreamInfo?.profile_image_url || '',
-        is_live: false,
-      };
+      const info: TwitchStream = { ...(opened.row as TwitchStream), user_login: login, is_live: false };
       set({
         streamUrl: 'offline',
         activeQuality: null,
@@ -2930,16 +2969,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
       if (superseded()) return;
-
-      // The session waits for the channel to go live (Rust: EventSub when
-      // signed in, the batched viewer poll always). Not for chatOnly: the
-      // channel is live already and its playback is what failed.
-      if (!opts?.chatOnly) {
-        ensureWatchSessionListeners(set, get);
-        await invoke('watch_session_start', {
-          target: { ...watchTargetOf(info, 'twitch', login, get().isAuthenticated), offline: true },
-        }).catch((e) => Logger.warn('[Offline room] Could not start the watch session:', e));
-      }
 
       if (opts?.playVod && !superseded()) {
         await get().playOfflineRoomVod();

@@ -35,36 +35,16 @@ import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
+import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
 
-// The earning gate.
-//
-// The Rust watch heartbeat credits a minute-watched (drops progress + channel
-// points) only while the player says it is playing, and it samples that flag
-// INSTANTANEOUSLY once every 60 seconds. A two-second window where the flag
-// reads false can therefore cost a whole minute, which is why this mirrors the
-// desktop VideoPlayer's handlers rather than reporting every state the media
-// element passes through.
-//
-// Desktop rules, ported from VideoPlayer.tsx:
-//   - `playing` reports true at once and cancels any pending paused report.
-//   - `pause` does NOT report false. It arms a grace timer, and only a pause
-//     that outlives the timer reports false.
-//   - There is no `waiting` handler. A buffer underrun is not a pause. Phones
-//     underrun constantly, and reporting false on each one is the whole reason
-//     earning was spotty here while the desktop was flawless.
-//   - Teardown cancels the pending report and reports nothing. Desktop does
-//     exactly this in an unmount effect, for the reason its comment gives: a
-//     report that lands after the player is gone gates the NEXT stream off.
-//
-// Module scope rather than refs because there is exactly one player: one
-// useMobileHlsEngine call site, in one MobilePlayer, in one WatchScreen. If a
-// second player surface is ever added, this state has to move into the hook.
-const PAUSE_REPORT_GRACE_MS = 6000;
-
-// A wedged link must not block every later report for the life of the process,
-// which would recreate the exact "video plays, nothing earns" failure this
-// whole gate exists to prevent.
-const REPORT_TIMEOUT_MS = 2000;
+// The earning gate (drops progress, channel points, watch time) is Rust's
+// (services/earning_gate.rs): the player only says what its video does. A
+// rebuffer is not a pause, so `waiting` is never reported.
+function reportState(state: 'playing' | 'paused' | 'paused_now' | 'hidden' | 'teardown'): void {
+  invoke('report_player_state', { state }).catch((err) => {
+    Logger.warn('[MobilePlayer] report_player_state failed:', err);
+  });
+}
 
 // How long a pause must last before we stop pulling segments.
 //
@@ -81,52 +61,29 @@ const REPORT_TIMEOUT_MS = 2000;
 // real pause and worth stopping for.
 const STOP_LOAD_AFTER_PAUSE_MS = 2000;
 
-let pausedReportTimer: number | null = null;
-
-// `report_player_playing` is an async command, so Tauri spawns each call as its
-// own task and two calls have no ordering relationship. Chaining makes the last
-// call made the last call applied. Insurance, not a fix for a known trigger.
-let reportChain: Promise<unknown> = Promise.resolve();
-
-function sendPlaying(playing: boolean): void {
-  Logger.debug(`[MobilePlayer] earning gate -> ${playing ? 'playing' : 'paused'}`);
-  reportChain = reportChain.then(() =>
-    Promise.race([
-      invoke('report_player_playing', { playing }).catch((err) => {
-        Logger.warn('[MobilePlayer] report_player_playing failed:', err);
-      }),
-      new Promise((resolve) => window.setTimeout(resolve, REPORT_TIMEOUT_MS)),
-    ]),
-  );
-}
-
-function cancelPausedReport(): void {
-  if (pausedReportTimer !== null) {
-    window.clearTimeout(pausedReportTimer);
-    pausedReportTimer = null;
-  }
-}
-
-function reportPlaying(): void {
-  cancelPausedReport();
-  sendPlaying(true);
-}
-
-function reportPausedSoon(reason: string): void {
-  cancelPausedReport();
-  pausedReportTimer = window.setTimeout(() => {
-    pausedReportTimer = null;
-    Logger.debug(`[MobilePlayer] pause outlived the grace window (${reason})`);
-    sendPlaying(false);
-  }, PAUSE_REPORT_GRACE_MS);
-}
-
 export type MobilePlayerState = 'idle' | 'loading' | 'playing' | 'stalled' | 'error';
+
+/** Why playback gave up, so the error line can say it in plain words. */
+export type MobilePlayerFailure = 'network' | 'media' | 'stall' | 'timeout' | 'unsupported' | 'other';
+
+// A failure is retried a set number of times and then shown, never looped: the
+// low-latency route falls back to whole segments once, then the player is
+// rebuilt twice (after 1 s, then 2 s) before the error and its Retry appear.
+// hls.js's own recovery used to run forever under an endless loading mark.
+const MAX_RELOADS = 2;
+// A rebuffer that makes no progress for this long is a dead stream, not a slow
+// one. Without it a relay that keeps answering with nothing new held the
+// loading mark up indefinitely, since hls.js never calls that fatal.
+const STALL_GIVE_UP_MS = 20_000;
+// No first frame this long after the player was built: the start failed
+// quietly (every manifest and segment timeout is already shorter than this).
+const START_GIVE_UP_MS = 30_000;
 
 export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const streamUrl = useAppStore((s) => s.streamUrl);
   const playerSettings = useAppStore((s) => s.settings.video_player);
   const [state, setState] = useState<MobilePlayerState>('idle');
+  const [reason, setReason] = useState<MobilePlayerFailure | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const seqRef = useRef(0);
 
@@ -146,22 +103,50 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     let detachVideo: (() => void) | null = null;
     let gateTimer: number | null = null;
     let stopLoadTimer: number | null = null;
+    let cushionTimer: number | null = null;
+    let startGiveUpTimer: number | null = null;
+    let stallGiveUpTimer: number | null = null;
+    let reloadTimer: number | null = null;
     let loadStopped = false;
+    // The route the current player was built on, whether it already fell back
+    // from low latency, and how many rebuilds this URL has had since it last
+    // played. All per URL: a new URL starts the count again.
+    let lowLatency = false;
+    let fellBack = false;
+    let reloads = 0;
+    // Still asking the core which route this stream is on; nothing built yet.
+    let probing = true;
+    // A restart or quality switch is cycling the relay (isRestartingStream).
+    let frozen = false;
+    const stalls = createStallReporter();
 
-    const destroy = () => {
-      if (gateTimer !== null) {
-        window.clearTimeout(gateTimer);
-        gateTimer = null;
+    const clearTimer = (t: number | null) => {
+      if (t !== null) window.clearTimeout(t);
+    };
+
+    // Tears down the hls.js instance and everything bound to it, leaving the
+    // effect alive so a rebuild can follow on the same URL.
+    const teardownPlayer = () => {
+      clearTimer(gateTimer);
+      gateTimer = null;
+      clearTimer(stopLoadTimer);
+      stopLoadTimer = null;
+      clearTimer(startGiveUpTimer);
+      startGiveUpTimer = null;
+      clearTimer(stallGiveUpTimer);
+      stallGiveUpTimer = null;
+      if (cushionTimer !== null) {
+        window.clearInterval(cushionTimer);
+        cushionTimer = null;
       }
-      if (stopLoadTimer !== null) {
-        window.clearTimeout(stopLoadTimer);
-        stopLoadTimer = null;
-      }
+      stalls.cancel();
       loadStopped = false;
       if (stopGovernor) {
         stopGovernor();
         stopGovernor = null;
       }
+      detachVideo?.();
+      detachVideo = null;
       if (hlsRef.current) {
         try {
           hlsRef.current.destroy();
@@ -172,8 +157,15 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       }
     };
 
+    const destroy = () => {
+      clearTimer(reloadTimer);
+      reloadTimer = null;
+      teardownPlayer();
+    };
+
     if (!video || !streamUrl || streamUrl === 'offline') {
       destroy();
+      setReason(null);
       setState(streamUrl === 'offline' ? 'error' : 'idle');
       return;
     }
@@ -181,41 +173,61 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     if (!Hls.isSupported()) {
       // Android System WebView always has MSE; this is a diagnostics guard.
       Logger.error('[MobilePlayer] hls.js unsupported in this webview');
+      setReason('unsupported');
       setState('error');
       return;
     }
 
+    setReason(null);
     setState('loading');
 
-    void (async () => {
-      // Whether the relay is serving the parts-based low-latency origin for
-      // THIS stream. Deliberately not read from the setting: turning the
-      // setting on for a channel that cannot do it would switch hls.js into
-      // low-latency mode against an ordinary playlist, which starves the
-      // buffer, and would also hand playhead control to a controller the
-      // governor is meant to own.
-      let isLowLatencyChannel = false;
-      try {
-        isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
-      } catch {
-        /* command unavailable or the stream went away */
+    // Something the player cannot get past: fall back, rebuild, or give up
+    // with the reason. Never while a restart is cycling the relay: its errors
+    // are expected, and the restart brings a fresh URL anyway.
+    const fail = (why: MobilePlayerFailure) => {
+      if (cancelled || seq !== seqRef.current || frozen) return;
+      // Same relay, whole segments: some part layouts are refused outright.
+      if (lowLatency && !fellBack) {
+        fellBack = true;
+        Logger.warn(`[MobilePlayer] low-latency playback failed (${why}); falling back to whole segments`);
+        teardownPlayer();
+        setState('loading');
+        build(false);
+        return;
       }
-      // A newer stream (or teardown) owns the element now; building here would
-      // leave a zombie player attached to it.
-      if (cancelled || seq !== seqRef.current) return;
+      if (reloads < MAX_RELOADS) {
+        reloads += 1;
+        const delay = reloads * 1000;
+        Logger.warn(`[MobilePlayer] playback failed (${why}); reload ${reloads} of ${MAX_RELOADS} in ${delay} ms`);
+        teardownPlayer();
+        setState('loading');
+        reloadTimer = window.setTimeout(() => {
+          reloadTimer = null;
+          if (cancelled || seq !== seqRef.current || frozen) return;
+          build(lowLatency);
+        }, delay);
+        return;
+      }
+      Logger.warn(`[MobilePlayer] playback failed (${why}) after ${MAX_RELOADS} reloads; showing the error`);
+      teardownPlayer();
+      setReason(why);
+      setState('error');
+    };
 
+    const build = (ll: boolean) => {
+      lowLatency = ll;
       const current = settingsRef.current;
       // The viewer's chosen distance behind live. On the parts path the edge
       // trails the broadcaster by a measured delay, so the edge target sits
       // that much lower to land on what they actually asked for.
       // The phone has no prefetch probe yet, so a whole-segment ride is
       // treated as a normal-latency broadcast (the safe side).
-      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, isLowLatencyChannel ? 'll' : 'plain');
-      const llTargetRaw = isLowLatencyChannel ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
+      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, ll ? 'll' : 'plain');
+      const llTargetRaw = ll ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
 
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: isLowLatencyChannel,
+        lowLatencyMode: ll,
         startFragPrefetch: false,
         backBufferLength: 30,
         maxBufferLength: current?.max_buffer_length || 30,
@@ -226,8 +238,11 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         nudgeOffset: 0.2,
         nudgeMaxRetry: 3,
         maxFragLookUpTolerance: 0.5,
-        liveSyncDuration: llTargetRaw,
+        liveSyncDuration: llTargetRaw + linkCushion(),
         liveMaxLatencyDuration: 60,
+        // The core owns the stall reaction (link_adapt's cushion), so hls.js's
+        // own one-second-per-stall ramp stays off, as on the desktop.
+        liveSyncOnStallIncrease: 0,
         // hls.js's own catch-up stays off on both paths: its rate steps are
         // quantized coarsely enough to be audible. The governor below does it
         // smoothly instead.
@@ -250,13 +265,33 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         abrBandWidthUpFactor: 0.7,
       });
       hlsRef.current = hls;
+      // Every handler below belongs to this build only; a rebuild on the same
+      // URL replaces the instance, and the old one's late events must not
+      // reach the new one.
+      const live = () => seq === seqRef.current && hlsRef.current === hls;
+
+      // The core judges the link by the segments this player downloads itself.
+      // Parts come from the relay over loopback, so they say nothing about it.
+      if (!ll) {
+        hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+          if (!live() || data.part) return;
+          const { loaded, loading } = data.frag.stats;
+          reportSegment(loaded, loading.end - loading.start);
+        });
+      }
+      // Where the cushion lives in hls.js (its start and resync position, and
+      // the whole-segment governor's target), kept in step with the core.
+      cushionTimer = window.setInterval(() => {
+        if (!live()) return;
+        hls.config.liveSyncDuration = llTargetRaw + linkCushion();
+      }, 2000);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (seq !== seqRef.current) return;
+        if (!live()) return;
         // Only the low-latency path starts here. hls.js positions the playhead
         // itself on that path, so there is nothing to wait for. The ordinary
         // path starts from the buffer gate below.
-        if (!isLowLatencyChannel) return;
+        if (!ll) return;
         video.play().catch((err) => {
           Logger.warn('[MobilePlayer] autoplay rejected:', err);
         });
@@ -268,11 +303,11 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // roughly 3.96s, which just misses 4 and forces a wait for a third
       // segment that has not been produced yet.
       let playStarted = false;
-      const GATE_THRESHOLD = isLowLatencyChannel ? 1 : 3;
+      const GATE_THRESHOLD = ll ? 1 : 3;
 
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
-        if (seq !== seqRef.current) return;
-        if (playStarted || isLowLatencyChannel) return;
+        if (!live()) return;
+        if (playStarted || ll) return;
 
         const buffered = video.buffered;
         if (buffered.length === 0) return;
@@ -297,36 +332,49 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // If the gate never clears (thin delivery on a phone connection), start
       // anyway rather than sit on a black frame. Low latency does not need it;
       // it already started above.
-      if (!isLowLatencyChannel) {
+      if (!ll) {
         gateTimer = window.setTimeout(() => {
-          if (playStarted || seq !== seqRef.current) return;
+          gateTimer = null;
+          if (playStarted || !live()) return;
           playStarted = true;
           Logger.warn('[MobilePlayer] buffer gate timed out, starting anyway');
           video.play().catch(() => {});
         }, 5000);
       }
 
+      // The first frame has to come eventually; a start that never errors and
+      // never plays is still a failed start.
+      // A start the app was sent to the background during is judged once it
+      // is back on screen, not while a hidden WebView holds playback.
+      let firstFrame = false;
+      const armStartGiveUp = () => {
+        startGiveUpTimer = window.setTimeout(() => {
+          startGiveUpTimer = null;
+          if (!live() || firstFrame) return;
+          if (document.visibilityState === 'hidden') {
+            armStartGiveUp();
+            return;
+          }
+          fail('timeout');
+        }, START_GIVE_UP_MS);
+      };
+      armStartGiveUp();
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (seq !== seqRef.current) return;
+        if (!live()) return;
         if (!data.fatal) return;
         if (recoverFromSequenceMismatch(hls, data)) {
           Logger.warn('[MobilePlayer] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
           return;
         }
         Logger.warn('[MobilePlayer] fatal hls error:', data.type, data.details);
-        switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
-            setState('stalled');
-            hls.startLoad();
-            break;
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            setState('stalled');
-            hls.recoverMediaError();
-            break;
-          default:
-            setState('error');
-            destroy();
-        }
+        fail(
+          data.type === Hls.ErrorTypes.NETWORK_ERROR
+            ? 'network'
+            : data.type === Hls.ErrorTypes.MEDIA_ERROR
+              ? 'media'
+              : 'other',
+        );
       });
 
       // Segment loading follows the play state.
@@ -339,7 +387,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           window.clearTimeout(stopLoadTimer);
           stopLoadTimer = null;
         }
-        if (!loadStopped) return;
+        if (!loadStopped || frozen) return;
         loadStopped = false;
         try {
           // No start position: resume buffering around the current playhead, so
@@ -352,34 +400,57 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         }
       };
 
+      const endStallWatch = () => {
+        clearTimer(stallGiveUpTimer);
+        stallGiveUpTimer = null;
+      };
+
       const onPlayIntent = () => {
-        if (seq !== seqRef.current) return;
+        if (!live()) return;
         resumeLoad('play');
       };
 
       const onPlaying = () => {
-        if (seq !== seqRef.current) return;
+        if (!live()) return;
         // Belt and braces: if anything resumed playback without a `play` event
         // reaching us, do not leave the loader stopped under a running element.
         resumeLoad('playing');
+        stalls.end();
+        endStallWatch();
+        if (!firstFrame) {
+          firstFrame = true;
+          clearTimer(startGiveUpTimer);
+          startGiveUpTimer = null;
+        }
+        // Playing again earns the next failure its full set of reloads.
+        reloads = 0;
         setState('playing');
-        reportPlaying();
+        reportState('playing');
       };
       const onWaiting = () => {
-        if (seq !== seqRef.current) return;
-        // Spinner only. The earning gate is deliberately untouched here; see
-        // the note above the gate helpers.
+        if (!live()) return;
+        // Spinner only. The earning gate is deliberately untouched here: a
+        // rebuffer is not a pause.
         Logger.debug('[MobilePlayer] buffer stall (earning gate unchanged)');
+        // A seek or the first load is not the link's doing.
+        if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
         setState('stalled');
+        // A rebuffer that never moves on is a dead stream. Judged by the
+        // playhead, not by a timer alone: a backgrounded WebView fires timers
+        // late, and a stall that recovered meanwhile must not count.
+        if (stallGiveUpTimer === null && firstFrame) {
+          const at = video.currentTime;
+          stallGiveUpTimer = window.setTimeout(() => {
+            stallGiveUpTimer = null;
+            if (!live() || video.paused || video.currentTime > at + 0.5) return;
+            fail('stall');
+          }, STALL_GIVE_UP_MS);
+        }
       };
       const onPauseOrEnd = () => {
-        if (seq !== seqRef.current) return;
-        // A pause that arrives while the page is already hidden cannot be
-        // deferred: Android pauses the WebView along with the activity, so the
-        // timer would never fire. In picture-in-picture the native layer
-        // resumes the WebView on purpose so playback continues, which means a
-        // pause there is a real pause and reporting at once is still right. No
-        // PiP signal is needed, and no race with it exists.
+        if (!live()) return;
+        stalls.cancel();
+        endStallWatch();
         // Stop pulling segments once the pause outlives the grace window. See
         // STOP_LOAD_AFTER_PAUSE_MS: without this a paused stream downloads at
         // full bitrate forever and discards the lot every ~55 seconds.
@@ -391,7 +462,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         if (stopLoadTimer === null && !loadStopped) {
           stopLoadTimer = window.setTimeout(() => {
             stopLoadTimer = null;
-            if (seq !== seqRef.current || !video.paused || loadStopped) return;
+            if (!live() || !video.paused || loadStopped) return;
             loadStopped = true;
             try {
               hls.stopLoad();
@@ -402,22 +473,16 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           }, STOP_LOAD_AFTER_PAUSE_MS);
         }
 
-        if (document.visibilityState === 'hidden') {
-          cancelPausedReport();
-          sendPlaying(false);
-          return;
-        }
-        reportPausedSoon('pause/ended');
+        // A pause that arrives while the page is already hidden is a real pause
+        // (backgrounding leaves the audio alone, and in picture-in-picture the
+        // native layer resumes the WebView on purpose), so it counts at once.
+        reportState(document.visibilityState === 'hidden' ? 'paused_now' : 'paused');
       };
       const onVisibilityChange = () => {
-        if (seq !== seqRef.current) return;
-        // The other ordering: pause landed first and armed the timer, then the
-        // app went to the background. Flush it while the DOM still runs.
-        if (document.visibilityState === 'hidden' && pausedReportTimer !== null) {
-          cancelPausedReport();
-          Logger.debug('[MobilePlayer] flushing pending paused report on hide');
-          sendPlaying(false);
-        }
+        if (!live()) return;
+        // The other ordering: pause landed first, then the app went to the
+        // background. Rust counts a pending pause at once on hide.
+        if (document.visibilityState === 'hidden') reportState('hidden');
       };
       video.addEventListener('play', onPlayIntent);
       video.addEventListener('playing', onPlaying);
@@ -444,13 +509,14 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // playhead toward a behind-live target and is tuned tightly enough that
       // it needs the buffer floor to stay safe; the ordinary one just mops up
       // drift against the forward buffer.
-      stopGovernor = isLowLatencyChannel
+      stopGovernor = ll
         ? startLatencyGovernor(hls, video, {
             label: 'mobile-ll',
             // Read live rather than captured, so moving the gap slider applies
             // without rebuilding the player.
             // Both in seconds behind the broadcaster as heard, like the desktop.
-            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll'),
+            // Plus the core's extra cushion after stalls on a poor link.
+            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll') + linkCushion(),
             getLatency: () =>
               typeof hls.latency === 'number' && hls.latency > 0 ? behindLiveFromEdge(hls.latency) : null,
             gain: 0.12,
@@ -466,21 +532,83 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             log: Logger.debug,
           })
         : startLatencyGovernor(hls, video, { label: 'mobile', log: Logger.debug });
+    };
+
+    // A restart or quality switch raises isRestartingStream while the core
+    // stops and restarts the relay. The player stops pulling from it and
+    // pauses for that stretch, as the desktop's does, instead of polling a
+    // relay that is going away. When the flag drops with a new URL this effect
+    // rebuilds anyway; when it drops on the same URL (the switch failed and
+    // the old relay is still what plays), loading and playback resume.
+    // A zustand listener runs inside set(), before React re-renders, so a
+    // write that changes the URL too is left to the rebuild.
+    const unsubscribeFreeze = useAppStore.subscribe((s, prev) => {
+      if (s.isRestartingStream === prev.isRestartingStream) return;
+      if (cancelled || seq !== seqRef.current || s.streamUrl !== streamUrl) return;
+      const hls = hlsRef.current;
+      if (s.isRestartingStream) {
+        frozen = true;
+        clearTimer(stopLoadTimer);
+        stopLoadTimer = null;
+        clearTimer(stallGiveUpTimer);
+        stallGiveUpTimer = null;
+        if (hls) {
+          loadStopped = true;
+          try {
+            hls.stopLoad();
+          } catch {
+            /* player already torn down */
+          }
+        }
+        video.pause();
+        Logger.debug('[MobilePlayer] relay restarting; loading stopped and paused');
+        return;
+      }
+      frozen = false;
+      if (hls) {
+        // The play intent resumes the loader (loadStopped is set above).
+        video.play().catch(() => {});
+      } else if (!probing && reloadTimer === null) {
+        // A failure or reload was waiting on the freeze; start over cleanly.
+        setReason(null);
+        setState('loading');
+        build(lowLatency);
+      }
+    });
+
+    void (async () => {
+      // Whether the relay is serving the parts-based low-latency origin for
+      // THIS stream. Deliberately not read from the setting: turning the
+      // setting on for a channel that cannot do it would switch hls.js into
+      // low-latency mode against an ordinary playlist, which starves the
+      // buffer, and would also hand playhead control to a controller the
+      // governor is meant to own.
+      let isLowLatencyChannel = false;
+      try {
+        isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
+      } catch {
+        /* command unavailable or the stream went away */
+      }
+      // Extra distance from the edge the core keeps after stalls on a poor
+      // link (Rust link_adapt); zero on a good one.
+      await refreshLinkCushion();
+      // A newer stream (or teardown) owns the element now; building here would
+      // leave a zombie player attached to it.
+      if (cancelled || seq !== seqRef.current) return;
+      probing = false;
+      build(isLowLatencyChannel);
     })();
 
     return () => {
       cancelled = true;
-      detachVideo?.();
-      // Cancel, do not report. This is a port of the desktop unmount effect in
-      // VideoPlayer.tsx, whose comment gives the reason: a paused report that
-      // lands after the player is gone wrongly gates the NEXT stream's earning
-      // off. It also removes the dead window that a restart, a quality switch
-      // and an ad pivot used to pay, since all three swap streamUrl while
+      unsubscribeFreeze();
+      // Cancel a pending pause, report nothing: a paused report that lands
+      // after the player is gone wrongly gates the NEXT stream's earning off,
+      // and a restart, a quality switch and an ad pivot swap streamUrl while
       // deliberately leaving drops monitoring armed on the same channel. Real
-      // teardown needs no help here: stopStream and exitStream both reach
-      // stop_drops_monitoring, whose clear_target drops the flag and the target
-      // together.
-      cancelPausedReport();
+      // teardown needs no help here: the stop clears the heartbeat with drops
+      // monitoring.
+      reportState('teardown');
       if (seq === seqRef.current) setActiveVideo(null);
       destroy();
     };
@@ -490,5 +618,5 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamUrl]);
 
-  return { state };
+  return { state, reason };
 }

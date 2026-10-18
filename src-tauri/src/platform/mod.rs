@@ -37,5 +37,9 @@ pub mod cookies;
 pub mod fs;
 pub mod process;
 pub mod responsiveness;
+/// iOS only: the cookies the Swift shell's sign-in sheet hands over. Built
+/// for tests everywhere so the desktop gate exercises it.
+#[cfg(any(target_os = "ios", test))]
+pub mod shell_cookies;
 pub mod webview_store;
 pub mod webview_url;

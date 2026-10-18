@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RewardAvailability } from '../types';
-import { formatCostShort, formatCountdown, rewardKind, rewardStatusText, rewardTakesText } from './rewardStatus';
+import { formatCountdown, rewardStatusText } from './rewardStatus';
 
 const blocked = (over: Partial<RewardAvailability>): RewardAvailability => ({
   redeemable: false,
@@ -46,41 +46,5 @@ describe('rewardStatusText', () => {
 
   it('falls back to the label when there is no detail', () => {
     expect(rewardStatusText(blocked({ detail: null }), 0, 'detail')).toBe('Paused');
-  });
-});
-
-describe('formatCostShort', () => {
-  it('keeps small costs whole and shortens thousands and millions', () => {
-    expect(formatCostShort(950)).toBe('950');
-    expect(formatCostShort(3_000)).toBe('3k');
-    expect(formatCostShort(2_500)).toBe('2.5k');
-    expect(formatCostShort(150_000)).toBe('150k');
-    expect(formatCostShort(20_000_000)).toBe('20M');
-    expect(formatCostShort(1_200_000)).toBe('1.2M');
-  });
-});
-
-describe('rewardKind', () => {
-  it('routes built-in rewards by type, never by title', () => {
-    expect(rewardKind({ reward_type: 'SEND_HIGHLIGHTED_MESSAGE', is_user_input_required: true })).toBe('highlight');
-    expect(rewardKind({ reward_type: 'SINGLE_MESSAGE_BYPASS_SUB_MODE', is_user_input_required: true })).toBe('sub_message');
-    expect(rewardKind({ reward_type: 'RANDOM_SUB_EMOTE_UNLOCK', is_user_input_required: false })).toBe('random_emote');
-    expect(rewardKind({ reward_type: 'CHOSEN_SUB_EMOTE_UNLOCK', is_user_input_required: false })).toBe('choose_emote');
-    expect(rewardKind({ reward_type: 'CHOSEN_MODIFIED_SUB_EMOTE_UNLOCK', is_user_input_required: false })).toBe('modify_emote');
-  });
-
-  it('treats custom rewards as input or standard', () => {
-    expect(rewardKind({ reward_type: null, is_user_input_required: true })).toBe('input');
-    expect(rewardKind({ reward_type: null, is_user_input_required: false })).toBe('standard');
-  });
-});
-
-describe('rewardTakesText', () => {
-  it('is true for the message rewards and custom input rewards only', () => {
-    expect(rewardTakesText('highlight')).toBe(true);
-    expect(rewardTakesText('sub_message')).toBe(true);
-    expect(rewardTakesText('input')).toBe(true);
-    expect(rewardTakesText('standard')).toBe(false);
-    expect(rewardTakesText('random_emote')).toBe(false);
   });
 });

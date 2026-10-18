@@ -20,15 +20,13 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { parseMessage } from '../../services/twitchChat';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import { Logger } from '../../utils/logger';
-import { MobileChatInput } from './MobileChatInput';
+import { MobileChatInput, type ChatGating } from './MobileChatInput';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
 import { ChatTabStrip } from './ChatTabStrip';
 import { AddChatSheet } from './AddChatSheet';
 import { useChatTabsStore } from './chatTabsStore';
 import { useChatWatchdog } from './useChatWatchdog';
 import { banUser, deleteMessage, isModeratorFrom, pinMessage, unbanUser } from './modActions';
-import { deriveChatGating } from './chatGating';
-import { useFollowStatus } from './useFollowStatus';
 import { ChatFanOut, type FanAction, type FanTarget } from './ChatFanOut';
 import { hapticCommit } from '../ui/haptics';
 import { usePhonePrefs } from '../phonePrefs';
@@ -155,23 +153,23 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   const isModerator = isTwitchRoom && isModeratorFrom(userBadges);
   /** Every Helix mod action keys off the channel's numeric id. */
   const broadcasterId = activeTab?.channelId ?? null;
-  // Only asked when follower mode is actually on, so an unrestricted room costs
-  // nothing. -1 is off; 0 and above are some flavour of followers-only.
-  const isFollowing = useFollowStatus(broadcasterId, (roomState?.followersOnly ?? -1) >= 0);
   // The room's chat modes in Rust's words (services/room_modes.rs), shown in
   // the composer while the setting is on.
   const showRoomModes = useAppStore((s) => s.settings.chat_input?.show_room_modes ?? true);
   const roomModesAsPrompt = useAppStore((s) => s.settings.chat_input?.room_modes_style !== 'chip');
   const roomModes =
     showRoomModes && roomState?.modes && roomState.modes.modes.length > 0 ? roomState.modes : null;
-  const gating = useMemo(() => {
-    const g = deriveChatGating(roomState, userBadges, isFollowing);
-    // The chat menu lists the modes in the same words as the composer.
-    const labels = roomState?.modes ? roomState.modes.modes.map((m) => m.label) : g.labels;
-    // Badge-based blocking reads Twitch IRC badges. A Kick room has none, so it
-    // would lock subscribers out of a subs-only room. Show the room state, never block.
-    return isTwitchRoom ? { ...g, labels } : { ...g, labels, blocked: null, reason: null };
-  }, [roomState, userBadges, isFollowing, isTwitchRoom]);
+  // Whether you can send here is Rust's call (your badges and your own follow
+  // of a followers-only room); the chat menu lists the modes in the same words.
+  const gating = useMemo<ChatGating>(() => {
+    const view = roomState?.modes;
+    return {
+      labels: view ? view.modes.map((m) => m.label) : [],
+      blocked: view?.blocked ?? null,
+      reason: view?.reason ?? null,
+      view: view && view.modes.length > 0 ? view : null,
+    };
+  }, [roomState]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
   // channel expects their tools, and making them hunt for a toggle every time is
   // the wrong default. The destructive actions are protected by the fan's
@@ -505,6 +503,40 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
     [messages, getMessageId],
   );
 
+  // Slash command page actions (utils/slashUi.ts). /usercard and /user open the
+  // profile sheet; /clearmessages hides what this room shows right now (visual
+  // only: new rows still arrive, and another room is untouched).
+  const [hiddenRows, setHiddenRows] = useState<{ channel: string; ids: ReadonlySet<string> } | null>(null);
+  useEffect(() => {
+    const openCard = (e: Event) => {
+      const d = (e as CustomEvent<{ userId?: string; username?: string; displayName?: string }>).detail;
+      if (!isTwitchRoom || !d?.userId || !d.username) return;
+      setSheetUser({ userId: d.userId, username: d.username, displayName: d.displayName ?? d.username, color: '' });
+    };
+    const clearRows = () => {
+      if (!activeChannel) return;
+      const ids = new Set<string>();
+      for (const message of messages) {
+        const id = getMessageId(message);
+        if (id) ids.add(id);
+      }
+      setHiddenRows({ channel: activeChannel, ids });
+    };
+    window.addEventListener('streamnook-open-user-card', openCard);
+    window.addEventListener('streamnook-clear-local-chat', clearRows);
+    return () => {
+      window.removeEventListener('streamnook-open-user-card', openCard);
+      window.removeEventListener('streamnook-clear-local-chat', clearRows);
+    };
+  }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  const shownMessages = useMemo(() => {
+    if (!hiddenRows || hiddenRows.channel !== activeChannel) return messages;
+    return messages.filter((m) => {
+      const id = getMessageId(m);
+      return !id || !hiddenRows.ids.has(id);
+    });
+  }, [hiddenRows, activeChannel, messages, getMessageId]);
+
   // Suppress the synthesized contextmenu entirely: the fan-out owns the hold now,
   // and letting both fire would open a menu behind the fan.
   const onListContextMenu = useCallback((e: React.MouseEvent) => {
@@ -657,7 +689,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         data-tap-reply={isPaused && !readOnly ? 'true' : undefined}
       >
         <ChatMessageList
-          messages={messages}
+          messages={shownMessages}
           renderToken={renderToken}
           isPaused={isPaused}
           onPauseIntent={() => pause(true)}

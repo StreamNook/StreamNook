@@ -31,6 +31,42 @@ pub async fn twitch_login(
     Ok((verification_uri, user_code))
 }
 
+/// Where a web sign-in starts, and the redirect it ends on.
+#[derive(serde::Serialize)]
+pub struct WebLogin {
+    /// Twitch's authorize page, which asks for the password first when the
+    /// page holds no twitch.tv session.
+    pub url: String,
+    /// The page Twitch redirects to with `code` and `state` (or `error`). The
+    /// sheet stops there and hands them to `finish_twitch_web_login`.
+    pub redirect: String,
+}
+
+/// Primary sign-in on Twitch's own login and Authorize pages, for a shell that
+/// shows them in its own web view (the iPhone app). Completes through
+/// `finish_twitch_web_login`, which emits the same `twitch-login-complete` /
+/// `twitch-login-error` the device-code login does.
+#[tauri::command]
+pub async fn begin_twitch_web_login() -> Result<WebLogin, String> {
+    Ok(WebLogin {
+        url: TwitchService::begin_web_login().map_err(|e| e.to_string())?,
+        redirect: TwitchService::web_login_redirect().to_string(),
+    })
+}
+
+/// The redirect of a web sign-in began with `begin_twitch_web_login`.
+#[tauri::command]
+pub async fn finish_twitch_web_login(
+    app: AppHandle,
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+) -> Result<(), String> {
+    TwitchService::finish_web_login(&app, code, state, error)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct CreateClipResult {
     pub id: String,
@@ -1323,13 +1359,14 @@ pub fn open_subscribe_window(
     Ok(label)
 }
 
-/// The phone's Subscribe: the platform's own checkout in the login overlay.
-/// The overlay shares the app's one cookie jar, which already holds the Twitch
-/// session from the activation page and the Kick session from Kick sign-in, so
-/// the checkout opens as the signed-in account. Async so the plugin call stays
-/// off the main thread. Returns a label for parity with desktop; the phone
-/// closes the overlay with `close_mobile_login`.
-#[cfg(target_os = "android")]
+/// The phone's Subscribe: the platform's own checkout in the login overlay
+/// (Android) or sheet (iPhone). Either shares the app's one cookie jar, which
+/// already holds the Twitch session from sign-in and the Kick session from
+/// Kick sign-in, so the checkout opens as the signed-in account. Async so the
+/// plugin call stays off the main thread. Returns a label for parity with
+/// desktop; Android closes the overlay with `close_mobile_login`, the iPhone
+/// sheet is closed by the person.
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn open_subscribe_window(
     app: AppHandle,
@@ -1339,7 +1376,10 @@ pub async fn open_subscribe_window(
 ) -> Result<String, String> {
     let (url, _) = subscribe_target(provider.as_deref(), &channel_login)?;
     let title = title.unwrap_or_else(|| format!("Subscribe to {}", channel_login));
+    #[cfg(target_os = "android")]
     crate::twitch_login_plugin::open_overlay(&app, &url, &title)?;
+    #[cfg(target_os = "ios")]
+    crate::services::ios_sheet::open_overlay(&app, &url, &title)?;
     Ok(format!("subscribe-{}", channel_login))
 }
 
@@ -1465,6 +1505,7 @@ pub async fn get_recommended_streams_paginated(
     Ok((streams, next))
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -1472,6 +1513,12 @@ pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String>
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|e| format!("Failed to open browser: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_browser_url(_app: AppHandle, url: String) -> Result<(), String> {
+    crate::ios_ffi::open_url(&url)
 }
 
 #[cfg(desktop)]
@@ -1501,7 +1548,7 @@ pub async fn focus_window(app: AppHandle) -> Result<(), String> {
 pub async fn get_top_games(
     state: State<'_, AppState>,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::get_top_games(&state, limit)
         .await
         .map_err(|e| e.to_string())
@@ -1512,7 +1559,7 @@ pub async fn get_top_games_paginated(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: u32,
-) -> Result<(Vec<serde_json::Value>, Option<String>), String> {
+) -> Result<(Vec<crate::services::twitch_service::CategoryRow>, Option<String>), String> {
     TwitchService::get_top_games_paginated(&state, cursor, limit)
         .await
         .map_err(|e| e.to_string())
@@ -1529,6 +1576,7 @@ pub async fn get_streams_by_game(
         .await
         .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    crate::services::home_snapshot::stamp_drops(&mut streams).await;
     Ok((streams, next))
 }
 
@@ -1541,6 +1589,7 @@ pub async fn search_channels(
         .await
         .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Search);
+    crate::services::home_snapshot::stamp_drops(&mut streams).await;
     Ok(streams)
 }
 
@@ -1590,6 +1639,16 @@ pub async fn unfollow_channel(target_user_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     crate::services::irc_service::own_follow_changed(&target_user_id, false).await;
     Ok(())
+}
+
+/// The viewer's follow and subscription state for a Twitch channel, for the
+/// follow and subscribe controls (`following` is null while unknown).
+#[tauri::command]
+pub async fn channel_relationship(
+    channel_id: String,
+    channel_login: String,
+) -> Result<crate::services::channel_relationship::Relationship, String> {
+    Ok(crate::services::channel_relationship::twitch(&channel_id, &channel_login.to_lowercase()).await)
 }
 
 #[tauri::command]
@@ -1876,13 +1935,13 @@ pub async fn refresh_whisper_history(
     Ok(out)
 }
 
-/// Search for categories by name (uses Twitch search API for fuzzy matching)
-/// Returns a list of matching categories with id, name, and box_art_url
+/// Categories matching `query`: the exact name first, then names starting with
+/// it, then the rest, each tier by live viewers (see `rank_category_results`).
 #[tauri::command]
 pub async fn search_categories(
     query: String,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::search_categories(&query, limit)
         .await
         .map_err(|e| e.to_string())
@@ -2400,6 +2459,49 @@ pub async fn update_suspicious_user_status(
         .map_err(|e| e.to_string())
 }
 
+/// A user's Twitch bio; empty when they have none.
+#[tauri::command]
+pub async fn get_twitch_bio(user_id: String) -> Result<String, String> {
+    TwitchService::get_user_bio(&user_id).await.map_err(|e| e.to_string())
+}
+
+/// Sets the signed-in account's Twitch bio (at most 300 characters) through
+/// the twitch.tv web session; answers what Twitch stored.
+#[tauri::command]
+pub async fn update_twitch_bio(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    description: String,
+) -> Result<String, String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::update_bio(&state.twitch_auth, &me.id, &description)
+        .await
+        .map(|stored| stored.description)
+}
+
+/// Changes the capitalization of the signed-in account's Twitch display name
+/// through the twitch.tv web session; answers what Twitch stored.
+#[tauri::command]
+pub async fn update_twitch_display_name(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    display_name: String,
+) -> Result<crate::services::twitch_profile_edit::ProfileEditResult, String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::update_display_name(&state.twitch_auth, &me.id, &me.login, &display_name).await
+}
+
+/// Uploads a new Twitch profile picture or banner (`kind` `picture` or
+/// `banner`, the file as base64; PNG, JPG or GIF up to 10 MB) through the
+/// twitch.tv web session. Twitch shows it a few seconds later.
+#[tauri::command]
+pub async fn upload_twitch_profile_image(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    kind: crate::services::twitch_profile_edit::ProfileImageKind,
+    data_base64: String,
+) -> Result<(), String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::upload_image(&state.twitch_auth, &me.id, kind, &data_base64).await
+}
+
 #[tauri::command]
 pub async fn update_user_chat_color(target_user_id: String, color: String) -> Result<(), String> {
     TwitchService::update_user_chat_color(&target_user_id, &color)
@@ -2447,8 +2549,9 @@ pub async fn get_channel_vips(broadcaster_id: String) -> Result<Vec<serde_json::
         .map_err(|e| e.to_string())
 }
 
-/// A channel's moderators and VIPs, read signed in. The phones' slash dispatch
-/// reads this for `/mods` and `/vips`; the desktop uses `slash_role_list`.
+/// A channel's moderators and VIPs, read signed in (the web session, then the
+/// rewards sign-in, then anonymous). `/mods` and `/vips` print theirs through
+/// `slash_role_list`, which the slash dispatcher calls on every platform.
 #[tauri::command]
 pub async fn get_chatters_by_role(
     state: State<'_, AppState>,

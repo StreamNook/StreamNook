@@ -326,6 +326,13 @@ fn ffz_colored_badge_url(url: &str) -> String {
 
 const FFZ_BADGE_CDN: &str = "https://cdn.frankerfacez.com/badge/";
 
+/// A scheme-relative URL (`//host/path`, which Chatty's feed lists for its own
+/// badges) made `https:`. A webview resolves those against its own origin and a
+/// native shell cannot load them at all; any other URL comes back unchanged.
+fn with_scheme(url: &str) -> String {
+    if url.starts_with("//") { format!("https:{url}") } else { url.to_string() }
+}
+
 fn is_ffz_cdn_badge(url: &str) -> bool {
     url.starts_with(FFZ_BADGE_CDN)
 }
@@ -333,40 +340,94 @@ fn is_ffz_cdn_badge(url: &str) -> bool {
 /// A glyph badge image is refused past this size; FFZ:AP's are ~3 KB.
 const BACKDROP_SOURCE_MAX_BYTES: usize = 256 * 1024;
 
+/// A glyph badge image wider or taller than this is refused; badges are 72 px.
+const BACKDROP_MAX_SIDE: u32 = 512;
+
 /// A glyph PNG with `color` (`#RRGGBB`) behind it as a rounded square, the
 /// shape FFZ's own finished badges have (corner radius side / 9, which is what
-/// FFZ's `/rounded` images use at 72 px), as an SVG data URI. The webview
-/// composites the glyph over the square, so nothing is decoded here and this
-/// builds on every platform. `None` for a colour that isn't `#RRGGBB` or
-/// bytes that aren't a PNG.
+/// FFZ's `/rounded` images use at 72 px), as a PNG data URI. The picture is
+/// finished here, a plain PNG every surface can draw: native shells decode
+/// with the platform's image library, which cannot read SVG, so a picture
+/// left for the webview to composite drew nothing there. `None` for a colour
+/// that isn't `#RRGGBB` or bytes that aren't a PNG.
 pub(crate) fn badge_with_backdrop(png: &[u8], color: &str) -> Option<String> {
     let hex = color.strip_prefix('#')?;
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let (w, h) = png_dimensions(png)?;
+    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok().map(|c| c as f32 / 255.0);
+    let back = [channel(0)?, channel(2)?, channel(4)?];
+    let (w, h, glyph) = decode_rgba(png)?;
     let radius = w.min(h) as f32 / 9.0;
+    let mut out = Vec::with_capacity(glyph.len());
+    for (i, px) in glyph.chunks_exact(4).enumerate() {
+        let (x, y) = ((i as u32 % w) as f32, (i as u32 / w) as f32);
+        // The glyph over the square, both straight (not premultiplied) alpha.
+        let under = rounded_square_cover(x, y, w as f32, h as f32, radius);
+        let over = px[3] as f32 / 255.0;
+        let alpha = over + under * (1.0 - over);
+        if alpha <= 0.0 {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        for c in 0..3 {
+            let mixed = (px[c] as f32 / 255.0 * over + back[c] * under * (1.0 - over)) / alpha;
+            out.push((mixed * 255.0).round() as u8);
+        }
+        out.push((alpha * 255.0).round() as u8);
+    }
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&out).ok()?;
+        writer.finish().ok()?;
+    }
     use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD;
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\
-         <rect width=\"{w}\" height=\"{h}\" rx=\"{radius}\" fill=\"#{hex}\"/>\
-         <image width=\"{w}\" height=\"{h}\" href=\"data:image/png;base64,{glyph}\"/></svg>",
-        glyph = b64.encode(png),
-    );
-    Some(format!("data:image/svg+xml;base64,{}", b64.encode(svg)))
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(encoded)))
 }
 
-/// Width and height from a PNG's header (IHDR is always the first chunk), or
-/// `None` when the bytes aren't a PNG.
-fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
-    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-    if png.len() < 24 || !png.starts_with(SIGNATURE) || &png[12..16] != b"IHDR" {
+/// A PNG as 8-bit RGBA: (width, height, pixels). `None` for bytes that aren't
+/// a PNG or one past `BACKDROP_MAX_SIDE`.
+pub(crate) fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let (w, h) = (reader.info().width, reader.info().height);
+    if w == 0 || h == 0 || w > BACKDROP_MAX_SIDE || h > BACKDROP_MAX_SIDE {
         return None;
     }
-    let w = u32::from_be_bytes(png[16..20].try_into().ok()?);
-    let h = u32::from_be_bytes(png[20..24].try_into().ok()?);
-    (w > 0 && h > 0).then_some((w, h))
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let frame = reader.next_frame(&mut buf).ok()?;
+    let data = &buf[..frame.buffer_size()];
+    let rgba: Vec<u8> = match frame.color_type {
+        png::ColorType::Rgba => data.to_vec(),
+        png::ColorType::Rgb => data.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => data.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::Grayscale => data.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    (rgba.len() == (w * h * 4) as usize).then_some((w, h, rgba))
+}
+
+/// How much of pixel (x, y) a `w` x `h` square with corners of `radius`
+/// covers, 0 to 1, from a 4 x 4 grid of samples, so the corners are smooth.
+fn rounded_square_cover(x: f32, y: f32, w: f32, h: f32, radius: f32) -> f32 {
+    let mut inside = 0;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let px = x + (sx as f32 + 0.5) / 4.0;
+            let py = y + (sy as f32 + 0.5) / 4.0;
+            let dx = px - px.clamp(radius, w - radius);
+            let dy = py - py.clamp(radius, h - radius);
+            if dx * dx + dy * dy <= radius * radius {
+                inside += 1;
+            }
+        }
+    }
+    inside as f32 / 16.0
 }
 
 fn backdrop_key(url: &str, color: &str) -> String {
@@ -653,7 +714,7 @@ impl ChattyBadge {
     /// glyph with no finished variant anywhere, so we paint it ourselves.
     fn backdrop(&self) -> Option<(String, String)> {
         let color = self.color.as_deref()?.trim();
-        if color.is_empty() || is_ffz_cdn_badge(&self.image_url) {
+        if color.is_empty() || is_ffz_cdn_badge(&with_scheme(&self.image_url)) {
             return None;
         }
         Some((self.image_urls().2, color.to_string()))
@@ -664,7 +725,8 @@ impl ChattyBadge {
         let x1 = self.image_url.as_str();
         let x2 = self.image_url_2.as_deref().unwrap_or(x1);
         let x4 = self.image_url_4.as_deref().unwrap_or(x2);
-        (ffz_colored_badge_url(x1), ffz_colored_badge_url(x2), ffz_colored_badge_url(x4))
+        let finished = |url: &str| ffz_colored_badge_url(&with_scheme(url));
+        (finished(x1), finished(x2), finished(x4))
     }
 }
 
@@ -2003,10 +2065,9 @@ impl BadgeService {
                 .get(MOLTORINO_BADGES_URL)
                 .header(
                     "User-Agent",
-                    concat!(
-                        "StreamNook/",
-                        env!("CARGO_PKG_VERSION"),
-                        " (+https://streamnook.app)"
+                    format!(
+                        "StreamNook/{} (+https://streamnook.app)",
+                        crate::services::client_identity::build_version()
                     ),
                 )
                 .header("Accept", "application/json")
@@ -2775,6 +2836,15 @@ impl BadgeService {
     /// This is the chat path, so it answers what the chatter WEARS: one badge
     /// per wear category (`worn_third_party`). The profile and picker paths below
     /// list everything the user owns.
+    /// What a chatter wears from the third-party feeds, read without waiting:
+    /// empty while a refresh holds the cache, so a row stamped then carries
+    /// none rather than holding up chat. Chatty's painted variants are not
+    /// built here; their raw image is drawn.
+    pub fn worn_third_party_now(&self, user_id: &str) -> Vec<UserBadge> {
+        let Ok(cache) = self.cache.try_read() else { return Vec::new() };
+        cache.third_party.by_user.get(user_id).map(|entries| worn_third_party(entries)).unwrap_or_default()
+    }
+
     pub async fn get_third_party_badges_only(&self, user_id: &str) -> UserBadgesResponse {
         UserBadgesResponse {
             display_badges: Vec::new(),
@@ -3042,22 +3112,34 @@ mod tests {
 
     #[test]
     fn a_glyph_gets_ffzs_rounded_backdrop_behind_it() {
-        // The header of a 72 px PNG, which is all the backdrop reads.
-        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
-        png.extend_from_slice(&72u32.to_be_bytes());
-        png.extend_from_slice(&72u32.to_be_bytes());
-        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        // A 72 px glyph: transparent, with one opaque white pixel at (36, 36).
+        let mut pixels = vec![0u8; 72 * 72 * 4];
+        let centre = (36 * 72 + 36) * 4;
+        pixels[centre..centre + 4].copy_from_slice(&[255, 255, 255, 255]);
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 72, 72);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+            writer.finish().unwrap();
+        }
 
         use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD;
         let uri = badge_with_backdrop(&png, "#755000").expect("builds");
-        let body = uri.strip_prefix("data:image/svg+xml;base64,").expect("an SVG data URI");
-        let svg = String::from_utf8(b64.decode(body).unwrap()).unwrap();
-        // FFZ's rounded square in the badge colour, the glyph drawn over it.
-        assert!(svg.contains(r#"viewBox="0 0 72 72""#));
-        let square = r##"<rect width="72" height="72" rx="8" fill="#755000"/>"##;
-        let glyph = format!(r#"href="data:image/png;base64,{}""#, b64.encode(&png));
-        assert!(svg.find(square).expect("the square") < svg.find(&glyph).expect("the glyph"));
+        // A plain PNG, which every surface's image decoder reads (no SVG).
+        let body = uri.strip_prefix("data:image/png;base64,").expect("a PNG data URI");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(body).unwrap();
+        let (w, h, out) = decode_rgba(&bytes).expect("decodes");
+        assert_eq!((w, h), (72, 72));
+        let at = |x: usize, y: usize| &out[(y * 72 + x) * 4..(y * 72 + x) * 4 + 4];
+        // The square in the badge colour, the glyph drawn over it.
+        assert_eq!(at(10, 10), &[0x75, 0x50, 0x00, 255]);
+        assert_eq!(at(36, 36), &[255, 255, 255, 255]);
+        // Rounded corners: the corner pixel is outside the square, an edge's middle inside.
+        assert_eq!(at(0, 0)[3], 0);
+        assert_eq!(at(0, 36)[3], 255);
 
         assert!(badge_with_backdrop(&png, "755000").is_none());
         assert!(badge_with_backdrop(&png, "#75500").is_none());
@@ -3084,6 +3166,23 @@ mod tests {
         // Already coloured, and FFZ's own CDN (drawn finished via /rounded).
         assert_eq!(feed[1].backdrop(), None);
         assert_eq!(feed[2].backdrop(), None);
+    }
+
+    #[test]
+    fn chattys_scheme_relative_badges_load_over_https() {
+        let feed: Vec<ChattyBadge> = serde_json::from_str(
+            r##"[{"id":"chatty","version":"supporter","image_url":"//tduva.com/img/chatty_badge_1.png",
+                  "image_url_2":"//tduva.com/img/chatty_badge_2.png","userids":["1"]}]"##,
+        )
+        .unwrap();
+        assert_eq!(
+            feed[0].image_urls(),
+            (
+                "https://tduva.com/img/chatty_badge_1.png".to_string(),
+                "https://tduva.com/img/chatty_badge_2.png".to_string(),
+                "https://tduva.com/img/chatty_badge_2.png".to_string(),
+            )
+        );
     }
 
     /// The live FFZ feed's shape (2026-09): the bot badge plus a coloured one.

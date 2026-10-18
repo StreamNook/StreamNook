@@ -71,6 +71,39 @@ pub async fn get_drops_overview(
     Ok(overview)
 }
 
+/// The phones' Drops segment (services/rewards_drops.rs): in progress,
+/// available now and recently earned, grouped by game, every line worked out.
+/// `refresh` reads Twitch again; otherwise the last read is re-filtered.
+#[tauri::command]
+pub async fn get_rewards_drops(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    refresh: bool,
+) -> Result<crate::services::rewards_drops::RewardsDrops, String> {
+    Ok(crate::services::rewards_drops::get(&state.drops_service, query.as_deref().unwrap_or(""), refresh).await)
+}
+
+/// The drop being earned on the watched stream, for the phones' bar in the
+/// player (services/watch_drop.rs). None when there is nothing to show; the
+/// inventory is only read when a campaign counts on this channel.
+#[tauri::command]
+pub async fn get_watch_drop(
+    state: State<'_, AppState>,
+    channel_id: Option<String>,
+    login: String,
+    game_id: Option<String>,
+    game_name: Option<String>,
+) -> Result<Option<crate::services::watch_drop::WatchDrop>, String> {
+    Ok(crate::services::watch_drop::get(
+        &state.drops_service,
+        channel_id.as_deref().unwrap_or(""),
+        &login,
+        game_id.as_deref().unwrap_or(""),
+        game_name.as_deref().unwrap_or(""),
+    )
+    .await)
+}
+
 #[tauri::command]
 pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSettings, String> {
     let drops_service = state.drops_service.lock().await;
@@ -196,8 +229,13 @@ pub async fn suggest_drop_games(
         crate::services::twitch_service::TwitchService::search_categories(query.trim(), 25)
             .await
             .unwrap_or_default()
-            .iter()
-            .filter_map(category_suggestion)
+            .into_iter()
+            .map(|c| crate::services::game_suggest::GameSuggestion {
+                box_art_url: crate::services::game_suggest::sized_box_art(&c.box_art_url),
+                id: c.id,
+                name: c.name,
+                drop_campaigns: 0,
+            })
             .collect()
     } else {
         Vec::new()
@@ -703,33 +741,14 @@ pub async fn update_monitoring_channel(
     Ok(())
 }
 
-/// Player playback state for the parity heartbeat: minute-watched events
-/// only send while the video is actually playing.
-///
-/// `slot` names a MultiNook tile's player instead of the main one. A tile
-/// counts toward StreamNook watch time only; the Twitch heartbeat follows the
-/// main player alone.
+/// What a player's video is doing, for the earning gate
+/// (services/earning_gate.rs): `playing`, `paused`, `paused_now`, `hidden` or
+/// `teardown`. `slot` names a MultiNook tile's player instead of the main one.
 #[tauri::command]
-pub async fn report_player_playing(
-    playing: bool,
-    slot: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    if let Some(slot) = slot {
-        crate::services::watch_minutes::set_playing(
-            &crate::services::watch_minutes::tile_key(&slot),
-            playing,
-        );
-        // MultiNook (and its tiles) exists on desktop only.
-        #[cfg(desktop)]
-        if playing {
-            crate::commands::multi_nook::refresh_tile_watch(&state, &slot);
-        }
-        return Ok(());
-    }
-    state.watch_heartbeat.set_playing(playing);
-    crate::services::watch_minutes::set_playing(crate::services::watch_minutes::MAIN, playing);
-    crate::services::live_bookmark::set_playing(playing);
+pub async fn report_player_state(app: AppHandle, state: String, slot: Option<String>) -> Result<(), String> {
+    let parsed = crate::services::earning_gate::PlayerState::parse(&state)
+        .ok_or_else(|| format!("Unknown player state: {state}"))?;
+    crate::services::earning_gate::report(&app, slot, parsed);
     Ok(())
 }
 
@@ -802,6 +821,7 @@ pub async fn get_streams_in_categories(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_drop_details(app_handle: AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -810,6 +830,12 @@ pub async fn open_drop_details(app_handle: AppHandle, url: String) -> Result<(),
         .opener()
         .open_url(url, None::<String>)
         .map_err(|e| format!("Failed to open drops details: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_drop_details(_app_handle: AppHandle, url: String) -> Result<(), String> {
+    crate::ios_ffi::open_url(&url)
 }
 
 // Prediction commands
@@ -1303,6 +1329,7 @@ fn parse_reward(
         is_hidden_for_subs: false,
         description: None,
         availability: Default::default(),
+        view: Default::default(),
     })
 }
 
@@ -1416,6 +1443,7 @@ fn parse_automatic_reward(
         is_hidden_for_subs: reward["isHiddenForSubs"].as_bool().unwrap_or(false),
         description: built_in_description(reward_type).map(str::to_string),
         availability: Default::default(),
+        view: Default::default(),
     })
 }
 
@@ -1560,6 +1588,22 @@ pub async fn get_channel_rewards(
         fetched_at_ms,
     )
     .await)
+}
+
+/// Redeem a reward by id, for every shell (services/reward_redeem.rs): Rust
+/// looks it up in its judged list, refuses one the verdict blocks, routes it
+/// by its built-in type and keeps the retry-safe transaction id. `text` is the
+/// typed answer or message; `emote_id` / `emote_name` an emote unlock's pick.
+#[tauri::command]
+pub async fn redeem_reward(
+    channel_login: String,
+    channel_id: String,
+    reward_id: String,
+    text: Option<String>,
+    emote_id: Option<String>,
+    emote_name: Option<String>,
+) -> Result<crate::services::reward_redeem::RedeemOutcome, String> {
+    Ok(crate::services::reward_redeem::redeem(&channel_login, &channel_id, &reward_id, text, emote_id, emote_name).await)
 }
 
 #[tauri::command]

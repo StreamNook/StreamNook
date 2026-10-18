@@ -1,5 +1,6 @@
 use crate::services::emote_credit::{self, CreditProvider, EmoteCredit};
 use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
+use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
 use crate::services::providers::{kick_emotes, youtube, youtube_emotes};
@@ -265,7 +266,136 @@ pub async fn match_emote_tokens(
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }
 
+    // The cycle and the phone strip offer the room's recent chatters after
+    // the emotes (provider `user`).
+    if profile == Profile::Cycle {
+        let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
+        let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);
+        rows.extend(chatters);
+    }
+
     Ok(EmoteMatchResult { rows, total, ready, counts })
+}
+
+/// Display names of subscription emote owners, kept for the life of the
+/// process. An id Helix did not answer is not asked again; its section keeps
+/// the "Channel <id>" title.
+type OwnerNames = (HashMap<String, String>, HashSet<String>);
+
+fn owner_names() -> &'static std::sync::Mutex<OwnerNames> {
+    static NAMES: std::sync::OnceLock<std::sync::Mutex<OwnerNames>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(Default::default)
+}
+
+/// Names for `ids`, asking Helix once (in batches of 100) for any not yet known.
+async fn resolve_owner_names(ids: Vec<String>) -> HashMap<String, String> {
+    let missing: Vec<String> = {
+        let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
+        ids.iter().filter(|id| !guard.0.contains_key(*id) && !guard.1.contains(*id)).cloned().collect()
+    };
+    if !missing.is_empty() {
+        let found = crate::services::twitch_service::TwitchService::users_by_ids(&missing).await;
+        let mut guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
+        for id in missing {
+            match found.get(&id) {
+                Some((_, display, _)) => {
+                    guard.0.insert(id, display.clone());
+                }
+                None => {
+                    guard.1.insert(id);
+                }
+            }
+        }
+    }
+    let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
+    ids.into_iter().filter_map(|id| guard.0.get(&id).map(|n| (id, n.clone()))).collect()
+}
+
+/// Saved favorite emote ids, in the order they were saved.
+fn favorite_id_list() -> Vec<String> {
+    cache_service::load_favorite_emotes()
+        .ok()
+        .flatten()
+        .and_then(|data| serde_json::from_str::<Vec<serde_json::Value>>(&data).ok())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| e.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The emote picker for a room: its tabs with counts, and the sections of
+/// `tab` (the room's default when absent) filtered by `query`, each cell with
+/// its flags and its disk-cache file at `tier`. Reads the sets already in
+/// memory, like `match_emote_tokens`; `ready` is false until the room's set
+/// has been fetched (`fetch_channel_emotes`).
+#[tauri::command]
+pub async fn emote_picker(
+    provider: Option<String>,
+    channel: String,
+    channel_id: Option<String>,
+    tab: Option<String>,
+    query: Option<String>,
+    tier: Option<String>,
+    state: State<'_, EmoteServiceState>,
+) -> Result<picker::PickerAnswer, String> {
+    use picker::{Room, Tab};
+    let room = Room::parse(provider.as_deref());
+    let channel_id = channel_id.filter(|id| !id.is_empty());
+    let tab = tab.as_deref().and_then(Tab::parse);
+    let query = query.unwrap_or_default();
+    let tier = render_tier(tier.as_deref());
+
+    let personal = match room {
+        Room::Twitch => AccountStore::primary()
+            .and_then(|me| irc_service::with_personal_emotes(&me.user_id, |map| map.clone())),
+        _ => None,
+    };
+    let favorites = favorite_id_list();
+    let recent = crate::services::recent_emotes::ids();
+    let ffz_subwoofer = crate::commands::ffz::cached_is_subwoofer().await;
+
+    // The joined chat's set first (it takes live 7TV changes), else the one
+    // the page fetched for the channel.
+    let joined = room == Room::Twitch && irc_service::with_channel_emotes(&channel, |_| ()).await.is_some();
+    let owners = if joined {
+        irc_service::with_channel_emotes(&channel, picker::subscription_owners).await
+    } else {
+        match channel_id.as_deref() {
+            Some(id) => state.0.read().await.with_cached_set(id, picker::subscription_owners).await,
+            None => None,
+        }
+    }
+    .unwrap_or_default();
+    let names = if owners.is_empty() { HashMap::new() } else { resolve_owner_names(owners).await };
+
+    let ctx = picker::Context {
+        room,
+        channel_id: channel_id.as_deref(),
+        favorites: &favorites,
+        recent: &recent,
+        ffz_subwoofer,
+        owner_names: &names,
+        personal: personal.as_ref(),
+    };
+    let run = |set: &EmoteSet| picker::build(Some(set), &ctx, tab, &query);
+    let found = if joined {
+        irc_service::with_channel_emotes(&channel, run).await
+    } else if room == picker::Room::Kick {
+        // A Kick room carries no Twitch channel id: its set is the slug's,
+        // native emotes and 7TV, from the Kick caches the chat resolve fills.
+        let set = crate::services::providers::kick_emotes::channel_emote_set(&channel).await;
+        Some(run(&set))
+    } else {
+        match channel_id.as_deref() {
+            Some(id) => state.0.read().await.with_cached_set(id, run).await,
+            None => None,
+        }
+    };
+    let mut answer = found.unwrap_or_else(|| picker::build(None, &ctx, tab, &query));
+    stamp_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier);
+    Ok(answer)
 }
 
 /// A channel emote that the viewer's own 7TV personal emote of the same name
@@ -473,6 +603,7 @@ mod tests {
             original_name: None,
             owner_ref: None,
             width: None,
+            height: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,

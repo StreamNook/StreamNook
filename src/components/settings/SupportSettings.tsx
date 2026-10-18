@@ -20,26 +20,19 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
     </button>
 );
 
-const COMMUNITY_DISCORD_INVITE_CODE = '2xvuF9TES7';
-const COMMUNITY_DISCORD_INVITE = `https://discord.gg/${COMMUNITY_DISCORD_INVITE_CODE}`;
-
-// The server's live Discord banner is stale and can't be refreshed without more
-// server boosts, so the card header is overridden with this CDN-hosted banner
-// (R2 via cdn.streamnook.app — kept OFF the app bundle so it's swappable without
-// shipping a release). Set to null to use the live Discord banner instead; and if
-// the CDN URL ever fails to load, it falls back to the live banner at runtime too.
-const CUSTOM_BANNER: string | null = 'https://cdn.streamnook.app/community-banner.gif';
-
-interface DiscordInviteData {
-    guild?: {
-        id: string;
-        name: string;
-        icon: string | null;
-        banner?: string | null;
-        description?: string | null;
-    };
-    approximate_member_count?: number;
-    approximate_presence_count?: number;
+/** The community Discord card as Rust reads it (cached, refreshed at most
+ *  once a minute). A failed read still answers, with the server details null. */
+interface CommunityInvite {
+    name: string | null;
+    description: string | null;
+    icon_url: string | null;
+    /** The hosted banner first, then the server's own; the card shows the
+     *  first one that loads. */
+    banner_urls: string[];
+    online: number | null;
+    members: number | null;
+    invite_url: string;
+    invite_label: string;
 }
 
 // Inline -webkit clamp so we don't depend on the Tailwind line-clamp utility
@@ -52,57 +45,40 @@ const clamp = (lines: number): CSSProperties => ({
 });
 
 const SupportSettings = () => {
-    const [serverData, setServerData] = useState<DiscordInviteData | null>(null);
-    // If the CDN banner fails to load, fall back to the live Discord banner.
-    const [customBannerFailed, setCustomBannerFailed] = useState(false);
+    const [invite, setInvite] = useState<CommunityInvite | null>(null);
+    // Banners that failed to load; the header falls through to the next one.
+    const [failedBanners, setFailedBanners] = useState<string[]>([]);
 
     useEffect(() => {
-        const fetchServerData = async () => {
-            try {
-                const response = await fetch(
-                    `https://discord.com/api/v10/invites/${COMMUNITY_DISCORD_INVITE_CODE}?with_counts=true`
-                );
-                if (response.ok) {
-                    setServerData(await response.json());
-                }
-            } catch (error) {
-                Logger.error('Failed to fetch Discord server preview:', error);
-            }
+        const read = () => {
+            invoke<CommunityInvite>('get_community_invite')
+                .then(setInvite)
+                .catch((error) => Logger.error('Failed to read the community invite:', error));
         };
 
-        fetchServerData();
-        const interval = setInterval(fetchServerData, 60000);
+        read();
+        const interval = setInterval(read, 60000);
         return () => clearInterval(interval);
     }, []);
 
-    const getServerIconUrl = (guildId: string, iconHash: string) => {
-        const extension = iconHash.startsWith('a_') ? 'gif' : 'png';
-        return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.${extension}?size=128`;
-    };
-
-    const getServerBannerUrl = (guildId: string, bannerHash: string) => {
-        const extension = bannerHash.startsWith('a_') ? 'gif' : 'png';
-        return `https://cdn.discordapp.com/banners/${guildId}/${bannerHash}.${extension}?size=512`;
-    };
-
+    const inviteUrl = invite?.invite_url ?? null;
     const handleJoinCommunity = async () => {
+        if (!inviteUrl) return;
         try {
             const { open } = await import('@tauri-apps/plugin-shell');
-            await open(COMMUNITY_DISCORD_INVITE);
+            await open(inviteUrl);
         } catch (err) {
             Logger.error('Failed to open Discord invite:', err);
-            window.open(COMMUNITY_DISCORD_INVITE, '_blank');
+            window.open(inviteUrl, '_blank');
         }
     };
 
-    const guild = serverData?.guild;
-    const name = guild?.name ?? 'StreamNook';
-    const iconUrl = guild?.icon ? getServerIconUrl(guild.id, guild.icon) : null;
-    const discordBanner = guild?.banner ? getServerBannerUrl(guild.id, guild.banner) : null;
-    const bannerUrl = CUSTOM_BANNER && !customBannerFailed ? CUSTOM_BANNER : discordBanner;
-    const description = guild?.description ?? null;
-    const presence = serverData?.approximate_presence_count;
-    const members = serverData?.approximate_member_count;
+    const name = invite?.name ?? 'StreamNook';
+    const iconUrl = invite?.icon_url ?? null;
+    const bannerUrl = invite?.banner_urls.find((url) => !failedBanners.includes(url)) ?? null;
+    const description = invite?.description ?? null;
+    const presence = invite?.online;
+    const members = invite?.members;
     const hasCounts = typeof presence === 'number' && typeof members === 'number';
 
     // Matches the card's own surface so the overlapping icon reads as cut into
@@ -139,7 +115,7 @@ const SupportSettings = () => {
                             src={bannerUrl}
                             alt=""
                             className="absolute inset-0 h-full w-full object-cover"
-                            onError={() => setCustomBannerFailed(true)}
+                            onError={() => setFailedBanners((failed) => [...failed, bannerUrl])}
                         />
                     ) : (
                         <div className="absolute inset-0" style={{ background: 'rgba(215, 165, 140, 0.07)' }} />
@@ -186,7 +162,7 @@ const SupportSettings = () => {
                     {/* Name + invite handle */}
                     <h3 className="truncate text-[15px] font-semibold text-textPrimary">{name}</h3>
                     <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-textMuted">
-                        discord.gg/{COMMUNITY_DISCORD_INVITE_CODE}
+                        {invite?.invite_label ?? '\u00a0'}
                     </p>
 
                     {description && (
