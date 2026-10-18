@@ -18,7 +18,9 @@ struct DropsSegment: View {
 
     var body: some View {
         @Bindable var rewards = rewards
-        Group {
+        // A stable container: on a Group the tasks and the sheet ride each branch, so the
+        // first nil -> connected switch ran the load again.
+        VStack(alignment: .leading, spacing: 0) {
             switch rewards.drops {
             case nil:
                 Color.clear.frame(height: 1)

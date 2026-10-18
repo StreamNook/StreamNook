@@ -18,7 +18,7 @@ struct WalletSheet: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            RewardsList(wallet: wallet, menu: menu) { path.append(.detail($0)) }
+            RewardsList(wallet: wallet, menu: menu, session: session) { path.append(.detail($0)) }
                 .navigationDestination(for: WalletRoute.self) { route in
                     switch route {
                     case .detail(let reward):
@@ -72,12 +72,49 @@ enum WalletRoute: Hashable {
 private struct RewardsList: View {
     let wallet: WalletModel
     let menu: RewardsMenuModel
+    let session: ChatSession
     let open: (ChannelReward) -> Void
     @State private var refreshing = false
+    @State private var tab = Tab.points
+
+    enum Tab: Hashable { case points, bits }
+
+    /// The tab shown: the one picked, unless the channel lacks it.
+    private var shown: Tab {
+        if tab == .bits, wallet.bits == nil { return .points }
+        if tab == .points, wallet.points == nil { return .bits }
+        return tab
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if wallet.points != nil, wallet.bits != nil {
+                    GlazeSegments([Segment(value: Tab.points, label: "Points"), Segment(value: Tab.bits, label: "Bits")],
+                                  selection: Binding(get: { shown }, set: { if let next = $0 { tab = next } }), fill: true)
+                        .padding(.bottom, 16)
+                }
+                if shown == .bits {
+                    BitsPane(login: wallet.login, channelID: session.roomID, core: session.core) { word in
+                        ComposerRegistry.shared.models[ObjectIdentifier(session)]?.insertCheer(word)
+                        wallet.sheetOpen = false
+                    }
+                } else {
+                    points
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+            .padding(.bottom, 24)
+        }
+        .scrollIndicators(.hidden)
+        .scrollDismissesKeyboard(.immediately)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    @ViewBuilder
+    private var points: some View {
+        VStack(alignment: .leading, spacing: 0) {
                 header.padding(.bottom, 14)
                 if menu.loading && menu.rewards.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
@@ -106,13 +143,7 @@ private struct RewardsList: View {
                     }
                     .snPanel()
                 }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 20)
-            .padding(.bottom, 24)
         }
-        .scrollIndicators(.hidden)
-        .toolbar(.hidden, for: .navigationBar)
     }
 
     /// The channel's points name over the balance; a tap re-reads it. Bits held here beside it.

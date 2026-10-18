@@ -11,6 +11,65 @@ export const TitleCapsule: React.FC<{ children: React.ReactNode; className?: str
   <div className={`chrome-glaze flex h-11 items-center px-1 ${className}`}>{children}</div>
 );
 
+/**
+ * A screen's parts as a compact two- or three-part capsule in the title row
+ * ("Drops | Badges"), so choosing between them spends no row of its own. The
+ * chosen part sits in a darker pill that glides; the others are secondary
+ * text. Each label keeps its bold width underneath, so the capsule never
+ * changes width when the choice moves.
+ */
+export function TitleSegments<T extends string>({
+  segments,
+  value,
+  onChange,
+  label,
+}: {
+  segments: { value: T; label: string }[];
+  value: T;
+  onChange: (next: T) => void;
+  /** What the group chooses, for screen readers. */
+  label: string;
+}) {
+  const pillId = useId();
+  return (
+    <TitleCapsule>
+      <div role="radiogroup" aria-label={label} className="flex items-center">
+        {segments.map((s) => {
+          const on = s.value === value;
+          return (
+            <button
+              key={s.value}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => {
+                if (!on) onChange(s.value);
+              }}
+              className={`relative h-9 rounded-full px-3 text-[14px] leading-none transition-colors ${
+                on ? 'text-textPrimary' : 'text-textSecondary'
+              }`}
+            >
+              {on && (
+                <motion.span
+                  layoutId={`title-segment-pill-${pillId}`}
+                  className="absolute inset-0 glaze-selected"
+                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 grid">
+                <span aria-hidden className="invisible col-start-1 row-start-1 font-semibold">
+                  {s.label}
+                </span>
+                <span className={`col-start-1 row-start-1 text-center ${on ? 'font-semibold' : ''}`}>{s.label}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </TitleCapsule>
+  );
+}
+
 export type StreamView = 'cards' | 'list';
 
 /**

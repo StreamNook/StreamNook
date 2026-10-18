@@ -6,28 +6,20 @@ import SwiftUI
 /// for a waiting bonus chest, and a "+N" for every gain Rust records. A tap collects a waiting
 /// chest on the way in and opens the wallet sheet.
 struct WalletButton: View {
+    /// Owned and started by the composer (ChatComposerModel.wallet); this only draws it.
+    let wallet: WalletModel
     let session: ChatSession
     /// Closes the composer's own panels as the wallet opens.
     var onOpen: () -> Void = {}
-    @State private var wallet: WalletModel?
     @State private var pulse = 0
 
     var body: some View {
-        Group {
-            if let wallet, wallet.faces.hasAny {
-                button(wallet)
-                    .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
-                        WalletSheet(wallet: wallet, session: session)
-                    }
-            }
+        if wallet.faces.hasAny {
+            button(wallet)
+                .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
+                    WalletSheet(wallet: wallet, session: session)
+                }
         }
-        .task(id: session.channel) {
-            guard !session.isKick else { return }
-            let model = WalletModel(login: session.channel, core: session.core)
-            wallet = model
-            await model.start()
-        }
-        .onDisappear { wallet?.stop() }
     }
 
     private func button(_ wallet: WalletModel) -> some View {
@@ -64,10 +56,12 @@ struct WalletButton: View {
                         }
                     }
                 if wallet.chestWaiting {
+                    // The gain's amber, rimmed dark so it reads apart from the glyph's arc.
                     Circle()
-                        .fill(Color(ChatTheme.accent))
-                        .frame(width: 8, height: 8)
-                        .offset(x: 1, y: 5)
+                        .fill(GainFloat.amber)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1.5))
+                        .frame(width: 9, height: 9)
+                        .offset(x: 1, y: 4)
                         .accessibilityHidden(true)
                 }
             }
@@ -119,6 +113,7 @@ struct WalletButton: View {
 /// The amount drifting up off the icon and dissolving: amber, so a glance catches it among the
 /// composer's accent-colored controls.
 private struct GainFloat: View {
+    static let amber = Color(red: 0.98, green: 0.75, blue: 0.14)
     let pop: WalletModel.Pop
     let done: () -> Void
     @Environment(\.snStill) private var still
@@ -126,7 +121,7 @@ private struct GainFloat: View {
     var body: some View {
         Text("+\(pop.amount.formatted())")
             .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(Color(red: 0.98, green: 0.75, blue: 0.14))
+            .foregroundStyle(Self.amber)
             .fixedSize()
             .keyframeAnimator(initialValue: Rise(), repeating: false) { content, f in
                 content

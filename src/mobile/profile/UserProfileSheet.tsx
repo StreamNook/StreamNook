@@ -1,8 +1,8 @@
 // Tap a name in chat, see who they are, in the same shape as your own card:
-// their Atmosphere as a band across the top, their picture cut into its edge
-// with their StreamNook badge on it as a medal, their name in their paint below
-// the art, their sub in this room, every badge they have under its platform's
-// mark, and what they said this session. No actions.
+// their Atmosphere glowing behind them, their picture with their StreamNook
+// badge on it as a medal (never on your own), their name in their paint, their
+// sub in this room, every badge they have under its platform's mark, and what
+// they said this session. No actions.
 //
 // Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
 // badge groups merged and deduped per provider, the worn paint, the Helix
@@ -11,6 +11,7 @@
 // out.
 import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from '../../stores/AppStore';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
 import type { ProfileBadge, ProfileSheetView } from '../../types/profileView';
@@ -21,13 +22,14 @@ import { Logger } from '../../utils/logger';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
-import { AtmosphereBand, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
-import { brandFor, identityNameSize, medalUrl } from './identity';
+import { AtmosphereGlow, BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader } from './IdentityParts';
+import { badgeArt, brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
+import { MemberSections } from './MemberSections';
 
-const BAND = 92;
+/** How far down the sheet their Atmosphere's glow reaches: the picture and
+ *  the name, fading out above what follows. */
+const GLOW = 200;
 const AVATAR = 76;
-/** The cutout ring at this avatar size (CutoutAvatar's own rule). */
-const RING = Math.max(3, Math.round(AVATAR * 0.05));
 
 export interface SheetUser {
   userId: string;
@@ -286,13 +288,19 @@ const ProfileBody: React.FC<{
   const paint = sheet?.paint_def ?? null;
   const adjustNameColor = useNameColorAdjust();
   const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
+  // A member's StreamNook group can carry art the app ships
+  // (`streamnook-house:<slug>`), drawn from the bundle.
   const groups = (sheet?.groups ?? [])
     .map((group) => ({
       ...group,
-      badges: group.badges.filter((b) => !failedImages.has(badgeImageKey(b))),
+      badges: group.badges
+        .map((b) => ({ ...b, url: badgeArt(b.url) }))
+        .filter((b) => !failedImages.has(badgeImageKey(b))),
     }))
     .filter((group) => group.badges.length > 0);
-  const member = !!sheet?.streamnook;
+  // Your own picture carries no marks, here as on your card.
+  const ownId = useAppStore((s) => s.currentUser?.user_id);
+  const medal = !!sheet?.streamnook && !(ownId && ownId === (sheet?.user_id || user.userId));
   const name = sheet?.display_name || user.displayName;
   // Before Rust answers, the login line comes from what the row carried.
   const login =
@@ -305,36 +313,41 @@ const ProfileBody: React.FC<{
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
       <div className="flex flex-col pb-2">
-        {/* Their Atmosphere as the band, else a quiet tint of their name color;
-            the picture cut into its lower edge, the name below it, never on it. */}
-        <div className="rounded-2xl overflow-hidden">
-          <AtmosphereBand swatch={sheet?.atmosphere?.swatch} tint={shownColor} height={BAND} radius={0} />
-        </div>
-        <div className="pl-2.5" style={{ marginTop: -(AVATAR / 2 + RING) }}>
-          <CutoutAvatar
-            platformUrl={sheet?.avatar_url}
-            picture={sheet?.picture}
-            size={AVATAR}
-            medal={medalUrl(sheet?.streamnook)}
-            medalLabel={sheet?.streamnook?.label}
-          />
-        </div>
-
-        <div className="pt-2 min-w-0">
-          <PaintedName
-            text={name}
-            paint={paint}
-            color={shownColor}
-            className="block font-bold leading-tight break-words"
-            style={{ fontSize: identityNameSize(name) - 2 }}
-          />
-          {(login || wearing) && (
-            <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
-              {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
-              {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
-              {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
-            </div>
-          )}
+        {/* Their Atmosphere glowing behind the picture and name across the
+            sheet's full width, else a faint glow of their name color. */}
+        <div className="relative -mx-4 px-4 pt-3">
+          <AtmosphereGlow atm={glowAtmosphere(sheet?.atmosphere?.id)} tint={shownColor} height={GLOW} />
+          <div className="relative flex items-start gap-3">
+            <CutoutAvatar
+              platformUrl={sheet?.avatar_url}
+              picture={sheet?.picture}
+              size={AVATAR}
+              medal={medal ? medalUrl(sheet?.streamnook) : null}
+              medalLabel={sheet?.streamnook?.label}
+            />
+            <div className="flex-1" />
+            {sheet?.member && (
+              <div className="pt-1.5">
+                <MemberRankMark rank={sheet.member} />
+              </div>
+            )}
+          </div>
+          <div className="relative pt-3 min-w-0">
+            <PaintedName
+              text={name}
+              paint={paint}
+              color={shownColor}
+              className="block font-bold leading-tight break-words"
+              style={{ fontSize: identityNameSize(name) - 2 }}
+            />
+            {(login || wearing) && (
+              <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
+                {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
+                {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
+              </div>
+            )}
+          </div>
         </div>
 
         {standing && (
@@ -382,11 +395,13 @@ const ProfileBody: React.FC<{
           />
         ))}
 
-        {/* A member's StreamNook badge is the medal on their picture, so it has
-            no group of its own here. */}
-        {sheet && groups.length === 0 && !member && (
+        {/* A member always has a StreamNook badge (it is the medal on their
+            picture, and their StreamNook group), so the line is for others. */}
+        {sheet && groups.length === 0 && !sheet.streamnook && (
           <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
+
+        {sheet?.member_profile && <MemberSections profile={sheet.member_profile} />}
 
         {/* Chat order (oldest first, newest at the bottom), the way the eye
             already reads the room. Plain text: the point is what was said,

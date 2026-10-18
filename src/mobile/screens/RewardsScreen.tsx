@@ -24,7 +24,7 @@ import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery 
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
 import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
 import { ScreenHeader } from '../ui/ScreenHeader';
-import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
+import { TitleSegments } from '../ui/TitleControls';
 import { ProviderMark } from '../../components/ProviderLogo';
 import {
   blurbText,
@@ -40,7 +40,7 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 
 type RewardsTab = 'drops' | 'badges';
-const REWARDS_TABS: Segment<RewardsTab>[] = [
+const REWARDS_TABS: { value: RewardsTab; label: string }[] = [
   { value: 'drops', label: 'Drops' },
   { value: 'badges', label: 'Badges' },
 ];
@@ -361,14 +361,12 @@ export const RewardsScreen: React.FC = () => {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="shrink-0">
-        {/* The same header as Following and Browse, so the title sits on one
-            baseline on every tab. */}
-        <ScreenHeader title="Rewards" />
-        <div className="flex px-4 pb-2">
-          <SegmentedControl<RewardsTab> label="Rewards" segments={REWARDS_TABS} value={tab} onChange={setTab} />
-        </div>
-      </div>
+      {/* The same header as Following and Browse, so the title sits on one
+          baseline on every tab. Drops and Badges sit beside it (Brandon: in the
+          title row, so the row under it goes and the content moves up). */}
+      <ScreenHeader title="Rewards">
+        <TitleSegments<RewardsTab> label="Rewards" segments={REWARDS_TABS} value={tab} onChange={setTab} />
+      </ScreenHeader>
       <PullToRefresh onRefresh={tab === 'drops' ? () => load(dropsQuery, true) :() => loadBadgeGallery(badgeSort, true)}>
         <div className={`px-4 sn-tabbar-clearance ${tab === 'badges' ? '' : 'hidden'}`}>
           {tiles.length === 0 ? (
@@ -469,7 +467,7 @@ export const RewardsScreen: React.FC = () => {
                 value={dropsQuery}
                 onChange={changeQuery}
                 placeholder="Search games or campaigns"
-                className="mt-1 mb-1"
+                className="mb-1"
               />
 
               {drops.no_match ? (

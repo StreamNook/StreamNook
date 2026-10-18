@@ -1,8 +1,8 @@
-// Who you are, at the top of the You tab: your Atmosphere as the card's band,
-// your picture cut into its edge with your StreamNook badge on it as a medal,
-// your name in your 7TV paint (or your Twitch color) below the art, the badges
-// you wear and what you have on, a line of chat as everyone sees it, and the
-// way into Edit profile. The header shows; Edit profile changes.
+// Who you are, at the top of the You tab: your Atmosphere glowing behind you,
+// your picture on its own (no marks: your accounts and badges show in the rows
+// below), your name in your 7TV paint (or your Twitch color), the badges you
+// wear and what you have on, a line of chat as everyone sees it, and the way
+// into Edit profile. The header shows; Edit profile changes.
 //
 // Rust builds the identity (`own_identity_header`, services/profile_view.rs):
 // Twitch's displayed badges minus the channel-only sets, the selected 7TV
@@ -16,21 +16,14 @@ import React from 'react';
 import { ChevronRight, User } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { usePicksStore, useOwnPicks } from './picksStore';
-import { AtmosphereBand, CutoutAvatar, PaintedName, ProfilePreviewRow, WornBadge } from './IdentityParts';
-import {
-  bandSwatch,
-  chatAtmosphereId,
-  identityNameSize,
-  medalUrl,
-  nameColorOr,
-  wornPreviewBadges,
-} from './identity';
+import { AtmosphereGlow, CutoutAvatar, PaintedName, ProfilePreviewRow, WornBadge } from './IdentityParts';
+import { chatAtmosphereId, glowAtmosphere, identityNameSize, nameColorOr, wornPreviewBadges } from './identity';
 
 const RADIUS = 22;
-const BAND = 104;
+/** How far down the card the Atmosphere's glow reaches: the picture, the name
+ *  and the worn line, fading out above the preview row. */
+export const GLOW = 210;
 const AVATAR = 80;
-/** The cutout ring at this avatar size (CutoutAvatar's own rule). */
-const RING = Math.max(3, Math.round(AVATAR * 0.05));
 
 interface Props {
   userId: string;
@@ -49,10 +42,7 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
 
   // The theme you just picked once Edit profile has read it, else the one Rust
   // says you wear (Rust's copy also covers a catalog the page has not read yet).
-  const rustAtmosphere = identity?.atmosphere;
-  const swatch = sn
-    ? (bandSwatch(sn.theme) ?? (rustAtmosphere?.id === sn.theme ? rustAtmosphere.swatch : null))
-    : (rustAtmosphere?.swatch ?? null);
+  const atmosphere = glowAtmosphere(sn ? sn.theme : identity?.atmosphere?.id);
   const color = nameColorOr(ext?.chat_color);
   // Once the 7TV half has answered it is the truth, a paint taken off included;
   // until then, the paint the identity carries.
@@ -67,18 +57,14 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
   return (
     // Raised over what follows, so the picture note a tap opens is never covered.
     <div className="glass-panel relative z-[1]" style={{ borderRadius: RADIUS }}>
-      <AtmosphereBand swatch={swatch} tint={color} height={BAND} radius={RADIUS} />
-      <div className="px-3" style={{ marginTop: -(AVATAR / 2 + RING) }}>
-        <CutoutAvatar
-          platformUrl={platformUrl}
-          picture={identity?.picture}
-          size={AVATAR}
-          medal={medalUrl(identity?.streamnook)}
-          medalLabel={identity?.streamnook?.label}
-          explains
-        />
+      <GlowLayer>
+        <AtmosphereGlow atm={atmosphere} tint={color} height={GLOW} />
+      </GlowLayer>
+      {/* Raised over the glow, the picture note it opens included. */}
+      <div className="relative z-[2] pl-4 pt-4">
+        <CutoutAvatar platformUrl={platformUrl} picture={identity?.picture} size={AVATAR} explains />
       </div>
-      <div className="px-4 pt-1 min-w-0">
+      <div className="relative px-4 pt-3 min-w-0">
         <PaintedName
           text={displayName}
           paint={paint}
@@ -98,7 +84,7 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
         )}
       </div>
       {(sn || ext) && (
-        <div className="px-3 pt-4">
+        <div className="relative px-3 pt-4">
           <ProfilePreviewRow
             name={displayName}
             paint={paint}
@@ -108,10 +94,10 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
           />
         </div>
       )}
-      <div className="mt-3 border-t border-borderSubtle" />
+      <div className="relative mt-3 border-t border-borderSubtle" />
       <button
         onClick={onEdit}
-        className="w-full flex items-center gap-2.5 px-4 h-[50px] text-left active:bg-surface-active"
+        className="relative w-full flex items-center gap-2.5 px-4 h-[50px] text-left active:bg-surface-active"
         style={{ borderBottomLeftRadius: RADIUS, borderBottomRightRadius: RADIUS }}
       >
         <span className="text-[15px] font-semibold text-textPrimary shrink-0">Edit profile</span>
@@ -124,31 +110,44 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
   );
 };
 
-/** Signed out, the card keeps its shape: the quiet band, an empty picture, why
+/** The glow's clip: the card's own corners, without clipping the card (the
+ *  picture note hangs past it). */
+const GlowLayer: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none" style={{ borderRadius: RADIUS }}>
+    {children}
+  </div>
+);
+
+/** Signed out, the card keeps its shape: a quiet glow, an empty picture, why
  *  to sign in, and the Twitch sign-in. */
 export const SignedOutIdentityCard: React.FC = () => {
   const loginToTwitch = useAppStore((s) => s.loginToTwitch);
   const isLoading = useAppStore((s) => s.isLoading);
   return (
-    <div className="glass-panel" style={{ borderRadius: RADIUS }}>
-      <AtmosphereBand tint="var(--color-accent)" height={BAND} radius={RADIUS} />
-      <div className="px-3" style={{ marginTop: -(AVATAR / 2 + RING) }}>
-        <div className="rounded-full bg-secondary w-fit" style={{ padding: RING }}>
-          <div
-            className="rounded-full bg-surface flex items-center justify-center"
-            style={{ width: AVATAR, height: AVATAR }}
-          >
-            <User size={30} className="text-textMuted" />
-          </div>
+    <div className="glass-panel relative" style={{ borderRadius: RADIUS }}>
+      <GlowLayer>
+        <AtmosphereGlow tint="var(--color-accent)" height={GLOW} />
+      </GlowLayer>
+      <div className="relative pl-4 pt-4">
+        <div
+          className="rounded-full flex items-center justify-center"
+          style={{
+            width: AVATAR,
+            height: AVATAR,
+            background: '#000',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.35), inset 0 0 0 0.5px rgba(255,255,255,0.1)',
+          }}
+        >
+          <User size={30} className="text-textMuted" />
         </div>
       </div>
-      <div className="px-4 pt-2">
+      <div className="relative px-4 pt-3">
         <div className="text-[24px] font-bold text-textPrimary leading-tight">Not signed in</div>
         <div className="mt-1 text-[14px] text-textSecondary">
           Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.
         </div>
       </div>
-      <div className="p-4">
+      <div className="relative p-4">
         <button
           onClick={() => void loginToTwitch()}
           disabled={isLoading}

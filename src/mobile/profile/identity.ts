@@ -4,7 +4,8 @@ import {
   DEFAULT_COSMETIC_SLUG,
   resolveCosmeticAsset,
 } from '../../components/cosmeticAssets';
-import { getAtmosphere } from '../../services/atmospheres';
+import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
+import { houseSlug } from './memberIcons';
 import type {
   ExternalPickerView,
   SnMemberBadge,
@@ -62,6 +63,13 @@ export function medalUrl(sn: SnMemberBadge | null | undefined): string | null {
   );
 }
 
+/** A badge image a renderer can load: bundled house art for a
+ *  `streamnook-house:<slug>` URL, any other URL as it is. */
+export function badgeArt(url: string): string {
+  const slug = houseSlug(url);
+  return (slug && COSMETIC_ASSET_BY_SLUG[slug]) || url;
+}
+
 /** The badges you wear, in chat's order: Twitch, 7TV, StreamNook last. */
 export function wornPreviewBadges(
   sn: StreamNookPickerView | null,
@@ -80,8 +88,8 @@ export function chatAtmosphereId(sn: StreamNookPickerView | null): string | null
   return sn && sn.show_chat_toggle && sn.chat_atmosphere ? sn.theme : null;
 }
 
-/** A theme id's band swatch; the Default and paint looks have none. */
-export function bandSwatch(theme: string | null | undefined): string | null {
+/** A theme id's look for the identity glow; the Default and paint looks have none. */
+export function glowAtmosphere(theme: string | null | undefined): Atmosphere | null {
   if (!theme || theme === 'tier' || theme === 'paint') return null;
-  return getAtmosphere(theme)?.swatch ?? null;
+  return getAtmosphere(theme);
 }

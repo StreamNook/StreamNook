@@ -98,16 +98,13 @@ const YouTabIcon: React.FC<{ selected: boolean }> = ({ selected }) => {
         boxShadow: selected ? `inset 0 0 0 ${RING}px var(--color-accent)` : undefined,
       }}
     >
-      {/* A solid disc under the picture, as the You card draws it: a picture
-          with transparent parts (many 7TV pictures) otherwise floats as loose
-          marks over the glass. */}
+      {/* A black disc under the picture, as the You card draws it (Brandon:
+          black behind a clear picture, not gray): a picture with transparent
+          parts (many 7TV pictures) otherwise floats as loose marks over the
+          glass. */}
       <span
         className="block overflow-hidden rounded-full"
-        style={{
-          width: diameter,
-          height: diameter,
-          background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background-tertiary)',
-        }}
+        style={{ width: diameter, height: diameter, background: '#000' }}
       >
         <img src={shown.url} alt="" draggable={false} className="h-full w-full object-cover" />
       </span>
@@ -152,11 +149,14 @@ export const MobileTabBar: React.FC<{
               <button
                 key={id}
                 onClick={() => setTab(id)}
-                // Unselected icons are the theme's text color, not muted: over
-                // bright thumbnails a muted icon disappears. The selected one takes
-                // the theme accent inside the dark pill.
+                // The chosen tab reads strongest: primary text, a filled icon
+                // and a semibold label in the dark pill. The others are
+                // secondary text, which holds its contrast over the floor under
+                // the bar. The accent read dimmer than the white tabs beside it
+                // (Winters Glass's accent is a soft gray-blue), so the chosen
+                // tab looked like the one switched off.
                 className={`sn-touch flex-1 flex items-center justify-center transition-colors ${
-                  active ? 'text-accent' : 'text-textPrimary'
+                  active ? 'text-textPrimary' : 'text-textSecondary'
                 }`}
                 aria-current={active ? 'page' : undefined}
               >
@@ -180,7 +180,11 @@ export const MobileTabBar: React.FC<{
                       <Icon size={24} weight={active ? 'fill' : 'regular'} />
                     )}
                   </span>
-                  <span className="relative z-10 text-[12px] font-semibold leading-[14px]">{label}</span>
+                  <span
+                    className={`relative z-10 text-[12px] leading-[14px] ${active ? 'font-semibold' : 'font-medium'}`}
+                  >
+                    {label}
+                  </span>
                 </span>
               </button>
             );
