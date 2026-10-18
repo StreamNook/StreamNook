@@ -162,10 +162,11 @@ impl<M: ReplayRow> Engine<M> {
         self.frontier = added == 0;
     }
 
-    /// Show everything up to `vt` again from the buffer. None when the buffer starts after it.
+    /// Show everything up to `vt` again from the buffer. None when the buffer does not reach
+    /// it: it starts after `vt`, or `vt` is past what has been fetched.
     fn reseek(&mut self, vt: f64) -> Option<ReplayStep<M>> {
         let first = self.buffer.first()?.0;
-        if vt < first - 1.0 {
+        if vt < first - 1.0 || vt > self.next_fetch + 1.0 {
             return None;
         }
         self.ptr = self.buffer.iter().take_while(|(o, _)| *o <= vt).count();
