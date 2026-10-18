@@ -166,13 +166,14 @@ export const MobileTabBar: React.FC<{
                   active ? 'text-textPrimary' : 'text-textSecondary'
                 }`}
                 aria-current={active ? 'page' : undefined}
+                aria-label={id === 'chats' && mentions > 0 ? `${label}, ${mentions} unread mentions` : label}
               >
-                {/* Icon over label (Brandon: labels, like the iPhone and
-                    Material 3's navigation bar). The selected pill holds both,
-                    leaves the same strip of glass above and below it, and
-                    glides between tabs on one shared layoutId, the way the
-                    desktop strip's highlight does. */}
-                <span className="relative flex flex-col items-center justify-center gap-0.5 w-full max-w-[74px] h-[54px]">
+                {/* Icons only (Brandon: with five tabs, "Following" spilled out
+                    of the selection's fill). The name stays the button's
+                    accessible label. The selected pill is sized to the icon,
+                    one per tab at even spacing, and glides between tabs on one
+                    shared layoutId, the way the desktop strip's highlight does. */}
+                <span className="relative flex items-center justify-center w-[56px] h-[44px]">
                   {active && (
                     <motion.span
                       layoutId="mobileTabHighlight"
@@ -188,17 +189,12 @@ export const MobileTabBar: React.FC<{
                     )}
                     {id === 'chats' && mentions > 0 && (
                       <span
+                        aria-hidden
                         className="absolute -top-1 left-[15px] min-w-[16px] h-4 px-1 rounded-full bg-error text-white text-[10.5px] font-semibold leading-4 text-center tabular-nums"
-                        aria-label={`${mentions} unread mentions`}
                       >
                         {mentions > 99 ? '99+' : mentions}
                       </span>
                     )}
-                  </span>
-                  <span
-                    className={`relative z-10 text-[12px] leading-[14px] ${active ? 'font-semibold' : 'font-medium'}`}
-                  >
-                    {label}
                   </span>
                 </span>
               </button>
