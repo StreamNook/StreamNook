@@ -467,7 +467,7 @@ export const RewardsScreen: React.FC = () => {
                 value={dropsQuery}
                 onChange={changeQuery}
                 placeholder="Search games or campaigns"
-                className="mt-1 mb-1"
+                className="mb-1"
               />
 
               {drops.no_match ? (
