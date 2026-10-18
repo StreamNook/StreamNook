@@ -95,7 +95,8 @@ extension PictureInPicture: @preconcurrency AVPictureInPictureControllerDelegate
         active = false
         let closed = !restoring && UIApplication.shared.applicationState != .active
         restoring = false
-        log.notice("pip stopped (\(closed ? (keepsAudio ? "closed to audio" : "closed") : "restored", privacy: .public))")
+        let outcome = closed ? (keepsAudio ? "closed to audio" : "closed") : "restored"
+        log.notice("pip stopped (\(outcome, privacy: .public))")
         guard closed else { return }
         if keepsAudio {
             layer?.player = nil
