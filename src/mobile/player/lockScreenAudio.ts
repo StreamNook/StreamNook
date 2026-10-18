@@ -55,6 +55,17 @@ if (typeof window !== 'undefined') {
 }
 const surfaceGone = () => screenOff || document.hidden;
 
+/**
+ * Whether the viewer turned Background play on (`video_player.background_mode`
+ * "audio"). Picture-in-picture always comes first when leaving the app; this
+ * only decides what happens once the video cannot float any more: with it on,
+ * closing the PiP window keeps the audio playing behind the media
+ * notification, with it off the window's X ends the stream.
+ */
+export function keepsAudioAfterPip(): boolean {
+  return useAppStore.getState().settings.video_player?.background_mode === 'audio';
+}
+
 function pushState(playing: boolean): void {
   if (!current) return;
   mediaSessionStart(current.title, current.artist, current.artUrl, playing);
@@ -170,8 +181,15 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
   //   - the app being hidden, which covers backgrounding without PiP (the
   //     "minimize to audio" path) and does not fire for a screen lock in PiP.
   const onVisibility = () => (document.hidden ? downshift() : restore());
+  // Closing the PiP window takes the surface away with no visibility change
+  // (the app was already reported hidden while it floated). With background
+  // play on the stream carries on, so it needs the audio rendition now.
+  const onPipClosed = () => {
+    if (keepsAudioAfterPip()) downshift();
+  };
   window.addEventListener('sn:screen-off', downshift);
   window.addEventListener('sn:screen-on', restore);
+  window.addEventListener('sn:pip-closed', onPipClosed);
   document.addEventListener('visibilitychange', onVisibility);
 
   detach = () => {
@@ -181,6 +199,7 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
     window.removeEventListener('sn:media-cmd', onCommand);
     window.removeEventListener('sn:screen-off', downshift);
     window.removeEventListener('sn:screen-on', restore);
+    window.removeEventListener('sn:pip-closed', onPipClosed);
     document.removeEventListener('visibilitychange', onVisibility);
   };
 

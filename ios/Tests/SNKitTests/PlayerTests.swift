@@ -78,9 +78,9 @@ import Testing
     @Test func prefsReadTheQualityAndBackgroundMode() throws {
         let json = #"{"quality":"720p60","video_player":{"background_mode":"audio","muted":false}}"#
         let prefs = try JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8))
-        #expect(prefs.quality == "720p60" && !prefs.floatsVideo)
+        #expect(prefs.quality == "720p60" && prefs.keepsAudio)
         let bare = try JSONDecoder().decode(PlayerPrefs.self, from: Data(#"{"quality":"best"}"#.utf8))
-        #expect(bare.floatsVideo)
+        #expect(!bare.keepsAudio)
     }
 }
 

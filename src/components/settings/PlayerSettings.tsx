@@ -433,14 +433,14 @@ const PlayerSettings = () => {
             onReset={resetFor(['video_player.background_mode', 'pip'])}
             description={
               (videoPlayer?.background_mode ?? 'pip') === 'audio'
-                ? 'Leaving the app keeps the audio going behind a media notification. Tap it to come back.'
-                : 'Leaving the app floats the video in a picture-in-picture window.'
+                ? 'Leaving the app floats the video in picture-in-picture. Close the window and the audio keeps going behind a media notification.'
+                : 'Leaving the app floats the video in picture-in-picture. Closing the window ends the stream.'
             }
             control={
               <Toggle
-                // On = audio only. Framed around the audio because that is what
-                // the viewer is choosing; losing the floating window is the
-                // consequence, not the point.
+                // On = the audio outlives the floating window. Picture-in-picture
+                // still comes first either way; this is only what happens after
+                // it, or when the video cannot float at all.
                 enabled={(videoPlayer?.background_mode ?? 'pip') === 'audio'}
                 onChange={() =>
                   updateSettings({

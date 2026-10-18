@@ -77,6 +77,7 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
+        watch.pip.onCloseToAudio = { watch.player.play() }
         watch.onRow = { [weak self] row in
             guard let self else { return }
             self.nav.refresh(row)
@@ -159,7 +160,7 @@ final class AppModel {
             await loadTheme()
             if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
                 watch.savedQuality = prefs.quality
-                watch.pip.floats = prefs.floatsVideo
+                watch.pip.keepsAudio = prefs.keepsAudio
             }
             return settings
         } catch {
