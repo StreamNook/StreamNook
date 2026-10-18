@@ -263,6 +263,7 @@ private struct Wash: View {
     var body: some View {
         ZStack {
             SN.background
+            ThemeLightLayer(surface: .shell)
             RadialGradient(colors: [SN.accent.opacity(0.16), .clear], center: .top, startRadius: 0, endRadius: 520)
             RadialGradient(colors: [SN.accent.opacity(0.06), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 420)
         }

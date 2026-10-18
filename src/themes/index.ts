@@ -308,6 +308,16 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
     };
 };
 
+/**
+ * A phone's page floors: nothing shows behind a phone's app (desktop's window
+ * can be see-through, a phone's never is), so a custom theme's see-through
+ * background is what it looks like over black, and the tertiary floor sits on
+ * that. Flattened once here, every surface built as solid from them (static
+ * popovers, menus, the tab bar floor, fades, Glassiness 0) is solid.
+ */
+export const phoneFloors = (background: string, tertiary: string): { background: string; tertiary: string } =>
+    opaqueFloors(background, tertiary, PHONE_FLOOR);
+
 // Whether a background needs light-coloured content drawn on top of it.
 // Relative luminance with the sRGB coefficients, split at the midpoint. Used for
 // the Android system bars, which sit over the app's own background: only the
@@ -409,9 +419,10 @@ let lastGlassStrength = 1;
 // glassiness would show the content behind it sharp enough to fight the text on
 // it, so with blur off the tint never gets more see-through than this. The
 // cap matches the member card's pinned strength, the app's existing "glass
-// that still reads" level.
+// that still reads" level. It lives in the shared JSON so the iPhone's native
+// theme light caps glassiness the same way.
 let glassBlurEnabled = true;
-const BLUR_OFF_MAX_STRENGTH = 0.45;
+const BLUR_OFF_MAX_STRENGTH: number = builtIn.glassBlurOffMaxStrength;
 const effectiveGlassStrength = (): number =>
     glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
 

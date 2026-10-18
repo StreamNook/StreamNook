@@ -15,6 +15,8 @@ public final class FakeFixtures: Sendable {
     public let rewards = FakeRewards()
     /// The mentions inbox: canned rows, every change announced.
     public let mentions = FakeMentions()
+    /// The stream manager on the fixture account's own channel: writes change only the fake.
+    public let streamManager = FakeStreamManager()
 
     public init(signedIn: Bool) {
         state = Mutex(State(signedIn: signedIn, settings: [
@@ -91,6 +93,7 @@ public final class FakeFixtures: Sendable {
         default:
             if let answer = try rewards.answer(cmd, args) { return answer }
             if let answer = try mentions.answer(cmd, args) { return answer }
+            if let answer = try streamManager.answer(cmd, args) { return answer }
             return try cosmetics.answer(cmd, args, userID: Self.user.id)
         }
     }

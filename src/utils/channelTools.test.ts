@@ -19,11 +19,12 @@ describe('channelToolSections', () => {
     expect(s).toEqual({ moderate: false, polls: false, drops: true, any: true });
   });
 
-  it('gives a Twitch moderator moderation but not polls', () => {
+  it('gives a Twitch moderator moderation and the stream manager rows', () => {
     const s = channelToolSections({ ...viewer, isModerator: true });
     expect(s.moderate).toBe(true);
-    expect(s.polls).toBe(false);
+    expect(s.polls).toBe(true);
     expect(s.any).toBe(true);
+    expect(channelToolSections({ ...viewer, isModerator: true, isVodReplay: true }).polls).toBe(false);
   });
 
   it('gives the broadcaster polls, but not while replaying a VOD', () => {

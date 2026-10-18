@@ -7,6 +7,7 @@ import { useAppStore } from '../../stores/AppStore';
 // It hides rows whose backing feature does not exist on Android, so the phone
 // settings stop offering knobs that quietly do nothing.
 import { IS_MOBILE } from '../../utils/platform';
+import ModerationCardSettings from './ModerationCardSettings';
 import PanelChannelList from '../plugins/PanelChannelList';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
@@ -900,6 +901,25 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               />
             </SubControls>
           </SettingsRow>
+        </SettingsSection>
+      )}
+
+      {/* The phone's Chats tab: your chats with no stream playing. */}
+      {IS_MOBILE && (
+        <SettingsSection label="Chats Tab" description="Reading your chats with no stream playing.">
+          <SettingsRow
+            title="Keep screen on"
+            onReset={resetFor(['chats_keep_screen_on', true])}
+            description="The screen stays on while the Chats tab is open, until 30 minutes pass without a touch."
+            control={
+              <Toggle
+                enabled={settings.chats_keep_screen_on ?? true}
+                onChange={() =>
+                  updateSettings({ ...settings, chats_keep_screen_on: !(settings.chats_keep_screen_on ?? true) })
+                }
+              />
+            }
+          />
         </SettingsSection>
       )}
 
@@ -3183,6 +3203,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       <UserCommandsSettings />
 
       <RemindersSettings />
+
+      {/* The phones' user card buttons; desktop sets its lengths on the Moderation tab. */}
+      {IS_MOBILE && <ModerationCardSettings />}
 
       <UserOverridesSettings />
     </div>

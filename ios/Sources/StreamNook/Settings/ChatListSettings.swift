@@ -36,7 +36,7 @@ struct EntryTextField: View {
         })
         Group {
             if multiline {
-                TextField(placeholder, text: binding, axis: .vertical).lineLimit(2...5)
+                TextField(placeholder, text: binding, axis: .vertical).lineLimit(2...5).keyboardHideButton()
             } else {
                 TextField(placeholder, text: binding).lineLimit(1)
             }
@@ -148,6 +148,7 @@ struct AddField: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(keyboard)
+                    .keyboardHideButton()
                     .submitLabel(.done)
                     .onSubmit { commit() }
                     .onChange(of: text) { _, value in

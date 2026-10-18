@@ -798,6 +798,12 @@ pub(crate) async fn reship_room_state(channel: &str) {
     send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
 }
 
+/// Send one chat-stream frame to `channel`'s rooms (a held AutoMod message,
+/// say), held for the next attach when no room is listening.
+pub(crate) async fn ship_channel_frame(channel: &str, frame: String) {
+    send_to_bridge(BridgeFrame::channel(channel, frame), true).await;
+}
+
 /// Look up the account's own follow of a followers-only room (one Helix call),
 /// word the room again with it, and keep a "you can chat in N minutes" line
 /// current until the wait is over.
@@ -1003,7 +1009,7 @@ pub(crate) struct EmoteLookup {
 }
 
 impl EmoteLookup {
-    fn build(set: &EmoteSet) -> Arc<Self> {
+    pub(crate) fn build(set: &EmoteSet) -> Arc<Self> {
         let mut by_name =
             HashMap::with_capacity(set.bttv.len() + set.ffz.len() + set.seven_tv.len());
         for e in set.bttv.iter().chain(&set.ffz).chain(&set.seven_tv) {
@@ -1014,8 +1020,13 @@ impl EmoteLookup {
 
     /// The third-party emote a word names. Only words Twitch did not tag reach
     /// this: a tagged span is always the Twitch emote.
-    fn get(&self, name: &str) -> Option<&Emote> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Emote> {
         self.by_name.get(name)
+    }
+
+    /// How many third-party names it knows.
+    pub(crate) fn len(&self) -> usize {
+        self.by_name.len()
     }
 }
 
@@ -1060,6 +1071,7 @@ fn drop_parse_lookup(key: &str) {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.remove(key);
     }
+    crate::services::shared_chat_emotes::release_home(key);
 }
 
 /// What a CLEARMSG line says: one message deleted by a moderator.
@@ -1233,6 +1245,16 @@ fn clear_parse_lookups() {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.clear();
     }
+    crate::services::shared_chat_emotes::release_all();
+}
+
+/// The message body of a `:prefix COMMAND #channel :text` line, or "". The
+/// colon is optional when the body is one word (Twitch and the history mirror
+/// both leave it out), which is how a one-emote message arrives.
+pub(crate) fn irc_trailing_text(raw: &str) -> &str {
+    let rest = if raw.starts_with('@') { raw.split_once(' ').map(|(_, r)| r).unwrap_or("") } else { raw };
+    let text = rest.splitn(4, ' ').nth(3).unwrap_or("");
+    text.strip_prefix(':').unwrap_or(text)
 }
 
 /// Owned Arc snapshots backing a ParseCtx. Gathered once per message; the
@@ -2675,6 +2697,16 @@ impl IrcService {
             }
         } else if trimmed.contains("USERNOTICE") {
             // Subscription, resub, gift sub, etc.
+            // The viewer's own sub, or a gift to them, shows in every chat menu at once.
+            if let Some((room, subscriber)) = crate::services::channel_relationship::sub_notice(trimmed) {
+                let mine = crate::services::account_store::AccountStore::primary()
+                    .is_some_and(|me| me.login.eq_ignore_ascii_case(&subscriber));
+                if mine {
+                    tauri::async_runtime::spawn(async move {
+                        crate::services::channel_state::own_sub_seen(&room).await;
+                    });
+                }
+            }
             // Parse USERNOTICE messages - layout will be measured by frontend
             if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
                 // Skip USERNOTICE messages with no visible content
@@ -2895,6 +2927,13 @@ impl IrcService {
             // A running /spam or /pyramid there hears refusals and bans.
             if let (Some(id), Some(ch)) = (msg_id.as_deref(), extract_channel_from_irc_line(trimmed)) {
                 crate::services::chat_burst::note_notice(&ch, id);
+                // A send refused because of a warning locks the box behind
+                // its Acknowledge button.
+                if crate::services::chat_warning::is_warned_refusal(Some(id), None) {
+                    tokio::spawn(async move {
+                        crate::services::chat_warning::on_refusal(&ch, Some("msg_warned"), None).await;
+                    });
+                }
             }
 
             // A suspended channel can never confirm its JOIN; forget it so the
@@ -3014,6 +3053,10 @@ impl IrcService {
                                                 SHARED_CHAT_ACTIVE.store(
                                                     true,
                                                     std::sync::atomic::Ordering::Relaxed,
+                                                );
+                                                // Who each partner is, ahead of their first row.
+                                                crate::services::shared_chat_source::warm(
+                                                    partner_ids.iter().filter(|id| id.as_str() != room_id).cloned().collect(),
                                                 );
                                             }
 
@@ -4181,11 +4224,10 @@ impl IrcService {
     /// synchronously with no locks and no data clones - the block_in_place +
     /// block_on bridge this replaced was a runtime-wide scheduling event per
     /// chat message.
-    fn gather_parse_snapshots(channel: &str, sender_id: &str) -> ParseSnapshots {
-        let channel_lookup = channel_parse_lookup()
-            .read()
-            .ok()
-            .and_then(|g| g.get(channel).cloned());
+    /// `partner`: the table of the Shared Chat room the row was sent in, which
+    /// replaces the home channel's (see `shared_chat_emotes`).
+    fn gather_parse_snapshots(channel: &str, sender_id: &str, partner: Option<Arc<EmoteLookup>>) -> ParseSnapshots {
+        let channel_lookup = partner.or_else(|| channel_parse_lookup().read().ok().and_then(|g| g.get(channel).cloned()));
         let personal = if sender_id.is_empty()
             || !PERSONAL_EMOTES_PRESENT.load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -4743,6 +4785,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Use EmotePos struct
         // emotes format: 25:0-4,12-16/1902:6-10 ...
@@ -4872,7 +4921,13 @@ impl IrcService {
 
         // Parse message content into segments (using stripped content).
         // Snapshots gathered once; parsing is fully synchronous.
-        let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id);
+        // A row from a Shared Chat partner uses that room's emotes, not ours.
+        let partner = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        )
+        .and_then(|room| crate::services::shared_chat_emotes::lookup_for(&privmsg_channel, room, raw));
+        let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id, partner);
         // Cheermotes draw only in a message that carries bits, as on Twitch: a
         // "Cheer100" that spent nothing (typed as text, or the composer's own
         // copy before the echo) is plain text.
@@ -5073,6 +5128,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Parse emotes from user's message content (if any)
         let emotes_str = tag_map.get("emotes").unwrap_or(&"");
@@ -5114,7 +5176,12 @@ impl IrcService {
 
         // Parse message content into segments (if there's user content)
         let segments = if !content.is_empty() {
-            let snapshots = Self::gather_parse_snapshots(&usernotice_channel, &user_id);
+            let partner = crate::services::shared_chat_emotes::partner_room(
+                tag_map.get("source-room-id").copied(),
+                tag_map.get("room-id").copied(),
+            )
+            .and_then(|room| crate::services::shared_chat_emotes::lookup_for(&usernotice_channel, room, raw));
+            let snapshots = Self::gather_parse_snapshots(&usernotice_channel, &user_id, partner);
             Self::parse_message_segments(&content, &emotes, &snapshots.ctx())
         } else {
             Vec::new()
@@ -5293,6 +5360,50 @@ impl IrcService {
     /// changed go to every window showing the channel as one
     /// `HISTORY_SEGMENTS` frame, which patches them in place. The backlog
     /// itself never waits on the providers.
+    /// Rows from a Shared Chat partner parsed before its set landed, parsed
+    /// again with it; the ones whose emotes change are patched in place in each
+    /// home chat (`HISTORY_SEGMENTS`, segments and view), so nothing on screen
+    /// moves and nothing waited for the set.
+    pub(crate) async fn restamp_partner_rows(room_id: &str, partner: Option<&EmoteLookup>, rows: Vec<(String, String)>) {
+        let mut by_home: HashMap<String, Vec<Value>> = HashMap::new();
+        for (home, raw) in rows {
+            let home_lookup = channel_parse_lookup().read().ok().and_then(|g| g.get(&home).cloned());
+            let emotes_change = partner.is_some_and(|p| {
+                crate::services::shared_chat_emotes::words_change(irc_trailing_text(&raw), p, home_lookup.as_deref())
+            });
+            if !emotes_change && !crate::services::shared_chat_emotes::badges_change(&raw, room_id) {
+                continue;
+            }
+            let parsed = match irc_command(&raw) {
+                Some("PRIVMSG") => Self::parse_privmsg(&raw),
+                Some("USERNOTICE") => Self::parse_usernotice(&raw),
+                _ => None,
+            };
+            let Some(mut msg) = parsed else { continue };
+            crate::services::chat_row_view::stamp(&mut msg);
+            let mut row = json!({
+                "id": msg.id,
+                "segments": msg.segments,
+                "parent_segments": msg.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()),
+                "badges": msg.badges,
+            });
+            if let Some(view) = &msg.metadata.view {
+                row["view"] = json!(view);
+            }
+            by_home.entry(home).or_default().push(row);
+        }
+        for (home, rows) in by_home {
+            debug!("[SharedChat] {home}: {} partner rows now wear their room's emotes and badges", rows.len());
+            let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": home, "rows": rows });
+            send_to_bridge(BridgeFrame::channel(&home, frame.to_string()), false).await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_parse_lookup_for_test(key: &str, set: &EmoteSet) {
+        rebuild_parse_lookup(key, set);
+    }
+
     pub fn spawn_history_restamp(channel: &str, raw: Vec<String>, first: &[ChatMessage]) {
         if raw.is_empty() || first.is_empty() {
             return;
@@ -6027,7 +6138,7 @@ impl IrcService {
         };
         // The broadcaster wrote the title, so the redeemer's personal emotes
         // and cheermotes have no part in it.
-        let snapshots = Self::gather_parse_snapshots(&r.channel, "");
+        let snapshots = Self::gather_parse_snapshots(&r.channel, "", None);
         let ctx = ParseCtx {
             channel: snapshots.channel.as_deref(),
             no_cheermotes: true,

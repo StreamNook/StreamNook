@@ -39,11 +39,14 @@ use commands::moderation_tools::{
     get_user_pronouns, moderate_chatter, resolve_automod_message, set_user_note,
     update_channel_info, upload_image,
 };
+use commands::stream_manager::{
+    check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
+};
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
     badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
-    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
+    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, shared_chat::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
@@ -1470,9 +1473,9 @@ pub fn run() {
             // cards. Replaces three JS timers per mounted chat and a 2.5 s poll
             // per open card. See services::channel_state.
             services::channel_state::start(app_handle.clone());
-            // Live line for the chat dock's Kick / YouTube / TikTok chats;
-            // Twitch ones ride channel_state. See services::chat_dock_live.
-            #[cfg(desktop)]
+            // Live line for the chat dock's (desktop) and the phone chats'
+            // Kick / YouTube / TikTok rooms; Twitch ones ride channel_state.
+            // See services::chat_dock_live.
             services::chat_dock_live::start(app_handle.clone());
             // Minimized-window signal: the page cannot see it (native occlusion
             // detection is off), Rust can. See services::window_visibility.
@@ -1766,6 +1769,13 @@ pub fn run() {
             create_clip,
             get_live_broadcast,
             create_vod_clip,
+            clip_create,
+            channel_media,
+            vod_replay_begin,
+            vod_replay_tick,
+            vod_replay_stop,
+            my_clips_list,
+            my_clips_forget,
             begin_clip_edit,
             finalize_clip,
             get_clip_render_status,
@@ -1826,6 +1836,7 @@ pub fn run() {
             get_category_info,
             get_user_by_id,
             get_user_by_login,
+            get_shared_chat_source,
             get_channel_moderators,
             get_channel_vips,
             follow_channel,
@@ -2064,6 +2075,12 @@ pub fn run() {
             create_stream_marker,
             warn_chat_user,
             update_shield_mode,
+            // Stream manager
+            get_stream_manager,
+            check_stream_info,
+            stream_manager_act,
+            get_reward_queue,
+            search_raid_targets,
             // Discord commands (desktop-only — Discord Rich Presence)
             #[cfg(desktop)]
             connect_discord,
@@ -2247,6 +2264,10 @@ pub fn run() {
             // Channel Points Rewards commands
             get_channel_rewards,
             get_cached_channel_rewards,
+            get_channel_prediction,
+            prediction_bet,
+            predict,
+            watch_channel_poll_view,
             redeem_channel_reward,
             redeem_reward,
             send_highlighted_message,
@@ -2473,9 +2494,19 @@ pub fn run() {
             #[cfg(mobile)]
             commands::chat_tabs::chat_tabs_set_active,
             #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_connect,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_park,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_keep,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_visible,
+            #[cfg(mobile)]
             commands::chat_tabs::chat_room_from_link,
             #[cfg(mobile)]
             commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_picker,
             #[cfg(mobile)]
             commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
@@ -2554,6 +2585,10 @@ pub fn run() {
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,
+            services::chat_warning::acknowledge_chat_warning,
+            services::mod_history::get_chatter_mod_history,
+            services::chatter_card::get_chatter_card_tools,
+            services::chatter_card::set_card_timeout_length,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

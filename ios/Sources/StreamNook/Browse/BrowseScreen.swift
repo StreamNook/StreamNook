@@ -31,8 +31,8 @@ struct BrowseScreen: View {
         }
         .scrollIndicators(.hidden)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
-        .scrollDismissesKeyboard(.immediately)
-        .background(SN.background)
+        .scrollDismissesKeyboard(.never)
+        .snShellBackground()
         .navigationTitle("Browse")
         .toolbarTitleDisplayMode(.inlineLarge)
         .searchable(text: $browse.query, placement: .navigationBarDrawer(displayMode: .always), prompt: searchPrompt)

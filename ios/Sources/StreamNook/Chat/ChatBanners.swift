@@ -3,8 +3,10 @@ import SwiftUI
 
 /// The surface of a banner over (or under) moving chat: the popover tint at 90 percent, solid
 /// at 0 percent glassiness, with no blur, since a blur over repainting chat costs every frame.
-/// Paragraphs (an unrolled pin) sit on a near-solid tint so chat never reads through them.
-private struct StaticPopover: ViewModifier {
+/// Paragraphs (an unrolled pin) sit on a near-solid tint so chat never reads through them. A
+/// popover's share of the theme's light lies on the tint, under the edge. The poll and
+/// prediction cards share it.
+struct StaticPopover: ViewModifier {
     var radius: CGFloat = 12
     var tint = 0.9
 
@@ -12,6 +14,7 @@ private struct StaticPopover: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content.background {
             shape.fill(SN.backgroundTertiary.opacity(tint + (1 - Look.shared.glassiness) * (1 - tint)))
+                .overlay { ThemeLightLayer(surface: .popover).clipShape(shape) }
                 .overlay { shape.stroke(SN.borderSubtle, lineWidth: 1) }
         }
     }

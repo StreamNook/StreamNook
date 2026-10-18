@@ -1292,6 +1292,8 @@ export interface Settings {
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
   mentions?: MentionSettings;
+  /** The phones' Chats screen keeps the screen on while in front, until 30 min pass with no touch. Default on. */
+  chats_keep_screen_on?: boolean;
   live_notifications?: LiveNotificationSettings;
   last_seen_version?: string;
   auto_switch?: AutoSwitchSettings;
@@ -1504,8 +1506,20 @@ export interface ModerationSettings {
   // message's moderation controls. First entry is the prefilled default.
   saved_ban_reasons?: string[];
   // Timeout durations (seconds) offered on the hover dock and drag dial.
-  // Default [1, 600, 3600, 86400].
+  // Default [1, 600, 3600, 86400]. The phones' user card shows the first four.
   timeout_presets?: number[];
+  // The viewer's own buttons on a user card in channels they moderate
+  // (Rust services/chatter_card.rs reads them; at most six are shown).
+  card_actions?: ModCardAction[];
+}
+
+export interface ModCardAction {
+  label: string;
+  kind: 'timeout' | 'ban' | 'unban' | 'warn';
+  /** Timeout length in seconds (timeouts only). */
+  seconds?: number;
+  /** Sent with the action; a warning without one asks for it. */
+  reason?: string;
 }
 
 export interface ModLogEvent {
@@ -1668,6 +1682,19 @@ export interface SharedChat {
   label: string;
 }
 
+/** The signed-in viewer's relationship to a Twitch channel (Rust
+ *  `channel_relationship::Relationship`). */
+export interface ChannelRelationship {
+  /** null while unknown (no sign-in, or Twitch did not answer). */
+  following: boolean | null;
+  subscribed: boolean;
+  /** Subscribed before, not now: the control offers to resubscribe. */
+  has_sub_history: boolean;
+  cumulative_months: number;
+  /** The subscriber badge the viewer's months (or next month) wear. */
+  badge_url: string | null;
+}
+
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
 export interface ChannelState {
   login: string;
@@ -1686,7 +1713,14 @@ export interface ChannelState {
   pinned: unknown[];
   pinned_at: number | null;
   collab: Collaboration | null;
+  /** Outside a Stream Together group, the Twitch Shared Chat session the
+   *  channel's chat is in. Read with `collab` (same tick, `collab_at`). */
+  shared_chat: SharedChat | null;
   collab_at: number | null;
+  /** The viewer's follow and subscription here, read when the chat opens;
+   *  null until the first answer. */
+  relationship: ChannelRelationship | null;
+  relationship_at: number | null;
 }
 
 /** One changed section, the payload of the `channel-state` event. */
@@ -1703,7 +1737,8 @@ export type ChannelStateUpdate =
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
   | { section: 'bits'; login: string; bits: ChannelBitsFace | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
-  | { section: 'collab'; login: string; collab: Collaboration | null; at: number };
+  | { section: 'collab'; login: string; collab: Collaboration | null; shared_chat: SharedChat | null; at: number }
+  | { section: 'relationship'; login: string; relationship: ChannelRelationship | null; at: number };
 
 /** One channel's bulk hype-train status, as Rust reports it. */
 export interface HypeTrainBulkStatus {
@@ -2716,4 +2751,117 @@ export interface SubStanding {
     art: string | null;
     text: string;
   } | null;
+}
+
+// ---- Poll and prediction cards (services/predictions.rs, services/poll_view.rs) ----
+// Rust decides every number and word on these cards; the shells only draw them.
+
+/** One side of a prediction, as Rust worded it. */
+export interface OutcomeView {
+  id: string;
+  title: string;
+  /** Twitch's color for the side, lowercase: `blue`, `pink`, others as sent. */
+  color: string;
+  /** Share of the points, 0 to 100. */
+  percent: number;
+  /** What one point returns if this side wins: "1:2.78". */
+  ratio: string;
+  points_label: string;
+  people_label: string;
+  winner: boolean;
+  mine: boolean;
+}
+
+/** How a prediction ended, for the viewer. */
+export interface ResultView {
+  tone: 'won' | 'lost' | 'refunded' | 'ended';
+  line: string;
+}
+
+/** One prediction card, decided in full by Rust. */
+export interface PredictionView {
+  channel_id: string;
+  prediction_id: string;
+  title: string;
+  phase: 'open' | 'locked' | 'resolving' | 'ended';
+  /** Unix ms the window closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Ended". */
+  badge: string | null;
+  outcomes: OutcomeView[];
+  can_predict: boolean;
+  /** The side the viewer already staked; the other sides cannot be chosen. */
+  picked: string | null;
+  status_line: string | null;
+  result: ResultView | null;
+  totals_line: string;
+  points_name: string;
+  points_icon: string | null;
+}
+
+/** `prediction-state` push, and `get_channel_prediction`'s answer. */
+export interface PredictionPush {
+  channel_id: string;
+  view: PredictionView | null;
+}
+
+export interface BetPreset {
+  label: string;
+  amount: number;
+}
+
+/** What a bet would do, in the card's and the confirm's words. Spends nothing. */
+export interface BetView {
+  amount: number;
+  max: number;
+  presets: BetPreset[];
+  ok: boolean;
+  problem: string | null;
+  button: string;
+  win_line: string;
+  confirm_title: string;
+  confirm_line: string;
+  confirm_note: string | null;
+  balance_line: string | null;
+}
+
+/** What `predict` answered; `message` is the toast either way. */
+export interface PredictOutcome {
+  success: boolean;
+  message: string;
+  view: PredictionView | null;
+}
+
+export interface ChoiceView {
+  id: string;
+  title: string;
+  /** Share of the votes, 0 to 100. */
+  percent: number;
+  votes_label: string;
+  mine: boolean;
+  winner: boolean;
+}
+
+/** One poll card, decided in full by Rust. */
+export interface PollView {
+  channel_id: string;
+  poll_id: string;
+  title: string;
+  phase: 'open' | 'closed' | 'ended';
+  /** Unix ms the poll closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Final". */
+  badge: string | null;
+  choices: ChoiceView[];
+  can_vote: boolean;
+  my_choice_id: string | null;
+  footer: string;
+  voters_line: string;
+  result_line: string | null;
+}
+
+/** `poll-state` push. */
+export interface PollPush {
+  channel_id: string;
+  view: PollView | null;
 }

@@ -17,6 +17,9 @@ final class ChatSession {
         case room
         /// Recorded frames replayed at a rate (frames a second), for building without a sign-in.
         case fixture(ChatFixture, rate: Double)
+        /// A VOD's recorded chat: the core's replay steps feed it in step with the player
+        /// (`Watch.onReplay`). Read-only: nobody posts into a recording.
+        case replay
     }
 
     /// The room's key: the bare lowercased login on Twitch, `kick:slug` on Kick.
@@ -82,6 +85,14 @@ final class ChatSession {
         case .room:
             connected = true
             reader = Task { [weak self] in await self?.loadHistory() }
+        case .replay:
+            connected = true
+            let core = core
+            let roomID = roomID
+            reader = Task {
+                _ = try? await core.invoke("fetch_global_badges", "{}")
+                if let roomID { _ = try? await core.invoke("fetch_channel_badges", args: ["channelId": roomID]) }
+            }
         case .fixture(let fixture, let rate):
             roomID = fixture.roomID
             let pipeline = pipeline

@@ -140,14 +140,14 @@ struct ChatEmotePicker: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Color(ChatTheme.surface), in: .rect(cornerRadius: 10))
+            .background(SN.surface, in: .rect(cornerRadius: 10))
             tabRow
             grid
         }
         .padding(8)
         .frame(height: min(420, screenHeight * 0.45))
-        .background(Color(ChatTheme.background), in: .rect(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(ChatTheme.borderSubtle)))
+        .background(SN.background, in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(SN.borderSubtle))
         .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
     }
 
@@ -192,7 +192,7 @@ struct ChatEmotePicker: View {
         case "emoji":
             Image(systemName: "face.smiling")
                 .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(active ? Color(ChatTheme.accent) : ComposerInk.quiet)
+                .foregroundStyle(active ? SN.accent : ComposerInk.quiet)
         default:
             // The provider's own logo, in its brand color while selected.
             ProviderLogo(provider: id, size: 14, tinted: active)
@@ -207,7 +207,7 @@ struct ChatEmotePicker: View {
         case "7tv": return Color(red: 0.16, green: 0.71, blue: 0.96)
         case "ffz": return .white
         case "kick": return Color(red: 0.33, green: 0.98, blue: 0.09)
-        default: return Color(ChatTheme.accent)
+        default: return SN.accent
         }
     }
 
@@ -309,7 +309,7 @@ struct ChatEmotePicker: View {
         case "favorites":
             Image(systemName: key == "recent" ? "clock.fill" : "star.fill")
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(key == "recent" ? Color(ChatTheme.textSecondary) : .yellow)
+                .foregroundStyle(key == "recent" ? SN.textSecondary : .yellow)
         case "emoji":
             EmptyView()
         default:
@@ -320,16 +320,16 @@ struct ChatEmotePicker: View {
     private func header(_ title: String, count: Int?, key: String = "") -> some View {
         HStack(spacing: 5) {
             headerMark(key)
-            Text(title.uppercased()).foregroundStyle(Color(ChatTheme.textPrimary))
+            Text(title.uppercased()).foregroundStyle(SN.textPrimary)
             if let count { Text("(\(count))").opacity(0.5) }
             Spacer()
         }
         .font(.system(size: 10, weight: .bold))
         .tracking(1)
-        .foregroundStyle(Color(ChatTheme.textSecondary))
+        .foregroundStyle(SN.textSecondary)
         .padding(.vertical, 6)
-        .background(Color(ChatTheme.background))
-        .overlay(alignment: .bottom) { Rectangle().fill(Color(ChatTheme.borderSubtle)).frame(height: 1) }
+        .background(SN.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(SN.borderSubtle).frame(height: 1) }
     }
 
     private var emptyFavorites: some View {
@@ -424,14 +424,14 @@ private struct EmoteCard: View {
             VStack(spacing: 3) {
                 Text(cell.name)
                     .font(.sn(16, 700))
-                    .foregroundStyle(Color(ChatTheme.textPrimary))
+                    .foregroundStyle(SN.textPrimary)
                 // Where it comes from: the provider's logo, then who made it.
                 HStack(spacing: 6) {
                     ProviderLogo(provider: cell.provider, size: 12, tinted: true)
                     if let owner = cell.ownerName, !owner.isEmpty {
                         Text("by \(owner)")
                             .font(.sn(12))
-                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                            .foregroundStyle(SN.textSecondary)
                     }
                 }
                 ForEach(cell.detailLines.filter { !$0.hasPrefix("by ") }, id: \.self) { line in
@@ -445,13 +445,13 @@ private struct EmoteCard: View {
         }
         .padding(18)
         .frame(minWidth: 200)
-        .background(Color(ChatTheme.background))
+        .background(SN.background)
     }
 
     static func tint(_ line: String) -> Color {
         if line.hasPrefix("Modifier") { return .purple }
         if line == "Zero-Width" { return .yellow }
-        return Color(ChatTheme.textMuted)
+        return SN.textMuted
     }
 }
 

@@ -25,6 +25,7 @@ struct BadgesSegment: View {
         }
         .sheet(item: $rewards.badgeSheet) { tile in
             BadgeSheet(model: model, tile: tile) { rewards.badgeSheet = nil }
+                .environment(\.themeLightOff, true)
         }
         .onAppear {
             warmOnAppear = !(rewards.wall?.tiles.isEmpty ?? true)
@@ -32,6 +33,7 @@ struct BadgesSegment: View {
         }
         .onChange(of: rewards.badgeSort) { Task { await rewards.loadWall(force: false) } }
         .onChange(of: model.signIn.user?.id) { Task { await rewards.loadWall(force: true) } }
+        .environment(\.themeLightOff, true)
     }
 
     private func stateLine(_ text: String) -> some View {

@@ -5,16 +5,22 @@ import SwiftUI
 // frost remains. System chrome (the tab bar, sheets, menus, popovers) stays Apple's Liquid Glass.
 
 extension View {
-    /// A panel in the page: the opaque floor, the theme's faint wash, light along its top edge, a
-    /// dark contour and a small shadow. No blur: its backdrop is the flat page, which blurs to
-    /// itself.
+    /// A panel in the page: the opaque floor, the theme's faint wash and its share of the theme's
+    /// light, light along its top edge, a dark contour and a small shadow. No blur: its backdrop is
+    /// the page, whose light is already soft. A panel that is a text field passes `light: nil`:
+    /// a field being typed into stays plain. A `stage` (a card showing someone's cosmetics) takes
+    /// no light and, under a theme that throws light, hides the page's light behind it too, so
+    /// the theme's light is never read as part of the cosmetic.
     @MainActor
-    func snPanel(radius: CGFloat = 12) -> some View {
+    func snPanel(radius: CGFloat = 12, light: ThemeLight.Surface? = .panel, stage: Bool = false) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let light = stage ? nil : light
         return background {
             ZStack {
+                if stage && Look.shared.light != nil { shape.fill(SN.background) }
                 shape.fill(SN.floor)
                 shape.fill(SN.backgroundSecondary)
+                if let light { ThemeLightLayer(surface: light).clipShape(shape) }
             }
             .overlay { shape.stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
             .overlay {
@@ -27,8 +33,9 @@ extension View {
         }
     }
 
-    /// A media card (stream, category): the floor, the wash and a faint accent tint, and nothing
-    /// else. A grid of outlined, lit rectangles reads as noise.
+    /// A media card (stream, category): the floor, the wash, a faint accent tint and the panel's
+    /// share of the theme's light, and nothing else. A grid of outlined, lit rectangles reads as
+    /// noise.
     @MainActor
     func snMediaCard(radius: CGFloat = SNRadius.card) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -37,15 +44,18 @@ extension View {
                 shape.fill(SN.floor)
                 shape.fill(SN.backgroundSecondary)
                 shape.fill(SN.accent.opacity(0.04))
+                ThemeLightLayer(surface: .panel).clipShape(shape)
             }
         }
     }
 
     /// Glass floating over content (a toast, the segment capsules, the mini player's close): Liquid
     /// Glass with the opaque floor laid over it as glassiness falls, solid at 0 or with blur off.
+    /// `light` is the share of the theme's light it catches; small controls take none.
     @MainActor
-    func snGlass<S: Shape>(_ shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
-        modifier(SNGlass(shape: shape, tint: tint, interactive: interactive))
+    func snGlass<S: Shape>(_ shape: S, tint: Color? = nil, interactive: Bool = false,
+                           light: ThemeLight.Surface? = nil) -> some View {
+        modifier(SNGlass(shape: shape, tint: tint, interactive: interactive, light: light))
     }
 
     /// A card chip's veil over a thumbnail: frosted, a thin dark film, solid at 0.
@@ -77,19 +87,26 @@ private struct SNGlass<S: Shape>: ViewModifier {
     let shape: S
     let tint: Color?
     let interactive: Bool
+    let light: ThemeLight.Surface?
 
     func body(content: Content) -> some View {
         let look = Look.shared
         if look.frosted {
             let glass = tint.map { Glass.regular.tint($0) } ?? .regular
             content
-                .background { shape.fill(SN.floor) }
+                .background {
+                    ZStack {
+                        shape.fill(SN.floor)
+                        if let light { ThemeLightLayer(surface: light).clipShape(shape) }
+                    }
+                }
                 .glassEffect(interactive ? glass.interactive() : glass, in: shape)
         } else {
             content.background {
                 ZStack {
                     shape.fill(SN.backgroundTertiary)
                     if let tint { shape.fill(tint) }
+                    if let light { ThemeLightLayer(surface: light).clipShape(shape) }
                 }
             }
         }

@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { CircleSlash } from 'lucide-react';
+import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
@@ -39,11 +40,13 @@ import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
-import type { RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import type { ChatWarningView, RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import { WarningBox } from './WarningBox';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
+import { ManageChannelSheet } from './ManageChannelSheet';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -97,6 +100,9 @@ export interface ChatGating {
   /** The room's modes in full for the chat menu, whatever the composer's
    *  room-mode icons are set to. */
   view?: RoomModeView | null;
+  /** A moderator's warning you have not acknowledged: the field stays locked
+   *  behind the Acknowledge box above it. */
+  warning?: ChatWarningView | null;
 }
 
 interface Props {
@@ -158,6 +164,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // that is still in flight answers into the room it was typed in.
   const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [manageOpen, setManageOpen] = useState(false);
   const text = drafts[roomKey] ?? '';
   const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
     setDrafts((d) => {
@@ -194,6 +201,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Whether the field has the keyboard: while it does, the commands button is
+  // the way to put the keyboard away (scrolling the chat never does).
+  const [typing, setTyping] = useState(false);
   // The composer rows of Settings > Chat that this field honors.
   const spellcheck = chatInput?.spellcheck_enabled ?? true;
   const hidePlaceholder = chatInput?.hide_placeholder ?? false;
@@ -452,7 +462,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // slow-mode wait, else "Send a message" (nothing when Settings hides it). A
   // mode that only may hold you back is said once, by its icon at the field's
   // end; the chat menu names it in full.
-  const placeholder = gating.blocked
+  const placeholder = gating.warning
+    ? gating.warning.prompt
+    : gating.blocked
     ? (gating.reason ?? 'Chat restricted')
     : slowWait > 0
       ? `Slow mode: you can send again in ${slowWait}s`
@@ -488,7 +500,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
     <div
       className="shrink-0 border-t border-borderSubtle"
       style={{
-        paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
+        // The Chats screen sets --sn-composer-floor so the box clears the tab
+        // bar; the keyboard, when up, covers the bar and wins.
+        paddingBottom:
+          'max(calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px), var(--sn-composer-floor, 0px))',
         transition: 'padding-bottom 0.15s ease-out',
       }}
     >
@@ -506,6 +521,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
           placeholder alone says why the field is dead, and it says it in the
           field you were about to type in. The chat menu carries the room's full
           state, and now the Follow action alongside it. */}
+      {/* A moderator's warning: what they said, and Acknowledge, the one way to
+          chat here again. Where the room's words live, so it cannot scroll away;
+          Rust unlocks the field once Twitch takes the acknowledgement. */}
+      {gating.warning && channelId && <WarningBox warning={gating.warning} roomId={channelId} />}
       {/* A message the room did not take. The text stays in the field; this
           says why once, beside it, with the two ways forward. */}
       {shownFailure && (
@@ -603,6 +622,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
+              // Its own hide-keyboard button replaces commands while typing.
+              data-keyboard-hide="own"
+              onFocus={() => setTyping(true)}
+              onBlur={() => setTyping(false)}
               onKeyDown={(e) => {
                 // An IME's Enter confirms the composed word; it never sends.
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -614,7 +637,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The placeholder says why, in the
               // field's ordinary placeholder ink: a statement, not an alarm.
-              disabled={!!gating.blocked}
+              disabled={!!gating.blocked || !!gating.warning}
               spellCheck={spellcheck}
               autoCorrect={spellcheck ? 'on' : 'off'}
               rows={1}
@@ -649,7 +672,19 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
               text), so only a Twitch room shows it. */}
-          {isTwitch && channel && (
+          {typing ? (
+            <button
+              // Held on the press, so the field keeps the keyboard until this
+              // tap lands; otherwise it would blur first and this button would
+              // give its place back before the tap.
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => inputRef.current?.blur()}
+              className="shrink-0 w-9 h-9 flex items-center justify-center text-textSecondary active:opacity-70"
+              aria-label="Hide keyboard"
+            >
+              <KeyboardHideIcon size={19} />
+            </button>
+          ) : isTwitch && channel && (
             <button
               onClick={() => {
                 setEmotesOpen(false);
@@ -903,8 +938,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onAddChat={onAddChat}
         onReload={onReload}
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
+        onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
         onCloseChat={onCloseChat}
       />
+      {channel && channelId && isTwitch && isModerator && (
+        <ManageChannelSheet
+          open={manageOpen}
+          onClose={() => setManageOpen(false)}
+          channelId={channelId}
+          channelLogin={channel}
+        />
+      )}
       <MobileCommandSheet
         open={commandsOpen}
         onClose={() => setCommandsOpen(false)}

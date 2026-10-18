@@ -18,15 +18,29 @@ struct MainShell: View {
         @Bindable var cosmetics = model.cosmetics
         let immersive = landscape && nav.shellCovered
         ZStack {
+            // Icons only, as on Android (Brandon: no text labels in the bar); each name stays the
+            // tab's accessibility label.
             TabView(selection: $nav.tab) {
-                Tab(MobileTab.following.title, systemImage: Symbol.following, value: MobileTab.following) {
+                Tab(value: MobileTab.following) {
                     stack(.following) { FollowingScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .following, symbol: Symbol.following)
                 }
-                Tab(MobileTab.browse.title, systemImage: Symbol.browse, value: MobileTab.browse) {
+                Tab(value: MobileTab.browse) {
                     stack(.browse) { BrowseScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .browse, symbol: Symbol.browse)
                 }
-                Tab(MobileTab.rewards.title, systemImage: Symbol.rewards, value: MobileTab.rewards) {
+                Tab(value: MobileTab.chats) {
+                    stack(.chats) { ChatsScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .chats, symbol: Symbol.chats)
+                }
+                .badge(model.chat.state.mentionTotal)
+                Tab(value: MobileTab.rewards) {
                     stack(.rewards) { RewardsScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .rewards, symbol: Symbol.rewards)
                 }
                 Tab(value: MobileTab.you) {
                     stack(.you) { YouScreen(model: model) }
@@ -36,6 +50,7 @@ struct MainShell: View {
             }
             .tint(SN.accent)
             .environment(\.shellCovered, nav.shellCovered)
+            .environment(\.openChat) { model.openChat($0) }
             .accessibilityHidden(nav.shellCovered)
 
             if nav.playing != nil {
@@ -50,7 +65,15 @@ struct MainShell: View {
         .statusBarHidden(immersive)
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
-        .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        .onChange(of: nav.tab) { old, new in
+            if old == .browse { model.browseState.leftTab() }
+            if new == .chats, old != .chats { model.nav.chatsReturnTab = old }
+        }
+        // Whoever signs in gets their own saved chats.
+        .onChange(of: model.signedIn) { _, _ in model.chat.load() }
+        // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
+        // player covers it) and under the full player.
+        .onChange(of: onScreenRoom, initial: true) { _, room in model.chat.setVisible(room.map { [$0] } ?? []) }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
         // selected ring's color).
         .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
@@ -59,6 +82,7 @@ struct MainShell: View {
         .sheet(item: $cosmetics.profile) { target in
             ProfileSheet(model: ProfileSheetModel(target: target, core: model.core, ownID: model.signIn.user?.id,
                                                   store: cosmetics))
+                .environment(\.themeLightOff, true)
         }
         .sheet(item: $model.clip) { link in
             ClipSheet(url: link.url, model: model)
@@ -67,11 +91,24 @@ struct MainShell: View {
         .sheet(isPresented: Binding(get: { model.chat.mentionsOpen }, set: { model.chat.mentionsOpen = $0 })) {
             MentionsSheet(model: model)
         }
+        .sheet(item: $model.clipTarget) { target in
+            CreateClipSheet(target: target, model: model)
+        }
+        .sheet(item: $model.channelSheet) { channel in
+            ChannelSheet(channel: channel, model: model)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
         }
         #endif
+    }
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var onScreenRoom: String? {
+        guard scenePhase == .active, model.signedIn, let room = model.chat.state.activeChannel else { return nil }
+        return nav.shellCovered || nav.tab == .chats ? room : nil
     }
 
     private func stack<Content: View>(_ tab: MobileTab, @ViewBuilder content: () -> Content) -> some View {
@@ -82,7 +119,9 @@ struct MainShell: View {
                 }
         }
         .overlay {
-            if showsTabBar(tab) { TabBarFloor() }
+            // Not on Chats with a chat open: its composer sits right above the bar and would
+            // fade into it. The picker there keeps the fade.
+            if showsTabBar(tab) && tab != .chats { TabBarFloor() }
         }
     }
 
@@ -105,18 +144,33 @@ struct MainShell: View {
             CosmeticsScreen(model: model)
         case .mentions:
             MentionsScreen(model: model)
+        case .myClips:
+            MyClipsScreen(model: model)
         }
+    }
+}
+
+/// A tab's glyph alone, named for VoiceOver by the tab's title.
+private struct TabIcon: View {
+    let tab: MobileTab
+    let symbol: String
+
+    var body: some View {
+        Image(systemName: symbol).accessibilityLabel(tab.title)
     }
 }
 
 extension EnvironmentValues {
     /// The full player covers the tabs: looping decorations in them stop.
     @Entry var shellCovered = false
+    /// Opens a channel's chat on its own (a card's menu); nil where nothing hosts the chats.
+    @Entry var openChat: ((TwitchStream) -> Void)? = nil
 }
 
-/// The floor under the floating tab bar: the page's own background rising from clear on an eased
-/// curve, so content scrolling down fades out under the bar instead of showing through it, with no
-/// hard edge and no bare strip below it. It never takes a touch.
+/// The floor under the floating tab bar: the page's own background (the room, its light
+/// included, lined up with the page's) rising from clear on an eased curve, so content scrolling
+/// down fades out under the bar instead of showing through it, with no hard edge and no bare strip
+/// below it. It never takes a touch.
 private struct TabBarFloor: View {
     /// How far above the bar's top edge the fade starts. Inside a tab the bottom safe area already
     /// spans the bar and the home indicator, so the floor covers that inset plus this lead-in and
@@ -125,9 +179,11 @@ private struct TabBarFloor: View {
 
     var body: some View {
         GeometryReader { proxy in
-            LinearGradient(stops: Self.easedStops(SN.background), startPoint: .top, endPoint: .bottom)
-                .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            ShellBackground()
+                .mask(alignment: .bottom) {
+                    LinearGradient(stops: Self.easedStops(.black), startPoint: .top, endPoint: .bottom)
+                        .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
+                }
         }
         .ignoresSafeArea(edges: .bottom)
         .allowsHitTesting(false)

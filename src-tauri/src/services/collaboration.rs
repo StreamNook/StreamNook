@@ -6,20 +6,25 @@
 //! (`home_snapshot`). A channel is often on both at once, so answers are
 //! cached for `FRESH` and a second caller inside that window reads the cache
 //! instead of asking Twitch again. One anonymous GQL request covers up to
-//! `BATCH` channels.
+//! `BATCH` channels, and up to `PARALLEL` of them run at once.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use futures::stream::{self, StreamExt};
 use log::debug;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
+use crate::services::twitch_limits::GQL_MAX_ALIASES;
 use crate::services::twitch_service::TwitchService;
 
-/// Channels per request.
-const BATCH: usize = 30;
+/// Channels per request: one alias each.
+pub(crate) const BATCH: usize = GQL_MAX_ALIASES;
+/// Requests in flight at once, so a long card list still answers inside the
+/// Home snapshot's wait.
+const PARALLEL: usize = 3;
 /// How long an answer serves every caller.
 const FRESH: Duration = Duration::from_secs(30);
 /// Entries not asked about for this long are dropped.
@@ -109,8 +114,16 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<Collaboration>> {
             }
         }
     }
-    for chunk in due.chunks(BATCH) {
-        let data = match TwitchService::get_collaborations(chunk).await {
+    // Owned chunks: a borrowed one makes the future not `Send` for the
+    // spawned tasks that await it.
+    let mut answers = stream::iter(due.chunks(BATCH).map(<[String]>::to_vec))
+        .map(|chunk| async move {
+            let answer = TwitchService::get_collaborations(&chunk).await;
+            (chunk, answer)
+        })
+        .buffer_unordered(PARALLEL);
+    while let Some((chunk, answer)) = answers.next().await {
+        let data = match answer {
             Ok(data) => data,
             Err(e) => {
                 debug!("[Collaboration] {} channels: {e}", chunk.len());

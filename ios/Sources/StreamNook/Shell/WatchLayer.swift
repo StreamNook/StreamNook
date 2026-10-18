@@ -486,6 +486,9 @@ private struct ChatArea: View {
         if model.signedIn {
             // The drop being earned shows only over the stream's own room, never over the video.
             ChatRoomsPanel(rooms: model.chat, overlay: readOnly,
+                           replay: model.replay,
+                           replayShown: Binding(get: { model.replayShown }, set: { model.replayShown = $0 }),
+                           replayAt: model.watch.playingVod == nil ? nil : PlayerText.clock(model.watch.vodPosition),
                            streamBanner: AnyView(WatchDropBar(model: model, visible: !readOnly && model.chat.viewingStream)),
                            onProfile: { model.cosmetics.open($0) })
         } else {

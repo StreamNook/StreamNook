@@ -124,6 +124,23 @@ export interface RoomModeView {
   blocked?: RoomModeKind | null;
   /** What a disabled message box says while `blocked` is set. */
   reason?: string | null;
+  /** A moderator's warning you have not acknowledged (Rust chat_warning.rs):
+   *  the box stays locked behind its Acknowledge button. */
+  warning?: ChatWarningView | null;
+}
+
+/** Mirrors Rust `chat_warning::WarningView`. */
+export interface ChatWarningView {
+  /** "A moderator warned you". */
+  title: string;
+  /** The reason in quotes and what to do. */
+  detail: string;
+  /** "Acknowledge". */
+  action: string;
+  /** The locked field's placeholder. */
+  prompt: string;
+  /** A word or two for a narrow box. */
+  short: string;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -1308,6 +1325,8 @@ interface HistorySegmentsRow {
   id: string;
   segments: RowSegments;
   parent_segments?: RowSegments | null;
+  /** A Shared Chat partner row's badges, once its room's badge art landed. */
+  badges?: BackendChatMessage['badges'];
 }
 
 /** Re-stamps that arrived before their backlog merged (the merge also waits
@@ -1320,6 +1339,7 @@ function withHistorySegments(m: BackendChatMessage, row: HistorySegmentsRow): Ba
   return {
     ...m,
     segments: row.segments,
+    ...(Array.isArray(row.badges) ? { badges: row.badges } : {}),
     ...(m.metadata && replyInfo && row.parent_segments
       ? { metadata: { ...m.metadata, reply_info: { ...replyInfo, parent_segments: row.parent_segments } } }
       : {}),

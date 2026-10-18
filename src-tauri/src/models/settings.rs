@@ -1202,6 +1202,10 @@ pub struct Settings {
     /// Typed because the chat rules and the mentions inbox read it.
     #[serde(default)]
     pub mentions: MentionSettings,
+    /// The phones' Chats screen keeps the screen on while it is in front, until
+    /// `chat_tabs::KEEP_AWAKE_IDLE_SECS` pass with no touch.
+    #[serde(default = "default_true")]
+    pub chats_keep_screen_on: bool,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1614,6 +1618,7 @@ impl Default for Settings {
             chat_input: ChatInputSettings::default(),
             chat_burst: ChatBurstSettings::default(),
             mentions: MentionSettings::default(),
+            chats_keep_screen_on: true,
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,

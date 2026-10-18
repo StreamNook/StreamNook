@@ -38,6 +38,8 @@ warp = { version = "0.4.2", features = ["server", "websocket"] }
 # Ref-counted response bodies for the media relays; already in the lock via warp/hyper.
 bytes = "1"
 futures = "0.3"
+# The device language, the default for Discover and browse; already in the lock.
+sys-locale = "0.3"
 futures-util = { version = "0.3.31", features = ["sink"] }
 rand = "0.10.2"
 url = "2.5.7"

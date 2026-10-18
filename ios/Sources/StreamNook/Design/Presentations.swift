@@ -55,6 +55,24 @@ extension View {
         }
     }
 
+    /// A hide-keyboard button on the keyboard's bar, for a field whose own Return key does not
+    /// close the keyboard: several lines (Return adds a line) or a number pad (no Return at all).
+    /// Scrolling never closes a keyboard (people scroll chat while they type), so this button and
+    /// a field's Done or Search key are the ways down.
+    func keyboardHideButton() -> some View {
+        toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                }
+                .accessibilityLabel("Hide keyboard")
+            }
+        }
+    }
+
     /// Sizes a sheet to its content, never taller than `maxFraction` of the screen, with one
     /// detent (it cannot be pulled taller) and its handle showing.
     func fittedSheet(maxFraction: CGFloat = 0.72) -> some View {

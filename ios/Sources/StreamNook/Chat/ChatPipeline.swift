@@ -37,6 +37,7 @@ final class ChatPipeline: @unchecked Sendable {
 
     @MainActor weak var list: ChatListView?
     private var failureObserver: NSObjectProtocol?
+    private var themeObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
          onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -50,10 +51,19 @@ final class ChatPipeline: @unchecked Sendable {
             guard let url = note.userInfo?["url"] as? String else { return }
             self?.dropBadge(url)
         }
+        // A new theme redoes every row in the new colours.
+        themeObserver = NotificationCenter.default.addObserver(forName: ChatTheme.changed, object: nil, queue: nil) { [weak self] _ in
+            self?.themeChanged()
+        }
     }
 
     deinit {
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
+
+    private func themeChanged() {
+        queue.async { [self] in relayoutAll() }
     }
 
     // MARK: Input
@@ -100,6 +110,23 @@ final class ChatPipeline: @unchecked Sendable {
 
     func setPaused(_ paused: Bool) {
         queue.async { [self] in buffer.paused = paused }
+    }
+
+    /// A VOD replay step from the core: a reset replaces every row (a seek, the first rows), else
+    /// the rows join the bottom like live ones.
+    func applyReplay(_ step: ReplayStep) {
+        guard step.reset else {
+            for message in step.rows { ingest(frame: .row(message)) }
+            return
+        }
+        queue.async { [self] in
+            pending.removeAll()
+            buffer.removeAll()
+            layouts.removeAll()
+            _ = buffer.apply(step.rows.map { .row($0) })
+            relayoutAll()
+            if width > 0 { ready.withLock { $0[$0.count - 1].forceLive = true } }
+        }
     }
 
     /// A room behind another tab keeps its rows but lays none out until it is on screen again.

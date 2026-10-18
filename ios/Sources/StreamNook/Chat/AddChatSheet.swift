@@ -1,26 +1,44 @@
 import SNKit
 import SwiftUI
 
-/// Picks another channel's chat to open in a tab. Live follows come first (that is where
-/// moderating usually happens, and they need no network call); two characters or more search
-/// every channel, offline ones included, since chat is joinable either way. The core answers the
-/// search and its order (live rooms first, by audience).
+/// "Add a chat": the chat picker in a sheet, from the Chats strip's + and the chat menu.
 struct AddChatSheet: View {
     let rooms: ChatRooms
     @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var results: [ChatRoomRow] = []
-    @State private var searching = false
-
-    private var searchingNow: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
-
-    private var list: [ChatRoomRow] {
-        searchingNow ? results : rooms.followedLive().map(ChatRoomRow.init(followed:))
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             SheetTitle(text: "Add a chat")
+            ChatPicker(rooms: rooms, onPicked: { dismiss() })
+        }
+        .presentationDetents([.fraction(0.85)])
+        .presentationDragIndicator(.visible)
+        // Nothing is see-through at 0 percent glassiness.
+        .presentationBackground {
+            if !Look.shared.frosted { SN.backgroundTertiary }
+        }
+    }
+}
+
+/// The "add a chat" picker: a search for any channel, then your follows that are live, then your
+/// follows that are offline. Tap a row to open its chat; a chat already open is marked "Open"
+/// where it sits, and tapping it switches to it. The lists are the core's (`chat_picker`, built
+/// from the Following snapshot, so opening this makes no request); searching is
+/// `search_chat_rooms`. Drawn inline as the Chats tab when no chat is open, and in the sheet.
+struct ChatPicker: View {
+    let rooms: ChatRooms
+    var onPicked: () -> Void = {}
+    /// Room under the lists (the inline picker clears the tab bar on its own).
+    var bottomPadding: CGFloat = 16
+    @State private var query = ""
+    @State private var results: [ChatRoomRow] = []
+    @State private var searching = false
+    @State private var lists = ChatPickerLists()
+
+    private var searchingNow: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
+
+    var body: some View {
+        VStack(spacing: 0) {
             // The magnifier and the text sit on the rows' face and name columns.
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
@@ -28,7 +46,7 @@ struct AddChatSheet: View {
                     .foregroundStyle(SN.textMuted)
                     .frame(width: 36)
                     .accessibilityHidden(true)
-                TextField("Search, or paste a kick.com link", text: $query)
+                TextField("Search any channel", text: $query)
                     .font(.sn(15))
                     .foregroundStyle(SN.textPrimary)
                     .textInputAutocapitalization(.never)
@@ -43,37 +61,38 @@ struct AddChatSheet: View {
             .padding(.bottom, 19)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !searchingNow {
-                        Text("LIVE NOW")
-                            .font(.sn(12, 600))
-                            .tracking(0.6)
-                            .foregroundStyle(SN.textMuted)
-                            .padding(.horizontal, 4)
-                            .padding(.bottom, 2)
-                            .accessibilityAddTraits(.isHeader)
-                    }
-                    if searching && list.isEmpty {
-                        note("Searching…")
-                    } else if list.isEmpty {
-                        note(searchingNow ? "No channels found." : "Nobody you follow is live. Search above to open any channel.")
-                    } else {
-                        let mixed = Set(list.map(\.provider)).count > 1
-                        ForEach(list) { row in
-                            let open = rooms.tabs.contains { $0.channel == row.key }
-                            Button {
-                                pick(row)
-                            } label: {
-                                RoomRow(row: row, open: open, mixed: mixed)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if searchingNow {
+                        if searching && results.isEmpty {
+                            note("Searching…")
+                        } else if results.isEmpty {
+                            note("No channels found.")
+                        } else {
+                            header("Results", count: nil)
+                            let mixed = Set(results.map(\.provider)).count > 1
+                            let followed = Set((lists.live + lists.offline).map(\.key))
+                            ForEach(results) { row in
+                                item(row, mixed: mixed, following: followed.contains(row.key))
                             }
-                            .buttonStyle(PressFade())
-                            .disabled(open)
+                        }
+                    } else {
+                        header("Live", count: lists.live.count)
+                        if lists.live.isEmpty {
+                            note("Nobody you follow is live.")
+                        } else {
+                            ForEach(lists.live) { row in item(row, mixed: lists.mixedPlatforms) }
+                        }
+                        if !lists.offline.isEmpty {
+                            header("Offline", count: lists.offline.count)
+                            ForEach(lists.offline) { row in item(row, mixed: lists.mixedPlatforms) }
                         }
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, bottomPadding)
             }
+            .scrollDismissesKeyboard(.never)
             // Rows fade out at both edges instead of being cut.
             .mask {
                 VStack(spacing: 0) {
@@ -84,12 +103,6 @@ struct AddChatSheet: View {
             }
             .padding(.top, -16)
         }
-        .presentationDetents([.fraction(0.7)])
-        .presentationDragIndicator(.visible)
-        // Nothing is see-through at 0 percent glassiness.
-        .presentationBackground {
-            if !Look.shared.frosted { SN.backgroundTertiary }
-        }
         .onAppear {
             if !rooms.addQuery.isEmpty {
                 query = rooms.addQuery
@@ -97,6 +110,35 @@ struct AddChatSheet: View {
             }
         }
         .task(id: query) { await search() }
+        // The tabs moved (an open mark), or the Following snapshot did: read the lists again.
+        .task(id: "\(rooms.state.revision)|\(rooms.followedLive().count)") { await load() }
+    }
+
+    private func header(_ text: String, count: Int?) -> some View {
+        HStack {
+            Text(text.uppercased())
+                .font(.sn(12, 600))
+                .tracking(0.6)
+            Spacer()
+            if let count {
+                Text("\(count)").font(.sn(12, 500)).monospacedDigit()
+            }
+        }
+        .foregroundStyle(SN.textMuted)
+        .padding(.horizontal, 4)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func item(_ row: ChatRoomRow, mixed: Bool, following: Bool = false) -> some View {
+        let open = rooms.tabs.contains { $0.channel == row.key }
+        return Button {
+            pick(row, open: open)
+        } label: {
+            RoomRow(row: row, open: open, mixed: mixed, following: following)
+        }
+        .buttonStyle(PressFade())
     }
 
     private func note(_ text: String) -> some View {
@@ -106,6 +148,12 @@ struct AddChatSheet: View {
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
+    }
+
+    private func load() async {
+        guard let found = try? await rooms.core.invoke("chat_picker", args: ["platforms": ["twitch", "kick"]],
+                                                       as: ChatPickerLists.self) else { return }
+        lists = found
     }
 
     /// Two characters or more, 0.32 s after the last keystroke: Twitch and Kick together, or the
@@ -126,67 +174,83 @@ struct AddChatSheet: View {
         searching = false
     }
 
-    private func pick(_ row: ChatRoomRow) {
-        rooms.add(row)
+    private func pick(_ row: ChatRoomRow, open: Bool) {
+        if open { rooms.select(row.key) } else { rooms.add(row) }
         query = ""
-        dismiss()
+        onPicked()
     }
 }
 
-/// One channel: its face with a live dot, the name, what it is doing, and its audience or "Open".
+/// One channel: its face with a live dot, the name, what it is doing (or when it was last live),
+/// and a + to open its chat, or "Open" when it already is.
 private struct RoomRow: View {
     let row: ChatRoomRow
     let open: Bool
     /// The list spans platforms, so a Kick room wears Kick's mark.
     var mixed = false
+    /// A search result you follow says so.
+    var following = false
+
+    private var detail: String {
+        guard row.isLive else { return row.subline }
+        var parts = [row.gameName.isEmpty ? "Live" : row.gameName]
+        if row.viewerCount > 0 { parts.append(row.viewerCount.formatted(.number.notation(.compactName))) }
+        if following { parts.append("following") }
+        return parts.joined(separator: " · ")
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            // An open room dims its face and name; the "Open" that says why stays readable.
-            Group {
-                face
-                    .overlay(alignment: .bottomTrailing) {
-                        if row.isLive {
-                            Circle().fill(SN.live)
-                                .frame(width: 12, height: 12)
-                                .overlay { Circle().stroke(SN.background, lineWidth: 2) }
-                                .offset(x: 2, y: 2)
-                                .accessibilityHidden(true)
-                        }
+            face
+                .opacity(row.isLive ? 1 : 0.6)
+                .overlay(alignment: .bottomTrailing) {
+                    if row.isLive {
+                        Circle().fill(SN.live)
+                            .frame(width: 10, height: 10)
+                            .overlay { Circle().stroke(SN.background, lineWidth: 2) }
+                            .offset(x: 1, y: 1)
+                            .accessibilityHidden(true)
                     }
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text(row.userName.isEmpty ? row.userLogin : row.userName)
-                            .font(.sn(15))
-                            .foregroundStyle(SN.textPrimary)
-                            .lineLimit(1)
-                        if mixed && row.provider == "kick" { PlatformMark(platform: .kick, size: 12) }
-                    }
-                    Text(row.subline)
-                        .font(.sn(12.5))
-                        .foregroundStyle(SN.textMuted)
-                        .lineLimit(1)
                 }
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(row.userName.isEmpty ? row.userLogin : row.userName)
+                        .font(.sn(15, 500))
+                        .foregroundStyle(SN.textPrimary)
+                        .lineLimit(1)
+                    if mixed && row.provider == "kick" { PlatformMark(platform: .kick, size: 12) }
+                }
+                Text(detail)
+                    .font(.sn(12.5))
+                    .foregroundStyle(SN.textMuted)
+                    .lineLimit(1)
             }
-            .opacity(open ? 0.45 : 1)
             Spacer(minLength: 0)
             if open {
-                Text("Open")
-                    .font(.sn(12))
-                    .foregroundStyle(SN.textSecondary)
-            } else if row.isLive, row.viewerCount > 0 {
                 HStack(spacing: 4) {
-                    Image(systemName: "person.2.fill").font(.system(size: 13)).accessibilityHidden(true)
-                    Text(row.viewerCount.formatted()).monospacedDigit()
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                    Text("Open").font(.sn(11.5, 600))
                 }
-                .font(.sn(12))
-                .foregroundStyle(SN.textMuted)
+                .foregroundStyle(SN.textPrimary)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(Capsule().fill(SN.accent.opacity(0.2)))
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(SN.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .snGlass(Circle())
             }
         }
         .padding(.horizontal, 4)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
+        .background {
+            if open { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.04)).padding(.horizontal, -4) }
+        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityHint(open ? "Shows this chat" : "Opens this chat")
     }
 
     private var face: some View {

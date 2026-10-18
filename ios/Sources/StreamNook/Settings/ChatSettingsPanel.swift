@@ -9,6 +9,8 @@ struct ChatSettingsPanel: View {
 
     var body: some View {
         landscape
+        pollsAndPredictions
+        chatsTab
         events
         layout
         names
@@ -28,6 +30,7 @@ struct ChatSettingsPanel: View {
         BadgeHighlightsSettings()
         spam
         CustomCommandsSettings()
+        ModerationSettings()
         NicknamesSettings()
     }
 
@@ -51,6 +54,35 @@ struct ChatSettingsPanel: View {
                              resetPaths: store.string("fullscreen_chat.side", "auto") == "left" ? ["fullscreen_chat.side"] : [],
                              shown: { $0 == "left" ? "left" : "right" })
             }
+        }
+    }
+
+    // MARK: Polls & Predictions
+
+    private var pollsAndPredictions: some View {
+        SettingsBlock(title: "Polls & Predictions", detail: "The live cards at the top of chat while the streamer runs a poll or a prediction.") {
+            ToggleRow(title: "Polls", path: "show_polls", fallback: true, detail: "A live poll card with the running vote tally.",
+                      help: "Collapsed opens a poll as its header bar, so it never takes over the top of chat; tap the header to expand it. Collapsing a poll sticks: it no longer reopens every time somebody votes.") {
+                NestedToggle(title: "Collapsed", path: "chat_design.polls_start_collapsed")
+            }
+            ToggleRow(title: "Predictions", path: "show_predictions", fallback: true,
+                      detail: "A live prediction card with the outcomes and how points are stacking up.",
+                      help: "Top card picks which one is open when a poll and a prediction run at the same time. The other folds to a strip under it; tap the strip to open it.") {
+                if store.bool("show_polls", true) {
+                    NestedChoice(title: "Top card", path: "chat_overlay_order",
+                                 choices: [Choice("Prediction", "prediction-first"), Choice("Poll", "poll-first")],
+                                 fallback: "prediction-first")
+                }
+            }
+        }
+    }
+
+    // MARK: Chats tab
+
+    private var chatsTab: some View {
+        SettingsBlock(title: "Chats Tab", detail: "Reading your chats with no stream playing.") {
+            ToggleRow(title: "Keep screen on", path: "chats_keep_screen_on", fallback: true,
+                      detail: "The screen stays on while the Chats tab is open, until 30 minutes pass without a touch.")
         }
     }
 
@@ -431,7 +463,7 @@ struct SettingTextField: View {
         })
         Group {
             if multiline {
-                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted), axis: .vertical).lineLimit(3...6)
+                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted), axis: .vertical).lineLimit(3...6).keyboardHideButton()
             } else {
                 TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted)).lineLimit(1)
             }

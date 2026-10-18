@@ -6,7 +6,8 @@
 //! this for a signed-in caller, one channel per Helix request, so answers are
 //! cached (`FRESH_IN` while a channel is sharing, `FRESH_OUT` while it is not;
 //! sessions last hours) and at most `PARALLEL` requests run at once. The
-//! participants' names and faces come from one anonymous GQL batch.
+//! participants' names and faces come from anonymous GQL batches; a session
+//! whose faces batch failed is asked again next pass.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -22,8 +23,10 @@ use crate::services::twitch_service::TwitchService;
 
 /// Helix requests in flight at once.
 const PARALLEL: usize = 6;
-/// Channels per GQL faces request.
-const BATCH: usize = 30;
+/// Channels per GQL faces request: one alias each.
+pub(crate) const FACES_BATCH: usize = crate::services::twitch_limits::GQL_MAX_ALIASES;
+/// Faces requests in flight at once.
+const FACES_PARALLEL: usize = 3;
 /// How long "is sharing" serves every caller.
 const FRESH_IN: Duration = Duration::from_secs(120);
 /// How long "is not sharing" serves every caller.
@@ -104,9 +107,17 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<SharedChat>> {
         }
     }
     let mut faces: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut faces_failed = false;
-    for chunk in wanted.chunks(BATCH) {
-        match TwitchService::get_channel_faces(chunk).await {
+    let mut faces_failed: HashSet<String> = HashSet::new();
+    // Owned chunks: a borrowed one makes the future not `Send` for the
+    // spawned tasks that await it.
+    let mut answers = stream::iter(wanted.chunks(FACES_BATCH).map(<[String]>::to_vec))
+        .map(|chunk| async move {
+            let answer = TwitchService::get_channel_faces(&chunk).await;
+            (chunk, answer)
+        })
+        .buffer_unordered(FACES_PARALLEL);
+    while let Some((chunk, answer)) = answers.next().await {
+        match answer {
             Ok(data) => {
                 for (i, id) in chunk.iter().enumerate() {
                     if let Some(user) = data.get(format!("u{i}").as_str()).filter(|u| !u.is_null()) {
@@ -116,10 +127,11 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<SharedChat>> {
             }
             Err(e) => {
                 debug!("[SharedChat] faces for {} channels: {e}", chunk.len());
-                faces_failed = true;
+                faces_failed.extend(chunk.iter().cloned());
             }
         }
     }
+    drop(answers);
 
     let now = Instant::now();
     let mut cache = cache().lock().await;
@@ -127,7 +139,7 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<SharedChat>> {
         let answer = match session {
             None => None,
             // Without the faces the group cannot be drawn; ask again next pass.
-            Some(_) if faces_failed => continue,
+            Some((_, ref participants)) if participants.iter().any(|p| faces_failed.contains(p)) => continue,
             Some((host, participants)) => build(&id, &host, &participants, &faces),
         };
         cache.insert(id.clone(), (now, answer.clone()));

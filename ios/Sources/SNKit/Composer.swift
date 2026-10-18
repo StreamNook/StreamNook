@@ -179,9 +179,14 @@ public struct SlashOutcome: Decodable, Sendable, Equatable {
         public var displayName: String?
         public var url: String?
         public var text: String?
+        /// `create_clip`: the room the line was typed in, its broadcaster id and the clip's title.
+        public var channel: String?
+        public var channelID: String?
+        public var title: String?
 
         enum CodingKeys: String, CodingKey {
-            case kind, login, url, text, userID = "user_id", displayName = "display_name"
+            case kind, login, url, text, channel, title, userID = "user_id", displayName = "display_name"
+            case channelID = "channel_id"
         }
 
         public init(kind: String, login: String? = nil, userID: String? = nil, displayName: String? = nil,

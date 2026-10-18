@@ -56,6 +56,21 @@ import Testing
         #expect(PinnedUpdate.parse(#"{"section":"viewers","login":"xqc","viewer_count":3,"at":1}"#) == nil)
     }
 
+    @Test func theRelationshipArrivesWithTheChatNotTheMenu() throws {
+        // Pushed when the core reads it (the chat opened) or the viewer follows, unfollows or subs.
+        let update = try #require(RelationshipUpdate.parse("""
+        {"section":"relationship","login":"xqc","at":7,"relationship":{"following":true,"subscribed":false,
+          "has_sub_history":true,"cumulative_months":7,"badge_url":"https://b/9"}}
+        """))
+        #expect(update.login == "xqc")
+        #expect(update.relationship == ChannelRelationship(following: true, hasSubHistory: true, badgeURL: "https://b/9"))
+        #expect(RelationshipUpdate.parse(#"{"section":"pinned","login":"xqc","pinned":[],"at":1}"#) == nil)
+        // A watch answer already holding it: the menu has it before it ever opens.
+        let state = #"{"login":"xqc","pinned":[],"relationship":{"following":null,"subscribed":true,"has_sub_history":false,"cumulative_months":2,"badge_url":null},"relationship_at":5}"#
+        #expect(RelationshipUpdate.held(inState: state) == ChannelRelationship(following: nil, subscribed: true))
+        #expect(RelationshipUpdate.held(inState: #"{"login":"xqc","pinned":[],"relationship":null}"#) == nil)
+    }
+
     @Test func streakAndResubTitlesMatchThePhone() throws {
         #expect(WatchStreakMilestone(milestoneID: "m", streakCount: 5).title == "5 stream watch streak")
         #expect(WatchStreakMilestone(milestoneID: "m", streakCount: 0).title == "Watch streak milestone")

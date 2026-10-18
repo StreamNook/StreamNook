@@ -75,7 +75,7 @@ struct PlayerChrome: View {
             #endif
         }
         .clipped()
-        .sheet(isPresented: $qualityShown) { QualitySheet(model: model) }
+        .sheet(isPresented: $qualityShown) { QualitySheet(model: model).snSheetLight() }
         .sheet(isPresented: $togetherShown) {
             if let stream, let group = group(stream) {
                 TogetherSheet(group: group, playing: stream.userLogin) { member in
@@ -83,6 +83,7 @@ struct PlayerChrome: View {
                                                      viewerCount: member.viewerCount ?? 0, gameName: "",
                                                      userID: member.userID, profileImageURL: member.avatarURL))
                 }
+                .snSheetLight()
             }
         }
         .onChange(of: model.nav.qualityPing) { _, _ in qualityShown = true }
@@ -93,13 +94,22 @@ struct PlayerChrome: View {
     private func header(_ stream: TwitchStream) -> some View {
         let live = watch.live
         // The room's latest broadcast names itself; a live stream its current title.
-        let title = watch.roomVod ? (watch.room?.latestVod?.title ?? stream.title) : (live?.title ?? stream.title)
+        let title = watch.vodTitle ?? (watch.roomVod ? (watch.room?.latestVod?.title ?? stream.title)
+                                                      : (live?.title ?? stream.title))
         let category = live?.gameName ?? stream.gameName
         // The avatar anchors a column: the name, the title and the category all start at the
         // name's edge, so the three read as one block about one stream. The live red is the
         // avatar's ring alone; the counts stay white so they never out-pull the name.
         return HStack(alignment: .top, spacing: 10) {
-            ChannelAvatar(url: stream.profileImageURL.flatMap(URL.init(string:)), name: stream.userName)
+            Button {
+                onTouch()
+                model.channelSheet = stream
+            } label: {
+                ChannelAvatar(url: stream.profileImageURL.flatMap(URL.init(string:)), name: stream.userName)
+            }
+            .buttonStyle(.plain)
+            .disabled(!stream.isTwitch)
+            .accessibilityLabel("\(stream.userName)'s videos and clips")
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     HStack(spacing: 4) {
@@ -155,7 +165,9 @@ struct PlayerChrome: View {
                 }
                 .buttonStyle(.plain)
             }
-            if watch.room == nil {
+            if let recorded = recordedLine {
+                Text(recorded)
+            } else if watch.room == nil {
                 HStack(spacing: 4) {
                     Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
                     Text(viewers.formatted()).monospacedDigit()
@@ -163,7 +175,7 @@ struct PlayerChrome: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(viewers.formatted()) viewers")
             }
-            if uptime, !PlayerText.uptime(startedAt: started).isEmpty {
+            if uptime, watch.playingVod == nil, !PlayerText.uptime(startedAt: started).isEmpty {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     Text(PlayerText.uptime(startedAt: started, now: context.date))
                         .monospacedDigit()
@@ -173,6 +185,14 @@ struct PlayerChrome: View {
         .font(.sn(12, 500))
         .foregroundStyle(.white.opacity(0.8))
         .fixedSize()
+    }
+
+    /// "Recorded Sep 28" while a VOD plays (with the year when it is not this one).
+    private var recordedLine: String? {
+        guard let vod = watch.playingVod else { return nil }
+        guard let raw = vod.recordedAt, let date = PlayerText.parseDate(raw) else { return "Recorded" }
+        let sameYear = Calendar.current.isDate(date, equalTo: .now, toGranularity: .year)
+        return "Recorded " + date.formatted(.dateTime.month(.abbreviated).day().year(sameYear ? .omitted : .defaultDigits))
     }
 
     /// The channel's group: Shared Viewership from the core's live collab section, else what the
@@ -210,7 +230,74 @@ struct PlayerChrome: View {
     /// another.
     private static let barIcon: CGFloat = 20
 
+    /// A VOD's transport: back and forward ten seconds and the speed. Play and pause stay the
+    /// center button's, as on a live stream.
+    private var vodTransport: some View {
+        HStack(spacing: 0) {
+            IconButton(symbol: "gobackward.10", label: "Back 10 seconds", size: Self.barIcon, weight: .medium,
+                       tint: .white) {
+                watch.skipVod(by: -10)
+                onTouch()
+            }
+            IconButton(symbol: "goforward.10", label: "Forward 10 seconds", size: Self.barIcon, weight: .medium,
+                       tint: .white) {
+                watch.skipVod(by: 10)
+                onTouch()
+            }
+            Menu {
+                ForEach([Float(1), 1.25, 1.5, 2], id: \.self) { rate in
+                    Button {
+                        watch.setVodRate(rate)
+                        onTouch()
+                    } label: {
+                        if rate == watch.vodRate {
+                            Label(PlayerText.rate(rate), systemImage: "checkmark")
+                        } else {
+                            Text(PlayerText.rate(rate))
+                        }
+                    }
+                }
+            } label: {
+                Text(PlayerText.rate(watch.vodRate))
+                    .font(.sn(12, 700).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.white, lineWidth: 1.5))
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Speed \(PlayerText.rate(watch.vodRate))")
+        }
+    }
+
+    private func liveStatus(behind: String?) -> some View {
+        HStack(spacing: 5) {
+            LiveDot(size: 7)
+            Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
+            if let behind {
+                ZStack(alignment: .leading) {
+                    Text("· 59s+").hidden()
+                    Text("· \(behind)")
+                }
+                .font(.sn(12, 500).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .fixedSize()
+    }
+
     private var bottomBar: some View {
+        VStack(spacing: 0) {
+            if watch.playingVod != nil {
+                VodSeekBar(watch: watch, onTouch: onTouch)
+                    .padding(.trailing, 0)
+            }
+            barRow
+        }
+    }
+
+    private var barRow: some View {
         HStack(spacing: 0) {
             if watch.roomVod {
                 // The room's latest broadcast plays: the way back is where LIVE sits.
@@ -224,61 +311,77 @@ struct PlayerChrome: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back to the room")
             }
+            if watch.playingVod != nil {
+                vodTransport
+            }
             // A status, not a control: a dot and the word, no filled badge.
-            if !watch.roomVod {
-                HStack(spacing: 5) {
-                    LiveDot(size: 7)
-                    Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
+            if !watch.roomVod, watch.playingVod == nil {
+                // How far behind live sits beside the word, in a slot sized for the widest
+                // reading so the bar never shifts; a bar too narrow for it drops the number whole.
+                ViewThatFits(in: .horizontal) {
+                    liveStatus(behind: watch.behindLabel)
+                    liveStatus(behind: nil)
                 }
-                .fixedSize()
                 .opacity(watch.error == nil ? 1 : 0)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Live")
+                .accessibilityLabel(watch.behindSpoken.map { "Live, \($0)" } ?? "Live")
                 .accessibilityHidden(watch.error != nil)
             }
             Spacer(minLength: 8)
             // The speaker is short and wide, so centered in its box it ends higher than the
             // taller symbols beside it; set down to share their bottom edge.
-            IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
-                       size: Self.barIcon, weight: .medium, tint: .white) {
-                watch.toggleMute()
-                onTouch()
+            if watch.playingVod == nil {
+                IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
+                           size: Self.barIcon, weight: .medium, tint: .white) {
+                    watch.toggleMute()
+                    onTouch()
+                }
+                .offset(y: 2)
             }
-            .offset(y: 2)
             // The system's AirPlay picker: an Apple TV, a HomePod, AirPods. UIKit draws its glyph
             // a point high in its box, so it is set down to the row's bottom edge too.
             RoutePicker()
                 .frame(width: 44, height: 44)
                 .offset(y: 1.5)
                 .accessibilityLabel("Watch on a TV")
+            if let stream, stream.isTwitch, model.signedIn {
+                IconButton(symbol: "scissors", label: "Create clip", size: Self.barIcon, weight: .medium, tint: .white) {
+                    onTouch()
+                    model.createClip(login: stream.userLogin, channelID: stream.userID ?? "")
+                }
+            }
             if let stream {
-                let title = watch.live?.title ?? stream.title
-                ShareLink(item: stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!,
+                let title = watch.vodTitle ?? watch.live?.title ?? stream.title
+                let link = watch.playingVod.flatMap { URL(string: "https://www.twitch.tv/videos/\($0.videoID)") }
+                    ?? stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!
+                ShareLink(item: link,
                           subject: Text(title.isEmpty ? stream.userName : title),
-                          message: Text("\(stream.userName) is live")) {
+                          message: Text(watch.playingVod == nil ? "\(stream.userName) is live" : "\(stream.userName)'s broadcast")) {
                     Image(systemName: Symbol.share)
                         .font(.system(size: Self.barIcon, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel("Share stream")
+                .accessibilityLabel(watch.playingVod == nil ? "Share stream" : "Share video")
             }
             IconButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
                        action: onMinimize)
-            Button {
-                onTouch()
-                Task { await model.restartStream() }
-            } label: {
-                Image(systemName: Symbol.refresh)
-                    .font(.system(size: Self.barIcon, weight: .medium))
-                    .foregroundStyle(.white)
-                    .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            if watch.playingVod == nil {
+                Button {
+                    onTouch()
+                    Task { await model.restartStream() }
+                } label: {
+                    Image(systemName: Symbol.refresh)
+                        .font(.system(size: Self.barIcon, weight: .medium))
+                        .foregroundStyle(.white)
+                        .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Restart stream")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Restart stream")
             IconButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
                 qualityShown = true
             }

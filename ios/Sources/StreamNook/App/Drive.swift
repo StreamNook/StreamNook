@@ -20,6 +20,11 @@ import SwiftUI
 /// - `room:LOGIN` opens LOGIN's offline room (or its stream when it is live); `roomvod` plays the
 ///   room's latest broadcast, `roomback` returns to the room; `roomstate` logs what the room holds
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
+/// - `channelsheet` opens the watched channel's videos and clips; `vodof:INDEX` plays the watched
+///   channel's past broadcast at INDEX (as its Channel sheet does), `clipof:INDEX` its clip;
+///   `seek:SECONDS`, `skip:SECONDS`, `rate:SPEED` move a VOD; `replay:on|off` picks the replay or
+///   the live chat; `vodstate` logs the VOD and its replay; `clipsheet` opens Create clip (never
+///   creates one); `open:myclips` pushes You > Your clips
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
@@ -35,8 +40,9 @@ import SwiftUI
 ///   arrow; `ssearch:TEXT` types into the You tab's settings search (`_` for spaces)
 /// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces);
 ///   `scroll:SECTION@end` shows the section's last rows
-/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it; `ptheme:ID`
-///   draws a built-in theme from the core's catalog without saving it
+/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it; `theme:ID` (or
+///   `ptheme:ID`) paints a built-in theme, its light included, without saving it; `theme:` paints
+///   the saved one again
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `view:cards`, `view:list` the stream lists' card or row view (saved, like the menu)
 /// - `resume` sends the app to the background and back as the scene phase does; `snapshot` logs
@@ -54,6 +60,8 @@ import SwiftUI
 ///   low-latency knobs for the next stream (see `Watch`)
 /// - the chat steps in `ChatDrive` (`chatlab`, `chatperf`, ...) and the profile and cosmetics
 ///   steps in `CosmeticsDrive` (`profile:LOGIN`, `cosmetics:dump`, `wash:find`, ...)
+/// - the poll and prediction steps in `LiveVotesDrive` (`pollfake:open`, `predfake:locked`,
+///   `predbet:yes:250`, `predconfirm`, `liveVotesLog`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
 /// - the Mentions steps in `MentionsDrive` (`mentions`, `mentions:fake`, `mentionnotify`, `mentioncard`, ...)
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
@@ -124,6 +132,19 @@ enum Drive {
                                                  gameName: "", isLive: false))
             case "roomvod": model.watch.playRoomVod()
             case "roomback": model.watch.leaveRoomVod()
+            case "channelsheet": model.channelSheet = model.watch.stream ?? model.nav.playing
+            case "vodof": await openMedia(model, clips: false, index: Int(value) ?? 0)
+            case "clipof": await openMedia(model, clips: true, index: Int(value) ?? 0)
+            case "seek": model.watch.seekVod(to: Double(value) ?? 0)
+            case "skip": model.watch.skipVod(by: Double(value) ?? 10)
+            case "rate": model.watch.setVodRate(Float(value) ?? 1)
+            case "replay": model.replayShown = value != "off"
+            case "vodstate":
+                let w = model.watch
+                let vod = w.playingVod
+                log.notice("drive vod \(vod?.videoID ?? "-", privacy: .public) play \(vod?.playID ?? 0) status \(vod?.status ?? "-", privacy: .public) at \(Int(w.vodPosition)) of \(Int(w.vodDuration)) rate \(w.vodRate) muted \(vod?.mutedSegments.count ?? 0) chapters \(vod?.chapters.count ?? 0) title \(w.vodTitle ?? "-", privacy: .public) replay \(model.replay?.rowCount ?? -1) shown \(model.replayShown) paused \(w.paused)")
+            case "clipsheet":
+                if let s = model.watch.stream { model.createClip(login: s.userLogin, channelID: s.userID ?? "") }
             case "roomstate":
                 let room = model.watch.room
                 log.notice("drive room \(room?.login ?? "-", privacy: .public) last \(room?.lastLiveAt ?? "-", privacy: .public) title \(room?.lastTitle ?? "-", privacy: .public) vod \(room?.latestVod?.id ?? "-", privacy: .public) next \(room?.nextStream?.startAt ?? "-", privacy: .public) waiting \(room?.chatters ?? -1) vodPlaying \(model.watch.roomVod) playing \(model.watch.stream?.userLogin ?? "-", privacy: .public)")
@@ -168,6 +189,7 @@ enum Drive {
                 }
             case "scroll": SettingsAnchor.shared.target = value.replacingOccurrences(of: "_", with: " ")
             case "glass": model.look.preview(glassiness: (Double(value) ?? 100) / 100)
+            case "theme": await previewTheme(value, model: model)
             case "motion": model.look.preview(motion: MotionMode(setting: value))
             case "ptheme": await previewTheme(value, model: model)
             case "toast": model.toasts.show(value.isEmpty ? "Could not load your Kick follows. Try again in a moment." : value)
@@ -203,6 +225,7 @@ enum Drive {
                 try? await Task.sleep(for: .seconds(5))
             default:
                 if !(await ChatDrive.run(name, value, model: model)),
+                   !(await LiveVotesDrive.run(name, value, model: model)),
                    !(await CosmeticsDrive.run(name, value, model: model)),
                    !(await RewardsDrive.run(name, value, model: model)),
                    !(await KickDrive.run(name, value, model: model)),
@@ -216,6 +239,28 @@ enum Drive {
     }
 
     /// The watched channel's most viewed clip, opened as a tapped chat link.
+    /// Plays the watched channel's video (or clip) at `index` from its Channel sheet's first page.
+    private static func openMedia(_ model: AppModel, clips: Bool, index: Int) async {
+        guard let channel = model.watch.stream ?? model.nav.playing, let id = channel.twitchID else {
+            log.notice("drive media: nothing watched")
+            return
+        }
+        let shelf: MediaShelf = clips ? .clips(.all) : .videos(.archive, .recent)
+        guard let page = try? await model.core.invoke("channel_media", args: shelf.args(channelID: id, cursor: nil),
+                                                       as: MediaPage.self),
+              page.rows.indices.contains(index) else {
+            log.notice("drive media: no row \(index)")
+            return
+        }
+        let row = page.rows[index]
+        log.notice("drive media \(row.kind, privacy: .public) \(row.id, privacy: .public) \(row.metaLine, privacy: .public) | \(row.countLine, privacy: .public) progress \(row.progress ?? -1)")
+        if clips {
+            if let url = URL(string: row.url) { model.clip = ClipLink(url: url) }
+        } else {
+            model.openVod(videoID: row.id, title: row.title, thumbnail: row.thumbnailUrl, channel: channel)
+        }
+    }
+
     private static func openTopClip(_ model: AppModel) async {
         struct Clip: Decodable { let url: String }
         guard let id = model.watch.stream?.userID,
@@ -267,17 +312,20 @@ enum Drive {
         log.notice("drive try \(path, privacy: .public) = \(json, privacy: .public)")
     }
 
-    /// Draws a built-in theme without saving it, for shots of a theme nobody has picked.
+    /// Paints a built-in theme from the core's catalog, palette and light, without saving it; an
+    /// empty id paints the saved theme again.
     private static func previewTheme(_ id: String, model: AppModel) async {
-        guard let json = try? await model.core.invoke("get_theme_catalog", args: [:]),
-              let root = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-              let theme = (root["themes"] as? [[String: Any]])?.first(where: { $0["id"] as? String == id }),
+        guard !id.isEmpty else { await model.loadTheme(); return }
+        let raw = (try? await model.core.invoke("get_theme_catalog", args: [:]))
+            .flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+        guard let theme = (raw["themes"] as? [[String: Any]])?.first(where: { $0["id"] as? String == id }),
               let tokens = theme["palette"] as? [String: Any] else {
-            log.notice("drive ptheme \(id, privacy: .public) not found")
+            log.error("drive theme: no built-in theme \(id, privacy: .public)")
             return
         }
-        model.look.apply(palette: Palette(tokens: tokens), themeID: id)
-        log.notice("drive ptheme \(id, privacy: .public)")
+        model.look.apply(palette: Palette(tokens: tokens), themeID: id,
+                         light: (theme["light"] as? [String: Any]).flatMap(ThemeLight.init(json:)))
+        log.notice("drive theme \(id, privacy: .public) light \(model.look.light != nil)")
     }
 
     private static func restoreSettings(model: AppModel) async {
@@ -311,6 +359,9 @@ enum Drive {
         case "cosmetics":
             model.nav.tab = .you
             model.nav.push(.cosmetics)
+        case "myclips":
+            model.nav.tab = .you
+            model.nav.push(.myClips)
         default:
             log.error("drive open: unknown \(what, privacy: .public)")
         }

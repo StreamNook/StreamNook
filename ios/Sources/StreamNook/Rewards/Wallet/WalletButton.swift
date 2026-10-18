@@ -18,6 +18,7 @@ struct WalletButton: View {
             button(wallet)
                 .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
                     WalletSheet(wallet: wallet, session: session)
+                        .snSheetLight()
                 }
         }
     }
@@ -175,7 +176,7 @@ struct PointsArt: View {
         } else {
             PointsGlyph()
                 .fill(style: FillStyle(eoFill: true))
-                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .foregroundStyle(SN.textSecondary)
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         }

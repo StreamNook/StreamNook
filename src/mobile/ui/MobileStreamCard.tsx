@@ -18,6 +18,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { groupFor } from '../../utils/sharedViewers';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { useChannelHold } from './ChannelHold';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -85,12 +86,15 @@ export const MobileStreamCard: React.FC<{
   // Rust stamps it on every Twitch row it serves; a Kick stream in the same
   // category earns nothing.
   const hasDrops = isTwitch && !!stream.drops_earnable;
+  // A tap watches; a hold offers the chat on its own.
+  const hold = useChannelHold(stream, onPress);
 
   if (variant === 'row') {
     return (
+      <>
       <button
-        onClick={() => onPress(stream)}
-        className="w-full text-left glass-panel media-card p-2 flex gap-2.5 active:opacity-80 transition-opacity"
+        {...hold.handlers}
+        className="w-full text-left glass-panel media-card p-2 flex gap-2.5 active:opacity-80 transition-opacity select-none [-webkit-touch-callout:none]"
       >
         <div className="sn-card-thumb relative w-[156px] shrink-0 overflow-hidden self-center">
           <img
@@ -197,13 +201,16 @@ export const MobileStreamCard: React.FC<{
           </div>
         </div>
       </button>
+      {hold.sheet}
+      </>
     );
   }
 
   return (
+    <>
     <button
-      onClick={() => onPress(stream)}
-      className="w-full text-left glass-panel media-card p-2 active:opacity-80 transition-opacity"
+      {...hold.handlers}
+      className="w-full text-left glass-panel media-card p-2 active:opacity-80 transition-opacity select-none [-webkit-touch-callout:none]"
     >
       <div className="sn-card-thumb relative mb-2 overflow-hidden">
         <img
@@ -279,5 +286,7 @@ export const MobileStreamCard: React.FC<{
         )}
       </div>
     </button>
+    {hold.sheet}
+    </>
   );
 };

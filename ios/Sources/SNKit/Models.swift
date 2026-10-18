@@ -153,9 +153,11 @@ public struct StreamStart: Decodable, Sendable, Equatable {
     public var entitled: Bool
     /// The relay's region when one is in use.
     public var proxyRegion: String?
+    /// VOD starts only: length, where to begin, the play stamp and the seek bar's marks.
+    public var vod: VodInfo?
 
     enum CodingKeys: String, CodingKey {
-        case url, quality, available, mode, entitled
+        case url, quality, available, mode, entitled, vod
         case proxyRegion = "proxy_region"
     }
 
@@ -177,6 +179,8 @@ public struct StreamStart: Decodable, Sendable, Equatable {
         mode = try c.decodeIfPresent(String.self, forKey: .mode)
         entitled = try c.decodeIfPresent(Bool.self, forKey: .entitled) ?? false
         proxyRegion = try c.decodeIfPresent(String.self, forKey: .proxyRegion)
+        // A VOD start whose extras do not read still plays, only without its marks.
+        vod = (try? c.decodeIfPresent(VodInfo.self, forKey: .vod)) ?? nil
     }
 }
 
@@ -190,6 +194,9 @@ public struct LiveDistance: Decodable, Sendable, Equatable {
     public var edgeAgeMs: Int?
     public var rate: Double
     public var fetches: [String]
+    /// The behind-live readout ("1.6s", "59s+") and how it is spoken; nil until measured.
+    public var behindLabel: String?
+    public var behindSpoken: String?
 }
 
 /// The part of the core's home snapshot the Browse list reads.

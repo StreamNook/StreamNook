@@ -35,8 +35,9 @@ import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
-import { streamProvider } from '../../utils/streamProvider';
 import { useMentionJump } from '../mentions/useMentionJump';
+import { useAutomodStore } from '../../stores/automodStore';
+import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -50,49 +51,44 @@ const READ_ONLY_HIDES: FanAction[] = ['reply'];
 const OTHER_PLATFORM_HIDES: FanAction[] = ['profile'];
 const OTHER_PLATFORM_READ_ONLY_HIDES: FanAction[] = ['reply', 'profile'];
 
+/** The mention that buzzed last. The watch layer keeps its pane mounted under
+ *  the mini player while the Chats screen shows another, so one mention reaches
+ *  two panes; it buzzes once. */
+let lastBuzzed: string | null = null;
+
 /**
  * `readOnly`: the landscape overlay. Chat is for reading there; the composer,
  * tap-to-reply and the fan's Reply are gone, because a keyboard over a
  * sideways video is not something anyone asked for.
+ *
+ * `strip`: the tab strip over the list. The Chats screen draws its own, with
+ * the play and add controls beside the tabs.
+ *
+ * `paused`: the pane is mounted but out of sight (the Chats tab behind another
+ * tab). It reads no room, so arriving messages render nothing until it shows.
+ *
+ * The stream tab is pointed at the player by `useChatsLifecycle`, once, in the
+ * shell: a pane only exists while it is on screen.
  */
-export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = false }) => {
-  const currentStream = useAppStore((s) => s.currentStream);
+export const MobileChatPane: React.FC<{ readOnly?: boolean; strip?: boolean; paused?: boolean }> = ({
+  readOnly = false,
+  strip = true,
+  paused = false,
+}) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
-  const syncStreamTab = useChatTabsStore((s) => s.syncStreamTab);
   const removeTab = useChatTabsStore((s) => s.removeTab);
   const reload = useChatTabsStore((s) => s.reload);
-
-  // Keep the stream-following tab pointed at whatever is playing, on the
-  // platform it plays on: a Kick stream's room is `kick:slug`, never a Twitch
-  // room that happens to share the name.
-  const streamProv = streamProvider(currentStream);
-  useEffect(() => {
-    syncStreamTab(
-      currentStream?.user_login ?? null,
-      currentStream?.user_id ?? null,
-      currentStream?.user_name || currentStream?.user_login || '',
-      currentStream?.profile_image_url ?? null,
-      streamProv,
-    );
-  }, [
-    currentStream?.user_login,
-    currentStream?.user_id,
-    currentStream?.user_name,
-    currentStream?.profile_image_url,
-    streamProv,
-    syncStreamTab,
-  ]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.channel === activeChannel) ?? null,
     [tabs, activeChannel],
   );
 
-  const chat = useChannelChat(activeChannel);
+  const chat = useChannelChat(paused ? null : activeChannel);
   const {
     messages,
     renderToken,
@@ -127,7 +123,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       return;
     }
     if (lastId === cur.lastId) return;
-    let buzz = false;
+    let buzz: string | null = null;
     const now = Date.now();
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i] as BackendChatMessage | string;
@@ -138,11 +134,14 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       const ts = Number(m.timestamp);
       const at = Number.isFinite(ts) ? (ts < 1e12 ? ts * 1000 : ts) : Date.parse(m.timestamp);
       if (Number.isFinite(at) && now - at > 8000) continue;
-      buzz = true;
+      buzz = m.id;
       break;
     }
     mentionCursor.current = { channel: activeChannel, lastId };
-    if (buzz && mentionHaptic && !isWindowHidden()) hapticCommit();
+    if (buzz && buzz !== lastBuzzed && mentionHaptic && !isWindowHidden()) {
+      lastBuzzed = buzz;
+      hapticCommit();
+    }
   }, [messages, activeChannel, mentionHaptic, currentUser?.user_id]);
 
   // Rebuilds the connection if it dies while the app is open. Every room rides
@@ -169,6 +168,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       blocked: view?.blocked ?? null,
       reason: view?.reason ?? null,
       view: view && view.modes.length > 0 ? view : null,
+      warning: view?.warning ?? null,
     };
   }, [roomState]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
@@ -489,6 +489,8 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   /** Pull the author and body out of a rendered row's message id. */
   const describeMessage = useCallback(
     (messageId: string) => {
+      // A held message has its own Allow and Deny, and nothing to reply to yet.
+      if (isHeldRowId(messageId)) return null;
       for (const message of messages) {
         if (getMessageId(message) !== messageId) continue;
         try {
@@ -536,13 +538,25 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       window.removeEventListener('streamnook-clear-local-chat', clearRows);
     };
   }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  // Messages AutoMod held, inline where they arrived, for a moderator of this
+  // room: Allow and Deny on the row, which folds once someone decides it.
+  const heldKey = isModerator && activeChannel ? activeChannel.toLowerCase() : '';
+  const heldNow = useAutomodStore((s) => (heldKey ? s.held[heldKey] : undefined));
+  const decidedNow = useAutomodStore((s) => (heldKey ? s.decided[heldKey] : undefined));
+  useEffect(() => {
+    if (heldKey) void useAutomodStore.getState().seed(heldKey);
+  }, [heldKey]);
+  const heldMessages = useMemo(() => heldRows(heldNow, decidedNow).map(heldRowMessage), [heldNow, decidedNow]);
   const shownMessages = useMemo(() => {
-    if (!hiddenRows || hiddenRows.channel !== activeChannel) return messages;
-    return messages.filter((m) => {
-      const id = getMessageId(m);
-      return !id || !hiddenRows.ids.has(id);
-    });
-  }, [hiddenRows, activeChannel, messages, getMessageId]);
+    const visible =
+      !hiddenRows || hiddenRows.channel !== activeChannel
+        ? messages
+        : messages.filter((m) => {
+            const id = getMessageId(m);
+            return !id || !hiddenRows.ids.has(id);
+          });
+    return mergeHeld(visible, heldMessages);
+  }, [hiddenRows, activeChannel, messages, getMessageId, heldMessages]);
 
   // Suppress the synthesized contextmenu entirely: the fan-out owns the hold now,
   // and letting both fire would open a menu behind the fan.
@@ -677,14 +691,14 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <ChatTabStrip />
+      {strip && <ChatTabStrip />}
       <div
         ref={listRef}
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
         // long-press on text by starting its OWN text selection, which wins the
         // gesture and the fan never arms. Chat text needs no selection anyway —
         // the fan's Copy bucket is the way to take a message.
-        className="flex-1 min-h-0 relative select-none [-webkit-touch-callout:none]"
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'}`}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}

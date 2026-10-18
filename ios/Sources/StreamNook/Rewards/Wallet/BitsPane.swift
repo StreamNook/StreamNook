@@ -68,6 +68,7 @@ struct BitsPane: View {
                     }
                     TextField("", text: $text)
                         .keyboardType(.numberPad)
+                        .keyboardHideButton()
                         .font(.sn(13.5, 600))
                         .monospacedDigit()
                         .frame(width: 58)
@@ -77,7 +78,7 @@ struct BitsPane: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 34)
-                .snPanel(radius: 10)
+                .snPanel(radius: 10, light: nil)
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
                         ForEach(state.quickAmounts, id: \.self) { n in

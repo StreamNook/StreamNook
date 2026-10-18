@@ -267,6 +267,25 @@
    ]
   },
   {
+   "page": "player",
+   "section": "Discover",
+   "title": "Languages",
+   "paths": [
+    "discovery_languages"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Streams in Discover and Kick browse. Your device language until you pick some.",
+   "aliases": [
+    "language",
+    "foreign streams",
+    "english only",
+    "stream language",
+    "any language",
+    "kick"
+   ]
+  },
+  {
    "page": "chat",
    "section": "Landscape Chat",
    "title": "Layout",
@@ -413,8 +432,7 @@
    "detail": "A live poll card with the running vote tally.",
    "aliases": [
     "poll"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -426,8 +444,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -442,8 +459,7 @@
    "aliases": [
     "prediction",
     "bet"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -455,8 +471,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -2377,6 +2392,41 @@
    "logo": null,
    "aliases": [],
    "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Moderation",
+   "title": "Timeout lengths",
+   "paths": [
+    "moderation.timeout_presets"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The four timeout lengths on a user card in channels you moderate, also the hover dock's on desktop.",
+   "aliases": [
+    "timeout",
+    "presets",
+    "mod",
+    "moderator",
+    "ban length"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Moderation",
+   "title": "Card buttons",
+   "paths": [
+    "moderation.card_actions"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Your own buttons on a user card in channels you moderate: a timeout, ban, unban or warning with a saved reason.",
+   "aliases": [
+    "custom mod actions",
+    "mod buttons",
+    "warn",
+    "moderator"
+   ]
   },
   {
    "page": "chat",

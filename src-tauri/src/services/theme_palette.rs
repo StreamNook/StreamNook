@@ -34,6 +34,19 @@ pub fn categories() -> Value {
     BUILT_IN.get("categories").cloned().unwrap_or_else(|| json!([]))
 }
 
+/// The light a theme's effect throws across the interface (Prism's blooms and streaks), as the
+/// shared JSON defines it for every shell: the colors, each gradient's stops at full strength,
+/// which gradients each kind of surface carries, and how the strength follows glassiness. The
+/// desktop's `styles/theme-prism.css` paints the same values (a test pins the two together);
+/// the iPhone draws them natively. `blurOffMaxStrength` is the glassiness cap with blur off,
+/// which the desktop's glass reads from the same file.
+pub fn effect_light(effect: &str) -> Option<Value> {
+    let mut light = BUILT_IN.get("effects")?.get(effect)?.clone();
+    let cap = BUILT_IN.get("glassBlurOffMaxStrength").cloned().unwrap_or(json!(0.45));
+    light.as_object_mut()?.insert("blurOffMaxStrength".into(), cap);
+    Some(light)
+}
+
 fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let h = hex.strip_prefix('#')?;
     if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -374,6 +387,8 @@ pub struct ResolvedTheme {
     /// Status-bar and other system content should be light on this background.
     pub light_content: bool,
     pub effect: Option<String>,
+    /// The effect's light (`effect_light`), for a shell that draws it natively.
+    pub light: Option<Value>,
 }
 
 /// Resolves a theme id against the custom themes and built-ins (custom first),
@@ -399,7 +414,8 @@ pub fn resolve(id: &str, custom_themes: &[Value], oled_accent: Option<&str>) -> 
     }
     lift_text(&mut palette);
     let light_content = needs_light_content(palette.get("background").and_then(Value::as_str).unwrap_or("#000000"));
-    ResolvedTheme { id, name, palette, light_content, effect }
+    let light = effect.as_deref().and_then(effect_light);
+    ResolvedTheme { id, name, palette, light_content, effect, light }
 }
 
 /// The gallery: categories, the built-in themes (OLED in its saved accent),
@@ -415,6 +431,9 @@ pub fn catalog(custom_themes: &[Value], oled_accent: Option<&str>) -> Value {
             }
             if let Some(palette) = t.get_mut("palette") {
                 lift_text(palette);
+            }
+            if let Some(light) = t.get("effect").and_then(Value::as_str).and_then(effect_light) {
+                t["light"] = light;
             }
             t
         })
@@ -613,5 +632,81 @@ mod tests {
         assert_eq!(faint[0]["palette"]["textSecondary"]["opacity"], 100);
         let (secondary, muted) = secondary_on_surface(&custom_palette(&faint[0]));
         assert!(secondary >= SECONDARY_CONTRAST_FLOOR && secondary >= muted);
+    }
+
+    /// A gradient from the shared JSON written the way `theme-prism.css` writes it.
+    fn css_gradient(gradient: &Value) -> String {
+        let stops: Vec<String> = gradient["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stop| match stop["color"].as_str() {
+                Some(color) => format!("rgba(var(--pr-{color}), calc({:.2} * var(--pr-level))) {}%", stop["alpha"].as_f64().unwrap(), stop["at"]),
+                None => format!("transparent {}%", stop["at"]),
+            })
+            .collect();
+        match gradient["angle"].as_f64() {
+            Some(angle) => format!("linear-gradient({angle}deg, {})", stops.join(", ")),
+            None => format!(
+                "radial-gradient({}% {}% at {}% {}%, {})",
+                gradient["size"][0], gradient["size"][1], gradient["center"][0], gradient["center"][1], stops.join(", ")
+            ),
+        }
+    }
+
+    fn kebab(name: &str) -> String {
+        name.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] } else { vec![c] }).collect()
+    }
+
+    /// The iPhone draws Prism's light from the shared JSON and the desktop paints it from
+    /// `theme-prism.css`: every color, gradient, surface and the glassiness level must be the
+    /// same in both, so a change to one without the other fails here.
+    #[test]
+    fn prism_light_matches_the_desktop_sheet() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let css = squash(include_str!("../../../src/styles/theme-prism.css"));
+        let light = resolve("prism", &[], None).light.expect("Prism serves its light");
+        assert_eq!(light["blurOffMaxStrength"], 0.45);
+        for (name, rgb) in light["colors"].as_object().unwrap() {
+            let channels: Vec<String> = rgb.as_array().unwrap().iter().map(|c| c.to_string()).collect();
+            let want = squash(&format!("--pr-{name}: {};", channels.join(", ")));
+            assert!(css.contains(&want), "color {name}: {want}");
+        }
+        let floor = light["levelFloor"].as_f64().unwrap();
+        let level = squash(&format!("--pr-level: calc({floor} + {} * var(--glass-strength, 1));", 1.0 - floor));
+        assert!(css.contains(&level), "level: {level}");
+        for (name, gradient) in light["gradients"].as_object().unwrap() {
+            let want = if name == "catch" {
+                squash(&format!(".glass-button:hover {{ background-image: {}; }}", css_gradient(gradient)))
+            } else {
+                squash(&format!("--pr-{}: {};", kebab(name), css_gradient(gradient)))
+            };
+            assert!(css.contains(&want), "gradient {name}: {want}");
+        }
+        let selectors = [
+            ("shell", ".sn-app-shell"),
+            ("dialog", ".liquid-glass-panel"),
+            ("modal", ".glass-modal"),
+            ("panel", ".glass-panel"),
+            ("popover", ".sn-popover"),
+            ("card", ".settings-card"),
+        ];
+        let surfaces = light["surfaces"].as_object().unwrap();
+        assert_eq!(surfaces.len(), selectors.len() + 1);
+        assert_eq!(surfaces["press"], json!(["catch"]));
+        for (surface, selector) in selectors {
+            let layers: Vec<String> =
+                surfaces[surface].as_array().unwrap().iter().map(|g| format!("var(--pr-{})", kebab(g.as_str().unwrap()))).collect();
+            let want = squash(&format!("html[data-theme-effect=\"prism\"] {selector} {{ background-image: {}", layers.join(", ")));
+            assert!(css.contains(&want), "surface {surface}: {want}");
+        }
+        let selection = &light["selection"];
+        let want = squash(&format!("::selection {{ background: rgba(var(--pr-{}), {}); }}", selection["color"].as_str().unwrap(), selection["alpha"]));
+        assert!(css.contains(&want), "selection: {want}");
+        // Only themes with an effect carry light, in the catalog too.
+        assert!(resolve(DEFAULT_THEME_ID, &[], None).light.is_none());
+        let catalog = catalog(&[], None);
+        let lit: Vec<&str> = catalog["themes"].as_array().unwrap().iter().filter(|t| t.get("light").is_some()).filter_map(|t| t["id"].as_str()).collect();
+        assert_eq!(lit, ["prism"]);
     }
 }

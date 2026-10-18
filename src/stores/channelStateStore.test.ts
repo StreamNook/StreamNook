@@ -22,7 +22,10 @@ const blank = (login: string): ChannelState => ({
   pinned: [],
   pinned_at: null,
   collab: null,
+  shared_chat: null,
   collab_at: null,
+  relationship: null,
+  relationship_at: null,
 });
 
 describe('channel state store', () => {
@@ -57,5 +60,13 @@ describe('channel state store', () => {
     const incoming = { ...blank('a'), viewer_count: 2, viewers_at: 9 };
     expect(newestSections(prev, incoming).viewer_count).toBe(2);
     expect(newestSections(incoming, prev).viewer_count).toBe(2);
+  });
+
+  it('keeps a relationship push newer than the watch answer', () => {
+    const rel = { following: true, subscribed: false, has_sub_history: false, cumulative_months: 0, badge_url: null };
+    const prev = { ...blank('a'), relationship: rel, relationship_at: 9 };
+    const incoming = { ...blank('a'), relationship: { ...rel, following: false }, relationship_at: 4 };
+    expect(newestSections(prev, incoming).relationship?.following).toBe(true);
+    expect(newestSections(prev, incoming).relationship_at).toBe(9);
   });
 });

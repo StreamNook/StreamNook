@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_THEME_ID, OLED_THEME_ID, getOledTheme, themeCategories, themes } from './index';
+import { DEFAULT_THEME_ID, OLED_THEME_ID, getOledTheme, phoneFloors, themeCategories, themes } from './index';
 
 // The built-in palettes are one JSON file the Rust core reads too
 // (services/theme_palette.rs), so a malformed entry breaks every shell at once.
@@ -97,5 +97,20 @@ describe('built-in themes', () => {
     const oled = getOledTheme('#000000').palette;
     const oledTrack = over(rgba(oled.surface), rgba(oled.background));
     expect(ratio(over(rgba(oled.textSecondary), oledTrack), oledTrack)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// A phone shows nothing behind the app, so a see-through custom background is
+// flattened over black and the tertiary floor over that page; surfaces built
+// as solid from them then are solid.
+describe('phone floors', () => {
+  it('flattens a see-through background over black and tertiary over the page', () => {
+    const floors = phoneFloors('rgba(40, 60, 80, 0.5)', 'rgba(200, 200, 200, 0.5)');
+    expect(floors.background).toBe('#141e28');
+    expect(floors.tertiary).toBe('#6e7378');
+  });
+
+  it('leaves opaque floors as they are', () => {
+    expect(phoneFloors('#0c0c0d', '#1a1a1b')).toEqual({ background: '#0c0c0d', tertiary: '#1a1a1b' });
   });
 });

@@ -13,7 +13,7 @@ import type { MobileTab } from './navStore';
 const START_TAB_KEY = 'sn-start-tab';
 const MENTION_HAPTIC_KEY = 'sn-mention-haptic';
 
-const TABS: readonly MobileTab[] = ['following', 'browse', 'rewards', 'you'];
+const TABS: readonly MobileTab[] = ['following', 'browse', 'chats', 'rewards', 'you'];
 
 function readStartTab(): MobileTab {
   try {

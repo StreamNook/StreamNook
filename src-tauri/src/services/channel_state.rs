@@ -17,6 +17,11 @@
 //! The same tick reads Shared Viewership (`collab`, see `services::collaboration`):
 //! who a live channel is streaming with and the combined count, batched for
 //! every watched live channel. It sleeps while no window is on screen.
+//!
+//! The viewer's relationship to the channel (follow, subscription, the badge
+//! their next month wears) is read once when a chat opens, again every ten
+//! minutes, and set at once by the viewer's own follow, unfollow or sub, so a
+//! chat menu opens with it already known and never fills in on screen.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,7 +36,9 @@ use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
+use crate::services::channel_relationship::{self, Relationship};
 use crate::services::collaboration::{self, Collaboration};
+use crate::services::shared_chat::{self, SharedChat};
 use crate::services::twitch_service::TwitchService;
 
 pub const EVENT: &str = "channel-state";
@@ -39,6 +46,8 @@ pub const EVENT: &str = "channel-state";
 const VIEWERS_PERIOD: Duration = Duration::from_secs(60);
 const POINTS_PERIOD: Duration = Duration::from_secs(60);
 const PINNED_PERIOD: Duration = Duration::from_secs(30);
+/// Follows and subs change through this app (set at once) or rarely elsewhere.
+const RELATIONSHIP_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 /// A rise in one of the viewer's balances here, for the wallet's "+N".
 #[derive(Serialize, Clone, PartialEq, Debug)]
@@ -139,7 +148,15 @@ pub struct ChannelState {
     pub pinned: Vec<serde_json::Value>,
     pub pinned_at: Option<u64>,
     pub collab: Option<Collaboration>,
+    /// Outside a Stream Together group, the Twitch Shared Chat session the
+    /// channel's chat is in (the channel first, then its live partners), so
+    /// the chat header can say whose chatters these are. Read with `collab`.
+    pub shared_chat: Option<SharedChat>,
     pub collab_at: Option<u64>,
+    /// The signed-in viewer's follow and subscription here; `None` until the
+    /// first answer.
+    pub relationship: Option<Relationship>,
+    pub relationship_at: Option<u64>,
     /// Numbers each pinned fetch as it starts. Fetches overlap (the poll, a
     /// refresh after a pin, the follow-up checks), and only the newest one to
     /// start may write, so a slow answer from before a pin can never put the
@@ -186,6 +203,12 @@ pub enum ChannelUpdate {
     Collab {
         login: String,
         collab: Option<Collaboration>,
+        shared_chat: Option<SharedChat>,
+        at: u64,
+    },
+    Relationship {
+        login: String,
+        relationship: Option<Relationship>,
         at: u64,
     },
 }
@@ -246,12 +269,21 @@ pub fn start(app: AppHandle) {
             }
         }
     });
-    let pinned = inner;
+    let pinned = inner.clone();
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(PINNED_PERIOD).await;
             for login in fully_watched_logins(&pinned).await {
                 refresh_pinned(&pinned, &login).await;
+            }
+        }
+    });
+    let relationships = inner;
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(RELATIONSHIP_PERIOD).await;
+            for login in fully_watched_logins(&relationships).await {
+                refresh_relationship(&relationships, &login, true).await;
             }
         }
     });
@@ -293,6 +325,12 @@ pub async fn watch(login: &str, channel_id: &str, live_only: bool) -> ChannelSta
             login.clone(),
             ChannelState { login: login.clone(), channel_id: channel_id.to_string(), ..Default::default() },
         );
+    }
+    if first_full {
+        // On its own task: three lookups that the other sections need not wait for.
+        let inner = inner.clone();
+        let l = login.clone();
+        tauri::async_runtime::spawn(async move { refresh_relationship(&inner, &l, true).await });
     }
     if first || first_full {
         let inner = inner.clone();
@@ -353,8 +391,8 @@ pub async fn is_live(login: &str) -> Option<bool> {
     s.answered.then_some(s.viewer_count.is_some())
 }
 
-/// Manual refresh of one section (`viewers`, `points`, `pinned`) for a
-/// watched channel: after a pin, a claim, a spend.
+/// Manual refresh of one section (`viewers`, `points`, `pinned`, `bits`,
+/// `relationship`) for a watched channel: after a pin, a claim, a spend.
 pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
     let inner = SERVICE.get().ok_or("channel state not started")?;
     let login = login.to_lowercase();
@@ -366,6 +404,7 @@ pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
         "points" => refresh_points(inner, &login).await,
         "pinned" => refresh_pinned(inner, &login).await,
         "bits" => refresh_bits(inner, &login).await,
+        "relationship" => refresh_relationship(inner, &login, true).await,
         other => return Err(format!("unknown channel section: {other}")),
     }
     Ok(())
@@ -489,6 +528,8 @@ async fn refresh_viewers(inner: &Inner) {
         crate::services::channel_rewards::note_stream_seen(&login, &start);
     }
     for (login, l) in changed {
+        #[cfg(mobile)]
+        crate::commands::chat_tabs::note_live(&login, l.viewer_count.is_some(), l.viewer_count);
         emit(
             &inner.app,
             ChannelUpdate::Viewers {
@@ -533,22 +574,40 @@ async fn refresh_collab(inner: &Inner, watched: &HashMap<String, String>, live_l
             fresh.insert(login.clone(), collab);
         }
     }
+    // Outside a group (a group already shares its chat), the Shared Chat
+    // session: cached per channel and signed-in only, so a failed or missing
+    // answer keeps what the channel last had.
+    let solo: Vec<String> = live_logins
+        .iter()
+        .filter(|l| matches!(fresh.get(*l), Some(None)) || !fresh.contains_key(*l))
+        .filter_map(|l| watched.get(l).cloned())
+        .collect();
+    let mut sessions = if solo.is_empty() { HashMap::new() } else { shared_chat::fetch(&solo).await };
     let at = now_secs();
-    let mut changed: Vec<(String, Option<Collaboration>)> = Vec::new();
+    let mut changed: Vec<(String, Option<Collaboration>, Option<SharedChat>)> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, collab) in fresh {
             if let Some(s) = state.get_mut(&login) {
-                if s.collab != collab {
-                    changed.push((login.clone(), collab.clone()));
+                let shared = if collab.is_some() || !live_logins.contains(&login) {
+                    None
+                } else {
+                    match watched.get(&login).and_then(|id| sessions.remove(id)) {
+                        Some(answer) => answer,
+                        None => s.shared_chat.clone(),
+                    }
+                };
+                if s.collab != collab || s.shared_chat != shared {
+                    changed.push((login.clone(), collab.clone(), shared.clone()));
                 }
                 s.collab = collab;
+                s.shared_chat = shared;
                 s.collab_at = Some(at);
             }
         }
     }
-    for (login, collab) in changed {
-        emit(&inner.app, ChannelUpdate::Collab { login, collab, at });
+    for (login, collab, shared_chat) in changed {
+        emit(&inner.app, ChannelUpdate::Collab { login, collab, shared_chat, at });
     }
 }
 
@@ -640,6 +699,80 @@ async fn refresh_points(inner: &Inner, login: &str) {
             ChannelUpdate::Points { login: login.to_string(), points: Some(points), at },
         );
     }
+}
+
+/// Read the viewer's relationship to a fully watched channel. `merge` keeps
+/// what a failed lookup could not answer (see `channel_relationship::merge`);
+/// after an account change the new read replaces everything.
+async fn refresh_relationship(inner: &Inner, login: &str, merge: bool) {
+    let channel_id = match inner.watched.read().await.get(login) {
+        Some(w) if w.full_refs > 0 && !w.channel_id.is_empty() => w.channel_id.clone(),
+        _ => return,
+    };
+    let (read, subs_answered) = channel_relationship::read_twitch(&channel_id, login).await;
+    let held = if merge {
+        inner.state.read().await.get(login).and_then(|s| s.relationship.clone())
+    } else {
+        None
+    };
+    store_relationship(inner, login, channel_relationship::merge(held.as_ref(), read, subs_answered)).await;
+}
+
+/// Keep `relationship` for `login` and emit it if it changed (the first answer
+/// always differs from the empty start).
+async fn store_relationship(inner: &Inner, login: &str, relationship: Relationship) {
+    let at = now_secs();
+    let changed = {
+        let mut state = inner.state.write().await;
+        let Some(s) = state.get_mut(login) else { return };
+        let changed = s.relationship.as_ref() != Some(&relationship);
+        s.relationship = Some(relationship.clone());
+        s.relationship_at = Some(at);
+        changed
+    };
+    if changed {
+        emit(
+            &inner.app,
+            ChannelUpdate::Relationship { login: login.to_string(), relationship: Some(relationship), at },
+        );
+    }
+}
+
+/// Change the held relationship for a channel id some window has fully open.
+async fn adjust_relationship(channel_id: &str, change: impl FnOnce(&mut Relationship)) {
+    let Some(inner) = SERVICE.get() else { return };
+    let Some(login) = login_for_id(inner, channel_id).await else { return };
+    let mut relationship = inner.state.read().await.get(&login).and_then(|s| s.relationship.clone()).unwrap_or_default();
+    change(&mut relationship);
+    store_relationship(inner, &login, relationship).await;
+}
+
+/// The viewer followed or unfollowed `channel_id` from this app. Twitch's
+/// answer to the write is the truth, so every chat menu shows it at once.
+pub async fn own_follow_changed(channel_id: &str, following: bool) {
+    adjust_relationship(channel_id, |r| r.following = Some(following)).await;
+}
+
+/// The viewer subscribed in `channel_id` (their own sub, a resub or upgrade,
+/// or a gift to them). The months and badge follow on the next read.
+pub async fn own_sub_seen(channel_id: &str) {
+    adjust_relationship(channel_id, |r| {
+        r.subscribed = true;
+        r.has_sub_history = false;
+    })
+    .await;
+}
+
+/// The signed-in account changed or signed out: every open chat's
+/// relationship belongs to the old one, so read each again from scratch.
+pub fn account_changed() {
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        for login in fully_watched_logins(&inner).await {
+            refresh_relationship(&inner, &login, false).await;
+        }
+    });
 }
 
 /// The watched login for a channel id, when some window has it fully open.

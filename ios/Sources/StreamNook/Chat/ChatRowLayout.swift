@@ -22,6 +22,8 @@ enum RowTapAction: Equatable {
     case mention(String)
     case link(URL)
     case replyParent(String)
+    /// Allow (`allow`) or deny the held message with this Twitch message id.
+    case held(String, allow: Bool)
 }
 
 struct RowTap {
@@ -211,6 +213,11 @@ struct ChatRowLayoutBuilder {
             top = placed.bottom
         }
 
+        // A message AutoMod held: the moderator's Allow and Deny under it, one quiet line once decided.
+        if let held = row.held {
+            return buildHeld(row, held)
+        }
+
         // System rows: a notice with no name or badges.
         if kind == .system {
             decor.fill = .solid(ChatTheme.warning.withAlphaComponent(0.10))
@@ -269,8 +276,11 @@ struct ChatRowLayoutBuilder {
             decor.fill = .tint(color, alpha: 0.20)
             label = (restricted ? "Restricted user" : "Monitored user", color)
         } else if meta.isFromSharedChat {
-            decor.leadingBar = (ChatTheme.accent.withAlphaComponent(0.5), 2)
-            decor.fill = .solid(ChatTheme.accent.withAlphaComponent(0.05))
+            // A partner's row wears that channel's own color, so two partners read apart at chat
+            // speed; the accent stands in until the core knows the channel.
+            let color = view?.source.flatMap { ChatTheme.color($0.color) } ?? ChatTheme.accent
+            decor.leadingBar = (color, 3)
+            decor.fill = .tint(color, alpha: 0.10)
         }
         if let redemption = Self.redemptionLabel(msgID) {
             decor.fill = .gradient([ChatTheme.highlightCyan.withAlphaComponent(0.18), UIColor.systemBlue.withAlphaComponent(0.10)])
@@ -317,8 +327,12 @@ struct ChatRowLayoutBuilder {
             top += 6
         }
 
-        // Badges, name and body flow as one paragraph.
+        // Badges, name and body flow as one paragraph. A Shared Chat partner's row leads with the
+        // channel's face, round and ringed in its color (the cell draws the ring).
         var block = RowText(builder: self)
+        if meta.isFromSharedChat, let face = view?.source?.avatarURL, !face.isEmpty {
+            block.face(face, gapAfter: 5)
+        }
         // Only badges whose image can load, so the gap before the name follows the last one shown.
         let badges = (view?.badges ?? []).filter { !ImagePipeline.shared.hasFailed($0.url) }
         for (i, badge) in badges.enumerated() {
@@ -328,7 +342,8 @@ struct ChatRowLayoutBuilder {
         let nameColor = ChatTheme.color(view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
         let accent = style.usernameAccentSource == "theme" ? ChatTheme.accent : nameColor
         let nameFont = font(fontSize, .bold)
-        let name = (style.showAtSign ? "@" : "") + message.shownName
+        // The viewer's own nickname for the author stands in for their name (Rust sets it).
+        let name = (style.showAtSign ? "@" : "") + (view?.nickname ?? message.shownName)
         switch style.usernameStyle {
         case "bar": block.bar(accent)
         case "dot": block.dot(accent)
@@ -407,6 +422,89 @@ struct ChatRowLayoutBuilder {
                                   mentionsMe: meta.isMentioned)
         built.paintShadows = PaintShadows(rawValue: style.paintShadows) ?? .all
         return built
+    }
+
+    /// A held message: a warm card with why it is held, the author and text, and Allow and Deny
+    /// side by side under it. Once decided it folds to one quiet line saying what happened.
+    func buildHeld(_ row: ChatRowModel, _ held: HeldRow) -> ChatRowLayout {
+        var lines: [PlacedLine] = []
+        var attachments: [RowAttachment] = []
+        var shapes: [RowShape] = []
+        var taps: [RowTap] = []
+        var decor = RowDecor()
+        var top: CGFloat = 0
+        func place(_ block: RowText, indent: CGFloat = 0, right: CGFloat = 0, maxLines: Int = 0) {
+            let placed = block.layout(top: top, left: sideInset + indent, width: width - 2 * sideInset - indent - right,
+                                      maxLines: maxLines, alignRight: false)
+            lines += placed.lines
+            attachments += placed.attachments
+            taps += placed.taps
+            shapes += placed.shapes
+            top = placed.bottom
+        }
+        let icon: CGFloat = 13
+
+        if let line = held.line {
+            top = 5
+            var block = RowText(builder: self)
+            block.append(line, font(12, .regular), ChatTheme.textSecondary)
+            if let by = held.by {
+                block.append(" \u{00B7} \(by)", font(12, .regular), ChatTheme.textMuted)
+            }
+            shapes.append(RowShape(kind: .symbol("flag.fill", ChatTheme.textMuted),
+                                   rect: CGRect(x: sideInset, y: top + 2, width: icon, height: icon)))
+            place(block, indent: icon + 6, maxLines: 2)
+            top += 5
+            let words = [line, held.by.map { "by \($0)" }].compactMap { $0 }.joined(separator: ", ")
+            return ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
+                                 attachments: attachments, shapes: shapes, taps: taps, decor: decor,
+                                 accessibilityText: words, live: row.live, mentionsMe: false)
+        }
+
+        let amber = ChatTheme.warning
+        let inset: CGFloat = 8
+        top = inset + 8
+        let cardTop = inset
+        // Why it is held.
+        var caption = RowText(builder: self)
+        caption.append(held.held.label, font(12, .semibold), amber)
+        shapes.append(RowShape(kind: .symbol("flag.fill", amber), rect: CGRect(x: sideInset + inset, y: top + 2, width: icon, height: icon)))
+        place(caption, indent: inset + icon + 6, right: inset, maxLines: 2)
+        top += 4
+        // The author and the message, as a row draws them.
+        var block = RowText(builder: self)
+        let nameColor = ChatTheme.color(row.message.metadata.view?.nameColor ?? row.message.color) ?? ChatTheme.fallbackName
+        block.name(row.message.metadata.view?.nickname ?? held.held.shownName, font: font(fontSize, .bold), color: nameColor,
+                   paint: nil, chip: nil)
+        block.append(": ", font(fontSize, .bold), nameColor)
+        block.append(held.held.text, font(fontSize, bodyWeight), ChatTheme.textPrimary)
+        place(block, indent: inset, right: inset)
+        top += 10
+        // Allow and Deny: words, not icons, and big enough to hit in a moving chat.
+        let gap: CGFloat = 8
+        let buttonHeight: CGFloat = 34
+        let buttonWidth = (width - 2 * sideInset - 2 * inset - gap) / 2
+        for (i, allow) in [true, false].enumerated() {
+            let rect = CGRect(x: sideInset + inset + CGFloat(i) * (buttonWidth + gap), y: top, width: buttonWidth, height: buttonHeight)
+            let tint = allow ? ChatTheme.success : ChatTheme.error
+            shapes.append(RowShape(kind: .capsule(fill: tint.withAlphaComponent(0.16), stroke: nil), rect: rect))
+            let title = allow ? "Allow" : "Deny"
+            // The renderer draws `text:` shapes medium weight at height / 1.6.
+            let size = (title as NSString).size(withAttributes: [.font: font(15, .medium)])
+            shapes.append(RowShape(kind: .symbol("text:\(title)", tint),
+                                   rect: CGRect(x: rect.midX - size.width / 2, y: rect.minY, width: size.width, height: 24)
+                                       .offsetBy(dx: 0, dy: (buttonHeight - 24) / 2)))
+            taps.append(RowTap(rect: rect, action: .held(held.held.messageID, allow: allow)))
+        }
+        top += buttonHeight + 10
+        let card = CGRect(x: sideInset - 2, y: cardTop, width: width - 2 * sideInset + 4, height: top - cardTop)
+        shapes.insert(RowShape(kind: .capsule(fill: amber.withAlphaComponent(0.10), stroke: amber.withAlphaComponent(0.25)), rect: card), at: 0)
+        top += inset
+        decor.flash = row.live ? (amber, 0.25) : nil
+        let words = "\(held.held.label). \(held.held.shownName): \(held.held.text)"
+        return ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
+                             attachments: attachments, shapes: shapes, taps: taps, decor: decor,
+                             accessibilityText: words, live: row.live, mentionsMe: false)
     }
 
     /// The box the given lines and images cover, for a frost block hugging them.

@@ -13,8 +13,8 @@
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
-  /* 64: the tabs carry labels under their icons. */
-  --sn-tabbar-h: 64px;
+  /* 56: icons only (five tabs left no room for labels), a 44 px pill inside. */
+  --sn-tabbar-h: 56px;
   --sn-safe-t: var(--sn-inset-t, env(safe-area-inset-top, 0px));
   --sn-safe-r: var(--sn-inset-r, env(safe-area-inset-right, 0px));
   --sn-safe-b: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));
@@ -109,6 +109,15 @@ body:has(.sn-mobile) .glass-input:focus {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
+/* A sheet's content once it has scrolled under the handle (MobileSheet adds
+   it), and a list that scrolls up under a header or the status bar (the Chats
+   tab): the top 24px fade out, so nothing meets the edge with a hard line.
+   The iPhone's fitted sheets fade the same way. */
+.sn-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+
 /* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
    the chat wash at 70%, faded in from both sides and down from just under the
    top to nothing well before the bottom, so no edge of the art ever shows.
@@ -156,6 +165,41 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-touch {
   min-height: 44px;
   min-width: 44px;
+}
+
+/* The stream manager's forms are the desktop builders' own; on the phone
+   their fields and buttons get finger-sized targets and text. */
+.sn-manage-touch .glass-input,
+.sn-manage-touch .glass-button,
+.sn-manage-touch .glass-button-secondary {
+  min-height: 44px;
+  font-size: 15px;
+}
+.sn-manage-touch .sm-btn {
+  min-height: 40px;
+  padding-left: 14px;
+  padding-right: 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+/* A reward's Pause and Complete all serve its heading: a step quieter than the
+   row actions. */
+.sn-manage-touch .sm-btn.sm-head {
+  min-height: 34px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+/* A redemption's actions go on their own line under its text, so the text
+   keeps the row's width. */
+.sn-manage-touch .sm-row {
+  flex-wrap: wrap;
+}
+.sn-manage-touch .sm-acts {
+  flex-basis: 100%;
+  gap: 8px;
+  padding-left: 34px;
 }
 
 /* Bottom clearance for scroll content that runs behind the floating pill tab
@@ -236,14 +280,17 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* A popover that sits OVER SCROLLING CHAT (the drop bar, the pinned banner).
-   The house popover blurs 64px of whatever is behind it, and behind these two
-   is a chat that repaints on every message, so the blur was recomputed on
-   every frame for the whole watch. A firmer tint carries the legibility the
-   blur was providing: at 90% the chat's words still showed through the card,
-   so it is 97%, and solid at Glassiness 0. */
+/* A popover with no blur behind it (the drop bar, the pinned banner, the You
+   card's picture note). The house popover blurs 64px of whatever is behind
+   it, and behind the first two is a chat that repaints on every message, so
+   the blur was recomputed every frame. With no blur the tint is all there is,
+   and any tint short of solid leaves the text behind crisp (at 97% a white
+   line still showed as a ghost on the phone), so a static popover is fully
+   opaque: the glass contract's "never crisp". The page background it mixes
+   is opaque on a phone (phoneFloors), and the theme's popover light still
+   rides the image layers on top. */
 .sn-mobile .sn-popover--static {
-  --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
+  --sn-popover-tint: 100%;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

@@ -18,6 +18,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { thenRun, useSettingReset } from './settingReset';
 import { AUTO_GAP } from '../../utils/latency';
 import { TitleBarTuckPreview } from './TitleBarTuckPreview';
+import { GlassMultiSelect } from '../ui/GlassMultiSelect';
+import {
+  DEVICE_LANGUAGE_LABEL,
+  DISCOVERY_LANGUAGE_OPTIONS,
+  nextDiscoveryLanguages,
+} from '../../utils/discoveryLanguages';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -864,6 +870,32 @@ const PlayerSettings = () => {
         </SettingsRow>
         </div>
       </SettingsSection>
+
+      {/* Phone-only: the phones have no Interface page, so the one Languages
+          setting the desktop draws under Interface > Discover lives here. */}
+      {IS_MOBILE && (
+        <SettingsSection label="Discover">
+          <SettingsRow
+            title="Languages"
+            description="Streams in Discover and Kick browse. Your device language until you pick some."
+            onReset={resetFor(['discovery_languages', []])}
+            control={
+              <GlassMultiSelect
+                values={settings.discovery_languages ?? []}
+                onChange={(picked) => {
+                  const current = useAppStore.getState().settings;
+                  const next = nextDiscoveryLanguages(current.discovery_languages ?? [], picked);
+                  void updateSettings({ ...current, discovery_languages: next }).then(() =>
+                    useAppStore.getState().loadRecommendedStreams(),
+                  );
+                }}
+                options={DISCOVERY_LANGUAGE_OPTIONS}
+                emptyLabel={DEVICE_LANGUAGE_LABEL}
+              />
+            }
+          />
+        </SettingsSection>
+      )}
     </div>
   );
 };

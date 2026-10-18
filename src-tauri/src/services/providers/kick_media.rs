@@ -16,6 +16,7 @@
 //! at each call site.
 
 use crate::models::provider_stream::{CategoryPage, ProviderCategory, ProviderStream, StreamPage};
+use crate::services::browse_languages;
 use crate::services::kick_auth_service;
 use crate::services::providers::hls_master;
 use crate::services::providers::key::make_key;
@@ -159,6 +160,37 @@ struct UserRow {
 }
 
 // --- Helpers ---------------------------------------------------------------
+
+/// `url` once per language in parallel, merged most-watched first, each
+/// channel once, cut to `limit`. Fails only when every language failed.
+async fn by_language(url: &str, languages: &[String], limit: usize) -> Result<Vec<ProviderStream>> {
+    let calls = languages.iter().map(|lang| {
+        let url = format!("{}&language={}", url, urlencoding::encode(lang));
+        async move { api_get::<V1LivestreamRow>(&url).await }
+    });
+    let mut rows: Vec<V1LivestreamRow> = Vec::new();
+    let mut failed = None;
+    for result in futures::future::join_all(calls).await {
+        match result {
+            Ok(mut r) => rows.append(&mut r),
+            Err(e) => failed = Some(e),
+        }
+    }
+    if rows.is_empty() {
+        if let Some(e) = failed {
+            return Err(e);
+        }
+    }
+    Ok(merge_by_viewers(rows.into_iter().filter_map(row_from_livestream).collect(), limit))
+}
+
+fn merge_by_viewers(mut streams: Vec<ProviderStream>, limit: usize) -> Vec<ProviderStream> {
+    streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+    let mut seen = std::collections::HashSet::new();
+    streams.retain(|s| seen.insert(s.key.clone()));
+    streams.truncate(limit);
+    streams
+}
 
 fn watch_url(slug: &str) -> String {
     format!("https://kick.com/{}", slug)
@@ -455,6 +487,16 @@ impl StreamSource for KickSource {
         let mut url = format!("{}/v1/livestreams?limit={}&sort=viewer_count", API, capped);
         if let Some(cat) = category.filter(|c| !c.is_empty()) {
             url.push_str(&format!("&category_id={}", urlencoding::encode(cat)));
+        }
+        // Kick ranks one worldwide list, so the viewer's languages are asked for
+        // here. It takes one `language` per request (a repeat keeps the first,
+        // `en,es` matches nothing), so each language is its own call, merged.
+        let languages = browse_languages::kick_codes(&browse_languages::current());
+        if !languages.is_empty() {
+            match by_language(&url, &languages, capped as usize).await {
+                Ok(streams) => return Ok(StreamPage { streams, cursor: None }),
+                Err(e) => log::warn!("[Kick] directory by language failed ({}); asking without", e),
+            }
         }
         // NOTE: v1 livestreams takes only broadcaster_user_id / category_id /
         // language / limit / sort — there is NO page or cursor parameter (checked

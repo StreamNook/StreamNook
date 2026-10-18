@@ -174,6 +174,13 @@ import Testing
         #expect(ChannelGroup.collabPush(json, login: "someone") == nil)
     }
 
+    @Test func theCollabPushCarriesASharedChatOutsideAGroup() {
+        let json = #"{"section":"collab","login":"caster","at":3,"collab":null,"shared_chat":{"label":"Sharing chat with Myth","members":[{"user_id":"1","login":"caster","display_name":"Caster","viewer_count":900,"is_leader":true,"is_self":true},{"user_id":"2","login":"myth","display_name":"Myth","avatar_url":"https://x/y.png","viewer_count":5000,"is_leader":false,"is_self":false}]}}"#
+        let group = ChannelGroup.collabPush(json, login: "caster")
+        #expect(group??.members.map(\.login) == ["caster", "myth"])
+        #expect(group??.summary == "One chat across 2 channels")
+    }
+
     @Test func aSharedChatSaysHowManyChannelsShareIt() {
         let group = ChannelGroup(members: [.init(userID: "1", login: "a", displayName: "A"),
                                            .init(userID: "2", login: "b", displayName: "B")], label: "")

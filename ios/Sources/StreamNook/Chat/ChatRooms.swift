@@ -32,6 +32,9 @@ final class ChatRooms {
     @ObservationIgnored var addQuery = ""
     /// Pinned messages by Twitch login, newest first, as the core's channel state reads them.
     private(set) var pins: [String: [PinnedChat]] = [:]
+    /// The viewer's relationship to each Twitch room's channel, as the core holds it (read when
+    /// the room opened, pushed on every change), so the chat menu opens with it known.
+    private(set) var relationships: [String: ChannelRelationship] = [:]
     /// The pinned banner is unrolled; every room starts it collapsed.
     var pinsOpen = false
     @ObservationIgnored private var shownChannel: String?
@@ -95,6 +98,7 @@ final class ChatRooms {
     func start() {
         guard !listening else { return }
         listening = true
+        load()
         let tabsEvents = core.events.stream("chat-tabs")
         let rebuilt = core.events.stream("chat-rebuilt")
         let channelState = core.events.stream("channel-state")
@@ -121,8 +125,11 @@ final class ChatRooms {
         }
         Task { [weak self] in
             for await event in channelState {
-                guard let update = PinnedUpdate.parse(event.payloadJSON) else { continue }
-                self?.takePins(login: update.login.lowercased(), update.pinned)
+                if let update = PinnedUpdate.parse(event.payloadJSON) {
+                    self?.takePins(login: update.login.lowercased(), update.pinned)
+                } else if let update = RelationshipUpdate.parse(event.payloadJSON) {
+                    self?.takeRelationship(login: update.login.lowercased(), update.relationship)
+                }
             }
         }
     }
@@ -138,7 +145,34 @@ final class ChatRooms {
         change("chat_tabs_sync_stream", ["room": room])
     }
 
-    /// Opens a room beside the stream and puts it on screen.
+    /// The saved chats, as the core restored them for whoever is signed in (not joined yet).
+    func load() {
+        Task {
+            guard let view = try? await core.invoke("chat_tabs_get", args: [:], as: ChatTabsState.self) else { return }
+            mirror(view)
+        }
+    }
+
+    /// Joins every chat not joined yet: the Chats tab's first look.
+    func connect() {
+        change("chat_tabs_connect", [:])
+    }
+
+    /// The rooms on screen right now, for the mentions hub (mentions there are read as they land).
+    func setVisible(_ rooms: [String]) {
+        Task { _ = try? await core.invoke("chat_tabs_visible", args: ["rooms": rooms]) }
+    }
+
+    /// Keeps the stream's chat after the player closes, or lets it close with it.
+    func keep(_ channel: String, _ keep: Bool) {
+        Task {
+            guard let view = try? await core.invoke("chat_tabs_keep", args: ["channel": channel, "keep": keep],
+                                                    as: ChatTabsState.self) else { return }
+            mirror(view)
+        }
+    }
+
+    /// Opens a room as one of your chats and puts it on screen.
     func add(_ row: ChatRoomRow) {
         change("chat_tabs_add", ["room": Self.room(provider: row.provider, channel: row.userLogin, id: row.userID,
                                                    label: row.userName.isEmpty ? row.userLogin : row.userName,
@@ -187,8 +221,10 @@ final class ChatRooms {
     /// Shows the core's list unless a newer one is already on screen.
     private func mirror(_ view: ChatTabsState) {
         guard view.revision >= state.revision else { return }
-        state = ChatTabsState(tabs: view.tabs, activeChannel: view.activeChannel, mixedPlatforms: view.mixedPlatforms,
-                              revision: view.revision)
+        var shown = view
+        shown.acquire = []
+        shown.release = []
+        state = shown
         showActive()
     }
 
@@ -294,6 +330,7 @@ final class ChatRooms {
             return
         }
         pins[tab.login] = nil
+        relationships[tab.login.lowercased()] = nil
         let core = core
         let login = tab.login
         enqueue { [weak self] in
@@ -459,11 +496,14 @@ final class ChatRooms {
         guard tab.provider == "twitch", let id = tab.channelID, !id.isEmpty else { return }
         let core = core
         Task {
-            if let json = try? await core.invoke("watch_channel_state", args: ["login": tab.login, "channelId": id]),
-               let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+            guard let json = try? await core.invoke("watch_channel_state", args: ["login": tab.login, "channelId": id]) else { return }
+            if let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
                let list = object["pinned"], let data = try? JSONSerialization.data(withJSONObject: list),
                let pinned = try? JSONDecoder().decode([PinnedChat].self, from: data), sessions[tab.channel] != nil {
                 takePins(login: tab.login, pinned)
+            }
+            if let held = RelationshipUpdate.held(inState: json) {
+                takeRelationship(login: tab.login.lowercased(), held)
             }
         }
         Task {
@@ -473,6 +513,21 @@ final class ChatRooms {
             guard sessions[tab.channel] != nil else { return }
             streaks[tab.channel] = found
         }
+    }
+
+    /// The relationship the core holds for a room's channel; nil before its first read.
+    func relationship(for login: String) -> ChannelRelationship? {
+        relationships[login.lowercased()]
+    }
+
+    /// A follow or unfollow this app just made, shown before the core's push confirms it.
+    func noteFollowing(_ following: Bool, for login: String) {
+        relationships[login.lowercased()]?.following = following
+    }
+
+    private func takeRelationship(login: String, _ relationship: ChannelRelationship?) {
+        guard sessions.values.contains(where: { $0.channel == login }) else { return }
+        relationships[login] = relationship
     }
 
     private func takePins(login: String, _ pinned: [PinnedChat]) {

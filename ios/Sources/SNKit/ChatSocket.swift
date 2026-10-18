@@ -36,13 +36,16 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
     public var blocked: String?
     /// What the disabled message box says while `blocked` is set.
     public var reason: String?
+    /// A moderator's warning the viewer has not acknowledged: the box stays locked behind its
+    /// Acknowledge button.
+    public var warning: ChatWarning?
 
     enum CodingKeys: String, CodingKey {
-        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds", blocked, reason
+        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds", blocked, reason, warning
     }
 
     public init(modes: [ChatRoomMode] = [], prompt: String? = nil, promptShort: String? = nil, standing: String? = nil,
-                slowSeconds: Int = 0, blocked: String? = nil, reason: String? = nil) {
+                slowSeconds: Int = 0, blocked: String? = nil, reason: String? = nil, warning: ChatWarning? = nil) {
         self.modes = modes
         self.prompt = prompt
         self.promptShort = promptShort
@@ -50,6 +53,7 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
         self.slowSeconds = slowSeconds
         self.blocked = blocked
         self.reason = reason
+        self.warning = warning
     }
 
     public init(from decoder: Decoder) throws {
@@ -61,6 +65,7 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
         slowSeconds = try c.decodeIfPresent(Int.self, forKey: .slowSeconds) ?? 0
         blocked = try c.decodeIfPresent(String.self, forKey: .blocked)
         reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        warning = try? c.decodeIfPresent(ChatWarning.self, forKey: .warning)
     }
 }
 
@@ -86,6 +91,8 @@ public enum ChatSocketFrame: Sendable, Equatable {
     case member(userID: String, atmosphere: String?, cologne: CologneLook?, badge: ChatViewBadge?)
     case patch(channel: String?, rows: [ChatRowPatch])
     case notice(channel: String?, msgID: String?, message: String?)
+    /// A message AutoMod held, or the decision on one (`AUTOMOD_HELD`).
+    case held(channel: String?, row: HeldRow)
     case status(String)
     case other(String)
 
@@ -137,6 +144,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
                 return .row(row)
             }
             return .notice(channel: head.channel, msgID: frame?.msgID, message: frame?.message)
+        case "AUTOMOD_HELD":
+            guard let frame = try? decoder.decode(HeldFrame.self, from: data) else { return .other(text) }
+            return .held(channel: head.channel, row: HeldRow(held: frame.held, line: frame.line, by: frame.by))
         default:
             return .other(text)
         }
@@ -210,6 +220,12 @@ public enum ChatSocketFrame: Sendable, Equatable {
             var view: ChatRowView?
         }
         var rows: [Row]
+    }
+
+    private struct HeldFrame: Decodable {
+        var held: HeldMessage
+        var line: String?
+        var by: String?
     }
 
     private struct NoticeFrame: Decodable {

@@ -360,6 +360,7 @@ struct NotifiedChannelsSheet: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            .snSheetLight()
             .background(SN.background)
             .searchable(text: $query, prompt: "Search channels")
             .navigationTitle("Channels to notify me about")

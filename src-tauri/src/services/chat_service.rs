@@ -132,6 +132,14 @@ impl ChatService {
                     Ok((_, false, drop_reason)) => {
                         // Twitch accepted the request but dropped the message
                         // (AutoMod, etc.). Report it; do NOT also send over IRC.
+                        if let Some(ch) = target_channel.filter(|_| {
+                            crate::services::chat_warning::is_warned_refusal(None, drop_reason.as_deref())
+                        }) {
+                            let (ch, text) = (ch.to_string(), drop_reason.clone());
+                            tokio::spawn(async move {
+                                crate::services::chat_warning::on_refusal(&ch, None, text.as_deref()).await;
+                            });
+                        }
                         return Ok(SendResult {
                             message_id: None,
                             is_sent: false,

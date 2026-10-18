@@ -16,6 +16,8 @@ final class Look {
     private(set) var motion = MotionMode.full
     private(set) var fontID: String?
     private(set) var themeID = "winters-glass"
+    /// The theme's light (Prism's), or nil for a palette-only theme.
+    private(set) var light: ThemeLight?
 
     /// Takes the look out of a settings read.
     func apply(_ settings: SettingsLook) {
@@ -26,9 +28,13 @@ final class Look {
         themeID = settings.theme ?? "winters-glass"
     }
 
-    /// Takes the palette of the theme the core resolved.
-    func apply(palette: Palette, themeID: String) {
-        if palette != self.palette { self.palette = palette }
+    /// Takes the palette and light of the theme the core resolved.
+    func apply(palette: Palette, themeID: String, light: ThemeLight?) {
+        if palette != self.palette {
+            self.palette = palette
+            ChatTheme.use(palette)
+        }
+        if light != self.light { self.light = light }
         self.themeID = themeID
     }
 
@@ -37,13 +43,12 @@ final class Look {
     /// How much of the opaque floor shows under a glass surface.
     var floorOpacity: Double { 1 - glassiness }
 
-    #if DEBUG
-    /// For drive steps that show a state without writing settings.
+    /// Shows a state without writing settings: the Glassiness slider while it is dragged, and
+    /// drive steps.
     func preview(glassiness: Double? = nil, motion: MotionMode? = nil) {
         if let glassiness { self.glassiness = glassiness }
         if let motion { self.motion = motion }
     }
-    #endif
 }
 
 /// The theme's colours by name, read from the look in force, so a theme change repaints whatever

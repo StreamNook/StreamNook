@@ -2,7 +2,7 @@
 // services, same theme system, phone-shaped chrome (bottom tabs, sheets,
 // safe-area frame). Boot orchestration is deliberately replicated, not shared;
 // see boot/useMobileBoot.ts for the contract with App.tsx.
-import React, { lazy, Suspense, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './mobile.css';
 import { useAppStore } from '../stores/AppStore';
@@ -27,6 +27,8 @@ import { FollowingScreen } from './screens/FollowingScreen';
 import { BrowseScreen } from './screens/BrowseScreen';
 import { YouScreen } from './screens/YouScreen';
 import { WatchScreen } from './screens/WatchScreen';
+import { ChatsScreen } from './screens/ChatsScreen';
+import { useChatsLifecycle } from './chat/useChatsLifecycle';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
@@ -40,7 +42,7 @@ import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
 
-const TAB_ORDER = ['following', 'browse', 'rewards', 'you'] as const;
+const TAB_ORDER = ['following', 'browse', 'chats', 'rewards', 'you'] as const;
 
 const MobileApp: React.FC = () => {
   useThemeBoot();
@@ -55,6 +57,9 @@ const MobileApp: React.FC = () => {
   // Shared with the desktop shell: the watched stream's viewer count is written
   // once at playback start and never refreshed without this.
   useCurrentStreamStats();
+  // The chats outside any one screen: the stream tab, the saved chats, and
+  // leaving the rooms after a while in the background.
+  useChatsLifecycle();
 
   const isBooting = useAppStore((s) => s.isBooting);
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);
@@ -102,6 +107,27 @@ const MobileApp: React.FC = () => {
     setDirection(tabIndex >= prevTabIndex ? 1 : -1);
     setPrevTabIndex(tabIndex);
   }
+
+  // The Chats tab stays mounted once opened, hidden and paused while another
+  // tab is in front. Unmounting it slid the whole chat list (rows, emotes,
+  // animated paints) out while the next tab mounted, and dropped frames on
+  // every switch away; coming back rebuilt every row. Shown again, it eases in
+  // on opacity and transform only, like the other tabs' slide.
+  const [chatsKept, setChatsKept] = useState(activeTab === 'chats');
+  if (activeTab === 'chats' && !chatsKept) setChatsKept(true);
+  const chatsShown = activeTab === 'chats';
+  const chatsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!chatsShown || !chatsRef.current) return;
+    // A surface over the tabs (no tab bar there), so it rises into place.
+    chatsRef.current.animate(
+      [
+        { opacity: 0, transform: 'translateY(32px)' },
+        { opacity: 1, transform: 'none' },
+      ],
+      { duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+    );
+  }, [chatsShown]);
 
   useEffect(() => installBackHandler(), []);
   useEffect(() => installLifecycle(), []);
@@ -164,9 +190,20 @@ const MobileApp: React.FC = () => {
                 {activeTab === 'you' && <YouScreen />}
               </motion.div>
             </AnimatePresence>
+            {chatsKept && (
+              <div
+                ref={chatsRef}
+                hidden={!chatsShown}
+                className="absolute inset-0 flex flex-col"
+                style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
+              >
+                <ChatsScreen shown={chatsShown} />
+              </div>
+            )}
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
-          <MobileTabBar hidden={shellCovered} />
+          {/* Chats is a full-screen surface: no tab bar there. */}
+          <MobileTabBar hidden={shellCovered || chatsShown} />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />

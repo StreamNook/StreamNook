@@ -37,6 +37,9 @@ final class Watch {
     private(set) var error: String?
     /// How far the player sits behind the relay's live edge, in milliseconds.
     private(set) var behindMS: Int?
+    /// The core's behind-live readout for the LIVE pill ("1.6s") and its spoken form.
+    private(set) var behindLabel: String?
+    private(set) var behindSpoken: String?
     /// From the tap to the player first playing, in milliseconds.
     private(set) var firstPlayMS: Int?
     /// The route the player is on now (after any fallback).
@@ -61,6 +64,20 @@ final class Watch {
     private(set) var room: OfflineRoom?
     /// The room's latest broadcast plays in the band.
     private(set) var roomVod = false
+    /// The VOD playing (opened from a channel's videos, or the room's latest broadcast): its
+    /// length, the stamp its position reports carry, and the seek bar's marks.
+    private(set) var playingVod: VodInfo?
+    /// The VOD's playhead and length in seconds, for the seek bar (moved once a second).
+    private(set) var vodPosition: Double = 0
+    private(set) var vodDuration: Double = 0
+    /// The VOD's playback speed.
+    private(set) var vodRate: Float = 1
+    /// The VOD's title, for the header and the lock screen.
+    private(set) var vodTitle: String?
+    /// The core's replay rows for the chat pane, in step with the VOD.
+    var onReplay: ((ReplayStep) -> Void)?
+    /// A VOD began (or ended, nil): the replay room opens or closes with it.
+    var onVodChange: ((VodInfo?) -> Void)?
     /// A stale card: the room's channel is live after all, and the stream starts instead.
     var onLive: ((TwitchStream) -> Void)?
 
@@ -100,6 +117,8 @@ final class Watch {
     private var recoveries = 0
     private static let maxRecoveries = 2
     private var watchers: [NSKeyValueObservation] = []
+    private var vodClock: Task<Void, Never>?
+    private var vodThumbnail: String?
     private var sessionObservers: [NSObjectProtocol] = []
     /// What the core's link governor hears from this player (stalls, and downloads on the
     /// whole-segment route); it answers with `playback-adapt`.
@@ -289,32 +308,168 @@ final class Watch {
     func playRoomVod() {
         guard let vod = room?.latestVod, let core, !roomVod else { return }
         roomVod = true
+        startVod(videoID: vod.id, title: vod.title, thumbnail: nil, at: nil, core: core,
+                 failure: "Could not play the latest broadcast")
+    }
+
+    /// Plays one of a channel's videos, opened from its Channel sheet: whatever played stops (a
+    /// live stream's watch session, drops and points with it), and the channel's header and chat
+    /// stay with the video.
+    func openVod(videoID: String, title: String, thumbnail: String?, channel: TwitchStream, at: Double? = nil,
+                 core: CoreBridge) {
+        close(core: core, stopping: true)
+        self.core = core
+        stream = channel
+        opened = .now
+        status = "Resolving"
+        startVod(videoID: videoID, title: title, thumbnail: thumbnail, at: at, core: core,
+                 failure: "Could not play this video")
+    }
+
+    /// One VOD start: the core resolves it (a deliberate open, so its positions may be saved),
+    /// the player begins at the saved position, and the chat replay and position reports run.
+    private func startVod(videoID: String, title: String, thumbnail: String?, at: Double?, core: CoreBridge,
+                          failure: String) {
         reloading()
+        vodTitle = title
+        vodThumbnail = thumbnail
         let asked = askedQuality
         tasks.append(Task {
             do {
                 let start = try await core.invoke(
-                    "start_stream", args: ["url": "https://twitch.tv/videos/\(vod.id)", "quality": asked], as: StreamStart.self
+                    "start_stream", args: ["url": "https://www.twitch.tv/videos/\(videoID)", "quality": asked],
+                    as: StreamStart.self
                 )
-                guard !Task.isCancelled, self.roomVod else { return }
+                guard !Task.isCancelled, self.stream != nil else { return }
                 self.apply(start)
+                self.playingVod = start.vod
+                self.vodDuration = start.vod?.lengthSeconds ?? 0
+                // A clip's moment wins over the saved position.
+                let begin = at ?? start.vod?.startPositionSecs
+                self.vodPosition = begin ?? 0
+                self.onVodChange?(start.vod)
                 try self.activateAudio()
                 self.load(start.url, route: .direct)
-                self.nowPlaying.show(title: vod.title, channel: self.stream?.userName ?? "",
+                if let begin, begin > 1 {
+                    await self.player.seek(to: CMTime(seconds: begin, preferredTimescale: 600))
+                }
+                self.nowPlaying.show(title: title, channel: self.stream?.userName ?? "",
                                      avatar: self.stream?.profileImageURL.flatMap(URL.init(string:)))
+                self.nowPlaying.vod(duration: self.vodDuration > 0 ? self.vodDuration : nil, elapsed: self.vodPosition,
+                                    rate: self.vodRate)
+                self.beginVodClock(core: core)
                 await self.measure(core: core)
             } catch {
                 guard !Task.isCancelled else { return }
                 self.roomVod = false
-                self.onToast?("Could not play the latest broadcast")
-                log.error("room vod failed: \(String(describing: error), privacy: .public)")
+                self.vodTitle = nil
+                self.onToast?(failure)
+                log.error("vod \(videoID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             }
         })
+    }
+
+    /// Once a second: the seek bar's playhead, the chat replay's rows for it, and every ten
+    /// seconds of playing a saved position (pauses and the end save too).
+    private func beginVodClock(core: CoreBridge) {
+        guard let vod = playingVod else { return }
+        let login = vod.channelLogin ?? stream?.userLogin ?? ""
+        let videoID = vod.videoID
+        let position = player.currentTime().seconds
+        let begin = position.isFinite ? position : (vod.startPositionSecs ?? 0)
+        Task.detached {
+            _ = try? await core.invoke("vod_replay_begin", args: ["videoId": videoID, "login": login, "position": begin])
+        }
+        vodClock?.cancel()
+        vodClock = Task { [weak self] in
+            var ticks = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.playingVod?.videoID == videoID else { return }
+                let t = self.player.currentTime().seconds
+                guard t.isFinite else { continue }
+                self.vodPosition = t
+                if let length = self.player.currentItem?.duration.seconds, length.isFinite, length > 0 {
+                    self.vodDuration = length
+                }
+                if let step = try? await core.invoke("vod_replay_tick", args: ["videoId": videoID, "position": t],
+                                                     as: ReplayStep.self),
+                   step.reset || !step.rows.isEmpty || step.error != nil {
+                    self.onReplay?(step)
+                }
+                ticks += 1
+                if ticks % 10 == 0, !self.paused { self.reportVodPosition() }
+                // The card counts on its own from the rate; a periodic fix keeps it honest.
+                if ticks % 15 == 0 {
+                    self.nowPlaying.vod(duration: self.vodDuration, elapsed: t, rate: self.paused ? 0 : self.vodRate)
+                }
+            }
+        }
+    }
+
+    /// Saves where the VOD is (Continue Watching, resume, the Twitch history). The core decides
+    /// from the play stamp whether this start may write anything.
+    private func reportVodPosition() {
+        guard let core, let vod = playingVod else { return }
+        let t = player.currentTime().seconds
+        guard t.isFinite, t > 0 else { return }
+        let duration = vodDuration > 0 ? vodDuration : nil
+        let login = vod.channelLogin ?? stream?.userLogin
+        let name = stream?.userName
+        let title = vodTitle
+        let thumbnail = vodThumbnail
+        Task.detached {
+            _ = try? await core.invoke("report_vod_position", args: [
+                "videoId": vod.videoID, "playId": vod.playID, "positionSecs": t, "durationSecs": duration,
+                "channelLogin": login, "channelName": name, "title": title, "thumbnailUrl": thumbnail,
+            ])
+        }
+    }
+
+    /// The VOD ends here: its last position is saved and the replay stops.
+    private func endVod() {
+        guard playingVod != nil else { return }
+        reportVodPosition()
+        vodClock?.cancel()
+        vodClock = nil
+        playingVod = nil
+        vodTitle = nil
+        vodThumbnail = nil
+        vodPosition = 0
+        vodDuration = 0
+        if vodRate != 1 {
+            vodRate = 1
+            player.defaultRate = 1
+        }
+        onVodChange?(nil)
+        nowPlaying.vod(duration: nil, elapsed: 0, rate: 1)
+        if let core { Task.detached { _ = try? await core.invoke("vod_replay_stop", args: [:]) } }
+    }
+
+    /// Moves the VOD to `seconds` (the seek bar); the replay follows on its next tick.
+    func seekVod(to seconds: Double) {
+        guard playingVod != nil else { return }
+        let target = max(0, vodDuration > 0 ? min(seconds, vodDuration - 1) : seconds)
+        vodPosition = target
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        nowPlaying.vod(duration: vodDuration > 0 ? vodDuration : nil, elapsed: target, rate: paused ? 0 : vodRate)
+    }
+
+    func skipVod(by seconds: Double) {
+        seekVod(to: vodPosition + seconds)
+    }
+
+    /// The VOD's speed (1x, 1.25x, 1.5x, 2x); a paused VOD keeps it for when it plays.
+    func setVodRate(_ rate: Float) {
+        vodRate = rate
+        player.defaultRate = rate
+        if !paused { player.rate = rate }
     }
 
     /// Back from the latest broadcast to the room.
     func leaveRoomVod() {
         guard roomVod, let core else { return }
+        endVod()
         roomVod = false
         reportState("teardown")
         player.pause()
@@ -353,11 +508,12 @@ final class Watch {
         let paused = status == .paused && player.currentItem != nil
         self.paused = paused
         guard stream != nil else {
-            UIApplication.shared.isIdleTimerDisabled = false
+            ScreenAwake.hold("player", false)
             return
         }
         nowPlaying.playing(!paused)
-        UIApplication.shared.isIdleTimerDisabled = !paused
+        ScreenAwake.hold("player", !paused)
+        if paused, playingVod != nil { reportVodPosition() }
         switch status {
         case .playing: reportState("playing")
         case .paused: reportState("paused")
@@ -454,7 +610,8 @@ final class Watch {
         guard let login = stream?.userLogin else { return }
         // A pause still waiting out its grace must not gate the next stream off.
         reportState("teardown")
-        UIApplication.shared.isIdleTimerDisabled = false
+        endVod()
+        ScreenAwake.hold("player", false)
         // A brightness the landscape dial borrowed goes back with the stream.
         ScreenBrightness.restore()
         lastStart = nil
@@ -467,6 +624,8 @@ final class Watch {
         loader = nil
         stream = nil
         behindMS = nil
+        behindLabel = nil
+        behindSpoken = nil
         firstPlayMS = nil
         stalls = 0
         quality = nil
@@ -729,6 +888,8 @@ final class Watch {
             as: LiveDistance.self
         ) else { return }
         behindMS = distance.behindMs
+        behindLabel = distance.behindLabel
+        behindSpoken = distance.behindSpoken
         if catchUpTargetMS != nil, player.timeControlStatus == .playing, player.rate != Float(distance.rate) {
             player.rate = Float(distance.rate)
         }

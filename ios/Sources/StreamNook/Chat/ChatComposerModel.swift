@@ -40,6 +40,8 @@ final class ChatComposerModel {
     }
     var menuOpen = false
     var commandsOpen = false
+    /// The stream manager sheet ("Manage channel" in the chat menu).
+    var manageOpen = false
     var toast: String?
     /// The picker keeps its tab, search and answer between opens.
     let picker: EmotePickerModel
@@ -66,7 +68,7 @@ final class ChatComposerModel {
         wallet = session.isKick ? nil : WalletModel(login: session.channel, core: session.core)
     }
 
-    var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending }
+    var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending && warning == nil }
 
     /// A message Twitch did not take, kept in the draft with what went wrong, until it is sent
     /// again or discarded.
@@ -130,10 +132,30 @@ final class ChatComposerModel {
         Task { await kick.connect() }
     }
 
-    /// Why the viewer cannot type here, when the core proves it (their badges, their follow).
+    /// Why the viewer cannot type here, when the core proves it (their badges, their follow, a
+    /// moderator's warning they have not acknowledged).
     var blockedReason: String? {
+        if let warning { return warning.prompt }
         guard let modes = session.modes, modes.blocked != nil else { return nil }
         return modes.reason ?? "Chat restricted"
+    }
+
+    /// A moderator's warning the viewer has not acknowledged in this room.
+    var warning: ChatWarning? { session.modes?.warning }
+    /// The acknowledgement is on its way to Twitch.
+    var acknowledging = false
+
+    /// Acknowledges the warning. The core rewords the room once Twitch takes it, which unlocks
+    /// the field; a refusal is said in a toast and the box stays.
+    func acknowledge() async {
+        guard !acknowledging, let room = session.roomID else { return }
+        acknowledging = true
+        defer { acknowledging = false }
+        do {
+            try await session.core.acknowledgeWarning(roomID: room)
+        } catch {
+            show(Self.words(error))
+        }
     }
 
     /// The field takes no typing while blocked; the picker still writes into the draft, so an
@@ -320,6 +342,9 @@ final class ChatComposerModel {
             picker.reload(debounce: false)
         case "speak":
             if let text = action.text, !text.isEmpty { speech.speak(AVSpeechUtterance(string: text)) }
+        case "create_clip":
+            ClipRouter.create?(action.channel ?? session.channel, action.channelID ?? session.roomID ?? "",
+                               action.title ?? "")
         default:
             let command = typed.split(separator: " ").first.map(String.init) ?? typed
             show("\(command) is not on iPhone yet")

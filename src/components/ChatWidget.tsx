@@ -66,6 +66,8 @@ import PredictionOverlay from './PredictionOverlay';
 import PollOverlay from './PollOverlay';
 import { ChatOverlayStack } from './chat/ChatOverlayStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
+import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
+import { useStreamManager } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
@@ -2248,8 +2250,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return s.offlineLastBroadcasts[offlineChannelId] ?? null;
   });
   // Shared Viewership: while the channel streams with others, the header shows
-  // a Together chip beside the channel's own count.
-  const collab = isTwitch ? (channelState?.collab ?? null) : null;
+  // a Together chip beside the channel's own count. Outside one, a Twitch
+  // Shared Chat session takes the same slot ("Shared chat" with the partners'
+  // faces; Rust reads it with the group), so people know whose chatters these
+  // are.
+  const sharedChatGroup = isTwitch ? (channelState?.shared_chat ?? null) : null;
+  const collab = isTwitch ? (channelState?.collab ?? sharedChatGroup) : null;
 
   // Auto-heal a set whose 7TV rows are not this channel's real dictionary. Rust
   // says so with `seven_tv_ok`: false when the channel document fetch failed and
@@ -2776,6 +2782,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     isVodReplay: !!isVodReplay,
     hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
   });
+  // The stream manager, read from Rust when a chat you manage opens (one read,
+  // then Rust's pushes), so the Tools menu opens with its rows already there.
+  const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
+  const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
+  if (managerChannel !== currentStream?.user_id) {
+    setManagerChannel(currentStream?.user_id);
+    setManagerPanel(null);
+  }
+  const streamManager = useStreamManager(
+    toolSections.polls ? currentStream?.user_id : null,
+    currentStream?.user_login ?? '',
+    true,
+  );
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
       ? {
@@ -4792,13 +4811,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                       data-fit-label
-                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat ? 'iridescent-title' : ''}`}
+                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat && !sharedChatGroup ? 'iridescent-title' : ''}`}
                     >
                       {!isConnected
                         ? 'Disconnected'
                         : channelOverride && !isMainSurface
                           ? channelOverride.user_name || channelOverride.user_login || 'Stream chat'
-                          : isSharedChat
+                          : isSharedChat && !sharedChatGroup
                             ? 'Shared stream chat'
                             : currentMediaType === 'offline_chat'
                               ? 'Offline chat'
@@ -5586,8 +5605,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {composerKind && currentStream?.user_id && (
                 <PollPredictionComposer
                   broadcasterId={currentStream.user_id}
+                  channelLogin={currentStream.user_login}
                   initialKind={composerKind}
                   onClose={() => setComposerKind(null)}
+                  onOutcome={streamManager.apply}
+                />
+              )}
+              {managerPanel && streamManager.view && (
+                <StreamManagerPanel
+                  kind={managerPanel}
+                  view={streamManager.view}
+                  queue={streamManager.queue}
+                  onQueue={streamManager.setQueue}
+                  onOutcome={streamManager.apply}
+                  onClose={() => setManagerPanel(null)}
                 />
               )}
               <AnimatePresence>
@@ -5758,8 +5789,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     isBroadcaster={!!isBroadcaster}
                     canModerate={toolSections.moderate}
                     canRunPolls={toolSections.polls}
-                    onStartPoll={setComposerKind}
-                    pollBuilderOpen={!!composerKind}
+                    onStartPoll={(kind) => {
+                      setManagerPanel(null);
+                      setComposerKind(kind);
+                    }}
+                    pollBuilderOpen={!!composerKind || !!managerPanel}
+                    manager={streamManager.view}
+                    onOpenManager={(kind) => {
+                      setComposerKind(null);
+                      setManagerPanel(kind);
+                    }}
+                    onManagerOutcome={streamManager.apply}
                     drops={dropsTool}
                     roomState={roomState}
                   />

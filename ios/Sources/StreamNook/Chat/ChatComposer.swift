@@ -45,7 +45,7 @@ private struct ComposerBar: View {
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
-                .fill(Color(ChatTheme.borderSubtle))
+                .fill(SN.borderSubtle)
                 .frame(height: 1)
             if let reply = session.replyTo {
                 replyChip(reply)
@@ -55,6 +55,9 @@ private struct ComposerBar: View {
             }
             if model.cheer.shown != nil {
                 CheerBar(model: model)
+            }
+            if let warning = model.warning {
+                warningBox(warning)
             }
             inputRow(slowWait: model.slowWait)
         }
@@ -67,7 +70,15 @@ private struct ComposerBar: View {
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
+                .snSheetLight()
                 .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $model.manageOpen) {
+            if let roomID = session.roomID {
+                ManageChannelSheet(core: session.core, channelID: roomID, channelLogin: session.channel,
+                                   toasts: session.rooms?.toasts)
+                    .presentationDetents([.large])
+            }
         }
         .sheet(isPresented: $model.commandsOpen) {
             ChatCommandSheet(session: session) { name in
@@ -75,6 +86,7 @@ private struct ComposerBar: View {
                 model.commandsOpen = false
                 focused = true
             }
+            .snSheetLight()
             .presentationDetents([.fraction(0.72), .large])
         }
     }
@@ -121,7 +133,7 @@ private struct ComposerBar: View {
         HStack(spacing: 6) {
             Text("Replying to \(Text("@\(reply.shownName)").fontWeight(.semibold))")
                 .font(.sn(12.5))
-                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .foregroundStyle(SN.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
@@ -130,7 +142,7 @@ private struct ComposerBar: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(ChatTheme.textMuted))
+                    .foregroundStyle(SN.textMuted)
                     .padding(6)
             }
             .accessibilityLabel("Cancel reply")
@@ -148,7 +160,7 @@ private struct ComposerBar: View {
                 .frame(width: 36)
             Text("Not sent: \(failure.why)")
                 .font(.sn(12.5))
-                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .foregroundStyle(SN.textSecondary)
                 .lineLimit(2)
             Spacer(minLength: 8)
             Button("Retry") { Task { await model.send() } }
@@ -165,15 +177,51 @@ private struct ComposerBar: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// A moderator's warning: what they said, and Acknowledge, which is the one way to chat
+    /// again. It sits where the room's words already live and cannot scroll away.
+    private func warningBox(_ warning: ChatWarning) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(warning.title, systemImage: "exclamationmark.bubble.fill")
+                .font(.sn(14, 600))
+                .foregroundStyle(Color(ChatTheme.textPrimary))
+                .labelStyle(WarningLabelStyle())
+            Text(warning.detail)
+                .font(.sn(13))
+                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task { await model.acknowledge() }
+            } label: {
+                ZStack {
+                    Text(warning.action).opacity(model.acknowledging ? 0 : 1)
+                    if model.acknowledging { ProgressView().tint(Color(ChatTheme.background)) }
+                }
+                .font(.sn(15, 600))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .foregroundStyle(Color(ChatTheme.background))
+                .background(Color(ChatTheme.info), in: .rect(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.acknowledging)
+            .padding(.top, 6)
+        }
+        .padding(12)
+        .background(Color(ChatTheme.info).opacity(0.08), in: .rect(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(ChatTheme.info).opacity(0.25)))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .accessibilityElement(children: .contain)
+    }
+
     private func prompt(slowWait: Int) -> Text {
         if model.fieldDisabled {
             // Why the viewer cannot type, in the one warning color.
             return Text(model.placeholder).foregroundStyle(ComposerInk.warning).fontWeight(.medium)
         }
         if slowWait > 0 {
-            return Text("Slow mode: you can send again in \(slowWait)s").foregroundStyle(Color(ChatTheme.textMuted))
+            return Text("Slow mode: you can send again in \(slowWait)s").foregroundStyle(SN.textMuted)
         }
-        return Text(model.placeholder).foregroundStyle(Color(ChatTheme.textMuted))
+        return Text(model.placeholder).foregroundStyle(SN.textMuted)
     }
 
     private func inputRow(slowWait: Int) -> some View {
@@ -190,7 +238,7 @@ private struct ComposerBar: View {
                 } else {
                     TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
                         .font(.sn(15))
-                        .foregroundStyle(Color(ChatTheme.textPrimary))
+                        .foregroundStyle(SN.textPrimary)
                         .padding(.vertical, 8)
                         .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
                         .submitLabel(.send)
@@ -210,13 +258,25 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if !session.isKick {
+                if focused {
+                    // Scrolling the chat never closes the keyboard; this does. While typing it
+                    // takes the commands button's place (a "/" still opens commands).
+                    Button {
+                        focused = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(ComposerSymbol.font)
+                            .foregroundStyle(SN.textSecondary)
+                            .frame(width: 32, height: 36)
+                    }
+                    .accessibilityLabel("Hide keyboard")
+                } else if !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {
                         Image(systemName: "slash.circle")
                             .font(ComposerSymbol.font)
-                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                            .foregroundStyle(SN.textSecondary)
                             .frame(width: 32, height: 36)
                     }
                     .accessibilityLabel("Chat commands")
@@ -242,14 +302,14 @@ private struct ComposerBar: View {
                         // Slow mode: the seconds until the next message can go.
                         Text("\(slowWait)")
                             .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(Color(ChatTheme.textPrimary))
+                            .foregroundStyle(SN.textPrimary)
                     } else if model.canSend, let gem = model.cheer.draft?.iconURL {
                         // The message cheers: Send spends, so it wears the gem.
                         RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
                     } else {
                         Image(systemName: model.canSend || model.sending ? "paperplane.fill" : "ellipsis")
                             .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(model.canSend ? Color.white : Color(ChatTheme.textSecondary))
+                            .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
                             .contentTransition(.symbolEffect(.replace))
                     }
                 }
@@ -283,7 +343,7 @@ private struct ComposerBar: View {
                         .frame(width: 32, height: 36)
                 }
             }
-            .foregroundStyle(Color(ChatTheme.accent))
+            .foregroundStyle(SN.accent)
             .padding(.vertical, 2)
             .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
             .frame(minHeight: 36)
@@ -321,7 +381,7 @@ private struct ComposerBar: View {
                 if model.panel == .emotes {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(Color(ChatTheme.accent))
+                        .foregroundStyle(SN.accent)
                 } else {
                     Text(smiley)
                         .font(.sn(20))
@@ -332,6 +392,16 @@ private struct ComposerBar: View {
             .frame(width: 36, height: 36)
         }
         .accessibilityLabel(model.panel == .emotes ? "Close emotes" : "Emotes and emoji")
+    }
+}
+
+/// The warning's title: its symbol in the info ink, centered on the title's line.
+private struct WarningLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            configuration.icon.foregroundStyle(Color(ChatTheme.info))
+            configuration.title
+        }
     }
 }
 
@@ -353,7 +423,7 @@ extension View {
     /// edge down to the composer's hairline (so no chat shows in the gap or its rounded corners)
     /// and a short fade above it, so the chat it covers never ends in a hard cut.
     func floatingSurface() -> some View {
-        let ground = Color(ChatTheme.background)
+        let ground = SN.background
         return background(alignment: .bottom) {
             ground
                 .frame(height: 28)
@@ -444,14 +514,14 @@ private struct SuggestionStrip: View {
                 let current = model.suggestions.first { $0.key == active } ?? model.suggestions.first
                 Text(current?.name ?? "")
                     .font(.sn(12, 600))
-                    .foregroundStyle(Color(ChatTheme.textPrimary))
+                    .foregroundStyle(SN.textPrimary)
                     .lineLimit(1)
                 // Where it comes from: the provider's logo, or a person for a chatter.
                 if let current {
                     if current.isChatter {
                         Image(systemName: "person.fill")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Color(ChatTheme.textMuted))
+                            .foregroundStyle(SN.textMuted)
                             .accessibilityLabel("Chatter")
                     } else {
                         ProviderLogo(provider: current.provider, size: 10, tinted: true)
@@ -466,8 +536,8 @@ private struct SuggestionStrip: View {
             .padding(.vertical, 6)
             .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.05)).frame(height: 1) }
         }
-        .background(Color(ChatTheme.background), in: .rect(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(ChatTheme.borderSubtle)))
+        .background(SN.background, in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(SN.borderSubtle))
     }
 
     private func tile(_ suggestion: EmoteMatch) -> some View {
@@ -476,7 +546,7 @@ private struct SuggestionStrip: View {
             if suggestion.isChatter {
                 Text(suggestion.name)
                     .font(.sn(10, 600))
-                    .foregroundStyle(Color(ChatTheme.textSecondary))
+                    .foregroundStyle(SN.textSecondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .padding(2)

@@ -1,20 +1,6 @@
 import SNKit
 import SwiftUI
 
-/// The viewer's relationship to the room's channel, as the core's `channel_relationship`
-/// answers it.
-struct ChannelRelationship: Decodable, Equatable {
-    /// Nil while unknown: the Follow row waits rather than guessing.
-    var following: Bool?
-    var subscribed: Bool
-    var hasSubHistory: Bool
-    var badgeURL: String?
-
-    enum CodingKeys: String, CodingKey {
-        case following, subscribed, hasSubHistory = "has_sub_history", badgeURL = "badge_url"
-    }
-}
-
 /// The chat menu behind the composer's round button: the room's modes, then the actions for
 /// this room in the phone's order (follow, subscribe, add a chat, reload, commands, moderator
 /// tools, close). It stays open while following or unfollowing, so the row flips in place.
@@ -22,9 +8,14 @@ struct ChatMenuSheet: View {
     let model: ChatComposerModel
     let session: ChatSession
     @Environment(\.dismiss) private var dismiss
-    @State private var relationship: ChannelRelationship?
+    /// Asked for only when the core holds nothing for this room (it was never watched).
+    @State private var fetched: ChannelRelationship?
     @State private var followBusy = false
-    @State private var moderates = false
+
+    /// The core reads it when the room opens and pushes every change, so the menu opens with it.
+    private var relationship: ChannelRelationship? {
+        session.rooms?.relationship(for: session.login) ?? fetched
+    }
 
     /// The room's name: its tab's label (a Kick room's key is `kick:slug`), else its login.
     private var label: String {
@@ -146,8 +137,24 @@ struct ChatMenuSheet: View {
                             Label("Chat commands", systemImage: "terminal")
                         }
                     }
+                    // The stream manager, for the broadcaster and the channel's moderators: Rust
+                    // offers each role only what Twitch lets it do.
+                    if !session.isKick, session.roomID != nil, session.isModerator {
+                        Button {
+                            dismiss()
+                            model.manageOpen = true
+                        } label: {
+                            HStack {
+                                Label("Manage channel", systemImage: "slider.horizontal.3")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(SN.textMuted)
+                            }
+                        }
+                    }
                     // Only where the actions would succeed: Helix refuses them without mod powers here.
-                    if moderates || session.isModerator {
+                    if session.isModerator {
                         Button {
                             session.setModeratorTools(!session.moderatorTools)
                         } label: {
@@ -165,6 +172,26 @@ struct ChatMenuSheet: View {
                             }
                         }
                     }
+                    // The stream's own chat closes with the player unless you keep it.
+                    if let rooms = session.rooms, let tab = rooms.tabs.first(where: { $0.channel == session.channel }),
+                       tab.pinnedToStream {
+                        Button {
+                            rooms.keep(tab.channel, !tab.kept)
+                        } label: {
+                            HStack {
+                                Label {
+                                    Text("Keep this chat")
+                                } icon: {
+                                    Image(systemName: tab.kept ? "bookmark.fill" : "bookmark")
+                                        .foregroundStyle(tab.kept ? SN.accent : SN.textSecondary)
+                                }
+                                Spacer()
+                                Text(tab.kept ? "On" : "Off")
+                                    .font(.sn(12.5))
+                                    .foregroundStyle(SN.textSecondary)
+                            }
+                        }
+                    }
                     if let tab = session.rooms?.tabs.first(where: { $0.channel == session.channel }), !tab.pinnedToStream {
                         Button(role: .destructive) {
                             dismiss()
@@ -175,7 +202,7 @@ struct ChatMenuSheet: View {
                         }
                     }
                 } footer: {
-                    if moderates || session.isModerator, session.moderatorTools {
+                    if session.isModerator, session.moderatorTools {
                         Text("Long-press any message for delete, timeout and ban.")
                             .font(.sn(12.5))
                             .foregroundStyle(SN.textSecondary)
@@ -185,11 +212,12 @@ struct ChatMenuSheet: View {
             .listSectionSpacing(16)
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollContentBackground(.hidden)
-            .tint(Color(ChatTheme.textPrimary))
+            .tint(SN.textPrimary)
         }
         .presentationDragIndicator(.visible)
-        // Only while the sheet is open: the follow and subscription lookups and the role.
-        .task { await load() }
+        // Nothing to read here: the role comes from the room, the relationship from the core's
+        // channel state. Only a room the core never watched asks.
+        .task { await loadUnheld() }
     }
 
     /// Your Kick follow list says you subscribe here.
@@ -202,16 +230,9 @@ struct ChatMenuSheet: View {
         return relationship.hasSubHistory ? "Resubscribe to \(label)" : "Subscribe to \(label)"
     }
 
-    private func load() async {
-        let core = session.core
-        guard !session.isKick else { return }
-        if let json = try? await core.invoke("chat_send_budget", args: ["channel": session.channel]),
-           let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-           let role = budget["role"] as? String {
-            moderates = role == "moderator" || role == "broadcaster"
-        }
-        guard let roomID = session.roomID else { return }
-        relationship = try? await core.invoke("channel_relationship", args: [
+    private func loadUnheld() async {
+        guard !session.isKick, relationship == nil, let roomID = session.roomID else { return }
+        fetched = try? await session.core.invoke("channel_relationship", args: [
             "channelId": roomID, "channelLogin": session.channel,
         ], as: ChannelRelationship.self)
     }
@@ -224,7 +245,8 @@ struct ChatMenuSheet: View {
             // The desktop's heart-drop takes 600 ms before an unfollow.
             if following { try? await Task.sleep(for: .milliseconds(600)) }
             _ = try await session.core.invoke(following ? "unfollow_channel" : "follow_channel", args: ["targetUserId": roomID])
-            relationship?.following = !following
+            session.rooms?.noteFollowing(!following, for: session.login)
+            fetched?.following = !following
         } catch {
             model.show("\(following ? "Unfollow" : "Follow") failed. Try logging out and back in via Settings to re-authenticate.")
         }
@@ -288,10 +310,10 @@ struct ChatCommandSheet: View {
                                 HStack(alignment: .top) {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("/\(row.name)").font(.sn(14, 500))
-                                            .foregroundStyle(Color(ChatTheme.textPrimary))
+                                            .foregroundStyle(SN.textPrimary)
                                         Text(row.description)
                                             .font(.sn(12.5))
-                                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                                            .foregroundStyle(SN.textSecondary)
                                         if let lock = row.lock {
                                             Text(lock).font(.sn(11.5)).foregroundStyle(.tertiary)
                                         }
@@ -309,7 +331,7 @@ struct ChatCommandSheet: View {
                     }
                 }
             }
-            .tint(Color(ChatTheme.textPrimary))
+            .tint(SN.textPrimary)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search commands")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()

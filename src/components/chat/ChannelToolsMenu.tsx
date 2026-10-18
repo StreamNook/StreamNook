@@ -3,13 +3,16 @@
 // Each section shows only when it applies to you here:
 //   Drops                    a drops campaign runs for this game and the drops
 //                            plugin is installed
-//   Polls and predictions    your own Twitch channel, live (not a VOD)
+//   Your channel / Channel   the stream manager's rows (stream info, polls,
+//                            predictions, raid, ad break, rewards queue): the
+//                            ones Rust says your role here can use
 //   Chat modes, Moderation,  you moderate this Twitch channel
 //   Your settings
 // ChatWidget decides which apply and renders the button only when at least
 // one does, so the row never carries a button that opens an empty menu.
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench } from 'lucide-react';
+import { Shield, ShieldAlert, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench, Pencil, Send, Tv, Megaphone } from 'lucide-react';
+import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Tooltip } from '../ui/Tooltip';
@@ -21,6 +24,8 @@ import { usePinStore } from '../../stores/pinStore';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
+import { managerAct, type ActOutcome, type ManagerAction, type SectionRow, type StreamManagerView } from '../../services/streamManager';
+import type { ManagerPanelKind } from './StreamManagerPanel';
 
 export interface DropsTool {
   gameName: string;
@@ -41,12 +46,21 @@ interface ChannelToolsMenuProps {
   /** You moderate this Twitch channel: chat modes, moderation, your settings.
    *  Twitch only, because every row behind it is a Helix call. */
   canModerate: boolean;
-  /** Your own live Twitch channel: start polls and predictions. */
+  /** You manage this live Twitch channel (broadcaster or moderator): the
+   *  stream manager rows, once `manager` has loaded. */
   canRunPolls: boolean;
   /** Open the poll / prediction builder above the message box. */
   onStartPoll: (kind: 'poll' | 'prediction') => void;
-  /** The builder is open, so the button reads as in use. */
+  /** A builder is open, so the button reads as in use. */
   pollBuilderOpen: boolean;
+  /** Rust's stream manager view for this channel, null until read. */
+  manager: StreamManagerView | null;
+  /** Open one of the stream manager's builders above the message box. */
+  onOpenManager: (kind: ManagerPanelKind) => void;
+  /** A write answered; the host keeps its view current from it. */
+  onManagerOutcome: (outcome: ActOutcome) => void;
+  /** The menu opened or closed, so the host reads the view only when used. */
+  onOpenChange?: (open: boolean) => void;
   /** Null when no drops campaign can be collected here. */
   drops: DropsTool | null;
   roomState: {
@@ -68,6 +82,10 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   canRunPolls,
   onStartPoll,
   pollBuilderOpen,
+  manager,
+  onOpenManager,
+  onManagerOutcome,
+  onOpenChange,
   drops,
   roomState,
 }) => {
@@ -88,15 +106,12 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   // module Map with no store behind it, and the menu is short-lived anyway.
   const [activeNukeCount, setActiveNukeCount] = useState(0);
 
-  // Poll / prediction controls are broadcaster-only, and that is a limit of
-  // Helix rather than of Twitch: these endpoints require broadcaster_id to
-  // match the token's own user id and take no moderator_id, unlike every other
-  // Helix endpoint moderators can use. Mod View can do it because it goes
-  // through GQL. Showing these to a moderator would only ever produce a 401.
-  const [livePoll, setLivePoll] = useState<{ id: string } | null>(null);
-  const [livePrediction, setLivePrediction] = useState<{ id: string; status: string } | null>(null);
+  // Shield Mode clears chat and tightens the modes by Twitch's defaults, so
+  // turning it on asks first, like Clear chat.
+  const [isConfirmingShield, setIsConfirmingShield] = useState(false);
 
   useEffect(() => {
+    onOpenChange?.(isOpen);
     if (!isOpen || !channelLogin) return;
     let alive = true;
     if (canModerate) {
@@ -104,43 +119,38 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
         .then((n) => alive && setActiveNukeCount(n))
         .catch(() => {});
     }
-    if (canRunPolls && isBroadcaster && broadcasterId) {
-      void invoke<{ id: string } | null>('get_active_poll', { broadcasterId })
-        .then((p) => alive && setLivePoll(p))
-        .catch(() => alive && setLivePoll(null));
-      void invoke<{ id: string; status: string } | null>('get_open_prediction', { broadcasterId })
-        .then((p) => alive && setLivePrediction(p))
-        .catch(() => alive && setLivePrediction(null));
-    }
     return () => {
       alive = false;
     };
-  }, [isOpen, channelLogin, canModerate, canRunPolls, isBroadcaster, broadcasterId]);
+  }, [isOpen, channelLogin, canModerate, onOpenChange]);
 
-  // Shared runner for the four poll/prediction end states.
-  const runLiveAction = async (
-    label: string,
-    command: string,
-    payload: Record<string, unknown>,
-    clear: () => void,
-  ) => {
-    if (isPending) return;
+  // The running poll and prediction controls and every stream manager write go
+  // through Rust's one door, which picks Helix for the broadcaster and Twitch's
+  // own GQL for moderators and editors.
+  const runManagerAction = async (action: ManagerAction) => {
+    if (isPending || !manager) return;
     setIsPending(true);
     try {
-      await invoke(command, payload);
-      addToast(label, 'success');
-      clear();
+      const outcome = await managerAct(manager.channel_id, manager.channel_login, action);
+      onManagerOutcome(outcome);
+      addToast(outcome.message, outcome.ok ? 'success' : 'error');
     } catch (err) {
-      Logger.error(`[ChannelToolsMenu] ${command} failed:`, err);
+      Logger.error('[ChannelToolsMenu] stream manager action failed:', err);
       addToast(typeof err === 'string' ? err : 'That did not go through', 'error');
     } finally {
       setIsPending(false);
     }
   };
 
+  const openPanel = (kind: ManagerPanelKind) => {
+    setIsOpen(false);
+    onOpenManager(kind);
+  };
+
   const markInside = useOutsidePress(isOpen, [containerRef], () => {
     setIsOpen(false);
     setIsConfirmingClear(false);
+    setIsConfirmingShield(false);
   });
 
   const handleToggleSetting = async (setting: string, currentValue: boolean | number) => {
@@ -205,6 +215,19 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
     onStartPoll(kind);
   };
 
+  // The stream manager's rows; Announce sits under Moderation. Until Rust's
+  // view arrives the broadcaster keeps the two builders it always had.
+  const channelRows: SectionRow[] = manager
+    ? manager.sections.filter((s) => s.id !== 'announce')
+    : isBroadcaster
+      ? [
+          { id: 'poll', label: 'Start a poll', detail: null, badge: null },
+          { id: 'prediction', label: 'Start a prediction', detail: null, badge: null },
+        ]
+      : [];
+  const canAnnounce = !!manager?.sections.some((s) => s.id === 'announce');
+  const shieldOn = manager?.chat?.shield ?? null;
+
   const inUse = isOpen || pollBuilderOpen;
   const collecting = !!drops?.collecting;
 
@@ -263,99 +286,55 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                 </div>
               )}
 
-              {canRunPolls && (
+              {canRunPolls && channelRows.length > 0 && (
                 <div className={`p-1.5 flex flex-col gap-1 ${drops ? 'border-t border-white/10' : ''}`}>
                   <div className="px-2 pt-1 pb-0.5">
-                    <span className={SECTION_LABEL}>Polls and predictions</span>
+                    <span className={SECTION_LABEL}>{isBroadcaster ? 'Your channel' : 'Channel'}</span>
                   </div>
-                  <MenuActionItem icon={<BarChart3 size={14} />} label="Start a poll" onClick={() => startPoll('poll')} />
-                  <MenuActionItem icon={<Trophy size={14} />} label="Start a prediction" onClick={() => startPoll('prediction')} />
-
-                  {/* Live poll. End keeps the result on screen; Cancel hides it entirely. */}
-                  {livePoll?.id && (
-                    <div className="px-2.5 py-2 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="flex items-center justify-center text-accent flex-shrink-0">
-                          <BarChart3 size={14} />
-                        </div>
-                        <span className="text-sm text-white/70 truncate">Poll running</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          disabled={isPending}
-                          onClick={() =>
-                            runLiveAction('Poll ended', 'end_poll', {
-                              broadcasterId,
-                              pollId: livePoll.id,
-                              status: 'TERMINATED',
-                            }, () => setLivePoll(null))
-                          }
-                          className="px-2 py-1 text-[11px] font-semibold bg-white/10 hover:bg-white/20 text-white/80 rounded transition-colors disabled:opacity-50"
-                        >
-                          End
-                        </button>
-                        <button
-                          disabled={isPending}
-                          onClick={() =>
-                            runLiveAction('Poll cancelled', 'end_poll', {
-                              broadcasterId,
-                              pollId: livePoll.id,
-                              status: 'ARCHIVED',
-                            }, () => setLivePoll(null))
-                          }
-                          className="px-2 py-1 text-[11px] font-semibold bg-red-500/15 hover:bg-red-500/25 text-red-300 rounded transition-colors disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Live prediction. Resolving needs a winning outcome, which is a
-                      choice this menu is too small for; that stays on
-                      /completeprediction and the banner itself. */}
-                  {livePrediction && (
-                    <div className="px-2.5 py-2 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="flex items-center justify-center text-accent flex-shrink-0">
-                          <Trophy size={14} />
-                        </div>
-                        <span className="text-sm text-white/70 truncate">
-                          {livePrediction.status === 'LOCKED' ? 'Prediction locked' : 'Prediction running'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        {livePrediction.status !== 'LOCKED' && (
-                          <button
-                            disabled={isPending}
-                            onClick={() =>
-                              runLiveAction('Prediction locked', 'finish_prediction', {
-                                broadcasterId,
-                                action: 'lock',
-                                outcome: null,
-                              }, () => setLivePrediction({ ...livePrediction, status: 'LOCKED' }))
-                            }
-                            className="px-2 py-1 text-[11px] font-semibold bg-white/10 hover:bg-white/20 text-white/80 rounded transition-colors disabled:opacity-50"
-                          >
-                            Lock
-                          </button>
-                        )}
-                        <button
-                          disabled={isPending}
-                          onClick={() =>
-                            runLiveAction('Prediction cancelled, points refunded', 'finish_prediction', {
-                              broadcasterId,
-                              action: 'cancel',
-                              outcome: null,
-                            }, () => setLivePrediction(null))
-                          }
-                          className="px-2 py-1 text-[11px] font-semibold bg-red-500/15 hover:bg-red-500/25 text-red-300 rounded transition-colors disabled:opacity-50"
-                        >
-                          Refund
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  {channelRows.map((row) => {
+                    // A running poll or prediction is its controls, not a
+                    // builder: End keeps the result on screen, Remove hides it.
+                    if (row.id === 'poll' && manager?.poll) {
+                      return (
+                        <LiveRow key="poll" icon={<BarChart3 size={14} />} label={row.label} detail={row.detail}>
+                          <LiveButton disabled={isPending} onClick={() => runManagerAction({ kind: 'end_poll', show_results: true })}>
+                            End
+                          </LiveButton>
+                          <LiveButton danger disabled={isPending} onClick={() => runManagerAction({ kind: 'end_poll', show_results: false })}>
+                            Remove
+                          </LiveButton>
+                        </LiveRow>
+                      );
+                    }
+                    if (row.id === 'prediction' && manager?.prediction) {
+                      const p = manager.prediction;
+                      return (
+                        <LiveRow key="prediction" icon={<Trophy size={14} />} label={p.status === 'locked' ? 'Prediction locked' : row.label} detail={row.detail}>
+                          {p.status === 'active' && (
+                            <LiveButton disabled={isPending} onClick={() => runManagerAction({ kind: 'lock_prediction' })}>
+                              Lock
+                            </LiveButton>
+                          )}
+                          <LiveButton danger disabled={isPending} onClick={() => runManagerAction({ kind: 'cancel_prediction' })}>
+                            Refund
+                          </LiveButton>
+                        </LiveRow>
+                      );
+                    }
+                    return (
+                      <MenuActionItem
+                        key={row.id}
+                        icon={ROW_ICON[row.id]}
+                        label={row.label}
+                        detail={row.detail}
+                        badge={row.badge}
+                        onClick={() => {
+                          if (row.id === 'poll' || row.id === 'prediction') startPoll(row.id);
+                          else openPanel(row.id as ManagerPanelKind);
+                        }}
+                      />
+                    );
+                  })}
                 </div>
               )}
 
@@ -435,12 +414,47 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                       onClick={() => handleToggleSetting('unique_chat_mode', roomState.r9k)}
                       disabled={isPending}
                     />
+                    {shieldOn !== null &&
+                      (isConfirmingShield ? (
+                        <div className="px-2.5 py-2 flex items-center justify-between gap-2">
+                          <span className="text-xs text-white/70">Turn on Shield Mode? It can clear chat.</span>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <LiveButton
+                              danger
+                              disabled={isPending}
+                              onClick={() => {
+                                setIsConfirmingShield(false);
+                                void runManagerAction({ kind: 'shield', on: true });
+                              }}
+                            >
+                              Turn on
+                            </LiveButton>
+                            <LiveButton disabled={isPending} onClick={() => setIsConfirmingShield(false)}>
+                              No
+                            </LiveButton>
+                          </div>
+                        </div>
+                      ) : (
+                        <MenuToggleItem
+                          icon={<ShieldAlert size={14} />}
+                          label="Shield Mode"
+                          isActive={shieldOn}
+                          onClick={() =>
+                            shieldOn ? void runManagerAction({ kind: 'shield', on: false }) : setIsConfirmingShield(true)
+                          }
+                          disabled={isPending}
+                        />
+                      ))}
                   </div>
 
                   <div className="p-1.5 border-t border-white/10 flex flex-col gap-1">
                     <div className="px-2 pt-1 pb-0.5">
                       <span className={SECTION_LABEL}>Moderation</span>
                     </div>
+
+                    {canAnnounce && (
+                      <MenuActionItem icon={<Megaphone size={14} />} label="Announce" onClick={() => openPanel('announce')} />
+                    )}
 
                     {/* Only rendered while a /nuke is still watching new messages, so
                         the menu doesn't carry a dead row the rest of the time. */}
@@ -662,27 +676,93 @@ const MenuToggleItem = ({
   );
 };
 
-/** A row that does something once (opens a builder), rather than a switch. */
+const ROW_ICON: Record<string, React.ReactNode> = {
+  info: <Pencil size={14} />,
+  poll: <BarChart3 size={14} />,
+  prediction: <Trophy size={14} />,
+  raid: <Send size={14} />,
+  ads: <Tv size={14} />,
+  rewards: <ChannelPointsIcon size={14} />,
+};
+
+/** A row that does something once (opens a builder), rather than a switch.
+ *  `detail` is a quieter second line; `badge` a short trailing count. */
 const MenuActionItem = ({
   icon,
   label,
+  detail,
+  badge,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
+  detail?: string | null;
+  badge?: string | null;
   onClick: () => void;
 }) => (
   <button
     onClick={onClick}
-    className="w-full text-left px-2.5 py-2 rounded-md flex items-center justify-between hover:bg-white/5 transition-colors group"
+    className="w-full text-left px-2.5 py-2 rounded-md flex items-center justify-between gap-2 hover:bg-white/5 transition-colors group"
   >
-    <div className="flex items-center gap-2.5">
-      <div className="flex items-center justify-center text-white/40 group-hover:text-accent transition-colors">
+    <div className="flex items-center gap-2.5 min-w-0">
+      <div className="flex items-center justify-center flex-shrink-0 text-white/40 group-hover:text-accent transition-colors">
         {icon}
       </div>
-      <span className="text-sm text-white/70 group-hover:text-white">{label}</span>
+      <div className="min-w-0">
+        <span className="block text-sm text-white/70 group-hover:text-white truncate">{label}</span>
+        {detail && <span className="block text-[11px] text-white/40 truncate">{detail}</span>}
+      </div>
     </div>
-    <ChevronRight size={14} className="text-white/30 group-hover:text-white/60" />
+    <div className="flex items-center gap-1.5 flex-shrink-0">
+      {badge && <span className="text-[11px] tabular-nums text-white/50">{badge}</span>}
+      <ChevronRight size={14} className="text-white/30 group-hover:text-white/60" />
+    </div>
+  </button>
+);
+
+/** A running poll or prediction: its name, then its controls. */
+const LiveRow = ({
+  icon,
+  label,
+  detail,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  detail?: string | null;
+  children: React.ReactNode;
+}) => (
+  <div className="px-2.5 py-2 flex items-center justify-between gap-2">
+    <div className="flex items-center gap-2.5 min-w-0">
+      <div className="flex items-center justify-center text-accent flex-shrink-0">{icon}</div>
+      <div className="min-w-0">
+        <span className="block text-sm text-white/70 truncate">{label}</span>
+        {detail && <span className="block text-[11px] text-white/40 truncate">{detail}</span>}
+      </div>
+    </div>
+    <div className="flex items-center gap-1.5 flex-shrink-0">{children}</div>
+  </div>
+);
+
+const LiveButton = ({
+  danger,
+  disabled,
+  onClick,
+  children,
+}: {
+  danger?: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    disabled={disabled}
+    onClick={onClick}
+    className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors disabled:opacity-50 ${
+      danger ? 'bg-red-500/15 hover:bg-red-500/25 text-red-300' : 'bg-white/10 hover:bg-white/20 text-white/80'
+    }`}
+  >
+    {children}
   </button>
 );
 

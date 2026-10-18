@@ -8,7 +8,7 @@ import { useAppStore } from '../stores/AppStore';
 import { startTab } from './phonePrefs';
 import type { TwitchCategory } from '../types';
 
-export type MobileTab = 'following' | 'browse' | 'rewards' | 'you';
+export type MobileTab = 'following' | 'browse' | 'chats' | 'rewards' | 'you';
 
 /** Where an opened settings page should land: a section by its heading, and
  *  the row inside it when the page draws one by that title. */
@@ -42,6 +42,11 @@ interface MobileNavState {
   /** Campaign the Activity screen should scroll to and flash, set when you
    *  tap the live drop progress while watching. Cleared once consumed. */
   focusDropCampaignId: string | null;
+  /** The tab Chats was opened from: Chats is a full-screen surface with no
+   *  tab bar, and leaving it (the grabber, a slide down, back) returns here. */
+  chatsReturnTab: MobileTab;
+  /** Leaves Chats for the tab it was opened from. */
+  exitChats: () => void;
   setTab: (tab: MobileTab) => void;
   /** Tap-through from the watch surface: shrink the player so playback (and
    *  the drop you are earning) keeps running, then land on that campaign. */
@@ -77,8 +82,17 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   mentionsOpen: false,
   playerMode: 'full',
   focusDropCampaignId: null,
+  chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
 
-  setTab: (tab) => set({ activeTab: tab }),
+  setTab: (tab) =>
+    set((s) =>
+      tab === 'chats' && s.activeTab !== 'chats'
+        ? { activeTab: tab, chatsReturnTab: s.activeTab }
+        : { activeTab: tab },
+    ),
+
+  exitChats: () =>
+    set((s) => (s.activeTab === 'chats' ? { activeTab: s.chatsReturnTab } : s)),
 
   openDropCampaign: (campaignId) =>
     set({
@@ -141,6 +155,11 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
     }
     if (browseCategory) {
       set({ browseCategory: null });
+      return true;
+    }
+    // Chats is a surface over the tabs: back leaves it for the tab it came from.
+    if (activeTab === 'chats') {
+      get().exitChats();
       return true;
     }
     // Back unwinds to the tab the app OPENS on, not to Following: someone who

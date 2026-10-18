@@ -15,7 +15,7 @@ export interface SearchFieldProps
 }
 
 export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
-  ({ value, onChange, placeholder, className = '', ...input }, ref) => (
+  ({ value, onChange, placeholder, className = '', onKeyDown, ...input }, ref) => (
     <div className={`glass-input relative flex h-11 items-center !rounded-full ${className}`}>
       <MagnifyingGlass
         size={18}
@@ -31,6 +31,12 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
         spellCheck={false}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        // The Search key puts the keyboard away: results are already live as
+        // you type, and scrolling them never closes it.
+        onKeyDown={(e) => {
+          onKeyDown?.(e);
+          if (!e.defaultPrevented && e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur();
+        }}
         placeholder={placeholder}
         className="h-full w-full min-w-0 bg-transparent pl-10 pr-10 text-[15px] text-textPrimary outline-none placeholder:text-textSecondary [&::-webkit-search-cancel-button]:hidden"
         {...input}

@@ -38,17 +38,24 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
 }
 
 extension ChannelGroup {
-    /// A `channel-state` push's collab section for `login`: `.some(nil)` when the channel left
-    /// its group, nil when the push is another section or another channel.
+    /// A `channel-state` push's collab section for `login`: the Shared Viewership group, else
+    /// the Twitch Shared Chat session the chat is in; `.some(nil)` when the channel is in
+    /// neither, nil when the push is another section or another channel.
     public static func collabPush(_ json: String, login: String) -> ChannelGroup?? {
         struct Push: Decodable {
             var section: String
             var login: String
             var collab: ChannelGroup?
+            var sharedChat: ChannelGroup?
+
+            enum CodingKeys: String, CodingKey {
+                case section, login, collab
+                case sharedChat = "shared_chat"
+            }
         }
         guard let push = try? JSONDecoder().decode(Push.self, from: Data(json.utf8)), push.section == "collab",
               push.login.lowercased() == login.lowercased() else { return nil }
-        return .some(push.collab)
+        return .some(push.collab ?? push.sharedChat)
     }
 
     /// The sheet's subtitle: "1,234 viewers combined" or "One chat across 3 channels".
@@ -147,6 +154,16 @@ public struct PlayerPrefs: Decodable, Sendable, Equatable {
 
 /// The words the player's controls show.
 public enum PlayerText {
+    /// A VOD playhead: "1:02:14", "4:05", "0:09". `width` pads to another clock's shape so the
+    /// two times on a seek bar keep their size as they count.
+    public static func clock(_ seconds: Double, like width: Double? = nil) -> String {
+        let s = seconds.isFinite ? max(0, Int(seconds.rounded(.down))) : 0
+        let hours = s / 3600
+        let wide = hours > 0 || (width.map { $0 >= 3600 } ?? false)
+        if wide { return String(format: "%d:%02d:%02d", hours, (s % 3600) / 60, s % 60) }
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
     /// "2h 14m" or "14m" since the broadcast began; empty when the start is unknown or unreadable.
     public static func uptime(startedAt: String?, now: Date = Date()) -> String {
         guard let startedAt, let start = parseDate(startedAt) else { return "" }
@@ -180,7 +197,15 @@ public enum PlayerText {
         return "best"
     }
 
-    private static func parseDate(_ text: String) -> Date? {
+    /// A playback speed as the speed menu shows it: "1x", "1.25x", "2x".
+    public static func rate(_ rate: Float) -> String {
+        let hundredths = Int((rate * 100).rounded())
+        if hundredths % 100 == 0 { return "\(hundredths / 100)x" }
+        if hundredths % 10 == 0 { return String(format: "%.1fx", Double(rate)) }
+        return String(format: "%.2fx", Double(rate))
+    }
+
+    public static func parseDate(_ text: String) -> Date? {
         let full = ISO8601DateFormatter()
         full.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = full.date(from: text) { return date }

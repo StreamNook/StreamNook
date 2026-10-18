@@ -7,11 +7,37 @@ import UIKit
 struct ChatRoomsPanel: View {
     let rooms: ChatRooms
     var overlay = false
+    /// A playing VOD's recorded chat; shown instead of the rooms while `replayShown` is on.
+    var replay: ChatSession?
+    var replayShown: Binding<Bool>?
+    /// The VOD's playhead, for the line beside the switch.
+    var replayAt: String?
     /// The stream's own card over the chat (the drop being earned), above the pinned banner.
     var streamBanner: AnyView?
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let replay, let replayShown {
+                ReplaySwitch(shown: replayShown, at: replayAt)
+                if replayShown.wrappedValue {
+                    ChatPanel(session: replay, overlay: true, onProfile: onProfile)
+                        .id(ObjectIdentifier(replay))
+                } else {
+                    roomsBody
+                }
+            } else {
+                roomsBody
+            }
+        }
+        .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
+            AddChatSheet(rooms: rooms)
+                .snSheetLight()
+        }
+    }
+
+    @ViewBuilder
+    private var roomsBody: some View {
         VStack(spacing: 0) {
             if rooms.showsStrip {
                 ChatTabStrip(rooms: rooms)
@@ -23,9 +49,31 @@ struct ChatRoomsPanel: View {
                 Color.clear
             }
         }
-        .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
-            AddChatSheet(rooms: rooms)
+    }
+}
+
+/// Over a VOD's chat: Replay (the recorded chat, in step with the video) or the channel's live
+/// chat, and where the replay is.
+struct ReplaySwitch: View {
+    @Binding var shown: Bool
+    let at: String?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            GlazeSegments([Segment(value: true, label: "Replay"), Segment(value: false, label: "Live chat")],
+                          selection: Binding(get: { shown }, set: { if let on = $0 { shown = on } }))
+                .fixedSize()
+            Spacer(minLength: 8)
+            if shown, let at {
+                Text("chat at \(at)")
+                    .font(.sn(12.5).monospacedDigit())
+                    .foregroundStyle(SN.textMuted)
+                    .lineLimit(1)
+            }
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 }
 
@@ -51,12 +99,13 @@ struct ChatPanel: View {
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
                 // Under the tab strip, a short fade instead of a hard cut too.
                 .mask {
-                    if let rooms, !overlay,
-                       !rooms.activePins.isEmpty || rooms.showsStrip || rooms.mentionCards[session.channel] != nil {
-                        let floating = !rooms.activePins.isEmpty || rooms.mentionCards[session.channel] != nil
+                    let pinned = !overlay && !(rooms?.activePins.isEmpty ?? true)
+                    let mentionCard = !overlay && rooms?.mentionCards[session.channel] != nil
+                    let cards = mentionCard || (votes.map { !$0.slots.isEmpty } ?? false)
+                    if pinned || cards || (!overlay && rooms?.showsStrip == true) {
                         VStack(spacing: 0) {
                             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: floating ? 30 : 12)
+                                .frame(height: pinned || cards ? 30 : 12)
                             Color.black
                         }
                     } else {
@@ -78,6 +127,12 @@ struct ChatPanel: View {
                                 .padding(.top, 6)
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
+                        // The live poll and prediction, under the pins; never over landscape video.
+                        if let votes {
+                            LiveVotesStack(model: votes)
+                                .padding(.horizontal, 10)
+                                .padding(.top, rooms?.activePins.isEmpty ?? true ? 6 : 0)
+                        }
                         if let toast {
                             Text(toast)
                                 .font(.snCaption)
@@ -96,7 +151,25 @@ struct ChatPanel: View {
                 ChatComposer(session: session, onProfile: onProfile)
             }
         }
-        .onAppear { session.start() }
+        .onAppear {
+            session.start()
+            if let votes {
+                votes.onToast = { [rooms] text, success in
+                    // The app's toasts show only failures; a success speaks over the list.
+                    if !success, let toasts = rooms?.toasts {
+                        toasts.show(text, .error)
+                    } else {
+                        show(text)
+                    }
+                }
+                votes.start()
+            }
+        }
+    }
+
+    /// The room's poll and prediction cards, never in the read-only landscape overlay.
+    private var votes: LiveVotesModel? {
+        overlay ? nil : LiveVotesRegistry.shared.model(for: session)
     }
 
     private func show(_ text: String) {
@@ -165,10 +238,22 @@ struct ChatListHost: UIViewRepresentable {
                     list?.pauseForJump()
                     onToast("Original message is no longer in chat history")
                 }
+            case .held(let messageID, let allow):
+                // Twitch's answer folds the row (the core's AUTOMOD_HELD update); only a refusal
+                // needs words here.
+                Task { @MainActor in
+                    do {
+                        try await session.core.resolveHeld(messageID: messageID, allow: allow)
+                    } catch {
+                        onToast(allow ? "Could not allow that message: \(error)" : "Could not deny that message: \(error)")
+                    }
+                }
             }
         }
         list.fanContext = { layout in
-            guard let message = session.pipeline.message(layout.id), !message.isSystem else { return nil }
+            // A held message has its own Allow and Deny; there is nothing to reply to yet.
+            guard let message = session.pipeline.message(layout.id), !message.isSystem,
+                  !layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")) else { return nil }
             let twitch = message.provider == "twitch"
             var buckets: [FanBucket] = []
             if !readOnly { buckets.append(.reply) }
