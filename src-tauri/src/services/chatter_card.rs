@@ -271,6 +271,49 @@ pub async fn get_chatter_card_tools(
     tools
 }
 
+/// The four lengths with `index` set to `seconds`, written back over the dock
+/// list's first four (any further dock lengths are kept after them). `None`
+/// when the length is out of range or already one of the four. Pure, for tests.
+pub fn with_length(settings: &Value, index: usize, seconds: u32) -> Option<Vec<u32>> {
+    if index >= CARD_LENGTHS || !(1..=TWITCH_MAX_TIMEOUT).contains(&seconds) {
+        return None;
+    }
+    let mut four = lengths_from(settings);
+    if four[index] != seconds && four.contains(&seconds) {
+        return None;
+    }
+    four[index] = seconds;
+    let rest: Vec<u32> = settings["moderation"]["timeout_presets"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_u64).map(|s| s as u32).skip(CARD_LENGTHS).filter(|s| !four.contains(s)).collect())
+        .unwrap_or_default();
+    four.extend(rest);
+    Some(four)
+}
+
+/// Sets one of the card's four timeout lengths (which are the dock's first
+/// four). Answers the four as stored.
+#[tauri::command]
+pub async fn set_card_timeout_length(
+    app: crate::rt::AppHandle,
+    index: usize,
+    seconds: u32,
+    state: tauri::State<'_, crate::models::settings::AppState>,
+) -> Result<Vec<u32>, String> {
+    let mut stored = Vec::new();
+    crate::commands::settings::commit_settings_patch(&app, &state, None, |current| {
+        let value = serde_json::to_value(current).map_err(|e| e.to_string())?;
+        let Some(list) = with_length(&value, index, seconds) else {
+            return Err("That length is already one of the four, or out of range (1 second to 14 days).".to_string());
+        };
+        stored = list.iter().take(CARD_LENGTHS).copied().collect();
+        let mut changes = serde_json::Map::new();
+        changes.insert("moderation.timeout_presets".into(), json!(list));
+        crate::commands::settings_fields::patch_for_changes(current, &changes)
+    })?;
+    Ok(stored)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +377,17 @@ mod tests {
         assert!(!buttons[0].asks_reason);
         assert_eq!(buttons[1].action, json!({ "kind": "warn" }));
         assert!(buttons[1].asks_reason, "a warning with no saved reason asks for one");
+    }
+
+    #[test]
+    fn one_length_changes_in_place() {
+        assert_eq!(with_length(&Value::Null, 1, 300), Some(vec![1, 300, 3_600, 86_400]));
+        let long = json!({ "moderation": { "timeout_presets": [60, 300, 600, 1800, 3600, 86400] } });
+        assert_eq!(with_length(&long, 0, 30), Some(vec![30, 300, 600, 1800, 3600, 86400]), "the dock's extra lengths stay");
+        assert_eq!(with_length(&long, 0, 300), None, "already one of the four");
+        assert_eq!(with_length(&long, 4, 300), None);
+        assert_eq!(with_length(&long, 0, 0), None);
+        assert_eq!(with_length(&long, 2, 600), Some(vec![60, 300, 600, 1800, 3600, 86400]), "unchanged");
     }
 
     #[test]

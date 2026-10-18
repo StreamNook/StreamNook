@@ -79,6 +79,8 @@ enum Entries {
     UserCommands,
     /// Renamed in place; added and removed with their files (`add_custom_sound`).
     CustomSounds,
+    /// The viewer's own user-card mod buttons (`services::chatter_card`).
+    CardActions,
 }
 
 /// The scrollbar mark kinds, in the order a saved list keeps, so a list
@@ -100,6 +102,7 @@ fn kind_of(path: &str) -> Option<Kind> {
         "chat_design.scrollbar_mark_kinds" => Kind::Set(MARK_KINDS),
         "live_notifications.muted_live_channels" => Kind::Logins,
         "chat_highlights.custom_sounds" => Kind::Entries(Entries::CustomSounds),
+        "moderation.card_actions" => Kind::Entries(Entries::CardActions),
         _ => return None,
     })
 }
@@ -159,6 +162,7 @@ fn new_entry(kind: Entries) -> Value {
             "require_slash": true, "also_match_suffix": false,
         }),
         Entries::CustomSounds => json!({ "id": new_id(), "name": "", "path": "" }),
+        Entries::CardActions => json!({ "id": new_id(), "label": "", "kind": "timeout", "seconds": 600, "reason": "" }),
     }
 }
 
@@ -185,6 +189,19 @@ fn clean_entry(kind: Entries, entry: &mut Map<String, Value>) {
             if let Some(cooldown) = entry.get("cooldown_seconds") {
                 let seconds = cooldown.as_f64().map(|s| s.round().clamp(0.0, 60.0) as u64).unwrap_or(3);
                 entry.insert("cooldown_seconds".into(), json!(seconds));
+            }
+        }
+        Entries::CardActions => {
+            if let Some(label) = text(entry, "label") {
+                entry.insert("label".into(), json!(label.trim().chars().take(24).collect::<String>()));
+            }
+            let kind = text(entry, "kind").filter(|k| ["timeout", "ban", "unban", "warn"].contains(&k.as_str()));
+            entry.insert("kind".into(), json!(kind.unwrap_or_else(|| "timeout".into())));
+            if let Some(seconds) = entry.get("seconds").and_then(Value::as_f64) {
+                entry.insert("seconds".into(), json!((seconds.round() as u64).clamp(1, 1_209_600)));
+            }
+            if let Some(reason) = text(entry, "reason") {
+                entry.insert("reason".into(), json!(reason.trim().chars().take(500).collect::<String>()));
             }
         }
         Entries::IgnoredPhrases | Entries::CustomSounds => {}

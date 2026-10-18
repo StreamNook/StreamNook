@@ -1,0 +1,157 @@
+import SNKit
+import SwiftUI
+
+/// Settings > Chat > Moderation: the four timeout lengths on a user card (the desktop dock's
+/// first four, so one edit changes both) and the viewer's own card buttons. The core keeps the
+/// lists (`set_card_timeout_length`, `edit_settings_list`); the page sends one change at a time.
+struct ModerationSettings: View {
+    @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
+    @State private var refusal: String?
+
+    static let path = "moderation.card_actions"
+    /// Lengths offered for a chip or a timeout button, shortest first.
+    static let lengths: [(Int, String)] = [
+        (1, "1s"), (30, "30s"), (60, "1m"), (300, "5m"), (600, "10m"), (1800, "30m"), (3600, "1h"), (21600, "6h"),
+        (43200, "12h"), (86400, "1d"), (259_200, "3d"), (604_800, "1w"), (1_209_600, "2w"),
+    ]
+
+    static func label(_ seconds: Int) -> String {
+        lengths.first { $0.0 == seconds }?.1 ?? "\(seconds)s"
+    }
+
+    /// The four as the card shows them: the saved dock list's first four, topped up from the
+    /// defaults (the core's `lengths_from` decides the same).
+    private var four: [Int] {
+        var out: [Int] = []
+        let saved = (store.value("moderation.timeout_presets") as? [Any] ?? []).compactMap { SettingsPath.double($0).map { Int($0) } }
+        for s in saved + [1, 600, 3600, 86400] where (1...1_209_600).contains(s) && !out.contains(s) {
+            out.append(s)
+            if out.count == 4 { break }
+        }
+        return out
+    }
+
+    var body: some View {
+        SettingsBlock(title: "Moderation", detail: "The buttons on a user card in channels you moderate.") {
+            WideRow(title: "Timeout lengths", detail: "Tap one to change it. The desktop's hover dock uses the same four.",
+                    paths: ["moderation.timeout_presets"]) {
+                HStack(spacing: 7) {
+                    ForEach(Array(four.enumerated()), id: \.offset) { index, seconds in
+                        Menu {
+                            ForEach(Self.lengths, id: \.0) { length, label in
+                                Button(label) { setLength(index, length) }
+                                    .disabled(four.contains(length) && length != seconds)
+                            }
+                        } label: {
+                            Text(Self.label(seconds))
+                                .font(.sn(14, 600))
+                                .foregroundStyle(SN.textPrimary)
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                                .background(SN.surface, in: .rect(cornerRadius: 10, style: .continuous))
+                        }
+                        .accessibilityLabel("Timeout length \(index + 1): \(Self.label(seconds))")
+                    }
+                }
+                .padding(.top, 10)
+                if let refusal {
+                    Text(refusal).font(.sn(12)).foregroundStyle(SN.error).padding(.top, 6)
+                }
+            }
+            WideRow(title: "Card buttons", detail: "Your own buttons under the lengths: a timeout, ban, unban or warning, with a reason sent along.",
+                    paths: [Self.path]) {
+                VStack(spacing: 8) {
+                    ForEach(Array(store.list(Self.path).enumerated()), id: \.offset) { _, entry in
+                        if let id = entry["id"] as? String {
+                            CardActionEditor(id: id, entry: entry)
+                        }
+                    }
+                    if store.list(Self.path).count < 6 {
+                        Button {
+                            Task { _ = try? await store.edit(Self.path, .add()) }
+                        } label: {
+                            Label("Add a button", systemImage: "plus")
+                                .font(.sn(14, 500))
+                                .foregroundStyle(SN.accent)
+                                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 10)
+            }
+        }
+    }
+
+    private func setLength(_ index: Int, _ seconds: Int) {
+        Task {
+            do {
+                _ = try await model.core.invoke("set_card_timeout_length", args: ["index": index, "seconds": seconds])
+                refusal = nil
+                await store.refresh()
+            } catch {
+                refusal = ChatComposerModel.words(error)
+            }
+        }
+    }
+}
+
+/// One card button: its label, what it does, its length (timeouts) and the reason sent with it.
+private struct CardActionEditor: View {
+    @Environment(SettingsStore.self) private var store
+    let id: String
+    let entry: [String: Any]
+
+    private var kind: String { entry["kind"] as? String ?? "timeout" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                EntryTextField(listPath: ModerationSettings.path, id: id, field: "label",
+                               value: entry["label"] as? String ?? "", placeholder: "Label, like Spoilers", limit: 24)
+                EntryDelete(label: "Remove this button") {
+                    Task { _ = try? await store.edit(ModerationSettings.path, .remove(id: id)) }
+                }
+            }
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach([("timeout", "Timeout"), ("ban", "Ban"), ("unban", "Unban"), ("warn", "Warning")], id: \.0) { value, title in
+                        Button(title) { update(["kind": value]) }
+                    }
+                } label: {
+                    menuLabel(["timeout": "Timeout", "ban": "Ban", "unban": "Unban", "warn": "Warning"][kind] ?? "Timeout")
+                }
+                if kind == "timeout" {
+                    let seconds = SettingsPath.double(entry["seconds"]).map { Int($0) } ?? 600
+                    Menu {
+                        ForEach(ModerationSettings.lengths, id: \.0) { length, label in
+                            Button(label) { update(["seconds": length]) }
+                        }
+                    } label: {
+                        menuLabel(ModerationSettings.label(seconds))
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            EntryTextField(listPath: ModerationSettings.path, id: id, field: "reason", value: entry["reason"] as? String ?? "",
+                           placeholder: kind == "warn" ? "Reason (asked each time when empty)" : "Reason (optional)", limit: 500)
+        }
+        .padding(10)
+        .snPanel()
+    }
+
+    private func update(_ patch: [String: Any?]) {
+        Task { _ = try? await store.edit(ModerationSettings.path, .update(id: id, patch)) }
+    }
+
+    private func menuLabel(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Text(text).font(.sn(13, 500))
+            Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(SN.textPrimary)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 32)
+        .background(SN.surface, in: .rect(cornerRadius: 8, style: .continuous))
+    }
+}
