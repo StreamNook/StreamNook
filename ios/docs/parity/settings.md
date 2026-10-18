@@ -558,7 +558,7 @@ Scope: the eight settings rows on the You tab and every panel they open; the Cha
 
 ## 28. Tab Completion
 
-- [x] Section "Tab Completion" (id `settings-section-emote-tab-completion`), phone description "Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it." (d:components/settings/ChatSettings.tsx:L2368-L2376) (iPhone: copy verbatim; Brandon may rename the section since there is no Tab key)
+- [x] Section "Tab Completion" (id `settings-section-emote-tab-completion`), phone description "Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it." (d:components/settings/ChatSettings.tsx:L2368-L2376) (iPhone: copy verbatim; Brandon may rename the section since there is no Tab key) (iPhone A7: renamed "Suggestions", since a phone has no Tab key)
 - [x] Row "Emotes" toggle: phone description "Suggest matching emotes as you type."; phone help "Matching: Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name."; key `chat_input.emote_tab_complete_enabled`, default true; reset arrow; read by the phone composer (d:components/settings/ChatSettings.tsx:L2377-L2400, m:chat/MobileChatInput.tsx:L339) (iPhone: `Toggle`; the strip per chat-input-emotes.md)
 - [x] Nested "Matching" (only while on): segmented "Starts With" (`starts_with`) | "Contains" (`includes`); key `chat_input.emote_tab_complete_match_mode`, default `starts_with`; reset arrow; read by the phone composer (d:components/settings/ChatSettings.tsx:L2419-L2432, m:chat/MobileChatInput.tsx:L331) (iPhone: `Picker(.segmented)`)
 - [~] Hidden on the phone: the nested "Style" (Carousel / List) and the "Colon list" row (d:components/settings/ChatSettings.tsx:L2403-L2418, d:components/settings/ChatSettings.tsx:L2436-L2452) (iPhone: [~] hidden on the phone, not parity)
@@ -768,3 +768,14 @@ Not parity lines: open questions found while reading, each to be settled before 
 - [ ] (backlog, not parity) Highlight phrases, ignored phrases and hidden users can be imported from or exported to a text file through the share sheet / Files
 - [ ] (backlog, not parity) A long-press peek on visual options (deleted style, glint, name style) that previews the option in place before it is picked, standing in for desktop hover-to-preview
 - [ ] (backlog, not parity) Settings search inside the Chat page using `.searchable`, reusing the existing settings search index
+
+## Hidden on iPhone (Brandon, 2026-10-17)
+
+Rows that change nothing on an iPhone are hidden there and only there. Saved values stay, and desktop and Android are unchanged. Rust's settings catalog marks each one `hidden_on_ios`, so iPhone search and Changed settings skip them while Android still finds them. Rows that would work once built are on the iPhone roadmap.
+
+- [x] Makes no sense on a phone, hidden: Scrollbar marks and Kinds, Docked Chats, the YouTube Chat section, Pictures in chat, Reminders, Points balance, Background checking (Instant alerts, How often to check), Song Identification, Buffer, Mention sound (Volume, Replies to you), Custom Sounds and the phrase sound line, and Dictionary
+- [x] Not built on iPhone yet, hidden until built (roadmap): Combined Chat, Polls & Predictions, the Chat Events rows other than Redemptions and Platforms, Pinned Messages, the Profile pictures source (Animation stays, as "Profile pictures"), 7TV Notices, Links Style and Trusted sites, Highlight Appearance Style (Opacity stays), Repeated Messages, Notify me about, and the Notifications page with the setup wizard's notification step
+- [x] Chat Events > Platforms lists Twitch and Kick only
+- [x] Theme > Font: the Custom choice is hidden; the six desktop faces (Inter for Twitch, Geist, Manrope, Outfit, Space Grotesk, Fraunces for Serif) now ship, cut to Latin and weights 300 to 700, under the SIL Open Font License (`Fonts/OFL.txt`)
+- [x] Rewords: Text size drops "when MultiChat fills a whole monitor"; Hide emote button drops "keyboard shortcut"; Tab Completion shows as "Suggestions" (iPhone only: its anchor and catalog section stay "Tab Completion" so Android's search still lands)
+- [ ] Larger Text (Dynamic Type): every font is a fixed point size today (roadmap, accessibility)

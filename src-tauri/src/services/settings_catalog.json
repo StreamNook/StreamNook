@@ -221,7 +221,8 @@
     "buffering",
     "stutter",
     "lag"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "player",
@@ -233,7 +234,8 @@
    "nested": false,
    "logo": null,
    "detail": "How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "player",
@@ -245,7 +247,8 @@
    "nested": false,
    "logo": null,
    "detail": "If the first listen matches nothing, StreamNook listens again this many times.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "player",
@@ -330,7 +333,8 @@
     "multi platform",
     "kick chat",
     "youtube chat"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -342,7 +346,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -354,7 +359,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -366,7 +372,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -378,7 +385,8 @@
    "nested": false,
    "logo": null,
    "detail": "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -390,7 +398,8 @@
    "nested": false,
    "logo": null,
    "detail": "Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -404,7 +413,8 @@
    "detail": "A live poll card with the running vote tally.",
    "aliases": [
     "poll"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -416,7 +426,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -431,7 +442,8 @@
    "aliases": [
     "prediction",
     "bet"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -443,7 +455,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -470,7 +483,8 @@
    "nested": false,
    "logo": null,
    "detail": "One 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -482,7 +496,8 @@
    "nested": false,
    "logo": null,
    "detail": "Shows the chat that was live while a clip was recorded, beside the clip.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -496,7 +511,8 @@
    "detail": "Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row.",
    "aliases": [
     "look"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -508,7 +524,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -520,7 +537,8 @@
    "nested": false,
    "logo": null,
    "detail": "A short highlight when an event row lands: a sheen across it, a pulse, or a spark that runs around the edge.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -532,7 +550,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -544,7 +563,8 @@
    "nested": false,
    "logo": null,
    "detail": "Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -568,7 +588,8 @@
    "nested": false,
    "logo": null,
    "detail": "Shows the pinned message as a compact one-line bar when you enter a channel.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -582,7 +603,8 @@
    "detail": "",
    "aliases": [
     "look"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -633,7 +655,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Size of message text, with room to go large when MultiChat fills a whole monitor.",
+   "detail": "Size of message text.",
    "aliases": [
     "font size",
     "bigger text",
@@ -849,7 +871,8 @@
    "aliases": [
     "avatar",
     "pfp"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -877,7 +900,8 @@
    "nested": false,
    "logo": null,
    "detail": "On platforms that send one (YouTube, TikTok), the chatter's picture leads their message.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -917,7 +941,8 @@
     "ping",
     "notification sound",
     "alert sound"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -929,7 +954,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -941,7 +967,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1187,7 +1214,8 @@
     "7tv notices",
     "7tv emote changes",
     "emote added"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1284,7 +1312,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1319,7 +1348,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion.",
+   "detail": "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.",
    "aliases": []
   },
   {
@@ -1441,7 +1470,8 @@
    "nested": false,
    "logo": null,
    "detail": "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one tap away.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1458,7 +1488,8 @@
     "spam",
     "duplicate messages",
     "copypasta"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1470,7 +1501,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1482,7 +1514,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1494,7 +1527,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1506,7 +1540,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1518,7 +1553,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1530,7 +1566,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1544,7 +1581,8 @@
    "detail": "",
    "aliases": [
     "look"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1568,7 +1606,8 @@
    "nested": false,
    "logo": null,
    "detail": "Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1580,7 +1619,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1632,7 +1672,8 @@
    "nested": false,
    "logo": null,
    "detail": "Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1644,7 +1685,8 @@
    "nested": false,
    "logo": null,
    "detail": "Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used.",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1659,7 +1701,8 @@
    "detail": "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
    "aliases": [
     "look"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1671,7 +1714,8 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -2021,7 +2065,8 @@
     "alerts",
     "push",
     "notify"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2033,7 +2078,8 @@
    "nested": false,
    "detail": "Alert when a channel you follow starts streaming",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2045,7 +2091,8 @@
    "nested": false,
    "detail": "Campaign progress and claimable rewards",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2057,7 +2104,8 @@
    "nested": false,
    "detail": "When a new global badge becomes available",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2073,7 +2121,8 @@
     "mute alerts",
     "mute channel",
     "silence"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2085,7 +2134,8 @@
    "nested": false,
    "detail": "Pushed the moment a channel goes live.",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "notifications",
@@ -2097,7 +2147,8 @@
    "nested": false,
    "detail": "Checking less often uses less battery.",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -2164,7 +2215,8 @@
     "sound file",
     "audio",
     "mp3"
-   ]
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -2230,7 +2282,8 @@
    "nested": false,
    "detail": "Post a message into a chat on a timer or a keyword.",
    "logo": null,
-   "aliases": []
+   "aliases": [],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",

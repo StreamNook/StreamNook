@@ -79,7 +79,7 @@ struct SettingsDirectory: View {
 
             if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(SettingsSection.allCases) { section in
+                    ForEach(SettingsSection.listed) { section in
                         NavigationLink(value: Route.settings(section)) {
                             RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
                         }

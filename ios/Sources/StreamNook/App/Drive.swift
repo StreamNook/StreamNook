@@ -387,7 +387,6 @@ extension SetupWizard.Page {
         case "welcome": .welcome
         case "accounts": .accounts
         case "drops": .drops
-        case "notifications": .notifications
         case "done": .done
         default: nil
         }

@@ -9,11 +9,7 @@ struct ChatSettingsPanel: View {
 
     var body: some View {
         landscape
-        combined
-        youtube
-        pollsAndPredictions
         events
-        pinned
         layout
         names
         mentions
@@ -24,22 +20,18 @@ struct ChatSettingsPanel: View {
         tabCompletion
         points
         behavior
-        docked
-        repeated
         HiddenMessagesSettings()
         highlightAppearance
-        CustomSoundsSettings()
         HighlightPhrasesSettings()
         EventHighlightsSettings()
         UserHighlightsSettings()
         BadgeHighlightsSettings()
         spam
         CustomCommandsSettings()
-        RemindersNote()
         NicknamesSettings()
     }
 
-    // MARK: Landscape, Combined, YouTube
+    // MARK: Landscape
 
     private var landscape: some View {
         SettingsBlock(title: "Landscape Chat", detail: "How chat shares the screen when the phone is on its side.") {
@@ -62,100 +54,13 @@ struct ChatSettingsPanel: View {
         }
     }
 
-    private var combined: some View {
-        SettingsBlock(title: "Combined Chat", detail: "Show a streamer's chat from their other platforms alongside the one you are watching.") {
-            ToggleRow(title: "Merged feed", path: "chat_blend.enabled", fallback: true,
-                      detail: "When a streamer you are watching also streams elsewhere, their other chats join this one in a single feed, each message marked with where it came from.",
-                      help: "Off by default, and inactive while off: no extra connections and nothing extra fetched. Suggestions look for a Kick or YouTube channel of the same name when you open a stream and wait behind the + in the chat header; YouTube is only found while it is live, and nothing is linked without you. Platform marks put a small logo on messages from the other platforms. Platforms sets which ones may ever join; the marks in the chat header drop one for just this channel. You chat on the platform you are watching, but a reply to someone elsewhere goes back there. Saved filters about sub length or bits only match Twitch messages.") {
-                NestedToggle(title: "Suggestions", path: "chat_blend.suggest_links", fallback: true)
-                NestedToggle(title: "Platform marks", path: "chat_blend.show_platform_badge", fallback: true)
-                NestedLine(title: "Platforms", paths: ["chat_blend.platforms"], stacked: true) {
-                    HStack(spacing: 16) {
-                        ForEach([("Twitch", "twitch"), ("Kick", "kick"), ("YouTube", "youtube"), ("TikTok", "tiktok")], id: \.1) { label, id in
-                            VStack(spacing: 4) {
-                                HStack(spacing: 4) {
-                                    BrandLogo(id: id, size: 13)
-                                    Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
-                                }
-                                SettingToggle(path: "chat_blend.platforms.\(id)", label: "Include \(label) in combined chat",
-                                              write: { ["chat_blend.platforms.\(id)": $0 ? nil : false] },
-                                              isOn: { $0.value("chat_blend.platforms.\(id)") as? Bool != false })
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var youtube: some View {
-        SettingsBlock(title: "YouTube Chat", logo: "youtube", shownTitle: "Chat", detail: "Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show.") {
-            ChoiceRow(title: "Feed", path: "youtube_chat_view", choices: [Choice("Live chat", "live"), Choice("Top chat", "top")],
-                      fallback: "live",
-                      detail: "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
-                      help: "Top chat drops messages YouTube judges low quality and most of one person's repeats, so you see less but can miss some.")
-            ChoiceRow(title: "Currency", path: "chat_events.superchat_currency",
-                      choices: [Choice("As sent", "")] + Self.currencies.map { Choice($0, $0) }, fallback: "", menu: true,
-                      detail: "Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent.",
-                      accessibility: "Super Chat currency")
-        }
-    }
-
-    static let currencies = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "INR", "BRL", "MXN", "KRW", "PHP", "SGD", "SEK", "CHF",
-                             "PLN", "TRY", "ZAR", "NZD", "HKD", "TWD", "THB", "IDR", "MYR", "CNY"]
-
-    // MARK: Polls, events, pins
-
-    private var pollsAndPredictions: some View {
-        SettingsBlock(title: "Polls & Predictions", detail: "The live cards at the top of chat while the streamer runs a poll or a prediction.") {
-            ToggleRow(title: "Polls", path: "show_polls", fallback: true, detail: "A live poll card with the running vote tally.",
-                      help: "Collapsed opens a poll as its header bar, so it never takes over the top of chat; tap the header to expand it. Collapsing a poll sticks: it no longer reopens every time somebody votes.") {
-                NestedToggle(title: "Collapsed", path: "chat_design.polls_start_collapsed")
-            }
-            ToggleRow(title: "Predictions", path: "show_predictions", fallback: true,
-                      detail: "A live prediction card with the outcomes and how points are stacking up.",
-                      help: "Top card picks which one sits on top when a poll and a prediction run at the same time. Both cards show either way, stacked.") {
-                if store.bool("show_polls", true) {
-                    NestedChoice(title: "Top card", path: "chat_overlay_order",
-                                 choices: [Choice("Prediction", "prediction-first"), Choice("Poll", "poll-first")],
-                                 fallback: "prediction-first")
-                }
-            }
-        }
-    }
+    // MARK: Events
 
     private var events: some View {
         SettingsBlock(title: "Chat Events", detail: "What live channel activity shows while you watch. Turn any of these off to keep chat clean.") {
             ToggleRow(title: "Redemptions", path: "show_channel_point_redemptions", fallback: true,
                       detail: "A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward.",
                       help: "Rewards that already post to chat are unaffected.")
-            ToggleRow(title: "Gift sub batches", path: "collapse_gift_subs", fallback: true,
-                      detail: "One 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift.",
-                      help: "Turn this off to see every gift as its own row.")
-            ToggleRow(title: "Clip chat replay", path: "clip_chat_replay", fallback: true,
-                      detail: "Shows the chat that was live while a clip was recorded, beside the clip.",
-                      help: "Needs the original broadcast to still be up, so older clips may have no replay.")
-            ChoiceRow(title: "Style", path: "chat_events.event_style",
-                      choices: [Choice("Cards", "cards"), Choice("Outline", "outline"), Choice("Plain", "plain")], fallback: "cards",
-                      detail: "Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row.",
-                      help: "With Outline, Outline color sets the ring. Leave it on the default to follow the theme accent.") {
-                if store.string("chat_events.event_style", "cards") == "outline" {
-                    NestedColor(title: "Outline color", path: "chat_events.event_outline_color", unset: "#9147ff")
-                }
-            }
-            ChoiceRow(title: "Glint", path: "chat_events.event_animation",
-                      choices: [Choice("None", "none"), Choice("Sheen", "sheen"), Choice("Pulse", "pulse"), Choice("Chase", "chase")],
-                      fallback: "none", menu: true,
-                      detail: "A short highlight when an event row lands: a sheen across it, a pulse, or a spark that runs around the edge.",
-                      help: "Loop keeps the glint going; off plays it once as the row arrives.", accessibility: "Event glint") {
-                if store.string("chat_events.event_animation", "none") != "none" {
-                    NestedToggle(title: "Loop", path: "chat_events.event_animate_repeat")
-                }
-            }
-            ChoiceRow(title: "Cheers", path: "chat_events.cheer_display",
-                      choices: [Choice("Card", "card"), Choice("Message", "message")], fallback: "card",
-                      detail: "Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline.")
-            EventWordingRow()
             WideRow(title: "Platforms", detail: "Turn event kinds off per platform. Lit means shown.",
                     paths: ["chat_events.hidden_provider_events"]) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -177,25 +82,12 @@ struct ChatSettingsPanel: View {
         }
     }
 
+    /// Twitch and Kick only: the iPhone has no YouTube or TikTok chat.
     static let eventKinds: [(String, String, [(String, String)])] = [
         ("twitch", "Twitch", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("bits", "Bits"), ("raids", "Raids"),
                              ("milestones", "Milestones"), ("channel_points", "Channel points"), ("announcements", "Announcements")]),
         ("kick", "Kick", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("follows", "Follows"), ("raids", "Raids")]),
-        ("youtube", "YouTube", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("bits", "Super Chats")]),
-        ("tiktok", "TikTok", [("gifts", "Gifts"), ("bits", "Coins"), ("follows", "Follows")]),
     ]
-
-    private var pinned: some View {
-        SettingsBlock(title: "Pinned Messages", detail: "How a pinned message shows at the top of chat.") {
-            ToggleRow(title: "Collapsed", path: "chat_design.pinned_start_collapsed", fallback: true,
-                      detail: "Shows the pinned message as a compact one-line bar when you enter a channel.",
-                      help: "Tap the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely.",
-                      showsNestedWhenOff: true) {
-                NestedChoice(title: "Style", path: "chat_design.pinned_collapsed_style",
-                             choices: [Choice("Bar", "bar"), Choice("Hidden", "hidden")], fallback: "bar")
-            }
-        }
-    }
 
     // MARK: Layout, names, mentions
 
@@ -208,7 +100,7 @@ struct ChatSettingsPanel: View {
             SliderRow(title: { "Spacing: \(Int($0))px" }, path: "chat_design.message_spacing", range: 0...20, step: 1, fallback: 8,
                       detail: "Blank space between messages; more room means fewer messages on screen.", accessibility: "Spacing")
             SliderRow(title: { "Text size: \(Int($0))px" }, path: "chat_design.font_size", range: 10...48, step: 1, fallback: 14,
-                      detail: "Size of message text, with room to go large when MultiChat fills a whole monitor.", accessibility: "Text size")
+                      detail: "Size of message text.", accessibility: "Text size")
             ChoiceRow(title: "Text weight", path: "chat_design.font_weight",
                       choices: [Choice("Light (300)", "300"), Choice("Normal (400)", "400"), Choice("Medium (500)", "500"),
                                 Choice("Semi-Bold (600)", "600"), Choice("Bold (700)", "700")],
@@ -267,18 +159,11 @@ struct ChatSettingsPanel: View {
                     SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
-            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
-                      choices: [Choice("7TV", "seventv"), Choice("Twitch", "twitch")], fallback: "seventv",
-                      detail: "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
-                      help: "Twitch shows each platform's own picture (Kick and YouTube included) and never asks 7TV for one; paints and badges stay. Animation has its own choice below and does not follow your Motion setting.") {
-                if store.string("cosmetics.profile_picture_source", "seventv") == "seventv" {
-                    NestedChoice(title: "Animation", path: "cosmetics.profile_picture_animation",
-                                 choices: [Choice("Always", "always"), Choice("Never", "never")],
-                                 fallback: "always", shown: { $0 == "hover" ? "never" : $0 })
-                }
-            }
-            ToggleRow(title: "Pictures in chat", path: "chat_design.show_avatars", fallback: true,
-                      detail: "On platforms that send one (YouTube, TikTok), the chatter's picture leads their message.")
+            // The picture source (7TV or Twitch) is not read on the iPhone yet, so only Animation shows.
+            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_animation",
+                      choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
+                      detail: "Animated 7TV profile pictures play, or hold their first frame.",
+                      shown: { $0 == "hover" ? "never" : $0 })
             ToggleRow(title: "@ prefix", path: "chat_design.show_at_sign", detail: "Writes every name as @name.")
             ChoiceRow(title: "Paint shadows", path: "cosmetics.paint_shadows",
                       choices: [Choice("All", "all"), Choice("One", "one"), Choice("None", "none")], fallback: "all",
@@ -294,16 +179,6 @@ struct ChatSettingsPanel: View {
 
     private var mentions: some View {
         SettingsBlock(title: "Mentions & Replies", detail: "How a message that mentions you, and a reply, stand out, and how an @name reads in chat.") {
-            ChoiceRow(title: "Mention sound", path: "chat_design.mention_sound", choices: SoundCatalog.choices(store, none: "No sound"),
-                      fallback: "", menu: true, detail: "Plays when someone @s you in any chat you have open.",
-                      help: "At most once every few seconds per chat, and never in streamer mode. Add your own sounds under Custom Sounds.",
-                      accessibility: "Mention sound") {
-                if !store.string("chat_design.mention_sound").isEmpty {
-                    NestedSlider(title: "Volume", path: "chat_design.mention_sound_volume", range: 0...200, step: 5, fallback: 100,
-                                 readout: { "\(Int($0))%" })
-                    NestedToggle(title: "Replies to you", path: "chat_design.mention_sound_replies", fallback: true)
-                }
-            }
             SettingRow(title: "@name style", detail: "How an @mention reads in chat.",
                        help: "A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright.") {
                 EmptyView()
@@ -368,9 +243,6 @@ struct ChatSettingsPanel: View {
             SliderRow(title: { "Spacing: \($0.fixed(3))rem" }, path: "chat_design.emote_margin", range: -0.5...0.5, step: 0.025,
                       fallback: 0.125, detail: "Space on each side of an emote; go negative to let neighboring emotes overlap.",
                       integer: false, accessibility: "Emote spacing")
-            ToggleRow(title: "Notices", path: "chat_design.seventv_emote_notices", fallback: true,
-                      detail: "Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.",
-                      help: "The new emote is usable right away either way.", logo: "7tv")
         }
     }
 
@@ -398,23 +270,19 @@ struct ChatSettingsPanel: View {
                       detail: "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
                       help: "Twitch normally blocks identical messages sent back to back. Handy for repeating an emote.")
             ToggleRow(title: "Spellcheck", path: "chat_input.spellcheck_enabled", fallback: true,
-                      detail: "Underlines misspelled words as you type and offers corrections when you tap one. Emotes, chatters, commands and links are left alone.",
-                      help: "Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click.") {
-                DictionaryEditor()
-            }
+                      detail: "Underlines misspelled words as you type and offers corrections when you tap one. Emotes, chatters, commands and links are left alone.")
             ToggleRow(title: "Chat modes", path: "chat_input.show_room_modes", fallback: true,
                       detail: "Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type.",
                       help: "Tap the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
             ToggleRow(title: "Hide placeholder", path: "chat_input.hide_placeholder",
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
-                      detail: "Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion.")
-            PointsBalanceRow()
+                      detail: "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.")
         }
     }
 
     private var tabCompletion: some View {
-        SettingsBlock(title: "Tab Completion", detail: "Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.") {
+        SettingsBlock(title: "Tab Completion", shownTitle: "Suggestions", detail: "Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.") {
             ToggleRow(title: "Emotes", path: "chat_input.emote_tab_complete_enabled", fallback: true,
                       detail: "Suggest matching emotes as you type.",
                       help: "Matching: Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name.") {
@@ -453,70 +321,11 @@ struct ChatSettingsPanel: View {
         }
     }
 
-    private var docked: some View {
-        SettingsBlock(title: "Docked Chats", detail: "Chats you keep open beside the stream, and how you switch between them.") {
-            ChoiceRow(title: "Menu style", path: "chat_design.chat_dock_switcher",
-                      choices: [Choice("List", "menu"), Choice("Tabs", "tabs")], fallback: "menu",
-                      detail: "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one tap away.")
-        }
-    }
-
-    private var repeated: some View {
-        SettingsBlock(title: "Repeated Messages", detail: "When several people post the same thing at once, fold the run into one row with a count instead of repeating it down the whole chat.") {
-            ChoiceRow(title: "Mode", path: "message_repeat.mode",
-                      choices: [Choice("Fold into one", "collapse"), Choice("Just count them", "label"), Choice("Off", "off")],
-                      fallback: "off",
-                      help: "Match: \"Nearly the same\" ignores capitals, extra spaces and trailing punctuation, so \"LULW!!\" joins \"lulw\". Minimum is how many copies it takes before the counter appears. Window is how long a run stays open; after that the next copy starts a fresh run. Counter color is the little x12. Mod & VIP exemption keeps mods, VIPs and the streamer on their own rows. Moderated channels turns folding off wherever you are a mod, so a hidden copy is never a message you needed to action.",
-                      detailFor: { mode in
-                          switch mode {
-                          case "collapse": "Keeps the first one and counts the rest onto it."
-                          case "label": "Leaves every message in chat and just numbers them, so nothing is hidden."
-                          default: "Repeats are left completely alone."
-                          }
-                      }) {
-                if store.string("message_repeat.mode", "off") != "off" {
-                    NestedChoice(title: "Match", path: "message_repeat.match",
-                                 choices: [Choice("Nearly the same", "normalized"), Choice("Exactly the same", "exact")], fallback: "normalized")
-                    NestedSlider(title: "Minimum", path: "message_repeat.threshold", range: 2...10, step: 1, fallback: 2,
-                                 readout: { "\(Int($0)) copies" })
-                    NestedSlider(title: "Window", path: "message_repeat.window_seconds", range: 10...300, step: 5, fallback: 60,
-                                 readout: { "\(Int($0))s" })
-                    NestedColor(title: "Counter color", path: "message_repeat.color", unset: "#8b8b8b")
-                    NestedToggle(title: "Mod & VIP exemption", path: "message_repeat.exempt_privileged", fallback: true)
-                    NestedToggle(title: "Moderated channels", path: "message_repeat.keep_all_when_moderator", fallback: true)
-                }
-            }
-        }
-    }
-
     private var highlightAppearance: some View {
         SettingsBlock(title: "Highlight Appearance", detail: "Applies to every highlight type below: phrases, usernames, badges, and events.") {
-            ChoiceRow(title: "Style", path: "chat_highlights.appearance.display_style",
-                      choices: [Choice("Standard", "standard"), Choice("Minimal", "minimal"), Choice("None", "none")], fallback: "standard",
-                      help: "Opacity is how bright the row tint appears, in the Standard style only. 20% matches the original look.",
-                      detailFor: { style in
-                          switch style {
-                          case "minimal": "Colored left border only, no row tint."
-                          case "none": "Nothing drawn. The sound and title flash still play."
-                          default: "Tinted row background plus colored left border."
-                          }
-                      }) {
-                if store.string("chat_highlights.appearance.display_style", "standard") == "standard" {
-                    NestedSlider(title: "Opacity", path: "chat_highlights.appearance.opacity", range: 0...100, step: 5, fallback: 20,
-                                 readout: { "\(Int($0))%" })
-                }
-            }
-            ToggleRow(title: "Scrollbar marks", path: "chat_design.scrollbar_marks", fallback: true,
-                      detail: "Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back.",
-                      help: "A tick takes its message's highlight color where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else.") {
-                NestedLine(title: "Kinds", paths: ["chat_design.scrollbar_mark_kinds"], stacked: true) {
-                    SettingChips(path: "chat_design.scrollbar_mark_kinds", chips: [
-                        Choice("Mentions", "mention"), Choice("Highlights", "highlight"), Choice("Pinned", "pinned"),
-                        Choice("Announcements", "announcement"), Choice("Subs", "sub"), Choice("Redeems", "redeem"),
-                        Choice("Raids", "raid"), Choice("First messages", "first_time"),
-                    ], storesOff: false)
-                }
-            }
+            SliderRow(title: { "Opacity: \(Int($0))%" }, path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
+                      fallback: 20, detail: "How bright a highlighted row's tint is; 20% matches the original look.",
+                      accessibility: "Highlight opacity")
         }
     }
 
@@ -595,59 +404,6 @@ private struct MentionColorLine: View {
     }
 }
 
-/// Points balance: one choice stored as two switches.
-private struct PointsBalanceRow: View {
-    @Environment(SettingsStore.self) private var store
-
-    var body: some View {
-        let hidden = store.bool("chat_input.hide_points_balance")
-        let inline = store.bool("chat_input.show_points_balance_inline")
-        let mode = hidden ? "hidden" : inline ? "always" : "hover"
-        let paths = ["chat_input.hide_points_balance", "chat_input.show_points_balance_inline"]
-        WideRow(title: "Points balance",
-                detail: "Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.",
-                paths: paths) {
-            SettingSegments(choices: [Choice("Always", "always"), Choice("On tap", "hover"), Choice("Hidden", "hidden")],
-                            selected: mode, accessibility: "Points balance") { value in
-                Task {
-                    await store.set([paths[0]: value == "hidden", paths[1]: value == "always"])
-                }
-            }
-            .padding(.top, 12)
-        }
-    }
-}
-
-/// Event Wording: the four templates, saved as typed.
-private struct EventWordingRow: View {
-    var body: some View {
-        WideRow(title: "Wording",
-                detail: "Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used.",
-                help: "Tokens: {username} {tier} {months} {years} {streak} {recipient} {count} {bits} {viewers} {channel} {platform} {time} {default}. Leave a box empty to keep the platform's wording.") {
-            VStack(alignment: .leading, spacing: 10) {
-                TemplateField(label: "Subscriptions", key: "subscriptions", placeholder: "{username} just re-subscribed for {months} months!")
-                TemplateField(label: "Gifts", key: "gifts", placeholder: "{username} gifted {count} subs to the channel!")
-                TemplateField(label: "Bits & Super Chats", key: "bits", placeholder: "{username} cheered {bits} bits!")
-                TemplateField(label: "Milestones", key: "milestones", placeholder: "{username} has been watching for {streak} in a row!")
-            }
-            .padding(.top, 12)
-        }
-    }
-}
-
-private struct TemplateField: View {
-    let label: String
-    let key: String
-    let placeholder: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.sn(11, 600)).textCase(.uppercase).foregroundStyle(SN.textMuted)
-            SettingTextField(path: "chat_events.event_templates.\(key)", placeholder: placeholder, limit: 200)
-        }
-    }
-}
-
 /// A one-line text field bound to a string setting: typing stays local and is saved a moment
 /// after it stops, and on leaving the field, so no keystroke is lost to a round trip.
 struct SettingTextField: View {
@@ -692,33 +448,6 @@ struct SettingTextField: View {
                 save?.cancel()
                 Task { await store.set(path, text) }
             }
-        }
-    }
-}
-
-/// The sound choices every picker shows: none, the five tones, then your own sounds.
-enum SoundCatalog {
-    static let builtIn = [Choice("Subtle Boop", "boop"), Choice("Cozy Knock", "tick"), Choice("Fireplace Crackle", "soft"),
-                          Choice("Raindrop", "whisper"), Choice("Wind Chime", "gentle")]
-
-    @MainActor
-    static func choices(_ store: SettingsStore, none: String) -> [Choice] {
-        let custom = store.list("chat_highlights.custom_sounds").compactMap { sound -> Choice? in
-            guard let id = sound["id"] as? String else { return nil }
-            let name = (sound["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Custom sound"
-            return Choice(name, id)
-        }
-        return [Choice(none, "")] + builtIn + custom
-    }
-}
-
-/// Reminders post from the desktop app only, so the phone lists none.
-private struct RemindersNote: View {
-    var body: some View {
-        SettingsBlock(title: "Reminders", detail: "Post a message into a streamer's chat on your behalf to nudge them about something: on a repeating timer, after a delay, at a set time, once the stream hits an uptime, or when a keyword shows up in chat. You can also fire one off instantly with /remind now <message>.", bare: true) {
-            Text("Reminders are set up and posted from StreamNook on your computer.")
-                .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity).padding(16).snPanel()
         }
     }
 }
