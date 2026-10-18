@@ -625,6 +625,7 @@ impl CompiledRules {
             history_cap,
             mention_color: String::new(),
             reply_color: String::new(),
+            mention_opts: MatchOptions::default(),
         }
     }
 
