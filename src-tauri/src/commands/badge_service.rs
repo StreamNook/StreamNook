@@ -495,6 +495,39 @@ async fn apply_drop(
     );
 }
 
+/// Store a drop's earn window again when the feed has already recorded the
+/// drop but the cache never kept the window. Android's notification worker
+/// used to record drops as seen while its window writes never reached disk,
+/// and an unchanged re-push is otherwise skipped, so those badges stayed
+/// windowless (never Available, never in the missing strip) for good. Only the
+/// enrichment is written: no gallery merge, no toast. True when it wrote one.
+pub(crate) async fn heal_enrichment(
+    badge: &crate::services::badge_polling_service::BadgeNotification,
+) -> bool {
+    let Some(enrichment) = &badge.enrichment else {
+        return false;
+    };
+    let key = format!("metadata:{}-v{}", badge.badge_set_id, badge.badge_version);
+    let kept = || {
+        matches!(
+            crate::services::universal_cache_service::peek_cached_entry(&key),
+            Ok(Some(entry)) if entry.metadata.source == crate::commands::badge_metadata::ENRICHMENT_SOURCE
+        )
+    };
+    if kept() {
+        return false;
+    }
+    crate::commands::badge_metadata::store_enrichment_metadata(
+        &badge.badge_set_id,
+        &badge.badge_version,
+        enrichment,
+    )
+    .await;
+    // An enrichment with nothing in it is skipped by the store; reporting it
+    // as healed would rebuild open surfaces on every frame for nothing.
+    kept()
+}
+
 /// Ingest a batch of drops from the real-time feed (the badge WebSocket, or its
 /// `latest.json` poll fallback).
 ///
@@ -538,6 +571,7 @@ pub async fn ingest_badge_drops(
         };
 
         if !action.stores() {
+            stored_any |= heal_enrichment(badge).await;
             continue;
         }
 
