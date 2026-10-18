@@ -458,6 +458,10 @@ pub struct RowView {
     /// The CS2 Major Cologne look the author's rows wear instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cologne: Option<crate::services::member_theme::Cologne>,
+    /// A Shared Chat partner's row: the channel it came from (face, its own
+    /// color floored for the theme), when already known as the row is stamped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::services::shared_chat_source::SharedSource>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

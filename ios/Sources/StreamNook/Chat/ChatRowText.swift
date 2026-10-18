@@ -106,6 +106,14 @@ struct RowText {
                width: size, height: size, centerAboveBaseline: 0.38 * fontSize, marginRight: gapAfter)
     }
 
+    /// A round face at badge size: the channel a Shared Chat row came from.
+    mutating func face(_ url: String, gapAfter: CGFloat) {
+        guard !ImagePipeline.shared.hasFailed(url) else { return }
+        let size = builder.badgeSize
+        inline(.image(.avatar, url: url, pixelHeight: Int(size * builder.scale), overlays: [], effects: 0, animate: false),
+               width: size, height: size, centerAboveBaseline: 0.38 * fontSize, marginRight: gapAfter)
+    }
+
     mutating func symbol(_ name: String, size: CGFloat, color: UIColor) {
         inline(.shape(.symbol(name, color)), width: size, height: size, centerAboveBaseline: middle(size), marginRight: 0)
     }

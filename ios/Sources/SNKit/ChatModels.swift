@@ -310,6 +310,29 @@ public struct ChatMetadata: Codable, Sendable, Equatable {
 
 // MARK: The native row view (Rust `RowView`)
 
+/// The partner channel a Shared Chat row came from (Rust `SharedSource`): its face and its own
+/// color, floored by the core for the theme.
+public struct SharedChatSource: Codable, Sendable, Equatable {
+    public var id: String
+    public var login: String
+    public var displayName: String
+    public var avatarURL: String?
+    public var color: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, login, color
+        case displayName = "display_name", avatarURL = "avatar_url"
+    }
+
+    public init(id: String, login: String, displayName: String, avatarURL: String? = nil, color: String) {
+        self.id = id
+        self.login = login
+        self.displayName = displayName
+        self.avatarURL = avatarURL
+        self.color = color
+    }
+}
+
 /// What a row draws, worked out once by the core: readable name colour, badge art, paint and
 /// the grouped body.
 public struct ChatRowView: Codable, Sendable, Equatable {
@@ -322,9 +345,11 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     public var atmosphere: String?
     /// The CS2 Major Cologne look behind them instead.
     public var cologne: CologneLook?
+    /// A Shared Chat partner's row: the channel it came from.
+    public var source: SharedChatSource?
 
     enum CodingKeys: String, CodingKey {
-        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne
+        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne, source
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -343,6 +368,7 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
         spans = try c.decodeIfPresent([ChatSpan].self, forKey: .spans) ?? []
         parentSpans = try c.decodeIfPresent([ChatSpan].self, forKey: .parentSpans)
+        source = try? c.decodeIfPresent(SharedChatSource.self, forKey: .source)
         atmosphere = try c.decodeIfPresent(String.self, forKey: .atmosphere)
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
     }

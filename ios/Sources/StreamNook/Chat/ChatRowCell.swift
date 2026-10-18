@@ -92,6 +92,15 @@ final class ChatRowCell: UIView {
                 load(url, into: image, attachment: attachment, isBase: i == 0)
             }
             applyEffects(attachment.effects, to: group)
+            if attachment.kind == .avatar {
+                // A face: round, ringed in the row's channel color.
+                group.cornerRadius = attachment.rect.height / 2
+                group.masksToBounds = true
+                if let ring = layout.decor.leadingBar?.color {
+                    group.borderWidth = 1.5
+                    group.borderColor = ring.cgColor
+                }
+            }
             layer.addSublayer(group)
             groupLayers.append(group)
         }

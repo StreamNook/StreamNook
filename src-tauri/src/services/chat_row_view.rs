@@ -1199,6 +1199,11 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         .and_then(|r| r.parent_segments.as_ref())
         .map(|segs| spans_with(segs, &channel, prefs.clone()));
     let theme = known_member_theme(msg);
+    let source = if msg.metadata.is_from_shared_chat {
+        crate::services::shared_chat_source::cached(msg.metadata.source_room_id.as_deref().unwrap_or_default(), prefs.dark_theme)
+    } else {
+        None
+    };
     msg.metadata.view = Some(RowView {
         name_color,
         badges: badges(msg, &prefs, worn.as_ref()),
@@ -1207,6 +1212,7 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         parent_spans,
         atmosphere: theme.as_ref().and_then(|t| t.chat_atmosphere().map(String::from)),
         cologne: theme.as_ref().and_then(|t| t.chat_cologne()),
+        source,
     });
 }
 
