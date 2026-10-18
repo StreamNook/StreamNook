@@ -62,8 +62,10 @@ export const MobileOfflineChin: React.FC = () => {
     !!stream && notice?.key === makeKey(streamProvider(stream), stream.user_login);
   if (!offline || noticeShown) return null;
   const name = room?.display_name || stream?.user_name || stream?.user_login || 'This channel';
+  // The gap below keeps chat's faded top row clear of the card's edge, so the
+  // card reads as sitting above chat, not over it.
   return (
-    <div className="shrink-0 px-4 pt-3">
+    <div className="shrink-0 px-4 pt-3 pb-2">
       <OfflineCard
         room={room}
         fallbackName={name}

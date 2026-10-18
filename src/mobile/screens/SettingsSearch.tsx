@@ -62,10 +62,24 @@ const FittedLine: React.FC<{ text: string; className: string }> = ({ text, class
     const el = ref.current;
     if (!el) return;
     let live = true;
-    // A pixel short of the box, so canvas and layout rounding apart never
-    // leave the browser cutting the fitted line a second time.
+    // Canvas and layout disagree on this font (features and axes the canvas
+    // ignores), so the budget is scaled by how wide layout really draws what
+    // is shown now (a Range measures the text, overflow included), and kept a
+    // pixel short, so the browser never cuts the fitted line a second time.
     const fit = () => {
-      if (live) setShown(fitLine(text, el.clientWidth - 1, getComputedStyle(el).font));
+      if (!live) return;
+      const font = getComputedStyle(el).font;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const drawn = range.getBoundingClientRect().width;
+      const ctx = (measureCanvas ??= document.createElement('canvas')).getContext('2d');
+      let scale = 1;
+      if (ctx && drawn > 0) {
+        ctx.font = font;
+        const measured = ctx.measureText(el.textContent ?? '').width;
+        if (measured > 0) scale = drawn / measured;
+      }
+      setShown(fitLine(text, (el.clientWidth - 1) / scale, font));
     };
     fit();
     const observer = new ResizeObserver(fit);

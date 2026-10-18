@@ -422,7 +422,7 @@ export const RewardsScreen: React.FC = () => {
                         {/* Two lines reserved whether the name needs them or
                             not, so the status word lines up across a row. */}
                         <span
-                          className={`w-full min-h-[28px] text-[11px] text-center line-clamp-2 leading-[14px] ${
+                          className={`w-full min-h-[28px] text-[11px] text-center line-clamp-2 leading-[14px] [overflow-wrap:anywhere] ${
                             lit ? 'text-textPrimary' : 'text-textMuted'
                           }`}
                         >

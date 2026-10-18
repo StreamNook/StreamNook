@@ -289,7 +289,8 @@ export const AccountsCard: React.FC = () => {
             disabled={kick.busy}
             className="whitespace-nowrap"
           >
-            {kick.busy ? 'Signing in' : 'Sign in with Kick'}
+            {/* The row already names Kick; a short label leaves its status whole. */}
+            {kick.busy ? 'Signing in' : 'Sign in'}
           </Button>
         )}
       </div>
