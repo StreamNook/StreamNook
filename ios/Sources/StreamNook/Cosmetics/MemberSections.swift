@@ -6,11 +6,15 @@ import SwiftUI
 /// sheet's badge groups. Android draws the same answer in `MemberSections.tsx`.
 struct MemberSections: View {
     let profile: MemberProfile
+    /// Emotes whose every image failed; they take themselves out, as a badge does.
+    @State private var failed: Set<String> = []
+
+    private var shownEmotes: [TopEmote] { profile.topEmotes.filter { !failed.contains($0.id) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if !profile.stats.isEmpty { overview }
-            if !profile.topEmotes.isEmpty { emotes }
+            if !shownEmotes.isEmpty { emotes }
             if !profile.accolades.isEmpty { accolades }
         }
     }
@@ -38,8 +42,8 @@ struct MemberSections: View {
         VStack(alignment: .leading, spacing: 8) {
             ProfileSectionHeader("Top emotes")
             FlowLayout(spacing: 8) {
-                ForEach(profile.topEmotes) { emote in
-                    CosmeticImage(emote.url, animate: true)
+                ForEach(shownEmotes) { emote in
+                    CosmeticImage(emote.url, animate: true, onFailure: { failed.insert(emote.id) })
                         .frame(width: 28, height: 28)
                         .frame(width: 32, height: 32)
                         .accessibilityLabel("\(emote.name), used \(emote.count) times")
