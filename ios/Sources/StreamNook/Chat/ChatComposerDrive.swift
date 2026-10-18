@@ -13,6 +13,9 @@ import SNKit
 /// - `chatfail[:WHY]` shows the draft as a message Twitch did not take
 /// - `chatnotice:TEXT` prints a line only the viewer sees
 /// - `chatpickerlog` logs the picker's tabs and sections
+/// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `cheerlog` logs the cheer bar's
+///   state. Send is ChatDrive's `chatsend`, which runs only on FakeCore (`chatlab:core:LOGIN`
+///   under `fake:` gives the stage the fake wallet core)
 @MainActor
 enum ComposerDrive {
     static func run(_ name: String, _ value: String, session: ChatSession?) async -> Bool {
@@ -33,6 +36,12 @@ enum ComposerDrive {
             composer?.debugFailure(value.isEmpty ? "same as your last message" : value)
         case "chatnotice":
             composer?.notice(value.isEmpty ? "Your message was not sent: your message was blocked by AutoMod" : value)
+        case "chatdraft":
+            composer?.draft = value.replacingOccurrences(of: "_", with: " ")
+            try? await Task.sleep(for: .milliseconds(600))
+        case "cheerlog":
+            let flow = composer?.cheer
+            log.notice("cheer draft \(flow?.draft?.total ?? -1) problems \(flow?.draft?.problems.count ?? -1) status \(String(describing: flow?.status.map { "\($0)" }), privacy: .public)")
         case "chatpickerlog":
             guard let picker = composer?.picker else { return true }
             let tabs = picker.tabs.map { "\($0)=\(picker.count($0).map(String.init) ?? "-")" }.joined(separator: ",")
