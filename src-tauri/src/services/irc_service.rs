@@ -798,6 +798,12 @@ pub(crate) async fn reship_room_state(channel: &str) {
     send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
 }
 
+/// Send one chat-stream frame to `channel`'s rooms (a held AutoMod message,
+/// say), held for the next attach when no room is listening.
+pub(crate) async fn ship_channel_frame(channel: &str, frame: String) {
+    send_to_bridge(BridgeFrame::channel(channel, frame), true).await;
+}
+
 /// Look up the account's own follow of a followers-only room (one Helix call),
 /// word the room again with it, and keep a "you can chat in N minutes" line
 /// current until the wait is over.

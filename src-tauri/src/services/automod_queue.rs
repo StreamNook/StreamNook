@@ -38,6 +38,68 @@ pub struct HeldMessage {
     pub held_at_ms: i64,
     /// "held" | "approved" | "denied" | "expired"
     pub status: String,
+    /// Why it is held, in words: "Held by AutoMod · Swearing, level 2".
+    pub label: String,
+}
+
+/// An AutoMod category as a person reads it. Twitch's ids vary between
+/// versions, so an unknown one is shown with its underscores as spaces.
+fn category_words(category: &str) -> String {
+    let words = match category.to_ascii_lowercase().as_str() {
+        "swearing" | "profanity" => "Swearing",
+        "sexwords" | "sex_based_terms" | "sexuality" | "sexual" => "Sex-based terms",
+        "aggressive" | "aggression" => "Aggression",
+        "disability" | "ableism" => "Disability",
+        "racism" | "race_ethnicity_or_religion" | "race" => "Race, religion or ethnicity",
+        "misogyny" => "Misogyny",
+        "homophobia" | "sexuality_sex_or_gender" => "Sexuality, sex or gender",
+        "bullying" | "hostility" => "Bullying",
+        other => return other.replace('_', " "),
+    };
+    words.to_string()
+}
+
+/// "Held by AutoMod · Swearing, level 2", or "Held: blocked term “bad”".
+pub fn held_label(reason: &str, category: Option<&str>, level: Option<u64>, terms: &[String]) -> String {
+    match reason {
+        "blocked_term" if !terms.is_empty() => {
+            let quoted: Vec<String> = terms.iter().map(|t| format!("\u{201C}{t}\u{201D}")).collect();
+            let noun = if terms.len() == 1 { "blocked term" } else { "blocked terms" };
+            format!("Held: {noun} {}", quoted.join(", "))
+        }
+        "blocked_term" => "Held: blocked term".to_string(),
+        "blocked_link" => "Held: blocked link".to_string(),
+        _ => match (category.filter(|c| !c.is_empty()), level) {
+            (Some(c), Some(l)) => format!("Held by AutoMod \u{00B7} {}, level {l}", category_words(c)),
+            (Some(c), None) => format!("Held by AutoMod \u{00B7} {}", category_words(c)),
+            _ => "Held by AutoMod".to_string(),
+        },
+    }
+}
+
+/// The quiet line a resolved held row folds into.
+pub fn resolved_line(row: &HeldMessage) -> String {
+    let who = if row.user_name.is_empty() { &row.user_login } else { &row.user_name };
+    match row.status.as_str() {
+        "approved" => format!("Allowed {who}\u{2019}s held message"),
+        "denied" => format!("Denied {who}\u{2019}s held message"),
+        "expired" => format!("{who}\u{2019}s held message expired"),
+        _ => row.label.clone(),
+    }
+}
+
+/// The chat-stream frame for a held message, held or resolved, so the phones
+/// draw it inline where it arrived and fold it in place once it is decided.
+/// `by` is the moderator who decided it.
+pub fn row_frame(row: &HeldMessage, by: Option<&str>) -> Value {
+    let resolved = row.status != "held";
+    serde_json::json!({
+        "type": "AUTOMOD_HELD",
+        "channel": row.channel,
+        "held": row,
+        "line": resolved.then(|| resolved_line(row)),
+        "by": by.filter(|b| !b.is_empty()),
+    })
 }
 
 static QUEUE: OnceLock<Mutex<HashMap<String, VecDeque<HeldMessage>>>> = OnceLock::new();
@@ -93,6 +155,9 @@ impl AutomodQueue {
             .and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
             .map(|d| d.timestamp_millis())
             .unwrap_or_else(now_ms);
+        let category = event.pointer("/automod/category").and_then(|x| x.as_str()).map(String::from);
+        let level = event.pointer("/automod/level").and_then(|x| x.as_u64());
+        let label = held_label(&reason, category.as_deref(), level, &terms);
         Some(HeldMessage {
             message_id,
             channel: s(event, "/broadcaster_user_login").to_lowercase(),
@@ -102,14 +167,12 @@ impl AutomodQueue {
             user_name: s(event, "/user_name"),
             text: s(event, "/message/text"),
             reason,
-            category: event
-                .pointer("/automod/category")
-                .and_then(|x| x.as_str())
-                .map(String::from),
-            level: event.pointer("/automod/level").and_then(|x| x.as_u64()),
+            category,
+            level,
             terms,
             held_at_ms,
             status: "held".into(),
+            label,
         })
     }
 
@@ -128,6 +191,12 @@ impl AutomodQueue {
     /// Apply an `automod.message.update` event. Returns (channel, message_id,
     /// status) when the row was known, so the caller can emit a targeted event.
     pub fn update(event: &Value) -> Option<(String, String, String)> {
+        Self::update_row(event).map(|row| (row.channel, row.message_id, row.status))
+    }
+
+    /// `update`, returning the resolved row with its new status, for the
+    /// chat stream's in-place fold.
+    pub fn update_row(event: &Value) -> Option<HeldMessage> {
         let message_id = s(event, "/message_id");
         let channel = s(event, "/broadcaster_user_login").to_lowercase();
         let status = s(event, "/status").to_lowercase();
@@ -138,8 +207,9 @@ impl AutomodQueue {
         let ring = map.get_mut(&channel)?;
         let pos = ring.iter().position(|r| r.message_id == message_id)?;
         // Resolved rows leave the queue; the frontend removes them on the event.
-        ring.remove(pos);
-        Some((channel, message_id, status))
+        let mut row = ring.remove(pos)?;
+        row.status = status;
+        Some(row)
     }
 
     /// Rows still held for a channel, oldest first; expired ones are pruned.
@@ -193,6 +263,33 @@ mod tests {
         assert_eq!((ch.as_str(), id.as_str(), st.as_str()), ("forsen", "m1", "approved"));
         assert!(AutomodQueue::list("forsen").is_empty());
         AutomodQueue::clear_channel("forsen");
+    }
+
+    #[test]
+    fn held_words_and_the_fold() {
+        assert_eq!(held_label("automod", Some("swearing"), Some(2), &[]), "Held by AutoMod \u{00B7} Swearing, level 2");
+        assert_eq!(held_label("automod", Some("new_thing"), None, &[]), "Held by AutoMod \u{00B7} new thing");
+        assert_eq!(held_label("automod", None, None, &[]), "Held by AutoMod");
+        assert_eq!(held_label("blocked_term", None, None, &["bad".into()]), "Held: blocked term \u{201C}bad\u{201D}");
+        assert_eq!(held_label("blocked_link", None, None, &[]), "Held: blocked link");
+
+        let ev = serde_json::json!({
+            "broadcaster_user_login": "fold", "message_id": "m9", "user_login": "gus", "user_name": "Gus",
+            "message": { "text": "rude" }, "reason": "automod", "automod": { "category": "swearing", "level": 1 }
+        });
+        let row = AutomodQueue::from_hold_event(&ev).unwrap();
+        let held = row_frame(&row, None);
+        assert_eq!(held["type"], "AUTOMOD_HELD");
+        assert_eq!(held["held"]["label"], "Held by AutoMod \u{00B7} Swearing, level 1");
+        assert!(held["line"].is_null());
+        AutomodQueue::hold(row);
+        let upd = serde_json::json!({ "broadcaster_user_login": "fold", "message_id": "m9", "status": "Denied" });
+        let done = AutomodQueue::update_row(&upd).unwrap();
+        let folded = row_frame(&done, Some("kay"));
+        assert_eq!(folded["held"]["status"], "denied");
+        assert_eq!(folded["line"], "Denied Gus\u{2019}s held message");
+        assert_eq!(folded["by"], "kay");
+        AutomodQueue::clear_channel("fold");
     }
 
     #[test]
