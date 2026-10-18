@@ -32,6 +32,9 @@ final class ChatRooms {
     @ObservationIgnored var addQuery = ""
     /// Pinned messages by Twitch login, newest first, as the core's channel state reads them.
     private(set) var pins: [String: [PinnedChat]] = [:]
+    /// The viewer's relationship to each Twitch room's channel, as the core holds it (read when
+    /// the room opened, pushed on every change), so the chat menu opens with it known.
+    private(set) var relationships: [String: ChannelRelationship] = [:]
     /// The pinned banner is unrolled; every room starts it collapsed.
     var pinsOpen = false
     @ObservationIgnored private var shownChannel: String?
@@ -113,8 +116,11 @@ final class ChatRooms {
         }
         Task { [weak self] in
             for await event in channelState {
-                guard let update = PinnedUpdate.parse(event.payloadJSON) else { continue }
-                self?.takePins(login: update.login.lowercased(), update.pinned)
+                if let update = PinnedUpdate.parse(event.payloadJSON) {
+                    self?.takePins(login: update.login.lowercased(), update.pinned)
+                } else if let update = RelationshipUpdate.parse(event.payloadJSON) {
+                    self?.takeRelationship(login: update.login.lowercased(), update.relationship)
+                }
             }
         }
     }
@@ -314,6 +320,7 @@ final class ChatRooms {
             return
         }
         pins[tab.login] = nil
+        relationships[tab.login.lowercased()] = nil
         let core = core
         let login = tab.login
         enqueue { [weak self] in
@@ -479,11 +486,14 @@ final class ChatRooms {
         guard tab.provider == "twitch", let id = tab.channelID, !id.isEmpty else { return }
         let core = core
         Task {
-            if let json = try? await core.invoke("watch_channel_state", args: ["login": tab.login, "channelId": id]),
-               let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+            guard let json = try? await core.invoke("watch_channel_state", args: ["login": tab.login, "channelId": id]) else { return }
+            if let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
                let list = object["pinned"], let data = try? JSONSerialization.data(withJSONObject: list),
                let pinned = try? JSONDecoder().decode([PinnedChat].self, from: data), sessions[tab.channel] != nil {
                 takePins(login: tab.login, pinned)
+            }
+            if let held = RelationshipUpdate.held(inState: json) {
+                takeRelationship(login: tab.login.lowercased(), held)
             }
         }
         Task {
@@ -493,6 +503,21 @@ final class ChatRooms {
             guard sessions[tab.channel] != nil else { return }
             streaks[tab.channel] = found
         }
+    }
+
+    /// The relationship the core holds for a room's channel; nil before its first read.
+    func relationship(for login: String) -> ChannelRelationship? {
+        relationships[login.lowercased()]
+    }
+
+    /// A follow or unfollow this app just made, shown before the core's push confirms it.
+    func noteFollowing(_ following: Bool, for login: String) {
+        relationships[login.lowercased()]?.following = following
+    }
+
+    private func takeRelationship(login: String, _ relationship: ChannelRelationship?) {
+        guard sessions.values.contains(where: { $0.channel == login }) else { return }
+        relationships[login] = relationship
     }
 
     private func takePins(login: String, _ pinned: [PinnedChat]) {

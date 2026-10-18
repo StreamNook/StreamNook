@@ -8,9 +8,14 @@ import SwiftUI
 struct SubscribePill: View {
     let model: AppModel
     let stream: TwitchStream
-    /// Twitch's answer for this channel (subscribed, past subs, the badge); Kick's comes from the
-    /// Kick follow list.
-    @State private var relationship: ChannelRelationship?
+    /// Asked for only when no open chat holds this channel's relationship.
+    @State private var fetched: ChannelRelationship?
+
+    /// Twitch's answer for this channel (subscribed, past subs, the badge), as the stream's chat
+    /// holds it; Kick's comes from the Kick follow list.
+    private var relationship: ChannelRelationship? {
+        model.chat.relationship(for: stream.userLogin) ?? fetched
+    }
 
     private var subscribed: Bool {
         stream.isTwitch ? relationship?.subscribed == true : model.kick.subscribed(to: stream.userLogin)
@@ -62,11 +67,12 @@ struct SubscribePill: View {
         .accessibilityLabel("\(label), \(stream.userName)")
     }
 
-    /// Twitch's relationship to the channel, once per channel (the chat menu reads the same).
+    /// Twitch's relationship to the channel when the stream's chat does not hold it yet.
     private func load() async {
-        relationship = nil
-        guard stream.isTwitch, model.signedIn, let id = stream.twitchID, !id.isEmpty else { return }
-        relationship = try? await model.core.invoke("channel_relationship", args: [
+        fetched = nil
+        guard stream.isTwitch, model.signedIn, let id = stream.twitchID, !id.isEmpty,
+              model.chat.relationship(for: stream.userLogin) == nil else { return }
+        fetched = try? await model.core.invoke("channel_relationship", args: [
             "channelId": id, "channelLogin": stream.userLogin,
         ], as: ChannelRelationship.self)
     }

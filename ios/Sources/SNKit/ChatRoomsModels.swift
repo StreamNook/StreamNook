@@ -294,6 +294,50 @@ public struct PinnedUpdate: Decodable, Sendable, Equatable {
     private struct Head: Decodable { var section: String }
 }
 
+/// The viewer's relationship to a Twitch channel: the core holds it in the channel's state while
+/// a chat is open there (read when the chat opens, set at once by a follow, unfollow or sub) and
+/// answers it from `channel_relationship`.
+public struct ChannelRelationship: Decodable, Sendable, Equatable {
+    /// Nil while unknown: the Follow row waits rather than guessing.
+    public var following: Bool?
+    public var subscribed: Bool
+    public var hasSubHistory: Bool
+    public var badgeURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case following, subscribed, hasSubHistory = "has_sub_history", badgeURL = "badge_url"
+    }
+
+    public init(following: Bool?, subscribed: Bool = false, hasSubHistory: Bool = false, badgeURL: String? = nil) {
+        self.following = following
+        self.subscribed = subscribed
+        self.hasSubHistory = hasSubHistory
+        self.badgeURL = badgeURL
+    }
+}
+
+/// A `channel-state` push carrying the viewer's relationship to a room's channel (Rust
+/// `ChannelUpdate::Relationship`).
+public struct RelationshipUpdate: Decodable, Sendable, Equatable {
+    public var login: String
+    public var relationship: ChannelRelationship?
+
+    public static func parse(_ json: String) -> RelationshipUpdate? {
+        guard let data = json.data(using: .utf8),
+              let head = try? JSONDecoder().decode(Head.self, from: data), head.section == "relationship" else { return nil }
+        return try? JSONDecoder().decode(RelationshipUpdate.self, from: data)
+    }
+
+    /// The relationship a `watch_channel_state` answer already holds; nil until the core has read it.
+    public static func held(inState json: String) -> ChannelRelationship? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(State.self, from: data))?.relationship
+    }
+
+    private struct Head: Decodable { var section: String }
+    private struct State: Decodable { var relationship: ChannelRelationship? }
+}
+
 /// A watch-streak milestone the viewer can share (Twitch's watch-streak read).
 public struct WatchStreakMilestone: Codable, Sendable, Equatable {
     public var milestoneID: String
