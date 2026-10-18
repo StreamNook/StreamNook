@@ -33,7 +33,7 @@ struct CategoryScreen: View {
             }
         }
         .scrollIndicators(.hidden)
-        .background(SN.background)
+        .snShellBackground()
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)

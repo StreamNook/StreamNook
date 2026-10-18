@@ -70,6 +70,7 @@ private struct ComposerBar: View {
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
+                .snSheetLight()
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $model.commandsOpen) {
@@ -78,6 +79,7 @@ private struct ComposerBar: View {
                 model.commandsOpen = false
                 focused = true
             }
+            .snSheetLight()
             .presentationDetents([.fraction(0.72), .large])
         }
     }

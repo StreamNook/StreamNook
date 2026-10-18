@@ -25,6 +25,7 @@ struct ChatRoomsPanel: View {
         }
         .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
             AddChatSheet(rooms: rooms)
+                .snSheetLight()
         }
     }
 }

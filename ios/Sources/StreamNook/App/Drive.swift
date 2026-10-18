@@ -35,8 +35,9 @@ import SwiftUI
 ///   arrow; `ssearch:TEXT` types into the You tab's settings search (`_` for spaces)
 /// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces);
 ///   `scroll:SECTION@end` shows the section's last rows
-/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it; `ptheme:ID`
-///   draws a built-in theme from the core's catalog without saving it
+/// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it; `theme:ID` (or
+///   `ptheme:ID`) paints a built-in theme, its light included, without saving it; `theme:` paints
+///   the saved one again
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `view:cards`, `view:list` the stream lists' card or row view (saved, like the menu)
 /// - `resume` sends the app to the background and back as the scene phase does; `snapshot` logs
@@ -169,6 +170,7 @@ enum Drive {
                 }
             case "scroll": SettingsAnchor.shared.target = value.replacingOccurrences(of: "_", with: " ")
             case "glass": model.look.preview(glassiness: (Double(value) ?? 100) / 100)
+            case "theme": await previewTheme(value, model: model)
             case "motion": model.look.preview(motion: MotionMode(setting: value))
             case "ptheme": await previewTheme(value, model: model)
             case "toast": model.toasts.show(value.isEmpty ? "Could not load your Kick follows. Try again in a moment." : value)
@@ -268,17 +270,20 @@ enum Drive {
         log.notice("drive try \(path, privacy: .public) = \(json, privacy: .public)")
     }
 
-    /// Draws a built-in theme without saving it, for shots of a theme nobody has picked.
+    /// Paints a built-in theme from the core's catalog, palette and light, without saving it; an
+    /// empty id paints the saved theme again.
     private static func previewTheme(_ id: String, model: AppModel) async {
-        guard let json = try? await model.core.invoke("get_theme_catalog", args: [:]),
-              let root = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-              let theme = (root["themes"] as? [[String: Any]])?.first(where: { $0["id"] as? String == id }),
+        guard !id.isEmpty else { await model.loadTheme(); return }
+        let raw = (try? await model.core.invoke("get_theme_catalog", args: [:]))
+            .flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+        guard let theme = (raw["themes"] as? [[String: Any]])?.first(where: { $0["id"] as? String == id }),
               let tokens = theme["palette"] as? [String: Any] else {
-            log.notice("drive ptheme \(id, privacy: .public) not found")
+            log.error("drive theme: no built-in theme \(id, privacy: .public)")
             return
         }
-        model.look.apply(palette: Palette(tokens: tokens), themeID: id)
-        log.notice("drive ptheme \(id, privacy: .public)")
+        model.look.apply(palette: Palette(tokens: tokens), themeID: id,
+                         light: (theme["light"] as? [String: Any]).flatMap(ThemeLight.init(json:)))
+        log.notice("drive theme \(id, privacy: .public) light \(model.look.light != nil)")
     }
 
     private static func restoreSettings(model: AppModel) async {

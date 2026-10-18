@@ -192,7 +192,10 @@ struct SNButtonStyle: ButtonStyle {
                 switch kind {
                 case .primary: shape.fill(SN.accent)
                 case .brand(let color): shape.fill(color)
-                case .secondary: Color.clear.snGlass(shape, interactive: true)
+                case .secondary:
+                    Color.clear.snGlass(shape, interactive: true)
+                        // Under the finger the glass turns an edge toward the theme's light.
+                        .overlay { ThemeLightLayer(surface: .press).clipShape(shape).opacity(configuration.isPressed ? 1 : 0) }
                 }
             }
             .contentShape(shape)

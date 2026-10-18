@@ -75,7 +75,7 @@ struct PlayerChrome: View {
             #endif
         }
         .clipped()
-        .sheet(isPresented: $qualityShown) { QualitySheet(model: model) }
+        .sheet(isPresented: $qualityShown) { QualitySheet(model: model).snSheetLight() }
         .sheet(isPresented: $togetherShown) {
             if let stream, let group = group(stream) {
                 TogetherSheet(group: group, playing: stream.userLogin) { member in
@@ -83,6 +83,7 @@ struct PlayerChrome: View {
                                                      viewerCount: member.viewerCount ?? 0, gameName: "",
                                                      userID: member.userID, profileImageURL: member.avatarURL))
                 }
+                .snSheetLight()
             }
         }
         .onChange(of: model.nav.qualityPing) { _, _ in qualityShown = true }

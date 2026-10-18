@@ -16,6 +16,8 @@ final class Look {
     private(set) var motion = MotionMode.full
     private(set) var fontID: String?
     private(set) var themeID = "winters-glass"
+    /// The theme's light (Prism's), or nil for a palette-only theme.
+    private(set) var light: ThemeLight?
 
     /// Takes the look out of a settings read.
     func apply(_ settings: SettingsLook) {
@@ -26,12 +28,13 @@ final class Look {
         themeID = settings.theme ?? "winters-glass"
     }
 
-    /// Takes the palette of the theme the core resolved.
-    func apply(palette: Palette, themeID: String) {
+    /// Takes the palette and light of the theme the core resolved.
+    func apply(palette: Palette, themeID: String, light: ThemeLight?) {
         if palette != self.palette {
             self.palette = palette
             ChatTheme.use(palette)
         }
+        if light != self.light { self.light = light }
         self.themeID = themeID
     }
 

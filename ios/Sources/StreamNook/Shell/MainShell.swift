@@ -59,6 +59,7 @@ struct MainShell: View {
         .sheet(item: $cosmetics.profile) { target in
             ProfileSheet(model: ProfileSheetModel(target: target, core: model.core, ownID: model.signIn.user?.id,
                                                   store: cosmetics))
+                .environment(\.themeLightOff, true)
         }
         .sheet(item: $model.clip) { link in
             ClipSheet(url: link.url, model: model)
@@ -108,9 +109,10 @@ extension EnvironmentValues {
     @Entry var shellCovered = false
 }
 
-/// The floor under the floating tab bar: the page's own background rising from clear on an eased
-/// curve, so content scrolling down fades out under the bar instead of showing through it, with no
-/// hard edge and no bare strip below it. It never takes a touch.
+/// The floor under the floating tab bar: the page's own background (the room, its light
+/// included, lined up with the page's) rising from clear on an eased curve, so content scrolling
+/// down fades out under the bar instead of showing through it, with no hard edge and no bare strip
+/// below it. It never takes a touch.
 private struct TabBarFloor: View {
     /// How far above the bar's top edge the fade starts. Inside a tab the bottom safe area already
     /// spans the bar and the home indicator, so the floor covers that inset plus this lead-in and
@@ -119,9 +121,11 @@ private struct TabBarFloor: View {
 
     var body: some View {
         GeometryReader { proxy in
-            LinearGradient(stops: Self.easedStops(SN.background), startPoint: .top, endPoint: .bottom)
-                .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            ShellBackground()
+                .mask(alignment: .bottom) {
+                    LinearGradient(stops: Self.easedStops(.black), startPoint: .top, endPoint: .bottom)
+                        .frame(height: proxy.safeAreaInsets.bottom + Self.lead)
+                }
         }
         .ignoresSafeArea(edges: .bottom)
         .allowsHitTesting(false)

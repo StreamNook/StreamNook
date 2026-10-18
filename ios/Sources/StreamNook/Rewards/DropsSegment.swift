@@ -34,6 +34,7 @@ struct DropsSegment: View {
         }
         .sheet(item: $rewards.campaignSheet) { card in
             CampaignSheet(model: model, card: card) { rewards.campaignSheet = nil }
+                .snSheetLight()
         }
         .task(id: rewards.query) {
             guard rewards.drops?.connected == true else { return }
@@ -170,7 +171,7 @@ private struct DropsSearchField: View {
         .padding(.leading, 12)
         .padding(.trailing, text.isEmpty ? 12 : 4)
         .frame(height: 40)
-        .snPanel(radius: 10)
+        .snPanel(radius: 10, light: nil)
         .contentShape(Rectangle())
         .onTapGesture { focused = true }
     }

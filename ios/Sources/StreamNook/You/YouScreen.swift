@@ -38,7 +38,7 @@ struct YouScreen: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
-        .background(SN.background)
+        .snShellBackground()
         .navigationTitle("You")
         .toolbar(.hidden, for: .navigationBar)
         // Every visit re-reads your picks, so a change made in Edit profile shows on return.
@@ -105,7 +105,7 @@ private struct SignedOutIdentityCard: View {
         }
         .background(alignment: .top) { AtmosphereGlow(look: nil).frame(height: OwnIdentityCard.glow) }
         .clipShape(RoundedRectangle(cornerRadius: OwnIdentityCard.radius, style: .continuous))
-        .snPanel(radius: OwnIdentityCard.radius)
+        .snPanel(radius: OwnIdentityCard.radius, stage: true)
     }
 }
 

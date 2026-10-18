@@ -337,7 +337,7 @@ private struct RewardDetail: View {
                             .lineLimit(3...5)
                             .focused($focused)
                             .padding(12)
-                            .snPanel(radius: 10)
+                            .snPanel(radius: 10, light: nil)
                             .onChange(of: text) { _, next in if next.count > Self.limit { text = String(next.prefix(Self.limit)) } }
                         Text("\(text.count)/\(Self.limit)").font(.sn(11)).monospacedDigit().foregroundStyle(SN.textMuted)
                     }

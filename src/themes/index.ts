@@ -409,9 +409,10 @@ let lastGlassStrength = 1;
 // glassiness would show the content behind it sharp enough to fight the text on
 // it, so with blur off the tint never gets more see-through than this. The
 // cap matches the member card's pinned strength, the app's existing "glass
-// that still reads" level.
+// that still reads" level. It lives in the shared JSON so the iPhone's native
+// theme light caps glassiness the same way.
 let glassBlurEnabled = true;
-const BLUR_OFF_MAX_STRENGTH = 0.45;
+const BLUR_OFF_MAX_STRENGTH: number = builtIn.glassBlurOffMaxStrength;
 const effectiveGlassStrength = (): number =>
     glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
 

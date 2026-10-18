@@ -41,7 +41,7 @@ struct SettingsPage: View {
                 withAnimation { reader.scrollTo(end ? String(target.dropLast(4)) : target, anchor: end ? .bottom : .top) }
             }
         }
-        .background(SN.background)
+        .snShellBackground()
         .navigationTitle(section.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
