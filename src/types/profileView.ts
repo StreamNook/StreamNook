@@ -83,6 +83,17 @@ export interface AtmosphereView {
   chatFrost?: boolean;
 }
 
+/** A member's number and rank, drawn on the right of their sheet. */
+export interface MemberRank {
+  number: number;
+  /** `ethereal`, `mythic`, `ascendant`, `founder` or `member`. */
+  tier: string;
+  /** The rank's name, or a famous number's own ("Nice" for 69). */
+  label: string;
+  /** The rank's color, `#rrggbb`. */
+  accent: string;
+}
+
 export interface ProfileSheetView {
   user_id: string;
   login: string;
@@ -96,6 +107,8 @@ export interface ProfileSheetView {
   paint_def?: PaintV4;
   groups: ProfileBadgeGroup[];
   streamnook?: SnMemberBadge;
+  /** A member's number and rank. */
+  member?: MemberRank;
   /** The Atmosphere they wear on their profile, after the wear gate. */
   atmosphere?: AtmosphereView;
   /** A member's overview, accolades and top emotes; their StreamNook badges
