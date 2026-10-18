@@ -1,0 +1,115 @@
+// The marks a member's sheet draws for what Rust names (services/member_profile.rs):
+// each overview tile's icon and color, keyed by its stat key, and each accolade
+// medallion's icon, keyed by the desktop's lucide name. Presentation only; the
+// iPhone keeps the same two maps in Cosmetics/MemberSections.swift.
+import {
+  Armchair,
+  BellRing,
+  Cake,
+  Clock,
+  Clover,
+  Crown,
+  Droplets,
+  Drumstick,
+  Eye,
+  Flag,
+  Flame,
+  Flower2,
+  Gem,
+  Ghost,
+  HandHeart,
+  Heart,
+  Hourglass,
+  Laugh,
+  Layers,
+  Leaf,
+  Medal,
+  Megaphone,
+  MessageCircle,
+  MessageSquare,
+  Mic,
+  Moon,
+  Package,
+  PartyPopper,
+  PiggyBank,
+  Repeat,
+  Shapes,
+  Skull,
+  Smile,
+  Snowflake,
+  Sparkles,
+  Star,
+  Sun,
+  Sword,
+  Target,
+  Timer,
+  TreePine,
+  Trophy,
+  Tv,
+  Users,
+  Waves,
+  type LucideIcon,
+} from 'lucide-react';
+
+/** Each overview tile's icon and the desktop card's color for it. */
+export const STAT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
+  hours: { icon: Clock, color: '#e6c178' },
+  messages: { icon: MessageSquare, color: '#8fd4b4' },
+  streams: { icon: Tv, color: '#8fc3e8' },
+  favorite_channel: { icon: Heart, color: '#e493a0' },
+  subs_gifted: { icon: HandHeart, color: '#b9a6ec' },
+  twitch_age: { icon: Cake, color: '#e493a0' },
+  followers: { icon: Users, color: '#8fc3e8' },
+  views: { icon: Eye, color: '#aebfca' },
+};
+
+/** The desktop medallions' lucide icons by name. */
+export const ACCOLADE_ICONS: Record<string, LucideIcon> = {
+  'message-circle': MessageCircle,
+  megaphone: Megaphone,
+  mic: Mic,
+  timer: Timer,
+  moon: Moon,
+  armchair: Armchair,
+  waves: Waves,
+  ghost: Ghost,
+  package: Package,
+  flame: Flame,
+  'piggy-bank': PiggyBank,
+  gem: Gem,
+  shapes: Shapes,
+  droplets: Droplets,
+  medal: Medal,
+  hourglass: Hourglass,
+  crown: Crown,
+  star: Star,
+  layers: Layers,
+  repeat: Repeat,
+  smile: Smile,
+  'bell-ring': BellRing,
+  sparkles: Sparkles,
+  target: Target,
+  'party-popper': PartyPopper,
+  heart: Heart,
+  clover: Clover,
+  laugh: Laugh,
+  sword: Sword,
+  skull: Skull,
+  drumstick: Drumstick,
+  'tree-pine': TreePine,
+  'flower-2': Flower2,
+  sun: Sun,
+  leaf: Leaf,
+  snowflake: Snowflake,
+  cake: Cake,
+  trophy: Trophy,
+  flag: Flag,
+};
+
+/** The slug of art the apps ship (`streamnook-house:<slug>`, `@chat` for the
+ *  chat-size cut), or null for an ordinary URL. */
+export function houseSlug(url: string): string | null {
+  const prefix = 'streamnook-house:';
+  if (!url.startsWith(prefix)) return null;
+  return url.slice(prefix.length).replace(/@chat$/, '') || null;
+}

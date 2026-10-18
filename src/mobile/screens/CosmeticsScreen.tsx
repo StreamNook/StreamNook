@@ -42,7 +42,7 @@ import type {
 } from '../../types/profileView';
 import { usePicksStore, useOwnPicks } from '../profile/picksStore';
 import {
-  AtmosphereBand,
+  AtmosphereGlow,
   BrandTile,
   CutoutAvatar,
   PaintedName,
@@ -52,8 +52,8 @@ import {
   WornMarks,
 } from '../profile/IdentityParts';
 import {
-  bandSwatch,
   chatAtmosphereId,
+  glowAtmosphere,
   nameColorOr,
   SEVENTV_BLUE,
   SEVENTV_INK,
@@ -378,21 +378,20 @@ export const CosmeticsScreen: React.FC = () => {
             className="pointer-events-none absolute inset-x-0 top-full z-10 h-6"
             style={{ background: 'linear-gradient(var(--color-background), transparent)' }}
           />
-          <div className="rounded-[18px] bg-secondary pb-3" style={{ boxShadow: '0 8px 12px rgba(0,0,0,0.55)' }}>
-            <AtmosphereBand
-              swatch={sn ? bandSwatch(sn.theme) : (identity?.atmosphere?.swatch ?? null)}
-              tint={color}
-              height={60}
-              radius={18}
-            />
-            <div className="flex items-end gap-2.5 px-3" style={{ marginTop: -31 }}>
+          <div
+            className="relative overflow-hidden rounded-[18px] bg-secondary pb-3"
+            style={{ boxShadow: '0 8px 12px rgba(0,0,0,0.55)' }}
+          >
+            {/* Your Atmosphere glowing behind you, as on the You card. */}
+            <AtmosphereGlow atm={glowAtmosphere(sn ? sn.theme : identity?.atmosphere?.id)} tint={color} height={120} />
+            <div className="relative flex items-center gap-2.5 px-3 pt-3">
               <CutoutAvatar
                 platformUrl={currentUser?.profile_image_url}
                 picture={identity?.picture}
                 size={56}
                 localUrl={localPicture}
               />
-              <div className="flex items-center gap-1.5 min-w-0 pb-0.5">
+              <div className="flex items-center gap-1.5 min-w-0">
                 <PaintedName
                   text={shownName}
                   paint={paintDef}
@@ -405,7 +404,7 @@ export const CosmeticsScreen: React.FC = () => {
               </div>
             </div>
             {(sn || ext) && (
-              <div className="px-3 pt-3">
+              <div className="relative px-3 pt-3">
                 <ProfilePreviewRow
                   name={shownName}
                   paint={paintDef}

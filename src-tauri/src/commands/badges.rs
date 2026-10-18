@@ -161,6 +161,49 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
     Ok(badges)
 }
 
+/// The global badge list read fresh from Twitch whatever the cache's age, for
+/// a deliberate refresh: the cached list is kept up to 7 days, so new drop
+/// badges could stay off a phone's wall for a week. Versions only the cache
+/// has (drops merged from the feed before Twitch lists them) are kept.
+pub async fn refresh_global_badges() -> Result<HelixBadgesResponse, String> {
+    let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
+    let token = TwitchService::get_token()
+        .await
+        .map_err(|e| format!("Failed to get token: {}", e))?;
+    let _guard = GLOBAL_BADGES_LOCK.lock().await;
+    let cache_key = "global_badges";
+    let previous = match get_cached_item(CacheType::Badge, cache_key).await {
+        Ok(Some(cached)) => serde_json::from_value::<CachedBadgesData>(cached.data).ok(),
+        _ => None,
+    };
+
+    let mut badges = fetch_badges_from_api(client_id, token).await?;
+    if let Some(previous) = previous {
+        for old in previous.badges.data {
+            match badges.data.iter_mut().find(|s| s.set_id == old.set_id) {
+                Some(set) => {
+                    for v in old.versions {
+                        if !set.versions.iter().any(|n| n.id == v.id) {
+                            set.versions.push(v);
+                        }
+                    }
+                }
+                None => badges.data.push(old),
+            }
+        }
+    }
+
+    let cached_data = CachedBadgesData {
+        badges: badges.clone(),
+        cached_at: get_current_timestamp(),
+    };
+    if let Ok(json_value) = serde_json::to_value(&cached_data) {
+        let _ = cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await;
+    }
+    note_row_view_badges(None, &badges);
+    Ok(badges)
+}
+
 /// Hands badge art to the native row view, which stamps it onto rows (the web
 /// renderers resolve it themselves from what these commands return).
 fn note_row_view_badges(room_id: Option<&str>, badges: &HelixBadgesResponse) {
@@ -172,6 +215,14 @@ fn note_row_view_badges(room_id: Option<&str>, badges: &HelixBadgesResponse) {
                 .map(move |v| (set.set_id.as_str(), v.id.as_str(), v.image_url_2x.as_str(), v.title.as_str()))
         }),
     );
+}
+
+/// Seconds since the global badge list was read from Twitch; None with none
+/// cached.
+pub async fn global_badges_age_secs() -> Option<u64> {
+    let cached = get_cached_item(CacheType::Badge, "global_badges").await.ok()??;
+    let data = serde_json::from_value::<CachedBadgesData>(cached.data).ok()?;
+    Some(get_current_timestamp().saturating_sub(data.cached_at))
 }
 
 /// Get cached global badges without fetching from API

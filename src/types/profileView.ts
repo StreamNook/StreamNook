@@ -15,9 +15,44 @@ export interface ProfileBadge {
 }
 
 export interface ProfileBadgeGroup {
-  /** "Twitch", "7TV" or "Chat clients". */
+  /** "Relics", "Twitch", "7TV", "Chat clients" or "StreamNook". */
   title: string;
   badges: ProfileBadge[];
+}
+
+/** One overview tile on a member's sheet. `key` is the stat's visibility key
+ *  (`hours`, `messages`, `streams`, `favorite_channel`, `subs_gifted`,
+ *  `twitch_age`, `followers`, `views`), which also picks its icon. */
+export interface MemberStatView {
+  key: string;
+  label: string;
+  value: string;
+  caption?: string;
+}
+
+/** One earned accolade: the desktop's lucide icon name and its two gradient
+ *  stops (`#rrggbb`). */
+export interface AccoladeMedalView {
+  id: string;
+  label: string;
+  icon: string;
+  colors: string[];
+}
+
+export interface TopEmoteView {
+  id: string;
+  name: string;
+  provider: string;
+  url: string;
+  count: number;
+}
+
+/** A member's overview (ending on their profile views), earned accolades and
+ *  top emotes, with what they hide already left out. */
+export interface MemberProfileView {
+  stats: MemberStatView[];
+  accolades: AccoladeMedalView[];
+  top_emotes: TopEmoteView[];
 }
 
 /** A member's StreamNook badge. `image_url` may be `streamnook-house:<slug>`,
@@ -48,6 +83,17 @@ export interface AtmosphereView {
   chatFrost?: boolean;
 }
 
+/** A member's number and rank, drawn on the right of their sheet. */
+export interface MemberRank {
+  number: number;
+  /** `ethereal`, `mythic`, `ascendant`, `founder` or `member`. */
+  tier: string;
+  /** The rank's name, or a famous number's own ("Nice" for 69). */
+  label: string;
+  /** The rank's color, `#rrggbb`. */
+  accent: string;
+}
+
 export interface ProfileSheetView {
   user_id: string;
   login: string;
@@ -61,8 +107,13 @@ export interface ProfileSheetView {
   paint_def?: PaintV4;
   groups: ProfileBadgeGroup[];
   streamnook?: SnMemberBadge;
+  /** A member's number and rank. */
+  member?: MemberRank;
   /** The Atmosphere they wear on their profile, after the wear gate. */
   atmosphere?: AtmosphereView;
+  /** A member's overview, accolades and top emotes; their StreamNook badges
+   *  and relics ride `groups`. */
+  member_profile?: MemberProfileView;
 }
 
 export interface OwnIdentityView {
