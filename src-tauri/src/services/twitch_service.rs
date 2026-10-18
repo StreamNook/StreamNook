@@ -5378,30 +5378,27 @@ impl TwitchService {
         Ok(body.pointer("/data/0/description").and_then(|v| v.as_str()).unwrap_or_default().to_string())
     }
 
-    /// Update User Chat Color
+    /// Update User Chat Color. `color` is what the viewer typed; it goes out in
+    /// the form Helix takes (`helix_chat_color`), as an encoded query value so
+    /// a hex value's "#" is not read as the URL's fragment.
     pub async fn update_user_chat_color(user_id: &str, color: &str) -> Result<()> {
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
-
-        let url = format!(
-            "https://api.twitch.tv/helix/chat/color?user_id={}&color={}",
-            user_id, color
-        );
+        let color = helix_chat_color(color);
 
         let response = client
-            .put(&url)
+            .put("https://api.twitch.tv/helix/chat/color")
+            .query(&[("user_id", user_id), ("color", color.as_str())])
             .header("Client-Id", CLIENT_ID)
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .send()
             .await?;
 
-        if !response.status().is_success() && response.status() != 204 {
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            error!(
-                "[TwitchService] Failed to update user chat color: {}",
-                error_text
-            );
-            return Err(anyhow::anyhow!("Failed to update user chat color"));
+            error!("[TwitchService] Failed to update user chat color ({status}): {error_text}");
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6725,6 +6722,30 @@ pub(crate) fn vod_refresh_from_node(
 }
 
 /// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
+/// Twitch's named chat colors, spelled the way Helix takes them.
+const CHAT_COLOR_NAMES: [&str; 15] = [
+    "blue", "blue_violet", "cadet_blue", "chocolate", "coral", "dodger_blue", "firebrick", "golden_rod", "green",
+    "hot_pink", "orange_red", "red", "sea_green", "spring_green", "yellow_green",
+];
+
+/// A typed chat color in the form Helix takes: a named color in its
+/// snake_case spelling ("SpringGreen", "spring green" and "springgreen" all
+/// read as `spring_green`), or a six-digit hex value with its "#". Anything
+/// else goes as typed, for Twitch to refuse with its own reason.
+pub(crate) fn helix_chat_color(typed: &str) -> String {
+    let typed = typed.trim();
+    let hex = typed.trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return format!("#{hex}");
+    }
+    let squashed: String = typed.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    CHAT_COLOR_NAMES
+        .iter()
+        .find(|name| name.replace('_', "") == squashed)
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| typed.to_string())
+}
+
 /// One role list (`mods` or `vips`) from a GQL answer: the users, or why there
 /// is none to show. A list that is present but empty is a real "none"; a
 /// missing list is Twitch's refusal (its `errors` message) or an unknown
@@ -7423,6 +7444,32 @@ mod web_login_tests {
         let url = TwitchService::begin_web_login().unwrap();
         let no_code = TwitchService::web_login_token(None, Some(state_of(&url)), None).await;
         assert!(no_code.unwrap_err().to_string().contains("authorization code"));
+    }
+}
+
+#[cfg(test)]
+mod chat_color_tests {
+    use super::helix_chat_color;
+
+    #[test]
+    fn named_colors_take_twitchs_snake_case_spelling() {
+        assert_eq!(helix_chat_color("SpringGreen"), "spring_green");
+        assert_eq!(helix_chat_color("spring green"), "spring_green");
+        assert_eq!(helix_chat_color("springgreen"), "spring_green");
+        assert_eq!(helix_chat_color("Red"), "red");
+        assert_eq!(helix_chat_color("GoldenRod"), "golden_rod");
+    }
+
+    #[test]
+    fn hex_values_keep_their_hash_with_or_without_one() {
+        assert_eq!(helix_chat_color("#ff69b4"), "#ff69b4");
+        assert_eq!(helix_chat_color("ff69b4"), "#ff69b4");
+    }
+
+    #[test]
+    fn anything_else_goes_as_typed_for_twitch_to_refuse() {
+        assert_eq!(helix_chat_color("rainbow"), "rainbow");
+        assert_eq!(helix_chat_color("#ff69"), "#ff69");
     }
 }
 
