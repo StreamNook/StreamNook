@@ -266,6 +266,7 @@ struct ChatterToolsSections: View {
             ProfileSectionHeader("Only you see this")
             VStack(spacing: 0) {
                 TextField("Add a note", text: $model.noteDraft, axis: .vertical)
+                    .keyboardHideButton()
                     .font(.sn(14))
                     .foregroundStyle(SN.textPrimary)
                     .lineLimit(1...5)

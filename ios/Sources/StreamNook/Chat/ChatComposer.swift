@@ -258,7 +258,19 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if !session.isKick {
+                if focused {
+                    // Scrolling the chat never closes the keyboard; this does. While typing it
+                    // takes the commands button's place (a "/" still opens commands).
+                    Button {
+                        focused = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(ComposerSymbol.font)
+                            .foregroundStyle(SN.textSecondary)
+                            .frame(width: 32, height: 36)
+                    }
+                    .accessibilityLabel("Hide keyboard")
+                } else if !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {

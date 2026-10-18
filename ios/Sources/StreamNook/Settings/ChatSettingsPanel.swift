@@ -463,7 +463,7 @@ struct SettingTextField: View {
         })
         Group {
             if multiline {
-                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted), axis: .vertical).lineLimit(3...6)
+                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted), axis: .vertical).lineLimit(3...6).keyboardHideButton()
             } else {
                 TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted)).lineLimit(1)
             }
