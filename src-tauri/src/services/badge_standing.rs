@@ -532,6 +532,73 @@ fn earn_icons(catalogue: &[CatalogueBadge]) -> HashMap<String, String> {
         .collect()
 }
 
+/// A badge's window and earn path read off the live Drops campaign that
+/// awards it. Only ever fills a badge whose own metadata has no window: a
+/// window the relay pushed or the copy states always wins.
+#[derive(Clone, Debug)]
+struct CampaignFill {
+    runs: Vec<WindowRun>,
+    earn: crate::services::badge_earn::EarnPath,
+    category: Option<String>,
+}
+
+/// The campaign fill for every catalogue badge an active campaign awards.
+/// A drop's push can be missed (an Android worker that never saved it, a
+/// relay history that has moved on), and without a window the badge never
+/// reads as earnable, though Twitch's own Drops list says it is.
+fn campaign_fills(
+    catalogue: &[CatalogueBadge],
+    campaigns: &[crate::models::drops::DropCampaign],
+) -> HashMap<String, CampaignFill> {
+    use crate::services::badge_earn::{EarnPath, EarnStep};
+    let mut fills = HashMap::new();
+    if campaigns.is_empty() {
+        return fills;
+    }
+    for badge in catalogue {
+        let Some(campaign) =
+            crate::services::drops_overview::campaign_for_badge(campaigns, &badge.set_id, Some(&badge.title))
+        else {
+            continue;
+        };
+        let tier = crate::services::drops_overview::badge_tier_for(campaign, Some(&badge.title));
+        let mut steps = Vec::new();
+        if let Some(d) = tier {
+            if d.required_subs > 0 {
+                steps.push(EarnStep::Subscribe { count: (d.required_subs > 1).then_some(d.required_subs) });
+            }
+            if d.required_minutes_watched > 0 {
+                // The drop counts its total; a step reads per day.
+                let days = d.required_days.max(1);
+                steps.push(EarnStep::Watch {
+                    minutes: Some(d.required_minutes_watched as u32 / days),
+                    days: (days > 1).then_some(days),
+                });
+            }
+        }
+        let channels = (campaign.is_acl_based && !campaign.allowed_channels.is_empty())
+            .then(|| campaign.allowed_channels.iter().map(|c| c.name.to_lowercase()).collect());
+        fills.insert(
+            badge.key(),
+            CampaignFill {
+                runs: vec![WindowRun {
+                    start_ms: Some(campaign.start_at.timestamp_millis()),
+                    end_ms: Some(campaign.end_at.timestamp_millis()),
+                }],
+                earn: EarnPath {
+                    steps,
+                    random_of: tier.and_then(|d| d.random_of),
+                    inferred: false,
+                    detail: None,
+                    channels,
+                },
+                category: campaign.has_category.then(|| campaign.game_name.clone()),
+            },
+        );
+    }
+    fills
+}
+
 /// Everything a standing contains, from already-loaded inputs. Pure, so the
 /// honesty rules can be tested without Twitch.
 fn build_standing(
@@ -542,22 +609,35 @@ fn build_standing(
     metadata: &HashMap<String, BadgeMeta>,
     now: i64,
 ) -> BadgeStanding {
+    build_standing_with(login, collection, refreshing, catalogue, metadata, &HashMap::new(), now)
+}
+
+/// `build_standing`, with windows from the Drops campaigns for badges whose
+/// metadata has none.
+fn build_standing_with(
+    login: Option<String>,
+    collection: Option<&Cached>,
+    refreshing: bool,
+    catalogue: &[CatalogueBadge],
+    metadata: &HashMap<String, BadgeMeta>,
+    fills: &HashMap<String, CampaignFill>,
+    now: i64,
+) -> BadgeStanding {
     let mut windows: HashMap<String, Vec<WindowRun>> = HashMap::new();
     let mut next_change_ms: Option<i64> = None;
     for badge in catalogue {
         let key = badge.key();
-        let Some(meta) = metadata.get(&key) else {
+        let own = metadata
+            .get(&key)
+            .and_then(|meta| badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref()))
+            .map(|w| w.runs);
+        let Some(runs) = own.or_else(|| fills.get(&key).map(|f| f.runs.clone())) else {
             continue;
         };
-        let Some(window) =
-            badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref())
-        else {
-            continue;
-        };
-        if let Some(t) = badge_window::next_boundary_after(&window.runs, now) {
+        if let Some(t) = badge_window::next_boundary_after(&runs, now) {
             next_change_ms = Some(next_change_ms.map_or(t, |c| c.min(t)));
         }
-        windows.insert(key, window.runs);
+        windows.insert(key, runs);
     }
 
     let catalogue_ready = !catalogue.is_empty() && !metadata.is_empty();
@@ -582,6 +662,23 @@ fn build_standing(
             }
             let meta = metadata.get(&key);
             let enrichment = meta.and_then(|m| m.enrichment.as_ref());
+            let mut earn = crate::services::badge_earn::earn_path(
+                enrichment,
+                meta.and_then(|m| m.more_info.as_deref()),
+            );
+            let mut category = enrichment
+                .and_then(|e| e.get("requirement"))
+                .and_then(|r| string_field(r, "category"))
+                .or_else(|| enrichment.and_then(|e| string_field(e, "category")));
+            // Where the badge's own copy says nothing, the campaign's numbers do.
+            if let Some(fill) = fills.get(&key) {
+                if earn.steps.is_empty() {
+                    earn = fill.earn.clone();
+                }
+                if category.is_none() {
+                    category = fill.category.clone();
+                }
+            }
             missing_now.push(MissingBadge {
                 key: key.clone(),
                 set_id: badge.set_id.clone(),
@@ -589,14 +686,8 @@ fn build_standing(
                 title: badge.title.clone(),
                 image_url: badge.image_url.clone(),
                 ends_ms: badge_window::run_containing(runs, now).and_then(|r| r.end_ms),
-                earn: crate::services::badge_earn::earn_path(
-                    enrichment,
-                    meta.and_then(|m| m.more_info.as_deref()),
-                ),
-                category: enrichment
-                    .and_then(|e| e.get("requirement"))
-                    .and_then(|r| string_field(r, "category"))
-                    .or_else(|| enrichment.and_then(|e| string_field(e, "category"))),
+                earn,
+                category,
             });
         }
         missing_now.sort_by(|a, b| match (a.ends_ms, b.ends_ms) {
@@ -747,6 +838,7 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
     }
 
     let catalogue = load_catalogue().await;
+    let campaigns = active_campaigns(app).await;
     let login = primary
         .map(|a| a.login)
         .or_else(|| cached.as_ref().map(|c| c.login.clone()))
@@ -758,12 +850,14 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
         if let Some(c) = cached.as_ref() {
             check_id_drift(c, &catalogue);
         }
-        build_standing(
+        let fills = campaign_fills(&catalogue, &campaigns);
+        build_standing_with(
             login,
             cached.as_ref(),
             refreshing,
             &catalogue,
             &metadata,
+            &fills,
             now,
         )
     })
@@ -784,6 +878,24 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
             build_standing(fallback_login, None, refreshing, &[], &HashMap::new(), now)
         }
     }
+}
+
+/// The Drops campaigns still running, from the Drops service's cached list
+/// at any age (Rewards opens on Drops, which reads it). Never a fetch from
+/// here: a fresh read resets the live drop progress, which a badge wall has no
+/// business doing.
+async fn active_campaigns(app: &crate::rt::AppHandle) -> Vec<crate::models::drops::DropCampaign> {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<crate::models::settings::AppState>() else {
+        return Vec::new();
+    };
+    let snapshot = state.drops_service.lock().await.cached_campaigns_snapshot().await;
+    let Some(mut campaigns) = snapshot else {
+        return Vec::new();
+    };
+    let now = chrono::Utc::now();
+    campaigns.retain(|c| c.end_at > now);
+    campaigns
 }
 
 /// One badge's earn window, for a surface that shows a single badge.
@@ -874,6 +986,37 @@ mod tests {
         assert_eq!(s.missing_now[0].earn.detail.as_deref(), Some("Watch it"));
         assert_eq!(s.next_change_ms, Some(NOW + HOUR));
         assert!(!s.windows.contains_key("permanent/1"));
+    }
+
+    #[test]
+    fn a_campaign_fills_only_a_badge_with_no_window_of_its_own() {
+        use crate::services::badge_earn::{EarnPath, EarnStep};
+        let (mut catalogue, meta) = fixture();
+        catalogue.push(badge("pushless", "1", "Pushless"));
+        let fill = |start: i64, end: i64| CampaignFill {
+            runs: vec![WindowRun { start_ms: Some(start), end_ms: Some(end) }],
+            earn: EarnPath {
+                steps: vec![EarnStep::Subscribe { count: None }],
+                random_of: None,
+                inferred: false,
+                detail: None,
+                channels: None,
+            },
+            category: Some("Space Marine 2".into()),
+        };
+        let mut fills = HashMap::new();
+        // No metadata at all: the campaign's window and numbers fill it.
+        fills.insert("pushless/1".to_string(), fill(NOW - HOUR, NOW + 11 * 24 * HOUR));
+        // Its own pushed window says it ended: the campaign never overrides that.
+        fills.insert("old/1".to_string(), fill(NOW - HOUR, NOW + 24 * HOUR));
+        let c = collection(&["other/1"], CollectionState::Complete);
+        let s = build_standing_with(None, Some(&c), false, &catalogue, &meta, &fills, NOW);
+        let keys: Vec<&str> = s.missing_now.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, vec!["chains/1", "wolf/1", "pushless/1"]);
+        let pushless = s.missing_now.iter().find(|m| m.key == "pushless/1").unwrap();
+        assert_eq!(pushless.earn.steps, vec![EarnStep::Subscribe { count: None }]);
+        assert_eq!(pushless.category.as_deref(), Some("Space Marine 2"));
+        assert_eq!(pushless.ends_ms, Some(NOW + 11 * 24 * HOUR));
     }
 
     #[test]
