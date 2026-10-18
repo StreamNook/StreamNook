@@ -260,6 +260,27 @@ public struct ProfileBadgeGroup: Codable, Sendable, Equatable, Identifiable {
     public var id: String { title }
 }
 
+/// A member's number and rank (Rust `MemberRank`), drawn on the right of their sheet.
+public struct MemberRank: Codable, Sendable, Equatable {
+    public var number: Int
+    /// `ethereal`, `mythic`, `ascendant`, `founder` or `member`.
+    public var tier: String
+    /// The rank's name, or a famous number's own ("Nice" for 69).
+    public var label: String
+    /// The rank's color, `#rrggbb`.
+    public var accent: String
+
+    public init(number: Int, tier: String, label: String, accent: String) {
+        self.number = number
+        self.tier = tier
+        self.label = label
+        self.accent = accent
+    }
+
+    /// The first three ranks wear their color on the number; the rest stay in the text color.
+    public var lit: Bool { ["ethereal", "mythic", "ascendant"].contains(tier) }
+}
+
 /// The 7TV picture renditions one surface draws.
 public struct AvatarPick: Codable, Sendable, Equatable, Hashable {
     public var still: String
@@ -278,6 +299,8 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
     public var paint: ChatPaint?
     public var groups: [ProfileBadgeGroup]
     public var streamnook: SNMemberBadge?
+    /// A member's number and rank.
+    public var member: MemberRank?
     /// The Atmosphere worn on the profile (wear-gated; shown even when kept out of chat).
     public var atmosphere: Atmosphere?
     /// The Cologne event look instead of an Atmosphere.
@@ -285,7 +308,8 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login"
-        case avatarURL = "avatar_url", picture, nameColor = "name_color", paint, groups, streamnook, atmosphere, cologne
+        case avatarURL = "avatar_url", picture, nameColor = "name_color", paint, groups, streamnook, member, atmosphere
+        case cologne
     }
 
     public init(from decoder: Decoder) throws {
@@ -300,6 +324,7 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
         groups = try c.decodeIfPresent([ProfileBadgeGroup].self, forKey: .groups) ?? []
         streamnook = try c.decodeIfPresent(SNMemberBadge.self, forKey: .streamnook)
+        member = try? c.decodeIfPresent(MemberRank.self, forKey: .member)
         atmosphere = try c.decodeIfPresent(Atmosphere.self, forKey: .atmosphere)
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
     }

@@ -145,10 +145,16 @@ struct ProfileSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
-                         medal: model.medal?.imageURL, medalLabel: model.medal?.label ?? "")
-                .padding(.leading, 16)
-                .padding(.top, 24)
+            HStack(alignment: .top, spacing: 12) {
+                CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
+                             medal: model.medal?.imageURL, medalLabel: model.medal?.label ?? "")
+                Spacer(minLength: 0)
+                if let rank = sheet?.member {
+                    MemberRankMark(rank: rank).padding(.top, 6)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 24)
             VStack(alignment: .leading, spacing: 0) {
                 identity.padding(.top, 8)
                 if let standing = model.standing {
