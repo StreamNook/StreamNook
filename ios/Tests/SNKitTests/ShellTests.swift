@@ -42,7 +42,7 @@ import Testing
         #expect(MobileTab.stored("rewards") == .rewards)
         #expect(MobileTab.stored("nope") == .following)
         #expect(MobileTab.stored(nil) == .following)
-        #expect(MobileTab.allCases.map(\.title) == ["Following", "Browse", "Rewards", "You"])
+        #expect(MobileTab.allCases.map(\.title) == ["Following", "Browse", "Chats", "Rewards", "You"])
     }
 
     @Test func streamViewIsCardsUnlessList() {

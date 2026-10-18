@@ -9,6 +9,7 @@ struct ChatSettingsPanel: View {
 
     var body: some View {
         landscape
+        chatsTab
         events
         layout
         names
@@ -51,6 +52,15 @@ struct ChatSettingsPanel: View {
                              resetPaths: store.string("fullscreen_chat.side", "auto") == "left" ? ["fullscreen_chat.side"] : [],
                              shown: { $0 == "left" ? "left" : "right" })
             }
+        }
+    }
+
+    // MARK: Chats tab
+
+    private var chatsTab: some View {
+        SettingsBlock(title: "Chats Tab", detail: "Reading your chats with no stream playing.") {
+            ToggleRow(title: "Keep screen on", path: "chats_keep_screen_on", fallback: true,
+                      detail: "The screen stays on while the Chats tab is open, until 30 minutes pass without a touch.")
         }
     }
 

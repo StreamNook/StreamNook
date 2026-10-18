@@ -25,6 +25,10 @@ struct MainShell: View {
                 Tab(MobileTab.browse.title, systemImage: Symbol.browse, value: MobileTab.browse) {
                     stack(.browse) { BrowseScreen(model: model) }
                 }
+                Tab(MobileTab.chats.title, systemImage: Symbol.chats, value: MobileTab.chats) {
+                    stack(.chats) { ChatsScreen(model: model) }
+                }
+                .badge(model.chat.state.mentionTotal)
                 Tab(MobileTab.rewards.title, systemImage: Symbol.rewards, value: MobileTab.rewards) {
                     stack(.rewards) { RewardsScreen(model: model) }
                 }
@@ -36,6 +40,7 @@ struct MainShell: View {
             }
             .tint(SN.accent)
             .environment(\.shellCovered, nav.shellCovered)
+            .environment(\.openChat) { model.openChat($0) }
             .accessibilityHidden(nav.shellCovered)
 
             if nav.playing != nil {
@@ -51,6 +56,8 @@ struct MainShell: View {
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
         .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        // Whoever signs in gets their own saved chats.
+        .onChange(of: model.signedIn) { _, _ in model.chat.load() }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
         // selected ring's color).
         .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
@@ -106,6 +113,8 @@ struct MainShell: View {
 extension EnvironmentValues {
     /// The full player covers the tabs: looping decorations in them stop.
     @Entry var shellCovered = false
+    /// Opens a channel's chat on its own (a card's menu); nil where nothing hosts the chats.
+    @Entry var openChat: ((TwitchStream) -> Void)? = nil
 }
 
 /// The floor under the floating tab bar: the page's own background rising from clear on an eased

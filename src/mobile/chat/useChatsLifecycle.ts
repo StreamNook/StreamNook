@@ -15,9 +15,11 @@ export function useChatsLifecycle(): void {
   const currentStream = useAppStore((s) => s.currentStream);
   const syncStreamTab = useChatTabsStore((s) => s.syncStreamTab);
   const load = useChatTabsStore((s) => s.load);
+  const userId = useAppStore((s) => s.currentUser?.user_id ?? null);
 
-  // The saved chats, restored by Rust and not joined until something looks.
-  useEffect(() => load(), [load]);
+  // The saved chats, restored by Rust for whoever is signed in and not joined
+  // until something looks. Read again after a sign-in or an account switch.
+  useEffect(() => load(), [load, userId]);
 
   // Keep the stream-following tab pointed at whatever is playing, on the
   // platform it plays on: a Kick stream's room is `kick:slug`, never a Twitch

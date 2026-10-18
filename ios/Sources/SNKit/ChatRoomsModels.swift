@@ -13,15 +13,25 @@ public struct ChatTabInfo: Codable, Sendable, Equatable, Hashable, Identifiable 
     public var avatar: String?
     /// Follows the watched stream: first, and not closable.
     public var pinnedToStream: Bool
+    /// One of your chats: saved, and kept when the player closes. Every room you opened is kept;
+    /// the stream's own only when you chose to keep it.
+    public var kept: Bool
+    /// Live now; nil until the room's live line has answered.
+    public var live: Bool?
+    public var viewerCount: Int?
+    /// Mentions of you here not read yet.
+    public var mentions: Int
 
     public var id: String { channel }
 
     enum CodingKeys: String, CodingKey {
         case channel, provider, login, channelID = "channel_id", label, avatar, pinnedToStream = "pinned_to_stream"
+        case kept, live, viewerCount = "viewer_count", mentions
     }
 
     public init(channel: String, provider: String = "twitch", login: String, channelID: String? = nil, label: String,
-                avatar: String? = nil, pinnedToStream: Bool = false) {
+                avatar: String? = nil, pinnedToStream: Bool = false, kept: Bool? = nil, live: Bool? = nil,
+                viewerCount: Int? = nil, mentions: Int = 0) {
         self.channel = channel
         self.provider = provider
         self.login = login
@@ -29,6 +39,25 @@ public struct ChatTabInfo: Codable, Sendable, Equatable, Hashable, Identifiable 
         self.label = label
         self.avatar = avatar
         self.pinnedToStream = pinnedToStream
+        self.kept = kept ?? !pinnedToStream
+        self.live = live
+        self.viewerCount = viewerCount
+        self.mentions = mentions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        channel = try c.decode(String.self, forKey: .channel)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? "twitch"
+        login = try c.decode(String.self, forKey: .login)
+        channelID = try c.decodeIfPresent(String.self, forKey: .channelID)
+        label = try c.decode(String.self, forKey: .label)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        pinnedToStream = try c.decodeIfPresent(Bool.self, forKey: .pinnedToStream) ?? false
+        kept = try c.decodeIfPresent(Bool.self, forKey: .kept) ?? !pinnedToStream
+        live = try c.decodeIfPresent(Bool.self, forKey: .live)
+        viewerCount = try c.decodeIfPresent(Int.self, forKey: .viewerCount)
+        mentions = try c.decodeIfPresent(Int.self, forKey: .mentions) ?? 0
     }
 }
 
@@ -41,11 +70,18 @@ public struct ChatTabsState: Codable, Sendable, Equatable {
     public var mixedPlatforms: Bool
     /// Grows with every change; an answer older than the one shown is dropped.
     public var revision: UInt64
+    /// "idle" (restored, not joined yet), "connected", or "parked" (left in the background).
+    public var connection: String
+    /// Unread mentions across every tab: the Chats tab's badge.
+    public var mentionTotal: Int
+    /// The Chats screen keeps the phone awake until this long passes with no touch.
+    public var keepAwakeIdleSecs: Int
     public var acquire: [ChatTabInfo]
     public var release: [ChatTabInfo]
 
     enum CodingKeys: String, CodingKey {
         case tabs, activeChannel = "active_channel", mixedPlatforms = "mixed_platforms", revision, acquire, release
+        case connection, mentionTotal = "mention_total", keepAwakeIdleSecs = "keep_awake_idle_secs"
     }
 
     public init(tabs: [ChatTabInfo] = [], activeChannel: String? = nil, mixedPlatforms: Bool = false, revision: UInt64 = 0,
@@ -54,6 +90,9 @@ public struct ChatTabsState: Codable, Sendable, Equatable {
         self.activeChannel = activeChannel
         self.mixedPlatforms = mixedPlatforms
         self.revision = revision
+        self.connection = "idle"
+        self.mentionTotal = 0
+        self.keepAwakeIdleSecs = 1800
         self.acquire = acquire
         self.release = release
     }
@@ -64,6 +103,9 @@ public struct ChatTabsState: Codable, Sendable, Equatable {
         activeChannel = try c.decodeIfPresent(String.self, forKey: .activeChannel)
         mixedPlatforms = try c.decodeIfPresent(Bool.self, forKey: .mixedPlatforms) ?? false
         revision = try c.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
+        connection = try c.decodeIfPresent(String.self, forKey: .connection) ?? "connected"
+        mentionTotal = try c.decodeIfPresent(Int.self, forKey: .mentionTotal) ?? 0
+        keepAwakeIdleSecs = try c.decodeIfPresent(Int.self, forKey: .keepAwakeIdleSecs) ?? 1800
         acquire = try c.decodeIfPresent([ChatTabInfo].self, forKey: .acquire) ?? []
         release = try c.decodeIfPresent([ChatTabInfo].self, forKey: .release) ?? []
     }
