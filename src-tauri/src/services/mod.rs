@@ -103,8 +103,7 @@ pub mod youtube_auth_service;
 pub mod favorite_categories;
 pub mod hidden_channels;
 pub mod favorite_live_service;
-// Reads the chat dock, which is desktop only.
-#[cfg(desktop)]
+// The live line for the desktop chat dock and the phone chats.
 pub mod chat_dock_live;
 pub mod live_announce;
 pub mod live_bookmark;
