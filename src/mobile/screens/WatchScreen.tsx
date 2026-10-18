@@ -78,8 +78,9 @@ const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar
 // (56 px, icons only, riding 14 px above the gesture strip).
 const BOTTOM_GAP = 104;
-// On the Chats tab the composer sits on the bar too; the box rests above it.
-const CHATS_COMPOSER_GAP = 49;
+// Chats has no tab bar: its composer sits at the bottom edge instead, lower
+// than the bar, so the box rests that much lower to keep the same gap above it.
+const CHATS_COMPOSER_GAP = 0;
 
 // Where the mini player is ALLOWED to be.
 //

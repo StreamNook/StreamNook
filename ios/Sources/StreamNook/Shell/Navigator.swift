@@ -78,6 +78,15 @@ final class Navigator {
 
     var tab: MobileTab
     var paths: [MobileTab: [Route]] = [:]
+    /// The tab Chats was opened from: Chats is a full-screen surface with no tab bar, and leaving
+    /// it (the grabber, a slide down) returns here.
+    var chatsReturnTab = MobileTab.following
+
+    /// Leaves Chats for the tab it was opened from.
+    func exitChats() {
+        guard tab == .chats else { return }
+        tab = chatsReturnTab == .chats ? .following : chatsReturnTab
+    }
 
     /// The stream in the watch layer, nil when nothing is open.
     private(set) var playing: TwitchStream?

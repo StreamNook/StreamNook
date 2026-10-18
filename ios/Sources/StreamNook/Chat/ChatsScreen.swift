@@ -13,11 +13,14 @@ import UIKit
 struct ChatsScreen: View {
     let model: AppModel
     @State private var awake = AwakeTimer()
+    /// How far the screen follows a slide down that started on the header.
+    @State private var drop: CGFloat = 0
 
     private var rooms: ChatRooms { model.chat }
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            header
             if !model.signedIn {
                 VStack(spacing: 14) {
                     Text("Sign in with Twitch to read and send chat.")
@@ -32,21 +35,18 @@ struct ChatsScreen: View {
             } else if rooms.tabs.isEmpty {
                 // No chat open: the tab is the picker itself.
                 ChatPicker(rooms: rooms)
-                    .padding(.top, 8)
+            } else if let session = rooms.activeSession {
+                ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) })
+                    .id(ObjectIdentifier(session))
             } else {
-                VStack(spacing: 0) {
-                    ChatTabStrip(rooms: rooms, trailing: AnyView(controls))
-                    if let session = rooms.activeSession {
-                        ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) })
-                            .id(ObjectIdentifier(session))
-                    } else {
-                        Color.clear
-                    }
-                }
+                Color.clear
             }
         }
         .background(SN.background)
+        .offset(y: drop)
         .toolbar(.hidden, for: .navigationBar)
+        // A full-screen surface: no tab bar here.
+        .toolbar(.hidden, for: .tabBar)
         .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
             AddChatSheet(rooms: rooms)
         }
@@ -57,6 +57,48 @@ struct ChatsScreen: View {
         .onAppear { awake.start(on: keepsAwake, idle: rooms.state.keepAwakeIdleSecs) }
         .onDisappear { awake.stop() }
         .onChange(of: keepsAwake) { _, on in awake.start(on: on, idle: rooms.state.keepAwakeIdleSecs) }
+    }
+
+    /// The handle: a grabber at the top center (a tap closes), then the rooms. A slide down that
+    /// starts here leaves Chats; the chat list is never a handle, so a drag there stays a scroll.
+    private var header: some View {
+        VStack(spacing: 0) {
+            Button {
+                model.nav.exitChats()
+            } label: {
+                Capsule()
+                    .fill(SN.textMuted.opacity(0.45))
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 8)
+                    .frame(width: 64, height: 24, alignment: .top)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close chats")
+            if model.signedIn, !rooms.tabs.isEmpty {
+                ChatTabStrip(rooms: rooms, trailing: AnyView(controls))
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                .onChanged { value in
+                    let dy = value.translation.height
+                    guard dy > abs(value.translation.width) || drop > 0 else { return }
+                    drop = max(0, dy)
+                }
+                .onEnded { value in
+                    let leave = drop > 120 || value.predictedEndTranslation.height - value.translation.height > 180
+                    if leave {
+                        withAnimation(.easeIn(duration: 0.2)) { drop = 900 } completion: {
+                            model.nav.exitChats()
+                            drop = 0
+                        }
+                    } else {
+                        withAnimation(.snappy(duration: 0.24)) { drop = 0 }
+                    }
+                }
+        )
     }
 
     /// Keep-awake is on in settings, and there is chat to read.

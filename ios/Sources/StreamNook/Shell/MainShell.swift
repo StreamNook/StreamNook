@@ -55,7 +55,10 @@ struct MainShell: View {
         .statusBarHidden(immersive)
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
-        .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
+        .onChange(of: nav.tab) { old, new in
+            if old == .browse { model.browseState.leftTab() }
+            if new == .chats, old != .chats { model.nav.chatsReturnTab = old }
+        }
         // Whoever signs in gets their own saved chats.
         .onChange(of: model.signedIn) { _, _ in model.chat.load() }
         // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
@@ -104,7 +107,7 @@ struct MainShell: View {
         .overlay {
             // Not on Chats with a chat open: its composer sits right above the bar and would
             // fade into it. The picker there keeps the fade.
-            if showsTabBar(tab) && (tab != .chats || model.chat.tabs.isEmpty) { TabBarFloor() }
+            if showsTabBar(tab) && tab != .chats { TabBarFloor() }
         }
     }
 
