@@ -182,6 +182,11 @@ export const WatchScreen: React.FC = () => {
   // The landscape chat overlay shares its knobs with the desktop overlay:
   // opacity, width and side are one preference however big the screen is.
   const fsChat = useAppStore((s) => s.settings.fullscreen_chat);
+  // The poll and prediction cards follow the same settings as desktop chat:
+  // each can be turned off, and the user picks which one sits on top.
+  const showPolls = useAppStore((s) => s.settings.show_polls) !== false;
+  const showPredictions = useAppStore((s) => s.settings.show_predictions) !== false;
+  const overlayOrder = useAppStore((s) => s.settings.chat_overlay_order) ?? 'prediction-first';
   // The dial being turned right now (brightness or volume), for the readout.
   const [dial, setDial] = useState<DialReading | null>(null);
   const dialHide = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1237,19 +1242,31 @@ export const WatchScreen: React.FC = () => {
 
           {/* Poll + prediction cards, exactly the desktop components: they
               self-fetch off the channel and anchor under the header. Stream
-              scoped, so same rule as the hype train above. */}
-          {currentStream && streamScoped && !chatOverlay && (
-            <>
-              <PredictionOverlay
-                channelId={currentStream.user_id}
-                channelLogin={currentStream.user_login}
-              />
-              <PollOverlay
-                channelId={currentStream.user_id}
-                channelLogin={currentStream.user_login}
-              />
-            </>
-          )}
+              scoped, so same rule as the hype train above. Either can be
+              turned off, and the order is the user's choice, as on desktop. */}
+          {currentStream && streamScoped && !chatOverlay &&
+            (overlayOrder === 'poll-first'
+              ? (['poll', 'prediction'] as const)
+              : (['prediction', 'poll'] as const)
+            ).map((kind) =>
+              kind === 'poll' ? (
+                showPolls && (
+                  <PollOverlay
+                    key="poll"
+                    channelId={currentStream.user_id}
+                    channelLogin={currentStream.user_login}
+                  />
+                )
+              ) : (
+                showPredictions && (
+                  <PredictionOverlay
+                    key="prediction"
+                    channelId={currentStream.user_id}
+                    channelLogin={currentStream.user_login}
+                  />
+                )
+              ),
+            )}
 
           <MobileChatPane readOnly={chatOverlay} />
           {chatOverlay && (

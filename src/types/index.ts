@@ -2627,3 +2627,116 @@ export interface SubStanding {
     text: string;
   } | null;
 }
+
+// ---- Poll and prediction cards (services/predictions.rs, services/poll_view.rs) ----
+// Rust decides every number and word on these cards; the shells only draw them.
+
+/** One side of a prediction, as Rust worded it. */
+export interface OutcomeView {
+  id: string;
+  title: string;
+  /** Twitch's color for the side, lowercase: `blue`, `pink`, others as sent. */
+  color: string;
+  /** Share of the points, 0 to 100. */
+  percent: number;
+  /** What one point returns if this side wins: "1:2.78". */
+  ratio: string;
+  points_label: string;
+  people_label: string;
+  winner: boolean;
+  mine: boolean;
+}
+
+/** How a prediction ended, for the viewer. */
+export interface ResultView {
+  tone: 'won' | 'lost' | 'refunded' | 'ended';
+  line: string;
+}
+
+/** One prediction card, decided in full by Rust. */
+export interface PredictionView {
+  channel_id: string;
+  prediction_id: string;
+  title: string;
+  phase: 'open' | 'locked' | 'resolving' | 'ended';
+  /** Unix ms the window closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Ended". */
+  badge: string | null;
+  outcomes: OutcomeView[];
+  can_predict: boolean;
+  /** The side the viewer already staked; the other sides cannot be chosen. */
+  picked: string | null;
+  status_line: string | null;
+  result: ResultView | null;
+  totals_line: string;
+  points_name: string;
+  points_icon: string | null;
+}
+
+/** `prediction-state` push, and `get_channel_prediction`'s answer. */
+export interface PredictionPush {
+  channel_id: string;
+  view: PredictionView | null;
+}
+
+export interface BetPreset {
+  label: string;
+  amount: number;
+}
+
+/** What a bet would do, in the card's and the confirm's words. Spends nothing. */
+export interface BetView {
+  amount: number;
+  max: number;
+  presets: BetPreset[];
+  ok: boolean;
+  problem: string | null;
+  button: string;
+  win_line: string;
+  confirm_title: string;
+  confirm_line: string;
+  confirm_note: string | null;
+  balance_line: string | null;
+}
+
+/** What `predict` answered; `message` is the toast either way. */
+export interface PredictOutcome {
+  success: boolean;
+  message: string;
+  view: PredictionView | null;
+}
+
+export interface ChoiceView {
+  id: string;
+  title: string;
+  /** Share of the votes, 0 to 100. */
+  percent: number;
+  votes_label: string;
+  mine: boolean;
+  winner: boolean;
+}
+
+/** One poll card, decided in full by Rust. */
+export interface PollView {
+  channel_id: string;
+  poll_id: string;
+  title: string;
+  phase: 'open' | 'closed' | 'ended';
+  /** Unix ms the poll closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Final". */
+  badge: string | null;
+  choices: ChoiceView[];
+  can_vote: boolean;
+  my_choice_id: string | null;
+  footer: string;
+  voters_line: string;
+  result_line: string | null;
+}
+
+/** `poll-state` push. */
+export interface PollPush {
+  channel_id: string;
+  view: PollView | null;
+}
