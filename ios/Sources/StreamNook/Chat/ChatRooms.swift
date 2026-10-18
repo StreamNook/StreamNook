@@ -556,6 +556,9 @@ final class ChatRooms {
     /// The room on screen's group, when its channel streams together or shares its chat.
     var activeGroup: ChannelGroup? {
         guard let tab = active, tab.provider == "twitch" else { return nil }
+        // The maps the Following cards read come first (by Twitch id), so the chip and the card
+        // always agree; the channel's own pushed state covers a room the maps miss.
+        if let id = tab.channelID, !id.isEmpty, let group = groupFor(id) { return group }
         return groups[tab.login]
     }
 

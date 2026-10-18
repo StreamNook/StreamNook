@@ -23,7 +23,7 @@ import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
 import { useChannelState } from '../../stores/channelStateStore';
 import { CollabAvatarStack } from '../../components/SharedViewers';
-import { isTogether } from '../../utils/sharedViewers';
+import { groupFor, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
 
@@ -209,8 +209,16 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   // watch screen says it (Rust's channel state for the room, the partners'
   // faces and the group's word), in the strip's empty left side. Tapping it
   // lists the partners, and a partner starts their stream.
+  // The room's group comes from the maps the Following cards read (by Twitch id), so the chip
+  // and the card always agree; the channel's own pushed state covers a room the maps miss.
   const roomState = useChannelState(active?.provider === 'twitch' ? active.login : null);
-  const group = roomState?.collab ?? roomState?.shared_chat ?? null;
+  const collabs = useAppStore((s) => s.collaborations);
+  const sharedChats = useAppStore((s) => s.sharedChats);
+  const group =
+    (active ? groupFor(collabs, sharedChats, { provider: active.provider, user_id: active.channelId ?? '' }) : undefined) ??
+    roomState?.collab ??
+    roomState?.shared_chat ??
+    null;
   const [groupOpen, setGroupOpen] = useState(false);
   const leading = group ? (
     <button
