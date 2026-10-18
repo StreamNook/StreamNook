@@ -482,6 +482,7 @@ allow = [
   "get_channel_rewards",
   "get_cached_channel_rewards",
   "redeem_channel_reward",
+  "redeem_reward",
   "send_highlighted_message",
   "send_sub_mode_message",
   "unlock_random_emote",

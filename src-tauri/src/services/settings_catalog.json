@@ -1277,6 +1277,18 @@
   {
    "page": "chat",
    "section": "Chat Input",
+   "title": "Dictionary",
+   "paths": [
+    "chat_input.spellcheck_custom_words"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
    "title": "Chat modes",
    "paths": [
     "chat_input.show_room_modes"
@@ -1296,18 +1308,6 @@
    "nested": false,
    "logo": null,
    "detail": "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.",
-   "aliases": []
-  },
-  {
-   "page": "chat",
-   "section": "Chat Input",
-   "title": "Hide command button",
-   "paths": [
-    "chat_input.hide_command_button"
-   ],
-   "nested": false,
-   "logo": null,
-   "detail": "Removes the slash button from inside the message box. Typing / still opens the quick command list.",
    "aliases": []
   },
   {
@@ -1707,18 +1707,6 @@
    "nested": false,
    "logo": null,
    "detail": "Off leaves links colored but not underlined.",
-   "aliases": []
-  },
-  {
-   "page": "chat",
-   "section": "Chat Input",
-   "title": "Dictionary",
-   "paths": [
-    "chat_input.spellcheck_custom_words"
-   ],
-   "nested": true,
-   "logo": null,
-   "detail": "",
    "aliases": []
   },
   {

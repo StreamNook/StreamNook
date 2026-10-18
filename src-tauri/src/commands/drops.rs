@@ -1329,6 +1329,7 @@ fn parse_reward(
         is_hidden_for_subs: false,
         description: None,
         availability: Default::default(),
+        view: Default::default(),
     })
 }
 
@@ -1442,6 +1443,7 @@ fn parse_automatic_reward(
         is_hidden_for_subs: reward["isHiddenForSubs"].as_bool().unwrap_or(false),
         description: built_in_description(reward_type).map(str::to_string),
         availability: Default::default(),
+        view: Default::default(),
     })
 }
 
@@ -1586,6 +1588,22 @@ pub async fn get_channel_rewards(
         fetched_at_ms,
     )
     .await)
+}
+
+/// Redeem a reward by id, for every shell (services/reward_redeem.rs): Rust
+/// looks it up in its judged list, refuses one the verdict blocks, routes it
+/// by its built-in type and keeps the retry-safe transaction id. `text` is the
+/// typed answer or message; `emote_id` / `emote_name` an emote unlock's pick.
+#[tauri::command]
+pub async fn redeem_reward(
+    channel_login: String,
+    channel_id: String,
+    reward_id: String,
+    text: Option<String>,
+    emote_id: Option<String>,
+    emote_name: Option<String>,
+) -> Result<crate::services::reward_redeem::RedeemOutcome, String> {
+    Ok(crate::services::reward_redeem::redeem(&channel_login, &channel_id, &reward_id, text, emote_id, emote_name).await)
 }
 
 #[tauri::command]

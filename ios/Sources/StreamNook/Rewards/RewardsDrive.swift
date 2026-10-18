@@ -14,11 +14,35 @@ import SNKit
 ///   `bsheet:INDEX` opens a tile's sheet; `bmissing:all` shows every missing row; `bstate` logs
 ///   the wall
 /// - `fakedrops:on`, `fakedrops:off` connect or disconnect FakeCore's drops
+/// - `wallet` opens the composer wallet on screen; `wreward:ID` opens it on one reward's detail;
+///   `wstate` logs the wallet
+/// - `fakegain:N` (FakeCore) a points gain of N as the core announces it; `fakechest:N` the same
+///   from a bonus chest; `fakechestwait:on|off` a chest waiting on the button
 @MainActor
 enum RewardsDrive {
     static func run(_ name: String, _ value: String, model: AppModel) async -> Bool {
         let rewards = model.rewards
         switch name {
+        case "wallet", "wreward":
+            guard let wallet = await liveWallet() else { return true }
+            if name == "wreward" { wallet.pendingReward = value }
+            wallet.sheetOpen = true
+        case "wstate":
+            let wallet = await liveWallet()
+            log.notice("drive wstate \(wallet?.login ?? "-", privacy: .public) balance \(wallet?.points?.balance ?? -1) name \(wallet?.points?.name ?? "-", privacy: .public) bits \(wallet?.bits?.balance ?? -1) chest \(wallet?.chestWaiting ?? false) pops \(wallet?.pops.count ?? -1)")
+        case "fakegain", "fakechest", "fakechestwait":
+            guard let fake = model.core as? FakeCore, let fixtures = fake.fixtures, let wallet = await liveWallet() else {
+                log.error("drive \(name, privacy: .public): no FakeCore wallet")
+                return true
+            }
+            let push: String
+            if name == "fakechestwait" {
+                fixtures.rewards.chestWaiting = value != "off"
+                push = fixtures.rewards.statePush(login: wallet.login)
+            } else {
+                push = fixtures.rewards.gainPush(login: wallet.login, amount: Int(value) ?? 50, chest: name == "fakechest")
+            }
+            fake.events.emit(name: "channel-state", payloadJSON: push, target: nil)
         case "rewards":
             rewards.segment = value == "badges" ? .badges : .drops
         case "dsearch":
@@ -66,6 +90,16 @@ enum RewardsDrive {
             return false
         }
         return true
+    }
+
+    /// The composer wallet on screen with something in it, waiting up to 10 seconds.
+    private static func liveWallet() async -> WalletModel? {
+        for _ in 0..<50 {
+            if let wallet = WalletModel.live.values.first(where: { $0.faces.hasAny }) { return wallet }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        log.error("drive: no composer wallet on screen")
+        return nil
     }
 
     /// The segment once the core has answered, waiting up to 10 seconds.

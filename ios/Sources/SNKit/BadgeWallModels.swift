@@ -91,6 +91,8 @@ public struct MissingRow: Decodable, Sendable, Equatable, Identifiable {
     public var chips: [EarnChip]
     public var iconsOnly: Bool
     public var randomNote: String?
+    /// "Only on a, b" or "Only on 5 channels": the campaign counts only there.
+    public var channelsNote: String?
     public var timeLeft: String
     /// It closes within a day.
     public var urgent: Bool?
@@ -101,6 +103,7 @@ public struct MissingRow: Decodable, Sendable, Equatable, Identifiable {
         case key, title, image, chips, urgent
         case iconsOnly = "icons_only"
         case randomNote = "random_note"
+        case channelsNote = "channels_note"
         case timeLeft = "time_left"
     }
 }

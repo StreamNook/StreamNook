@@ -303,7 +303,7 @@ const ProfileBody: React.FC<{
   const pickedBrand = brandFor(picked?.provider);
 
   return (
-    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8}>
+    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
       <div className="flex flex-col pb-2">
         {/* Their Atmosphere as the band, else a quiet tint of their name color;
             the picture cut into its lower edge, the name below it, never on it. */}
