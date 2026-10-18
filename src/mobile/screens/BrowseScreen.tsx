@@ -1,6 +1,5 @@
 // Discover: Live streams and Categories, with search covering both modes.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ListBullets, MagnifyingGlass, SquaresFour, X } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
@@ -20,6 +19,9 @@ import { bumpPreviewStamp } from '../followRefresh';
 import { isTwitchStream, streamKey } from '../../utils/streamProvider';
 import { KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
 import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
+import { ScreenHeader } from '../ui/ScreenHeader';
+import { TitleCapsule, ViewToggle } from '../ui/TitleControls';
+import { SearchField } from '../ui/SearchField';
 import { EmptyNote } from '../ui/EmptyNote';
 import type { ProviderCategory } from '../../types/providers';
 import { KickBrowseBody } from './KickBrowseBody';
@@ -301,73 +303,29 @@ export const BrowseScreen: React.FC = () => {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="px-4 pt-3 pb-2 shrink-0">
-        <div className="flex items-center justify-between mb-3">
-          <h1 className="text-xl font-bold text-textPrimary">Browse</h1>
-          {/* The same logo menu Following filters with; switching clears the
-              search and any Kick category. */}
-          <PlatformMenu
-            options={[TWITCH_PLATFORM, KICK_PLATFORM]}
-            value={platform}
-            onChange={switchPlatform}
-          />
-        </div>
-        <div className="relative mb-2.5">
-          <MagnifyingGlass
-            size={17}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted pointer-events-none z-10"
-          />
-          <input
+      <div className="shrink-0">
+        {/* The same logo menu Following filters with; switching clears the
+            search and any Kick category. The view toggle joins it in the
+            title row while the live list shows, so the mode row below holds
+            one control and never changes height. */}
+        <ScreenHeader title="Browse">
+          <TitleCapsule>
+            <PlatformMenu options={[TWITCH_PLATFORM, KICK_PLATFORM]} value={platform} onChange={switchPlatform} />
+          </TitleCapsule>
+          {mode === 'live' && <ViewToggle value={view} onChange={setViewPersisted} />}
+        </ScreenHeader>
+        <div className="flex flex-col gap-2.5 px-4 pb-2">
+          <SearchField
             ref={searchInput}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={setQuery}
             placeholder={
               mode === 'live' ? (platform === 'kick' ? 'Search Kick channels' : 'Search channels') : 'Search categories'
             }
-            className="glass-input w-full h-11 pl-10 pr-10 text-[15px] text-textPrimary placeholder:text-textMuted bg-transparent outline-none"
-            autoCapitalize="none"
-            autoCorrect="off"
-            enterKeyHint="search"
           />
-          {query && (
-            <button
-              onClick={() => setQuery('')}
-              className="absolute right-1 top-1/2 -translate-y-1/2 sn-touch flex items-center justify-center text-textMuted"
-              aria-label="Clear search"
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <SegmentedControl
-            label="Show"
-            segments={MODE_SEGMENTS}
-            value={mode}
-            onChange={setMode}
-          />
-          {mode === 'live' && (
-            <div className="flex ml-auto">
-              <button
-                onClick={() => setViewPersisted('cards')}
-                className={`sn-touch flex items-center justify-center ${
-                  view === 'cards' ? 'text-accent' : 'text-textMuted'
-                }`}
-                aria-label="Card view"
-              >
-                <SquaresFour size={20} weight={view === 'cards' ? 'fill' : 'regular'} />
-              </button>
-              <button
-                onClick={() => setViewPersisted('list')}
-                className={`sn-touch flex items-center justify-center ${
-                  view === 'list' ? 'text-accent' : 'text-textMuted'
-                }`}
-                aria-label="List view"
-              >
-                <ListBullets size={20} weight={view === 'list' ? 'bold' : 'regular'} />
-              </button>
-            </div>
-          )}
+          <div className="flex">
+            <SegmentedControl label="Show" segments={MODE_SEGMENTS} value={mode} onChange={setMode} />
+          </div>
         </div>
       </div>
       {/* Touching or scrolling the results puts the keyboard away, so it
