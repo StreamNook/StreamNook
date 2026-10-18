@@ -64,15 +64,23 @@ pub fn badge_art(badges: &HelixBadgesResponse, set_id: &str, version: &str) -> O
 /// The viewer's relationship to the Twitch channel `channel_id` (login
 /// `channel_login`).
 pub async fn twitch(channel_id: &str, channel_login: &str) -> Relationship {
+    read_twitch(channel_id, channel_login).await.0
+}
+
+/// `twitch`, and whether the subscription lookup answered: a failed one reads
+/// as "not subscribed", which must not replace an answer already held.
+pub async fn read_twitch(channel_id: &str, channel_login: &str) -> (Relationship, bool) {
     let following = match own_follow(channel_id).await {
         FollowAnswer::Following(_) => Some(true),
         FollowAnswer::NotFollowing => Some(false),
         FollowAnswer::Unknown => None,
     };
     let Some(me) = crate::services::account_store::AccountStore::primary() else {
-        return Relationship { following, ..Default::default() };
+        return (Relationship { following, ..Default::default() }, true);
     };
-    let subage = crate::services::ivr::subage_summary(&me.login, channel_login).await.ok().flatten();
+    let subage_read = crate::services::ivr::subage_summary(&me.login, channel_login).await;
+    let subs_answered = subage_read.is_ok();
+    let subage = subage_read.ok().flatten();
     let subscribed = subage.as_ref().is_some_and(|s| s.active_sub_type.is_some());
     let cumulative = subage.as_ref().and_then(|s| s.cumulative_months).unwrap_or(0);
     let version = badge_version(badge_months(subscribed, cumulative));
@@ -83,13 +91,45 @@ pub async fn twitch(channel_id: &str, channel_login: &str) -> Relationship {
             badge_url = badge_art(&global, "subscriber", version);
         }
     }
-    Relationship {
+    let relationship = Relationship {
         following,
         subscribed,
         has_sub_history: cumulative > 0 && !subscribed,
         cumulative_months: cumulative,
         badge_url,
+    };
+    (relationship, subs_answered)
+}
+
+/// A fresh read laid over the answer held: a part Twitch did not answer this
+/// time (the follow lookup, the subscription lookup) keeps its earlier value,
+/// so a lookup that failed never flips a menu to a guess.
+pub fn merge(held: Option<&Relationship>, read: Relationship, subs_answered: bool) -> Relationship {
+    let Some(held) = held else { return read };
+    let following = read.following.or(held.following);
+    if subs_answered {
+        Relationship { following, ..read }
+    } else {
+        Relationship { following, ..held.clone() }
     }
+}
+
+/// Who a subscription USERNOTICE made a subscriber, and where: `(room id,
+/// login)` for a sub, resub or upgrade (the sender) or a gift (its recipient).
+/// None for anything else, a mystery gift's announcement included.
+pub fn sub_notice(raw: &str) -> Option<(String, String)> {
+    let tags = raw.strip_prefix('@')?.split(' ').next()?;
+    let tag = |name: &str| {
+        tags.split(';')
+            .find_map(|t| t.strip_prefix(name)?.strip_prefix('='))
+            .filter(|v| !v.is_empty())
+    };
+    let subscriber = match tag("msg-id")? {
+        "sub" | "resub" | "giftpaidupgrade" | "primepaidupgrade" | "anongiftpaidupgrade" => tag("login")?,
+        "subgift" => tag("msg-param-recipient-user-name")?,
+        _ => return None,
+    };
+    Some((tag("room-id")?.to_string(), subscriber.to_lowercase()))
 }
 
 #[cfg(test)]
@@ -108,6 +148,48 @@ mod tests {
             click_action: None,
             click_url: None,
         }
+    }
+
+    fn rel(following: Option<bool>, subscribed: bool, months: i64) -> Relationship {
+        Relationship {
+            following,
+            subscribed,
+            has_sub_history: months > 0 && !subscribed,
+            cumulative_months: months,
+            badge_url: Some(format!("badge{months}")),
+        }
+    }
+
+    #[test]
+    fn a_failed_lookup_keeps_what_was_known() {
+        let held = rel(Some(true), true, 14);
+        // IVR did not answer: the read says "not subscribed", which is a guess.
+        let read = rel(Some(true), false, 0);
+        assert_eq!(merge(Some(&held), read, false), held);
+        // The follow lookup did not answer: the held follow stays.
+        let read = rel(None, true, 15);
+        assert_eq!(merge(Some(&held), read, true), rel(Some(true), true, 15));
+        // Real answers replace it, an unfollow and a lapse included.
+        let read = rel(Some(false), false, 14);
+        assert_eq!(merge(Some(&held), read.clone(), true), read);
+        // Nothing held yet: the read is the answer.
+        assert_eq!(merge(None, rel(None, false, 0), false), rel(None, false, 0));
+    }
+
+    #[test]
+    fn sub_notices_name_who_became_a_subscriber() {
+        let resub = "@badge-info=;login=Viewer;msg-id=resub;room-id=71092938;system-msg=x :tmi.twitch.tv USERNOTICE #xqc :hi";
+        assert_eq!(sub_notice(resub), Some(("71092938".into(), "viewer".into())));
+        let gift = "@login=gifter;msg-id=subgift;msg-param-recipient-user-name=Lucky;room-id=1 :tmi.twitch.tv USERNOTICE #a";
+        assert_eq!(sub_notice(gift), Some(("1".into(), "lucky".into())));
+        let mystery = "@login=gifter;msg-id=submysterygift;room-id=1 :tmi.twitch.tv USERNOTICE #a";
+        assert_eq!(sub_notice(mystery), None);
+        let raid = "@login=r;msg-id=raid;room-id=1 :tmi.twitch.tv USERNOTICE #a";
+        assert_eq!(sub_notice(raid), None);
+        assert_eq!(sub_notice(":tmi.twitch.tv PRIVMSG #a :sub"), None);
+        // A tag whose name only starts with "login" is not the login.
+        let odd = "@login-hint=x;msg-id=sub;room-id=1 :tmi.twitch.tv USERNOTICE #a";
+        assert_eq!(sub_notice(odd), None);
     }
 
     #[test]

@@ -2705,6 +2705,16 @@ impl IrcService {
             }
         } else if trimmed.contains("USERNOTICE") {
             // Subscription, resub, gift sub, etc.
+            // The viewer's own sub, or a gift to them, shows in every chat menu at once.
+            if let Some((room, subscriber)) = crate::services::channel_relationship::sub_notice(trimmed) {
+                let mine = crate::services::account_store::AccountStore::primary()
+                    .is_some_and(|me| me.login.eq_ignore_ascii_case(&subscriber));
+                if mine {
+                    tauri::async_runtime::spawn(async move {
+                        crate::services::channel_state::own_sub_seen(&room).await;
+                    });
+                }
+            }
             // Parse USERNOTICE messages - layout will be measured by frontend
             if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
                 // Skip USERNOTICE messages with no visible content
