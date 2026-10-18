@@ -197,8 +197,11 @@ const DropCard: React.FC<{
             {live.trailing}
           </span>
         </div>
-        <div className="text-[10.5px] text-textMuted truncate">{live.line}</div>
-        <div className="h-1 rounded-full bg-surface overflow-hidden mt-1">
+        <div className="text-[11px] leading-[14px] text-textMuted truncate">{live.line}</div>
+        {/* The track is a light film, not the surface color: on the card's
+            near-solid fill the surface tint all but vanished, and the bar read
+            as a floating stub. */}
+        <div className="h-1 rounded-full bg-white/[0.12] overflow-hidden mt-1">
           <div
             className={`h-full rounded-full transition-[width] duration-700 ${live.complete ? 'bg-success' : 'bg-accent'}`}
             style={{ width: `${live.percent}%` }}

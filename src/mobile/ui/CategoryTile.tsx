@@ -76,11 +76,14 @@ export const CategoryTile: React.FC<{
           />
         )}
         {/* A hairline edge so art as dark as the page keeps its shape; on
-            bright art it disappears. */}
+            bright art it disappears. One device pixel, as the iPhone draws it:
+            a full CSS pixel is four on this phone and reads as an outline. */}
         <span
           aria-hidden
           className="pointer-events-none absolute inset-0 rounded-[12px]"
-          style={{ boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 10%, transparent)' }}
+          style={{
+            boxShadow: 'inset 0 0 0 var(--sn-hairline, 1px) color-mix(in srgb, var(--color-text-primary) 10%, transparent)',
+          }}
         />
       </div>
       <div className={CHIN_CLASS}>

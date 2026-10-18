@@ -122,7 +122,9 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
           onPointerCancel={onPointerUp}
         >
           <div className="w-9 h-1 rounded-full bg-textMuted/40" />
-          {title && <div className="mt-2 text-sm font-semibold text-textPrimary">{title}</div>}
+          {/* The sheet title the iPhone uses, 16/600: at 14 it read as a
+              section label rather than the sheet's name. */}
+          {title && <div className="mt-2 text-[16px] font-semibold leading-5 text-textPrimary">{title}</div>}
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">{children}</div>
       </motion.div>
