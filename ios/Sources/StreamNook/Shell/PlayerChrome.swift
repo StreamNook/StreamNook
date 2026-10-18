@@ -317,7 +317,8 @@ struct PlayerChrome: View {
             // A status, not a control: a dot and the word, no filled badge.
             if !watch.roomVod, watch.playingVod == nil {
                 // How far behind live sits beside the word, in a slot sized for the widest
-                // reading so the bar never shifts; a bar too narrow for it drops the number whole.
+                // reading so the bar never shifts. It is sized first: the buttons give up a few
+                // points each to make room, and only a bar too narrow even then drops the number.
                 ViewThatFits(in: .horizontal) {
                     liveStatus(behind: watch.behindLabel)
                     liveStatus(behind: nil)
@@ -326,12 +327,13 @@ struct PlayerChrome: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(watch.behindSpoken.map { "Live, \($0)" } ?? "Live")
                 .accessibilityHidden(watch.error != nil)
+                .layoutPriority(1)
             }
             Spacer(minLength: 8)
             // The speaker is short and wide, so centered in its box it ends higher than the
             // taller symbols beside it; set down to share their bottom edge.
             if watch.playingVod == nil {
-                IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
+                BarButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
                            size: Self.barIcon, weight: .medium, tint: .white) {
                     watch.toggleMute()
                     onTouch()
@@ -341,11 +343,11 @@ struct PlayerChrome: View {
             // The system's AirPlay picker: an Apple TV, a HomePod, AirPods. UIKit draws its glyph
             // a point high in its box, so it is set down to the row's bottom edge too.
             RoutePicker()
-                .frame(width: 44, height: 44)
+                .barSlot()
                 .offset(y: 1.5)
                 .accessibilityLabel("Watch on a TV")
             if let stream, stream.isTwitch, model.signedIn {
-                IconButton(symbol: "scissors", label: "Create clip", size: Self.barIcon, weight: .medium, tint: .white) {
+                BarButton(symbol: "scissors", label: "Create clip", size: Self.barIcon, weight: .medium, tint: .white) {
                     onTouch()
                     model.createClip(login: stream.userLogin, channelID: stream.userID ?? "")
                 }
@@ -360,12 +362,12 @@ struct PlayerChrome: View {
                     Image(systemName: Symbol.share)
                         .font(.system(size: Self.barIcon, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .barSlot()
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel(watch.playingVod == nil ? "Share stream" : "Share video")
             }
-            IconButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
+            BarButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
                        action: onMinimize)
             if watch.playingVod == nil {
                 Button {
@@ -376,18 +378,18 @@ struct PlayerChrome: View {
                         .font(.system(size: Self.barIcon, weight: .medium))
                         .foregroundStyle(.white)
                         .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
-                        .frame(width: 44, height: 44)
+                        .barSlot()
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Restart stream")
             }
-            IconButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
+            BarButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
                 qualityShown = true
             }
             if landscape {
                 let on = model.nav.landscapeChat
-                IconButton(symbol: Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
+                BarButton(symbol: Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
                            size: 18, weight: .medium, tint: on ? SN.accent : .white) {
                     onTouch()
                     withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { model.nav.landscapeChat.toggle() }
@@ -617,4 +619,34 @@ private struct RoutePicker: UIViewRepresentable {
     }
 
     func updateUIView(_ picker: AVRoutePickerView, context: Context) {}
+}
+
+/// A bottom-bar button: 44 points wide when the bar has room, down to 34 when it is full, so the
+/// LIVE status and its behind-live number always fit beside a full row of buttons.
+private struct BarButton: View {
+    let symbol: String
+    let label: String
+    var size: CGFloat = 20
+    var weight: Font.Weight = .regular
+    var tint: Color?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(tint ?? SN.textSecondary)
+                .barSlot()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+private extension View {
+    /// A bar button's box: 44 points, giving way to 34 when the row is short of room.
+    func barSlot() -> some View {
+        frame(minWidth: 34, idealWidth: 44, maxWidth: 44, minHeight: 44, maxHeight: 44)
+    }
 }
