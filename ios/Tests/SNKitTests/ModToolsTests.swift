@@ -71,7 +71,7 @@ import Testing
     }
 
     @Test func rowViewCarriesTheViewersNickname() throws {
-        let raw = #"{"name_color":"#ff0000","nickname":"Cake"}"#
+        let raw = ##"{"name_color":"#ff0000","nickname":"Cake"}"##
         let view = try JSONDecoder().decode(ChatRowView.self, from: Data(raw.utf8))
         #expect(view.nickname == "Cake")
         #expect(view.nameColor == "#ff0000")
