@@ -11,8 +11,8 @@ import SNKit
 /// - `dfocus:ID` asks for a campaign the way the player's drop bar does
 /// - `dstate` logs what the segment holds
 /// - `bsort:NAME` sorts the badge wall (`newest`, `available`, `soon`, `usage`, `oldest`);
-///   `bsheet:INDEX` opens a tile's sheet; `bmissing:all` shows every missing row; `bstate` logs
-///   the wall
+///   `bsheet:INDEX` opens a tile's sheet; `bmissing:all` shows every missing row;
+///   `bmissingsheet:INDEX` opens the INDEXth missing row's sheet; `bstate` logs the wall
 /// - `fakedrops:on`, `fakedrops:off` connect or disconnect FakeCore's drops
 /// - `rend` scrolls the tab to its last row (to check it clears the tab bar)
 /// - `wallet` opens the composer wallet on screen; `wreward:ID` opens it on one reward's detail;
@@ -74,6 +74,10 @@ enum RewardsDrive {
             let tiles = rewards.wall?.tiles ?? []
             let index = Int(value) ?? 0
             if tiles.indices.contains(index) { rewards.badgeSheet = tiles[index] }
+        case "bmissingsheet":
+            for _ in 0..<50 where rewards.wall?.tiles.isEmpty ?? true { try? await Task.sleep(for: .milliseconds(200)) }
+            let rows = rewards.wall?.missing.rows ?? []
+            if let index = Int(value), rows.indices.contains(index) { rewards.openMissing(rows[index].key) }
         case "bmissing":
             rewards.missingExpanded = value == "all"
         case "bstate":

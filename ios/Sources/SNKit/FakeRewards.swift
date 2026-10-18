@@ -240,6 +240,10 @@ public final class FakeRewards: Sendable {
                     ["key": "mouse/1", "title": "Mouse Pad", "image": badgeCDN + "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a/3",
                      "chips": [chip("subscribe", "Sub", "Subscribe or gift a subscription"), chip("watch", "30 min", "Watch 30 min")],
                      "icons_only": false, "random_note": "1 of 3 at random", "channels_note": "Only on shroud, hjune", "time_left": "5h left", "urgent": true],
+                    // As long as real names get beside a two-step pill: it must stay inside its card.
+                    ["key": "belmont/1", "title": "Castlevania Belmont's Curse Launch Supporter", "image": badgeCDN + "4a5d5b74-2c3e-4b67-9e1e-4cbe1c44ce4a/3",
+                     "chips": [chip("subscribe", "Sub", "Subscribe or gift a subscription"), chip("watch", "20 min \u{00D7} 3d", "Watch 20 min on 3 days")],
+                     "icons_only": false, "random_note": NSNull(), "time_left": "35d left"],
                 ],
             ] as [String: Any],
         ]

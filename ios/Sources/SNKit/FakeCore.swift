@@ -184,7 +184,9 @@ public final class FakeCore: CoreBridge {
             "content": lines[n % lines.count],
             "provider": "twitch",
             "channel": channel,
-            "tags": [String: String](),
+            // The fake wallet channel's room, so a stage on FakeCore learns its room the way
+            // Twitch rows tell it.
+            "tags": ["room-id": "4242"],
         ]
         // Two StreamNook members, so a member's Atmosphere and badge show on fake rows.
         let member: (atmosphere: String, color: String)? = switch name {

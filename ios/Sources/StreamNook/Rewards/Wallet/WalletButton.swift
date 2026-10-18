@@ -56,10 +56,12 @@ struct WalletButton: View {
                         }
                     }
                 if wallet.chestWaiting {
+                    // The gain's amber, rimmed dark so it reads apart from the glyph's arc.
                     Circle()
-                        .fill(Color(ChatTheme.accent))
-                        .frame(width: 8, height: 8)
-                        .offset(x: 1, y: 5)
+                        .fill(GainFloat.amber)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1.5))
+                        .frame(width: 9, height: 9)
+                        .offset(x: 1, y: 4)
                         .accessibilityHidden(true)
                 }
             }
@@ -111,6 +113,7 @@ struct WalletButton: View {
 /// The amount drifting up off the icon and dissolving: amber, so a glance catches it among the
 /// composer's accent-colored controls.
 private struct GainFloat: View {
+    static let amber = Color(red: 0.98, green: 0.75, blue: 0.14)
     let pop: WalletModel.Pop
     let done: () -> Void
     @Environment(\.snStill) private var still
@@ -118,7 +121,7 @@ private struct GainFloat: View {
     var body: some View {
         Text("+\(pop.amount.formatted())")
             .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(Color(red: 0.98, green: 0.75, blue: 0.14))
+            .foregroundStyle(Self.amber)
             .fixedSize()
             .keyframeAnimator(initialValue: Rise(), repeating: false) { content, f in
                 content
