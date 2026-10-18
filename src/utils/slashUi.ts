@@ -13,7 +13,7 @@ export type SlashUi =
   | { kind: 'open_user_card'; user_id: string; login: string; display_name: string }
   | { kind: 'clear_local_chat' }
   | { kind: 'open_poll_composer'; channel: string; composer: 'poll' | 'prediction' }
-  | { kind: 'create_clip' }
+  | { kind: 'create_clip'; channel: string; channel_id: string; title: string }
   | { kind: 'identify_song' }
   | { kind: 'reload_stream' }
   | { kind: 'reload_chat' }

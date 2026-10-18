@@ -401,6 +401,209 @@ async fn delete_clip_inner(slug: &str) -> Result<()> {
     Ok(())
 }
 
+// --- Quick clip (phones) ------------------------------------------------------
+// One call makes a clip of the last 30 seconds: of a live stream (its uptime is
+// the offset) or of a VOD (the playhead). It uses the editor's raw-media flow
+// with the editor's default selection, the window's last 30 seconds, records the
+// clip in "Your clips", and fills in its thumbnail once Twitch has rendered it.
+
+/// A clip covers the 30 seconds before this point, so a point earlier has nothing to grab.
+const QUICK_CLIP_SECONDS: f64 = 30.0;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MadeClip {
+    pub slug: String,
+    pub url: String,
+    pub title: String,
+    pub channel_name: String,
+}
+
+/// The words a phone shows when a clip cannot be made, from the core's error codes.
+fn clip_failure_words(code: &str, live: bool) -> String {
+    if code.contains("OFFLINE") {
+        "You can only clip a live stream".to_string()
+    } else if code.contains("REAUTH") {
+        "Sign in to Twitch again to make clips".to_string()
+    } else if code.contains("EARLY") && live {
+        "This stream just started. Give it 30 seconds before clipping.".to_string()
+    } else if code.contains("EARLY") {
+        "Play at least 30 seconds of the video first".to_string()
+    } else if code.contains("THROTTLED") {
+        "Twitch is busy making clips. Try again in a minute.".to_string()
+    } else {
+        "Could not make a clip".to_string()
+    }
+}
+
+/// Where the clip ends: the VOD playhead, or how long the broadcast has run.
+fn quick_clip_offset(vod_offset: Option<f64>, started_at: Option<&str>, now_ms: i64) -> Option<f64> {
+    if let Some(offset) = vod_offset {
+        return Some(offset.max(0.0));
+    }
+    let started = chrono::DateTime::parse_from_rfc3339(started_at?).ok()?;
+    Some(((now_ms - started.timestamp_millis()) as f64 / 1000.0).max(0.0))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn clip_create(
+    app: AppHandle,
+    channel_id: String,
+    login: String,
+    name: Option<String>,
+    title: Option<String>,
+    vod_id: Option<String>,
+    vod_offset: Option<f64>,
+) -> Result<MadeClip, String> {
+    let live = vod_id.is_none();
+    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| login.clone());
+    let made = quick_clip(&channel_id, vod_id.as_deref(), vod_offset, title.clone()).await;
+    let (raw_title, slug, duration) = match made {
+        Ok(made) => made,
+        Err(e) => {
+            let code = e.to_string();
+            warn!("[Clip] {login}: {code}");
+            return Err(clip_failure_words(&code, live));
+        }
+    };
+    let clip = crate::services::my_clips::MyClip {
+        slug: slug.clone(),
+        title: raw_title.clone(),
+        channel_id,
+        channel_login: login.to_lowercase(),
+        channel_name: name.clone(),
+        made_at: chrono::Utc::now().timestamp_millis(),
+        duration_seconds: duration,
+        source: if live { "live" } else { "vod" }.to_string(),
+        thumbnail_url: None,
+    };
+    let url = clip.url();
+    if let Err(e) = crate::services::my_clips::record(clip) {
+        warn!("[Clip] could not record {slug}: {e}");
+    }
+    notify_my_clips(&app);
+    // The render takes a few seconds; the thumbnail joins the list when it is done.
+    let poll_app = app.clone();
+    let poll_slug = slug.clone();
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            if let Ok(status) = get_clip_render_status_inner(&poll_slug).await {
+                if let Some(thumb) = status.thumbnail.filter(|_| status.ready) {
+                    let _ = crate::services::my_clips::set_thumbnail(&poll_slug, &thumb);
+                    notify_my_clips(&poll_app);
+                    return;
+                }
+            }
+        }
+    });
+    Ok(MadeClip {
+        slug,
+        url,
+        title: raw_title,
+        channel_name: name,
+    })
+}
+
+fn notify_my_clips(app: &AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit("my-clips://changed", ());
+}
+
+/// (title, slug, seconds) of a fresh 30 second clip ending at the live edge or the playhead.
+async fn quick_clip(
+    channel_id: &str,
+    vod_id: Option<&str>,
+    vod_offset: Option<f64>,
+    title: Option<String>,
+) -> Result<(String, String, f64)> {
+    let (broadcast_id, offset) = match vod_id {
+        Some(_) => (None, quick_clip_offset(vod_offset, None, 0)),
+        None => {
+            let (broadcast_id, started_at) = TwitchService::get_live_broadcast(channel_id).await?;
+            let offset = quick_clip_offset(None, Some(&started_at), chrono::Utc::now().timestamp_millis());
+            (Some(broadcast_id), offset)
+        }
+    };
+    let offset = offset.ok_or_else(|| anyhow::anyhow!("NO_OFFSET"))?;
+    if offset < QUICK_CLIP_SECONDS {
+        return Err(anyhow::anyhow!("EARLY"));
+    }
+    let session = begin_clip_edit_inner(vod_id, broadcast_id.as_deref(), offset).await?;
+    let length = QUICK_CLIP_SECONDS.min(session.duration_seconds.max(5.0));
+    let start = (session.duration_seconds - length).max(0.0);
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "Clip".to_string());
+    let made = finalize_clip_inner(&session.raw_media_id, start, length, Some(title.clone())).await?;
+    Ok((title, made.id, length))
+}
+
+/// "Your clips", newest first.
+#[tauri::command]
+pub async fn my_clips_list() -> Result<Vec<MyClipRow>, String> {
+    Ok(tokio::task::spawn_blocking(crate::services::my_clips::list)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(MyClipRow::from)
+        .collect())
+}
+
+/// Take a clip off "Your clips" (the clip stays on Twitch).
+#[tauri::command]
+pub async fn my_clips_forget(app: AppHandle, slug: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::services::my_clips::forget(&slug))
+        .await
+        .map_err(|e| e.to_string())??;
+    notify_my_clips(&app);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyClipRow {
+    #[serde(flatten)]
+    pub clip: crate::services::my_clips::MyClip,
+    pub url: String,
+    pub age_label: String,
+    pub length_label: String,
+}
+
+impl From<crate::services::my_clips::MyClip> for MyClipRow {
+    fn from(clip: crate::services::my_clips::MyClip) -> Self {
+        use crate::services::channel_media::{age_ms, clip_length};
+        let url = clip.url();
+        let age_label = age_ms(clip.made_at, chrono::Utc::now().timestamp_millis());
+        let length_label = clip_length(clip.duration_seconds);
+        MyClipRow { clip, url, age_label, length_label }
+    }
+}
+
+#[cfg(test)]
+mod quick_clip_tests {
+    use super::*;
+
+    #[test]
+    fn the_offset_is_the_playhead_or_the_uptime() {
+        assert_eq!(quick_clip_offset(Some(95.5), None, 0), Some(95.5));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-18T10:01:00Z").unwrap().timestamp_millis();
+        assert_eq!(quick_clip_offset(None, Some("2026-10-18T10:00:00Z"), now), Some(60.0));
+        assert_eq!(quick_clip_offset(None, Some("not a date"), now), None);
+    }
+
+    #[test]
+    fn failures_read_as_words() {
+        assert_eq!(clip_failure_words("OFFLINE", true), "You can only clip a live stream");
+        assert_eq!(clip_failure_words("EARLY", true), "This stream just started. Give it 30 seconds before clipping.");
+        assert_eq!(clip_failure_words("EARLY", false), "Play at least 30 seconds of the video first");
+        assert_eq!(clip_failure_words("REAUTH", true), "Sign in to Twitch again to make clips");
+        assert_eq!(clip_failure_words("boom", true), "Could not make a clip");
+    }
+}
+
 // --- Clip trim editor (raw-media flow) --------------------------------------
 // The editor captures a ~90s raw-media window around the VOD offset, lets the
 // user scrub it and pick an exact [start, start+duration] segment + title, then
@@ -2051,6 +2254,21 @@ pub async fn get_user_videos(
     Ok((videos, cursor))
 }
 
+/// A channel's videos or clips for the phones' Channel sheet, labels worded (see
+/// `services::channel_media`).
+#[tauri::command]
+pub async fn channel_media(
+    channel_id: String,
+    kind: String,
+    filter: Option<String>,
+    sort: Option<String>,
+    cursor: Option<String>,
+) -> Result<crate::services::channel_media::MediaPage, String> {
+    crate::services::channel_media::page(&channel_id, &kind, filter.as_deref(), sort.as_deref(), cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // --- VOD chat replay (synced historical comments) ---------------------------
 // VODs expose no Helix chat endpoint; Twitch's own web player reads historical
 // chat via the GQL VideoCommentsByOffsetOrCursor persisted query. We page by
@@ -2069,6 +2287,37 @@ const H_VIDEO_COMMENTS: &str =
 fn vod_comments_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// Start replaying a VOD's chat from `position` (the player's clock). A clip replays its
+/// window of the source VOD: `startOffset` and `endOffset` are seconds into that VOD.
+#[tauri::command]
+pub async fn vod_replay_begin(
+    app: AppHandle,
+    video_id: String,
+    login: String,
+    position: f64,
+    start_offset: Option<f64>,
+    end_offset: Option<f64>,
+) -> Result<(), String> {
+    crate::services::vod_replay::begin(&app, &video_id, &login, start_offset.unwrap_or(0.0), end_offset, position);
+    Ok(())
+}
+
+/// The replay rows to add with the player at `position` (about once a second).
+#[tauri::command]
+pub async fn vod_replay_tick(
+    app: AppHandle,
+    video_id: String,
+    position: f64,
+) -> Result<crate::services::vod_replay::ReplayStep, String> {
+    Ok(crate::services::vod_replay::tick(&app, &video_id, position))
+}
+
+#[tauri::command]
+pub async fn vod_replay_stop() -> Result<(), String> {
+    crate::services::vod_replay::stop();
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -2264,6 +2513,16 @@ pub async fn get_vod_comments(
     offset_seconds: f64,
     state: State<'_, AppState>,
 ) -> Result<Vec<VodComment>, String> {
+    vod_comments_at(&video_id, &channel_login, offset_seconds, state.emote_service.clone()).await
+}
+
+/// One page of a VOD's recorded chat from `offset_seconds`, parsed like live rows.
+pub(crate) async fn vod_comments_at(
+    video_id: &str,
+    channel_login: &str,
+    offset_seconds: f64,
+    emote_service: Arc<tokio::sync::RwLock<crate::services::emote_service::EmoteService>>,
+) -> Result<Vec<VodComment>, String> {
     let offset_int = offset_seconds.max(0.0).floor() as i64;
     let body = serde_json::json!({
         "operationName": "VideoCommentsByOffsetOrCursor",
@@ -2305,10 +2564,7 @@ pub async fn get_vod_comments(
     // without this third-party emotes would fall back to plain text. Guarded to
     // fetch at most once per channel per session.
     if !chan.is_empty() {
-        crate::services::irc_service::IrcService::ensure_channel_emotes_for_parse(
-            &chan,
-            state.emote_service.clone(),
-        )
+        crate::services::irc_service::IrcService::ensure_channel_emotes_for_parse(&chan, emote_service)
         .await;
     }
 

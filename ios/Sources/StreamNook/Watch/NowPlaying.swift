@@ -3,6 +3,7 @@ import UIKit
 
 /// The lock screen and Control Center card for the stream being watched: the title (or the
 /// channel when untitled), the channel's name and avatar, marked live so no seek controls show.
+/// A VOD instead carries its length and playhead, and the card scrubs and skips ten seconds.
 /// The player is the source of truth: a card button only sends a command, and the card's
 /// play/pause follows what the player then does. Stop ends the stream (headsets, CarPlay, Siri;
 /// the lock screen itself has no Stop slot).
@@ -11,6 +12,9 @@ final class NowPlaying {
     var onPlay: (() -> Void)?
     var onPause: (() -> Void)?
     var onStop: (() -> Void)?
+    /// A VOD's card moved the playhead: to a time, or by a number of seconds.
+    var onSeek: ((Double) -> Void)?
+    var onSkip: ((Double) -> Void)?
 
     private var info: [String: Any] = [:]
     private var avatar: URL?
@@ -22,7 +26,7 @@ final class NowPlaying {
         setUpCommands()
         info[MPMediaItemPropertyTitle] = title.isEmpty ? channel : title
         info[MPMediaItemPropertyArtist] = channel
-        info[MPNowPlayingInfoPropertyIsLiveStream] = true
+        if info[MPMediaItemPropertyPlaybackDuration] == nil { info[MPNowPlayingInfoPropertyIsLiveStream] = true }
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
         if info[MPNowPlayingInfoPropertyPlaybackRate] == nil { info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0 }
         publish()
@@ -36,6 +40,29 @@ final class NowPlaying {
                   let image = UIImage(data: data) else { return }
             self?.setArtwork(image)
         }
+    }
+
+    /// A VOD: its length and where it is, so the card shows a scrubber; nil `duration` turns the
+    /// card back into a live one.
+    func vod(duration: Double?, elapsed: Double, rate: Float) {
+        guard !info.isEmpty || duration != nil else { return }
+        let center = MPRemoteCommandCenter.shared()
+        if let duration, duration > 0 {
+            info[MPNowPlayingInfoPropertyIsLiveStream] = false
+            info[MPMediaItemPropertyPlaybackDuration] = duration
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+            info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = Double(rate)
+        } else {
+            info[MPNowPlayingInfoPropertyIsLiveStream] = true
+            info[MPMediaItemPropertyPlaybackDuration] = nil
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = nil
+            info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = nil
+        }
+        let on = duration != nil
+        for command in [center.changePlaybackPositionCommand, center.skipForwardCommand, center.skipBackwardCommand] {
+            command.isEnabled = on
+        }
+        publish()
     }
 
     /// The card's play/pause, from what the player is doing.
@@ -52,6 +79,10 @@ final class NowPlaying {
         avatar = nil
         info = [:]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        let center = MPRemoteCommandCenter.shared()
+        for command in [center.changePlaybackPositionCommand, center.skipForwardCommand, center.skipBackwardCommand] {
+            command.isEnabled = false
+        }
     }
 
     private func setArtwork(_ image: UIImage) {
@@ -91,6 +122,23 @@ final class NowPlaying {
         }
         center.stopCommand.addTarget { @Sendable [weak self] _ in
             Task { @MainActor in self?.onStop?() }
+            return .success
+        }
+        // A VOD's scrubber and skips; off until a VOD turns them on.
+        center.changePlaybackPositionCommand.addTarget { @Sendable [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            let time = event.positionTime
+            Task { @MainActor in self?.onSeek?(time) }
+            return .success
+        }
+        center.skipForwardCommand.preferredIntervals = [10]
+        center.skipBackwardCommand.preferredIntervals = [10]
+        center.skipForwardCommand.addTarget { @Sendable [weak self] _ in
+            Task { @MainActor in self?.onSkip?(10) }
+            return .success
+        }
+        center.skipBackwardCommand.addTarget { @Sendable [weak self] _ in
+            Task { @MainActor in self?.onSkip?(-10) }
             return .success
         }
         for command in [center.changePlaybackPositionCommand, center.skipForwardCommand, center.skipBackwardCommand,

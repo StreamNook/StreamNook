@@ -74,6 +74,12 @@ struct MainShell: View {
         .sheet(item: $model.clip) { link in
             ClipSheet(url: link.url, model: model)
         }
+        .sheet(item: $model.clipTarget) { target in
+            CreateClipSheet(target: target, model: model)
+        }
+        .sheet(item: $model.channelSheet) { channel in
+            ChannelSheet(channel: channel, model: model)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
@@ -119,6 +125,8 @@ struct MainShell: View {
             SettingsPage(model: model, section: section)
         case .cosmetics:
             CosmeticsScreen(model: model)
+        case .myClips:
+            MyClipsScreen(model: model)
         }
     }
 }

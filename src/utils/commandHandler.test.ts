@@ -141,7 +141,7 @@ describe('applying the answer', () => {
   });
 
   it('starts a clip for /clip', async () => {
-    answer(outcome({ ui: { kind: 'create_clip' } }));
+    answer(outcome({ ui: { kind: 'create_clip', channel: 'chan', channel_id: '42', title: '' } }));
     await run('/clip');
     expect(createClip).toHaveBeenCalled();
   });

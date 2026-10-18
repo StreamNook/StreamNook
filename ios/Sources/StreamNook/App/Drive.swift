@@ -20,6 +20,11 @@ import SwiftUI
 /// - `room:LOGIN` opens LOGIN's offline room (or its stream when it is live); `roomvod` plays the
 ///   room's latest broadcast, `roomback` returns to the room; `roomstate` logs what the room holds
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
+/// - `channelsheet` opens the watched channel's videos and clips; `vodof:INDEX` plays the watched
+///   channel's past broadcast at INDEX (as its Channel sheet does), `clipof:INDEX` its clip;
+///   `seek:SECONDS`, `skip:SECONDS`, `rate:SPEED` move a VOD; `replay:on|off` picks the replay or
+///   the live chat; `vodstate` logs the VOD and its replay; `clipsheet` opens Create clip (never
+///   creates one); `open:myclips` pushes You > Your clips
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
@@ -126,6 +131,19 @@ enum Drive {
                                                  gameName: "", isLive: false))
             case "roomvod": model.watch.playRoomVod()
             case "roomback": model.watch.leaveRoomVod()
+            case "channelsheet": model.channelSheet = model.watch.stream ?? model.nav.playing
+            case "vodof": await openMedia(model, clips: false, index: Int(value) ?? 0)
+            case "clipof": await openMedia(model, clips: true, index: Int(value) ?? 0)
+            case "seek": model.watch.seekVod(to: Double(value) ?? 0)
+            case "skip": model.watch.skipVod(by: Double(value) ?? 10)
+            case "rate": model.watch.setVodRate(Float(value) ?? 1)
+            case "replay": model.replayShown = value != "off"
+            case "vodstate":
+                let w = model.watch
+                let vod = w.playingVod
+                log.notice("drive vod \(vod?.videoID ?? "-", privacy: .public) play \(vod?.playID ?? 0) status \(vod?.status ?? "-", privacy: .public) at \(Int(w.vodPosition)) of \(Int(w.vodDuration)) rate \(w.vodRate) muted \(vod?.mutedSegments.count ?? 0) chapters \(vod?.chapters.count ?? 0) title \(w.vodTitle ?? "-", privacy: .public) replay \(model.replay?.rowCount ?? -1) shown \(model.replayShown) paused \(w.paused)")
+            case "clipsheet":
+                if let s = model.watch.stream { model.createClip(login: s.userLogin, channelID: s.userID ?? "") }
             case "roomstate":
                 let room = model.watch.room
                 log.notice("drive room \(room?.login ?? "-", privacy: .public) last \(room?.lastLiveAt ?? "-", privacy: .public) title \(room?.lastTitle ?? "-", privacy: .public) vod \(room?.latestVod?.id ?? "-", privacy: .public) next \(room?.nextStream?.startAt ?? "-", privacy: .public) waiting \(room?.chatters ?? -1) vodPlaying \(model.watch.roomVod) playing \(model.watch.stream?.userLogin ?? "-", privacy: .public)")
@@ -219,6 +237,28 @@ enum Drive {
     }
 
     /// The watched channel's most viewed clip, opened as a tapped chat link.
+    /// Plays the watched channel's video (or clip) at `index` from its Channel sheet's first page.
+    private static func openMedia(_ model: AppModel, clips: Bool, index: Int) async {
+        guard let channel = model.watch.stream ?? model.nav.playing, let id = channel.twitchID else {
+            log.notice("drive media: nothing watched")
+            return
+        }
+        let shelf: MediaShelf = clips ? .clips(.all) : .videos(.archive, .recent)
+        guard let page = try? await model.core.invoke("channel_media", args: shelf.args(channelID: id, cursor: nil),
+                                                       as: MediaPage.self),
+              page.rows.indices.contains(index) else {
+            log.notice("drive media: no row \(index)")
+            return
+        }
+        let row = page.rows[index]
+        log.notice("drive media \(row.kind, privacy: .public) \(row.id, privacy: .public) \(row.metaLine, privacy: .public) | \(row.countLine, privacy: .public) progress \(row.progress ?? -1)")
+        if clips {
+            if let url = URL(string: row.url) { model.clip = ClipLink(url: url) }
+        } else {
+            model.openVod(videoID: row.id, title: row.title, thumbnail: row.thumbnailUrl, channel: channel)
+        }
+    }
+
     private static func openTopClip(_ model: AppModel) async {
         struct Clip: Decodable { let url: String }
         guard let id = model.watch.stream?.userID,
@@ -317,6 +357,9 @@ enum Drive {
         case "cosmetics":
             model.nav.tab = .you
             model.nav.push(.cosmetics)
+        case "myclips":
+            model.nav.tab = .you
+            model.nav.push(.myClips)
         default:
             log.error("drive open: unknown \(what, privacy: .public)")
         }

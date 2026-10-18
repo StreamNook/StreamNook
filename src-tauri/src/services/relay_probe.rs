@@ -35,6 +35,10 @@ const CATCH_UP_RATE: f64 = 1.08;
 const CATCH_UP_START_MS: i64 = 500;
 /// ...which runs until the player is within this much of the target.
 const CATCH_UP_STOP_MS: i64 = 100;
+/// Distances the readout's median is taken over (the player asks once a second).
+const LABEL_SAMPLES: usize = 5;
+/// The readout stops counting here and reads "59s+".
+const LABEL_CAP_MS: i64 = 60_000;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -50,6 +54,7 @@ struct State {
     edges: VecDeque<EdgeArrival>,
     fetches: Vec<String>,
     catching_up: bool,
+    recent: VecDeque<i64>,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -122,6 +127,12 @@ pub struct LiveDistance {
     pub rate: f64,
     /// Player requests since the previous report, oldest first.
     pub fetches: Vec<String>,
+    /// The behind-live readout ("1.6s", "12s", "59s+"): the median of the last
+    /// few distances, so one late part does not make it jump. None until two
+    /// distances are in.
+    pub behind_label: Option<String>,
+    /// The readout as it is spoken ("1.6 seconds behind live").
+    pub behind_spoken: Option<String>,
 }
 
 /// Where live is on the programme timeline at `now`, and from the newest part
@@ -154,6 +165,13 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistanc
         _ => false,
     };
     s.catching_up = catching_up;
+    if let Some(b) = behind_ms {
+        s.recent.push_back(b);
+        while s.recent.len() > LABEL_SAMPLES {
+            s.recent.pop_front();
+        }
+    }
+    let shown = median(&s.recent);
     let fetches = std::mem::take(&mut s.fetches);
     let newest = s.edges.back();
     LiveDistance {
@@ -164,6 +182,43 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistanc
         edge_age_ms: newest.map(|e| now - e.arrived_ms),
         rate: if catching_up { CATCH_UP_RATE } else { 1.0 },
         fetches,
+        behind_label: shown.map(behind_label),
+        behind_spoken: shown.map(behind_spoken),
+    }
+}
+
+/// The middle distance once two are in.
+fn median(recent: &VecDeque<i64>) -> Option<i64> {
+    if recent.len() < 2 {
+        return None;
+    }
+    let mut sorted: Vec<i64> = recent.iter().copied().collect();
+    sorted.sort_unstable();
+    Some(sorted[sorted.len() / 2])
+}
+
+/// Tenths under ten seconds, whole seconds up to a minute, then "59s+". Never
+/// below 0.1 s: jitter can put the player a hair past the measured edge.
+fn behind_label(ms: i64) -> String {
+    let ms = ms.max(100);
+    if ms >= LABEL_CAP_MS {
+        "59s+".to_string()
+    } else if ms < 9_950 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format!("{}s", ((ms + 500) / 1000).min(59))
+    }
+}
+
+fn behind_spoken(ms: i64) -> String {
+    let ms = ms.max(100);
+    if ms >= LABEL_CAP_MS {
+        "over a minute behind live".to_string()
+    } else {
+        let label = behind_label(ms);
+        let number = label.trim_end_matches('s');
+        let unit = if number == "1" || number == "1.0" { "second" } else { "seconds" };
+        format!("{number} {unit} behind live")
     }
 }
 
@@ -190,6 +245,30 @@ mod tests {
         let (freshest, newest) = edge_at(&edges, 101_000).unwrap();
         assert_eq!(freshest, 106_000);
         assert_eq!(newest, 105_700);
+    }
+
+    #[test]
+    fn the_readout_words_each_range() {
+        assert_eq!(behind_label(1_640), "1.6s");
+        assert_eq!(behind_label(-300), "0.1s");
+        assert_eq!(behind_label(9_940), "9.9s");
+        assert_eq!(behind_label(9_960), "10s");
+        assert_eq!(behind_label(12_400), "12s");
+        assert_eq!(behind_label(59_600), "59s");
+        assert_eq!(behind_label(60_000), "59s+");
+        assert_eq!(behind_spoken(1_640), "1.6 seconds behind live");
+        assert_eq!(behind_spoken(12_400), "12 seconds behind live");
+        assert_eq!(behind_spoken(120_000), "over a minute behind live");
+    }
+
+    #[test]
+    fn the_readout_is_the_median_and_waits_for_two() {
+        let mut recent = VecDeque::new();
+        recent.push_back(1_500);
+        assert_eq!(median(&recent), None);
+        recent.push_back(1_600);
+        recent.push_back(9_000);
+        assert_eq!(median(&recent), Some(1_600));
     }
 
     #[test]
