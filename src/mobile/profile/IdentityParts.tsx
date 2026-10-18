@@ -245,9 +245,11 @@ export const MemberRankMark: React.FC<{ rank: MemberRank }> = ({ rank }) => {
 
 /** Which of your two pictures shows where, as the avatar's tap explains it. */
 const PictureNote: React.FC<{ sevenTv: boolean }> = ({ sevenTv }) => (
+  // The solid popover surface: glass let the card's own rows read through
+  // the note's last line.
   <div
     role="note"
-    className="absolute left-0 top-full mt-2 z-30 w-[290px] max-w-[calc(100vw-32px)] glass-modal rounded-xl p-4 flex flex-col gap-2.5"
+    className="absolute left-0 top-full mt-2 z-30 w-[290px] max-w-[calc(100vw-32px)] sn-popover sn-popover--static shadow-lg rounded-xl p-4 flex flex-col gap-2.5"
   >
     <NoteLine brand="seventv">
       {sevenTv
