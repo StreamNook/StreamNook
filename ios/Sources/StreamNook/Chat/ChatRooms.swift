@@ -125,7 +125,7 @@ final class ChatRooms {
                 if let update = PinnedUpdate.parse(event.payloadJSON) {
                     self?.takePins(login: update.login.lowercased(), update.pinned)
                 } else if let self, let room = self.groupRoom(event.payloadJSON) {
-                    self.groups[room.login] = room.group
+                    self.setGroup(room.group, login: room.login)
                 } else if let update = RelationshipUpdate.parse(event.payloadJSON) {
                     self?.takeRelationship(login: update.login.lowercased(), update.relationship)
                 }
@@ -511,7 +511,7 @@ final class ChatRooms {
                 enum CodingKeys: String, CodingKey { case collab, sharedChat = "shared_chat" }
             }
             if sessions[tab.channel] != nil, let held = try? JSONDecoder().decode(Held.self, from: Data(json.utf8)) {
-                groups[tab.login] = held.collab ?? held.sharedChat
+                setGroup(held.collab ?? held.sharedChat, login: tab.login)
             }
         }
         Task {
@@ -544,6 +544,13 @@ final class ChatRooms {
             if let group = ChannelGroup.collabPush(json, login: tab.login) { return (tab.login, group) }
         }
         return nil
+    }
+
+    private func setGroup(_ group: ChannelGroup?, login: String) {
+        guard groups[login] != group else { return }
+        groups[login] = group
+        let kind = group.map { $0.together ? "together" : "shared chat" } ?? "none"
+        chatLog.notice("chat room \(login, privacy: .public) group: \(kind, privacy: .public)")
     }
 
     /// The room on screen's group, when its channel streams together or shares its chat.
