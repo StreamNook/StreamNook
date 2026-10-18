@@ -12,6 +12,8 @@ enum ChatLab {
     private static var window: UIWindow?
     private(set) static var session: ChatSession?
     static let state = ChatLabState()
+    /// The stage's own drop, shown by `dropfake` (the stage has no watched stream).
+    static let drop = WatchDropModel()
 
     static func open(core: CoreBridge, mode: String) {
         close()
@@ -45,6 +47,7 @@ enum ChatLab {
     }
 
     static func close() {
+        drop.set(nil)
         session?.stop()
         session = nil
         window?.isHidden = true
@@ -82,7 +85,7 @@ struct ChatLabView: View {
                 VStack(spacing: 0) {
                     videoStandIn
                         .aspectRatio(16 / 9, contentMode: .fit)
-                    ChatPanel(session: session)
+                    ChatPanel(session: session, drop: ChatLab.drop)
                         .background(SN.background)
                 }
             }

@@ -489,8 +489,13 @@ private struct ChatArea: View {
                            replay: model.replay,
                            replayShown: Binding(get: { model.replayShown }, set: { model.replayShown = $0 }),
                            replayAt: model.watch.playingVod == nil ? nil : PlayerText.clock(model.watch.vodPosition),
-                           streamBanner: AnyView(WatchDropBar(model: model, visible: !readOnly && model.chat.viewingStream)),
+                           drop: .watched,
                            onProfile: { model.cosmetics.open($0) })
+                // The reader stays mounted whichever room or mode is on screen, so its reading
+                // never stops; the chat stack draws what it reads.
+                .background {
+                    WatchDropReader(model: model, drops: .watched, visible: !readOnly && model.chat.viewingStream)
+                }
         } else {
             VStack(spacing: 14) {
                 Text("Sign in with Twitch to read and send chat.")

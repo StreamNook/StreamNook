@@ -45,6 +45,8 @@ public final class FakeLiveVotes: Sendable {
             return (try FakeCore.json(["channel_id": channel, "view": predictionView(channel: channel)]), nil)
         case "watch_channel_poll_view":
             return (try Self.fragment(pollView(channel: channel)), nil)
+        case "chat_top_stack":
+            return (try FakeCore.json(Self.stackLayout(args["request"] as? [String: Any] ?? [:])), nil)
         case "prediction_bet":
             let outcome = args["outcomeId"] as? String ?? ""
             let typed = args["amount"] as? String
@@ -119,6 +121,34 @@ public final class FakeLiveVotes: Sendable {
             s.prediction = next
         }
         return (try? FakeCore.json(["channel_id": channel, "view": predictionView(channel: channel)])) ?? "{}"
+    }
+
+    // MARK: The stack, as Rust lays it out
+
+    /// `chat_top_stack`'s answer, the way services/chat_top_stack.rs decides it, so the fake chat
+    /// stage stacks its cards like the real core: votes in the order setting, the drop after them,
+    /// one card open at most (the one the viewer opened, else on a tall enough column the first
+    /// vote they did not fold, else a lone drop), capped at 40 percent of the column.
+    public static func stackLayout(_ request: [String: Any]) -> [String: Any] {
+        let cards = request["cards"] as? [String] ?? []
+        let folded = request["folded"] as? [String] ?? []
+        let height = (request["chat_height"] as? NSNumber)?.doubleValue ?? 0
+        let collapsed = request["polls_start_collapsed"] as? Bool ?? false
+        let votes = request["order"] as? String == "poll-first" ? ["poll", "prediction"] : ["prediction", "poll"]
+        let order = (votes + ["drop"]).filter(cards.contains)
+        let compact = height > 0 && height < 460
+        var open = (request["opened"] as? String).flatMap { cards.contains($0) ? $0 : nil }
+        if open == nil, !compact {
+            open = order.first { kind in
+                switch kind {
+                case "poll": !collapsed && !folded.contains(kind)
+                case "prediction": !folded.contains(kind)
+                default: !folded.contains(kind) && order.allSatisfy { $0 == "drop" }
+                }
+            }
+        }
+        let maxHeight = height > 0 ? max(height * 0.4, 76).rounded() : 0
+        return ["slots": order.map { ["kind": $0, "open": $0 == open] as [String: Any] }, "max_height": maxHeight]
     }
 
     // MARK: The views, as Rust words them

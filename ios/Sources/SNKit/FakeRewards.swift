@@ -45,13 +45,7 @@ public final class FakeRewards: Sendable {
             return try FakeCore.json(Self.wall(sort: args["sort"] as? String ?? "newest"))
         case "get_watch_drop":
             guard connected else { return "null" }
-            let ready = claims.isEmpty
-            return try FakeCore.json([
-                "campaign_id": "c1", "drop_id": ready ? "d2" : "d3", "instance_id": "inst", "name": ready ? "Hoodie" : "Pants",
-                "image": "", "trailing": ready ? "" : "1h 48m to watch", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
-                "percent": ready ? 100.0 : 40.0, "complete": ready, "claim_label": "Claim",
-                "spoken": ready ? "Hoodie, ready to claim" : "Pants, 108 minutes left",
-            ] as [String: Any])
+            return Self.watchDropJSON(ready: claims.isEmpty)
         case "claim_drop":
             state.withLock { $0.claims.append(args["dropId"] as? String ?? "") }
             return "null"
@@ -81,6 +75,17 @@ public final class FakeRewards: Sendable {
         default:
             return nil
         }
+    }
+
+    /// `get_watch_drop`'s answer: a drop ready to claim, or the next one 40 percent of the way.
+    /// The chat stage shows it too (`dropfake`), so its words are Rust's (services/watch_drop.rs).
+    public static func watchDropJSON(ready: Bool) -> String {
+        (try? FakeCore.json([
+            "campaign_id": "c1", "drop_id": ready ? "d2" : "d3", "instance_id": "inst", "name": ready ? "Hoodie" : "Pants",
+            "image": "", "trailing": ready ? "" : "1h 48m to watch", "status": ready ? "Ready" : "1h 48m to watch", "line": "Rust Twitch Drops Round 41 · \(ready ? 2 : 3) of 4",
+            "percent": ready ? 100.0 : 40.0, "complete": ready, "claim_label": "Claim",
+            "spoken": ready ? "Hoodie, ready to claim" : "Pants, 108 minutes left",
+        ] as [String: Any])) ?? "null"
     }
 
     // MARK: The wallet (FakeWallet answers; writes are only recorded)

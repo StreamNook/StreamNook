@@ -2,10 +2,10 @@ import Foundation
 import Observation
 import SNKit
 
-/// One room's poll and prediction cards: the views Rust pushes for the room, the settings that
-/// decide which cards show, which ones the viewer folded, a vote waiting on Twitch, and the bet
-/// being shaped. Every word and number comes from Rust; this only keeps the viewer's picks and
-/// asks Rust what they would do.
+/// One room's top of chat: the poll and prediction views Rust pushes for the room, the drop shown
+/// over it, the settings that decide which cards show, what the viewer opened or folded, Rust's
+/// layout of the stack, a vote waiting on Twitch, and the bet being shaped. Every word, number
+/// and layout comes from Rust; this only keeps the viewer's picks and asks Rust what they do.
 @Observable @MainActor
 final class LiveVotesModel {
     @ObservationIgnored private(set) weak var session: ChatSession?
@@ -14,7 +14,19 @@ final class LiveVotesModel {
     private(set) var poll: PollView?
     private(set) var prediction: PredictionView?
     private(set) var settings = LiveVoteSettings()
-    private(set) var folds = LiveVoteFolds()
+
+    /// Rust's layout of the stack (`chat_top_stack`), nil until it first answers.
+    private(set) var layout: StackLayout?
+    /// What the viewer opened and folded, which Rust reads.
+    private(set) var viewer = StackViewer()
+    /// The drop shown over this room, by id: the watched stream's, only on its own room.
+    private(set) var dropID: String?
+    /// The chat column's height as last asked about, in points.
+    private(set) var chatHeight: Double = 0
+    /// A height a drive step forces, to check the short-column rule on any phone.
+    var forcedHeight: Double? {
+        didSet { applyHeight() }
+    }
 
     /// The choice just tapped, shown as the viewer's at once until Rust's next push confirms it.
     private(set) var pendingChoice: String?
@@ -36,15 +48,41 @@ final class LiveVotesModel {
 
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var betTask: Task<Void, Never>?
+    @ObservationIgnored private var stackTask: Task<Void, Never>?
+    @ObservationIgnored private var stackAsks = 0
+    /// Each card's identity, so a new poll, prediction or drop starts fresh.
+    @ObservationIgnored private var identities: [TopCard: String] = [:]
+    /// The column's height as measured, and whether a card's own field holds the height.
+    @ObservationIgnored private var measuredHeight: Double = 0
+    @ObservationIgnored private var heightHeld = false
+    @ObservationIgnored private var stackFailed = false
 
     init(session: ChatSession) {
         self.session = session
         core = session.core
     }
 
-    /// The cards to draw, in order, each open or folded.
-    var slots: [LiveVoteSlot] {
-        LiveVoteStack.slots(poll: poll, prediction: prediction, settings: settings, folds: folds)
+    /// The cards to draw, top to bottom, each open or a strip: Rust's layout, less any card that
+    /// left since it answered (a card that just arrived waits for Rust's next answer).
+    var slots: [StackSlot] {
+        let present = Set(presentCards)
+        return (layout?.slots ?? []).filter { $0.card.map(present.contains) ?? false }
+    }
+
+    /// The most height the stack may take; 0 when uncapped.
+    var maxHeight: CGFloat { CGFloat(layout?.maxHeight ?? 0) }
+
+    /// The cards there are to show, before Rust orders them.
+    var presentCards: [TopCard] {
+        var cards: [TopCard] = []
+        if settings.showPredictions, prediction != nil { cards.append(.prediction) }
+        if settings.showPolls, poll != nil { cards.append(.poll) }
+        if dropID != nil { cards.append(.drop) }
+        return cards
+    }
+
+    var stackRequest: StackRequest {
+        StackRequest(cards: presentCards, settings: settings, viewer: viewer, chatHeight: chatHeight)
     }
 
     /// The room's id, which every push and command is keyed by.
@@ -98,6 +136,7 @@ final class LiveVotesModel {
         tasks.forEach { $0.cancel() }
         tasks = []
         betTask?.cancel()
+        stackTask?.cancel()
     }
 
     /// Reads both cards fresh (also asks Rust to follow the room's poll).
@@ -118,21 +157,90 @@ final class LiveVotesModel {
         guard let json = try? await core.invoke("get_settings_view", "{}"),
               let view = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
               let values = view["values"] as? [String: Any] else { return }
-        settings = LiveVoteSettings(values: values)
+        let next = LiveVoteSettings(values: values)
+        guard next != settings else { return }
+        settings = next
+        cardsChanged()
     }
 
-    // MARK: Folding
+    // MARK: The stack
 
-    func toggle(_ slot: LiveVoteSlot) {
-        folds.set(slot.key, folded: !slot.folded)
+    /// A tap on a card's head: opens a strip (folding the rest) or folds the open card. The tap
+    /// shows at once; Rust's answer to the same question follows.
+    func tap(_ card: TopCard) {
+        let shown = slots
+        let wasOpen = shown.first { $0.card == card }?.open ?? false
+        viewer.tap(card, wasOpen: wasOpen, shown: shown.compactMap(\.card))
+        layout = layout?.showing(open: wasOpen ? nil : card)
+        askStack()
     }
 
-    /// Forgets folds of cards that are gone, so a long session does not keep every id.
-    private func pruneFolds() {
-        var keys: Set<String> = []
-        if let poll { keys.insert("poll:\(poll.pollID)") }
-        if let prediction { keys.insert("prediction:\(prediction.predictionID)") }
-        folds.keep(only: keys)
+    /// The drop shown over this room changed (nil: none).
+    func setDrop(_ id: String?) {
+        guard id != dropID else { return }
+        dropID = id
+        cardsChanged()
+    }
+
+    /// The chat column was measured. Resizes settle a beat before Rust is asked.
+    func setChatHeight(_ height: CGFloat) {
+        measuredHeight = Double(height.rounded())
+        applyHeight()
+    }
+
+    /// While a card's own field is being typed in, the number pad's shrink is not a short column:
+    /// the card keeps the room it had, and the real height applies once typing stops.
+    func holdHeight(_ held: Bool) {
+        heightHeld = held
+        applyHeight()
+    }
+
+    private func applyHeight() {
+        let next = forcedHeight ?? measuredHeight
+        guard next > 0, next != chatHeight, !(heightHeld && forcedHeight == nil && next < chatHeight) else { return }
+        let first = chatHeight == 0
+        chatHeight = next
+        askStack(after: first || forcedHeight != nil ? .zero : .milliseconds(150))
+    }
+
+    /// A card came, went or changed its identity: a new one starts with nothing opened or folded.
+    private func cardsChanged() {
+        let now: [TopCard: String] = [
+            .poll: poll?.pollID ?? "", .prediction: prediction?.predictionID ?? "", .drop: dropID ?? "",
+        ]
+        for (card, id) in now where identities[card, default: ""] != id { viewer.forget(card) }
+        identities = now
+        askStack()
+    }
+
+    /// Asks Rust for the layout; a newer question makes an older answer moot.
+    private func askStack(after delay: Duration = .zero) {
+        stackTask?.cancel()
+        stackAsks += 1
+        let ask = stackAsks
+        let request = stackRequest
+        guard !request.cards.isEmpty else {
+            layout = StackLayout(slots: [], maxHeight: layout?.maxHeight ?? 0)
+            return
+        }
+        stackTask = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled, let self else { return }
+            do {
+                let json = try await self.core.invoke("chat_top_stack", request.argsJSON)
+                let answer = try JSONDecoder().decode(StackLayout.self, from: Data(json.utf8))
+                guard ask == self.stackAsks else { return }
+                self.layout = answer
+            } catch {
+                guard ask == self.stackAsks else { return }
+                if !self.stackFailed {
+                    self.stackFailed = true
+                    log.error("chat_top_stack failed: \(String(describing: error), privacy: .public)")
+                }
+                // A core without the command still shows every card, as strips the viewer opens.
+                self.layout = StackLayout.strips(request.cards).showing(open: self.viewer.opened)
+            }
+        }
     }
 
     // MARK: Poll
@@ -144,7 +252,7 @@ final class LiveVotesModel {
             pendingChoice = nil
         }
         poll = next
-        pruneFolds()
+        cardsChanged()
     }
 
     /// Whether the viewer's mark is on this choice (theirs per Rust, or just tapped).
@@ -176,7 +284,7 @@ final class LiveVotesModel {
     func take(prediction next: PredictionView?) {
         let previous = prediction
         prediction = next
-        pruneFolds()
+        cardsChanged()
         guard let next else {
             resetBet()
             confirmOpen = false
@@ -300,8 +408,8 @@ final class LiveVotesModel {
     }
 }
 
-/// Each room's cards model, kept for the room's life so folds and a half-shaped bet survive
-/// switching tabs or turning the phone.
+/// Each room's cards model, kept for the room's life so what the viewer opened or folded and a
+/// half-shaped bet survive switching tabs or turning the phone.
 @MainActor
 final class LiveVotesRegistry {
     static let shared = LiveVotesRegistry()

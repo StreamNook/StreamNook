@@ -69,6 +69,8 @@ enum SN {
     static var accent: Color { p.accent.color }
     static var accentHover: Color { p.accentHover.color }
     static var accentMuted: Color { p.accentMuted.color }
+    /// The accent for marks and bars on a card, readable on the card track in every theme.
+    static var accentOnSurface: Color { p.accentOnSurface.color }
     static var border: Color { p.border.color }
     static var borderLight: Color { p.borderLight.color }
     static var borderSubtle: Color { p.borderSubtle.color }
