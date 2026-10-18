@@ -94,12 +94,9 @@ const Spinner: React.FC = () => (
  *  each picture says whose it is without words. */
 const PictureFrame: React.FC<{ brand: 'twitch' | 'seventv'; children: React.ReactNode }> = ({ brand, children }) => (
   <div className="relative shrink-0" aria-hidden="true">
-    {/* glass-exempt: the theme's raised surface made solid, so a picture with
+    {/* glass-exempt: pure black, like every picture of ours, so a picture with
         transparent parts never shows the panel through it. */}
-    <div
-      className="w-11 h-11 rounded-full overflow-hidden ring-1 ring-white/10"
-      style={{ background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background)' }}
-    >
+    <div className="w-11 h-11 rounded-full overflow-hidden ring-1 ring-white/10" style={{ background: '#000' }}>
       {children}
     </div>
     <span
