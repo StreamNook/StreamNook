@@ -197,7 +197,37 @@ final class ImagePipeline: @unchecked Sendable {
             }
         }
         guard !frames.isEmpty else { return nil }
+        // An animation whose thumbnails all came back as one picture (a lossless WebP's frames
+        // can) is decoded again frame by frame at full size and scaled here, as WebKit decodes
+        // animations; the timing stays the same.
+        if indices.count > 1, frames.count == indices.count, Self.looksStill(frames) {
+            let redone = indices.compactMap { i in
+                CGImageSourceCreateImageAtIndex(source, i, nil).flatMap { Self.scaled($0, maxSide: maxSide) }
+            }
+            if redone.count == frames.count, !Self.looksStill(redone) { frames = redone }
+        }
         return DecodedImage(frames: frames, durations: durations)
+    }
+
+    /// True when the first, quarter and middle frames hold the same pixels.
+    private static func looksStill(_ frames: [CGImage]) -> Bool {
+        let picks = [0, frames.count / 4, frames.count / 2].map { frames[$0].dataProvider?.data as Data? }
+        guard let first = picks[0] else { return false }
+        return picks.allSatisfy { $0 == first }
+    }
+
+    /// The frame drawn at most `maxSide` pixels on its longer side, as premultiplied BGRA.
+    private static func scaled(_ image: CGImage, maxSide: Int) -> CGImage? {
+        let longer = max(image.width, image.height)
+        let factor = longer > maxSide ? Double(maxSide) / Double(longer) : 1
+        let width = max(1, Int((Double(image.width) * factor).rounded()))
+        let height = max(1, Int((Double(image.height) * factor).rounded()))
+        let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: colorSpace, bitmapInfo: info) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
