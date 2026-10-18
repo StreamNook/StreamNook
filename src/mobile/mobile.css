@@ -244,17 +244,17 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* A popover that sits OVER SCROLLING CHAT (the drop bar, the pinned banner).
-   The house popover blurs 64px of whatever is behind it, and behind these two
-   is a chat that repaints on every message, so the blur was recomputed on
-   every frame for the whole watch. A firmer tint carries the legibility the
-   blur was providing: at 90% the chat's words still showed through the card,
-   so it is 97%, and solid at Glassiness 0. The tint is only as solid as the
-   page background it mixes, which a custom theme can make see-through; on a
-   phone applyTheme flattens that background over black (phoneFloors), so this
-   stays solid on every theme and keeps the theme's own popover light. */
+/* A popover with no blur behind it (the drop bar, the pinned banner, the You
+   card's picture note). The house popover blurs 64px of whatever is behind
+   it, and behind the first two is a chat that repaints on every message, so
+   the blur was recomputed every frame. With no blur the tint is all there is,
+   and any tint short of solid leaves the text behind crisp (at 97% a white
+   line still showed as a ghost on the phone), so a static popover is fully
+   opaque: the glass contract's "never crisp". The page background it mixes
+   is opaque on a phone (phoneFloors), and the theme's popover light still
+   rides the image layers on top. */
 .sn-mobile .sn-popover--static {
-  --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
+  --sn-popover-tint: 100%;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
