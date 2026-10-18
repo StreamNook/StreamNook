@@ -106,13 +106,15 @@ export const YouScreen: React.FC = () => {
         Open the app on
       </div>
       {/* The segments share the row's width, so the track ends where the
-          cards above and below it end. */}
-      <div className="px-4 mb-4 [&_[role=radio]]:flex-1">
+          cards above and below it end; each is sized to its label, so all five
+          fit on one line. */}
+      <div className="px-4 mb-4">
         <SegmentedControl<MobileTab>
           label="Open the app on"
           value={startTab}
           onChange={setStartTab}
           segments={START_TABS}
+          fill
         />
       </div>
 
