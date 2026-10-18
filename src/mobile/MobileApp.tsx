@@ -2,7 +2,7 @@
 // services, same theme system, phone-shaped chrome (bottom tabs, sheets,
 // safe-area frame). Boot orchestration is deliberately replicated, not shared;
 // see boot/useMobileBoot.ts for the contract with App.tsx.
-import React, { lazy, Suspense, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './mobile.css';
 import { useAppStore } from '../stores/AppStore';
@@ -109,6 +109,28 @@ const MobileApp: React.FC = () => {
     setPrevTabIndex(tabIndex);
   }
 
+  // The Chats tab stays mounted once opened, hidden and paused while another
+  // tab is in front. Unmounting it slid the whole chat list (rows, emotes,
+  // animated paints) out while the next tab mounted, and dropped frames on
+  // every switch away; coming back rebuilt every row. Shown again, it eases in
+  // on opacity and transform only, like the other tabs' slide.
+  const [chatsKept, setChatsKept] = useState(activeTab === 'chats');
+  if (activeTab === 'chats' && !chatsKept) setChatsKept(true);
+  const chatsShown = activeTab === 'chats';
+  const chatsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!chatsShown || !chatsRef.current) return;
+    chatsRef.current.animate(
+      [
+        { opacity: 0, transform: `translateX(${28 * direction}px)` },
+        { opacity: 1, transform: 'none' },
+      ],
+      { duration: 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+    );
+    // Runs on showing only; the direction is read as it stands then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsShown]);
+
   useEffect(() => installBackHandler(), []);
   useEffect(() => installLifecycle(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
@@ -164,11 +186,20 @@ const MobileApp: React.FC = () => {
               >
                 {activeTab === 'following' && <FollowingScreen />}
                 {activeTab === 'browse' && <BrowseScreen />}
-                {activeTab === 'chats' && <ChatsScreen />}
                 {activeTab === 'rewards' && <RewardsScreen />}
                 {activeTab === 'you' && <YouScreen />}
               </motion.div>
             </AnimatePresence>
+            {chatsKept && (
+              <div
+                ref={chatsRef}
+                hidden={!chatsShown}
+                className="absolute inset-0 flex flex-col"
+                style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
+              >
+                <ChatsScreen active={chatsShown} />
+              </div>
+            )}
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
           <MobileTabBar hidden={shellCovered} floor={activeTab !== 'chats' || !chatTabsOpen} />
