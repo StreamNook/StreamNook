@@ -1198,6 +1198,10 @@ pub struct Settings {
     /// are varied. Typed because the Rust runner reads it.
     #[serde(default)]
     pub chat_burst: ChatBurstSettings,
+    /// What counts as a mention of you, and which chats keep them quiet.
+    /// Typed because the chat rules and the mentions inbox read it.
+    #[serde(default)]
+    pub mentions: MentionSettings,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1421,6 +1425,39 @@ impl Default for ChatBurstSettings {
     }
 }
 
+/// What counts as someone mentioning you, and where mentions stay quiet.
+/// Read by the chat rules (services/mention_match.rs) and the mentions inbox.
+/// Mirrors the frontend `MentionSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct MentionSettings {
+    /// Your login as a whole word, without the `@`.
+    pub match_bare_login: bool,
+    /// Your display name, when it differs from your login.
+    pub match_display_name: bool,
+    /// Your highlight phrases count as mentions too: they file into the
+    /// inbox and notify.
+    pub highlight_words: bool,
+    /// Chats whose mentions still highlight but never notify or reach the
+    /// inbox, by room key (bare Twitch login, `provider:slug` otherwise).
+    pub muted_channels: Vec<String>,
+    /// Keys the frontend adds to this group before this struct names them.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for MentionSettings {
+    fn default() -> Self {
+        Self {
+            match_bare_login: true,
+            match_display_name: true,
+            highlight_words: true,
+            muted_channels: Vec::new(),
+            extra: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct SnippetSettings {
@@ -1576,6 +1613,7 @@ impl Default for Settings {
             cosmetics: CosmeticsSettings::default(),
             chat_input: ChatInputSettings::default(),
             chat_burst: ChatBurstSettings::default(),
+            mentions: MentionSettings::default(),
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,

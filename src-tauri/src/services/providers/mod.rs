@@ -271,6 +271,8 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
         crate::services::irc_service::run_message_side_effects(evaluated);
         return;
     }
+    // Inbox, mention sound and notification, as on the Twitch lane.
+    crate::services::mention_inbox::on_verdict(&evaluated, &verdict);
     // A native shell draws the row Rust laid out, as on the Twitch lane.
     crate::services::chat_row_view::stamp(&mut evaluated);
     let msg = &evaluated;

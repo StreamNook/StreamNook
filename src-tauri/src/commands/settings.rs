@@ -628,6 +628,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
     crate::services::mention_ping::refresh(settings);
+    crate::services::mention_inbox::refresh(settings);
     #[cfg(desktop)]
     crate::services::mention_notify::refresh(settings);
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a

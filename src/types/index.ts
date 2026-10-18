@@ -646,6 +646,20 @@ export interface ChatBurstSettings {
   vary_repeats?: boolean;
 }
 
+// What counts as a mention of you, and which chats keep them quiet.
+// Mirrored in models/settings.rs (MentionSettings).
+export interface MentionSettings {
+  // Your login as a whole word, without the @. Default true.
+  match_bare_login?: boolean;
+  // Your display name, when it differs from your login. Default true.
+  match_display_name?: boolean;
+  // Highlight phrases count as mentions (inbox and notifications). Default true.
+  highlight_words?: boolean;
+  // Room keys (bare Twitch login, provider:slug otherwise) that never notify
+  // or reach the inbox.
+  muted_channels?: string[];
+}
+
 // Render / perf controls. All optional with defaults preserving prior behavior.
 export interface ChatRenderSettings {
   // Animate the scroll when the user clicks the "Resume" button at the
@@ -1240,6 +1254,7 @@ export interface Settings {
   snippets?: SnippetSettings;
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
+  mentions?: MentionSettings;
   live_notifications?: LiveNotificationSettings;
   last_seen_version?: string;
   auto_switch?: AutoSwitchSettings;

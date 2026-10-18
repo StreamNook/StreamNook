@@ -24,6 +24,7 @@
 
 use crate::models::chat_layout::{BuiltInStamp, ChatMessage, HighlightStamp, ScrollbarMark};
 use crate::models::settings::Settings;
+use crate::services::mention_match::{find_mention, MatchOptions, MentionTarget, NameHit};
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -329,6 +330,8 @@ pub struct CompiledRules {
     /// ticks. Empty leaves the tick to the page's theme colour.
     mention_color: String,
     reply_color: String,
+    /// Which of your names count as a mention (`settings.mentions`).
+    pub mention_opts: crate::services::mention_match::MatchOptions,
 }
 
 impl Default for BuiltIn {
@@ -893,6 +896,7 @@ pub fn mentions_login(content: &str, login: &str) -> bool {
 static RULES: OnceLock<RwLock<Arc<CompiledRules>>> = OnceLock::new();
 static RULES_HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static OWN: OnceLock<RwLock<Option<(String, String)>>> = OnceLock::new();
+static OWN_TARGET: OnceLock<RwLock<MentionTarget>> = OnceLock::new();
 
 fn rules_cell() -> &'static RwLock<Arc<CompiledRules>> {
     RULES.get_or_init(|| RwLock::new(Arc::new(CompiledRules::default())))
@@ -900,6 +904,10 @@ fn rules_cell() -> &'static RwLock<Arc<CompiledRules>> {
 
 fn own_cell() -> &'static RwLock<Option<(String, String)>> {
     OWN.get_or_init(|| RwLock::new(None))
+}
+
+fn own_target_cell() -> &'static RwLock<MentionTarget> {
+    OWN_TARGET.get_or_init(|| RwLock::new(MentionTarget::default()))
 }
 
 pub struct ChatRules;
@@ -911,6 +919,11 @@ pub struct Verdict {
     pub mentioned: bool,
     /// A reply to one of the signed-in account's own messages.
     pub reply_to_me: bool,
+    /// Which of your names it used, when `mentioned`.
+    pub name_hit: Option<NameHit>,
+    /// The highlight that matched was one of your phrases (not a user or
+    /// badge rule), so it can count as a mention.
+    pub phrase_hit: bool,
 }
 
 /// Full result of one evaluation, applied to the message after the borrowed
@@ -918,6 +931,7 @@ pub struct Verdict {
 struct Evaluation {
     drop: bool,
     mentioned: bool,
+    name_hit: Option<NameHit>,
     reply_to_me: bool,
     highlight: Option<HighlightStamp>,
     built_in: Option<BuiltInStamp>,
@@ -931,12 +945,24 @@ impl Evaluation {
         Evaluation {
             drop: true,
             mentioned: false,
+            name_hit: None,
             reply_to_me: false,
             highlight: None,
             built_in: None,
             filter_ids: Vec::new(),
             suspicious: None,
             scrollbar_mark: None,
+        }
+    }
+
+    fn verdict(&self) -> Verdict {
+        Verdict {
+            drop: self.drop,
+            matched_highlight: self.highlight.is_some(),
+            mentioned: self.mentioned,
+            reply_to_me: self.reply_to_me,
+            name_hit: self.name_hit,
+            phrase_hit: self.highlight.as_ref().is_some_and(|h| h.kind == "phrase"),
         }
     }
 }
@@ -992,10 +1018,27 @@ impl ChatRules {
         if let Ok(mut g) = own_cell().write() {
             *g = Some((login.to_lowercase(), user_id.to_string()));
         }
+        // A new account starts with only its login; its display name follows.
+        if let Ok(mut g) = own_target_cell().write() {
+            *g = MentionTarget::new(login, "");
+        }
+    }
+
+    /// The signed-in account's display name, so a localized or styled name
+    /// counts as a mention too. Call after `set_own_identity`.
+    pub fn set_own_display_name(display_name: &str) {
+        if let Ok(mut g) = own_target_cell().write() {
+            let login = g.login.clone();
+            *g = MentionTarget::new(&login, display_name);
+        }
     }
 
     pub(crate) fn own_identity() -> Option<(String, String)> {
         own_cell().read().ok().and_then(|g| g.clone())
+    }
+
+    fn own_target() -> MentionTarget {
+        own_target_cell().read().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Recompile from the live settings when the rule groups changed. Cheap
@@ -1026,6 +1069,12 @@ impl ChatRules {
         // The mention and reply colours ride the scrollbar ticks.
         settings.chat_design.mention_color.hash(&mut hasher);
         settings.chat_design.reply_color.hash(&mut hasher);
+        // So do the names that count as a mention.
+        let mention_opts = MatchOptions {
+            bare_login: settings.mentions.match_bare_login,
+            display_name: settings.mentions.match_display_name,
+        };
+        (mention_opts.bare_login, mention_opts.display_name).hash(&mut hasher);
         let h = hasher.finish().max(1);
         if RULES_HASH.load(std::sync::atomic::Ordering::Acquire) == h {
             return;
@@ -1049,6 +1098,7 @@ impl ChatRules {
         }
         compiled.mention_color = settings.chat_design.mention_color.clone();
         compiled.reply_color = settings.chat_design.reply_color.clone();
+        compiled.mention_opts = mention_opts;
         for e in &compiled.errors {
             log::warn!(
                 "[ChatRules] {} rule {} skipped: {}",
@@ -1126,12 +1176,7 @@ impl ChatRules {
             }
             ev
         };
-        let verdict = Verdict {
-            drop: ev.drop,
-            matched_highlight: ev.highlight.is_some(),
-            mentioned: ev.mentioned,
-            reply_to_me: ev.reply_to_me,
-        };
+        let verdict = ev.verdict();
         if !ev.drop {
             Self::apply(msg, ev);
         }
@@ -1195,11 +1240,14 @@ impl ChatRules {
             }
         }
 
-        // 2. Mention and reply-to-me.
-        let mentioned = own
-            .as_ref()
-            .map(|(login, _)| !is_own && mentions_login(facts.content, login))
-            .unwrap_or(false);
+        // 2. Mention and reply-to-me. Which names count is the user's choice
+        //    (`settings.mentions`); `@login` always does.
+        let name_hit = if own.is_some() && !is_own {
+            find_mention(facts.content, &Self::own_target(), &rules.mention_opts)
+        } else {
+            None
+        };
+        let mentioned = name_hit.is_some();
         let reply_to_me = own
             .as_ref()
             .map(|(_, id)| {
@@ -1291,6 +1339,7 @@ impl ChatRules {
         Evaluation {
             drop: false,
             mentioned,
+            name_hit,
             reply_to_me,
             highlight,
             built_in,
@@ -2044,12 +2093,7 @@ mod tests {
             let facts = MessageFacts::from_message(m);
             ChatRules::evaluate_facts(&facts, rules)
         };
-        let v = Verdict {
-            drop: ev.drop,
-            matched_highlight: ev.highlight.is_some(),
-            mentioned: ev.mentioned,
-            reply_to_me: ev.reply_to_me,
-        };
+        let v = ev.verdict();
         if !ev.drop {
             ChatRules::apply(m, ev);
         }
