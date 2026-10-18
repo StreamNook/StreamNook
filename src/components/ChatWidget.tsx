@@ -2779,23 +2779,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     isVodReplay: !!isVodReplay,
     hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
   });
-  // The stream manager, read from Rust the first time the Tools menu opens in
-  // this channel and kept current while a builder is up.
+  // The stream manager, read from Rust when a chat you manage opens (one read,
+  // then Rust's pushes), so the Tools menu opens with its rows already there.
   const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
-  const [toolsOpened, setToolsOpened] = useState(false);
   const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
   if (managerChannel !== currentStream?.user_id) {
     setManagerChannel(currentStream?.user_id);
     setManagerPanel(null);
-    setToolsOpened(false);
   }
-  const handleToolsOpenChange = useCallback((open: boolean) => {
-    if (open) setToolsOpened(true);
-  }, []);
   const streamManager = useStreamManager(
     toolSections.polls ? currentStream?.user_id : null,
     currentStream?.user_login ?? '',
-    toolsOpened || !!managerPanel,
+    true,
   );
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
@@ -5730,7 +5725,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setManagerPanel(kind);
                     }}
                     onManagerOutcome={streamManager.apply}
-                    onOpenChange={handleToolsOpenChange}
                     drops={dropsTool}
                     roomState={roomState}
                   />

@@ -1630,6 +1630,19 @@ export interface SharedChat {
   label: string;
 }
 
+/** The signed-in viewer's relationship to a Twitch channel (Rust
+ *  `channel_relationship::Relationship`). */
+export interface ChannelRelationship {
+  /** null while unknown (no sign-in, or Twitch did not answer). */
+  following: boolean | null;
+  subscribed: boolean;
+  /** Subscribed before, not now: the control offers to resubscribe. */
+  has_sub_history: boolean;
+  cumulative_months: number;
+  /** The subscriber badge the viewer's months (or next month) wear. */
+  badge_url: string | null;
+}
+
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
 export interface ChannelState {
   login: string;
@@ -1652,6 +1665,10 @@ export interface ChannelState {
    *  channel's chat is in. Read with `collab` (same tick, `collab_at`). */
   shared_chat: SharedChat | null;
   collab_at: number | null;
+  /** The viewer's follow and subscription here, read when the chat opens;
+   *  null until the first answer. */
+  relationship: ChannelRelationship | null;
+  relationship_at: number | null;
 }
 
 /** One changed section, the payload of the `channel-state` event. */
@@ -1668,7 +1685,8 @@ export type ChannelStateUpdate =
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
   | { section: 'bits'; login: string; bits: ChannelBitsFace | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
-  | { section: 'collab'; login: string; collab: Collaboration | null; shared_chat: SharedChat | null; at: number };
+  | { section: 'collab'; login: string; collab: Collaboration | null; shared_chat: SharedChat | null; at: number }
+  | { section: 'relationship'; login: string; relationship: ChannelRelationship | null; at: number };
 
 /** One channel's bulk hype-train status, as Rust reports it. */
 export interface HypeTrainBulkStatus {
