@@ -422,6 +422,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
   const [connecting, setConnecting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [showEmotes, setShowEmotes] = useState(false);
+  const emoteButtonRef = useRef<HTMLButtonElement>(null);
   const [replyingTo, setReplyingTo] = useState<ReplyRef | null>(null);
   const [editing, setEditing] = useState<{ id: string; attachment?: string; reply?: ReplyRef } | null>(null);
   const [showJump, setShowJump] = useState(false);
@@ -920,6 +921,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
         <EmotePickerPanel
           open={showEmotes}
           onClose={() => setShowEmotes(false)}
+          ignoreRef={emoteButtonRef}
           emotes={emotes ?? null}
           isTwitch
           isKick={false}
@@ -994,6 +996,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
             <Paperclip size={16} />
           </button>
           <button
+            ref={emoteButtonRef}
             onClick={() => setShowEmotes((v) => !v)}
             onMouseLeave={smiley.cycleEmoteSmiley}
             disabled={state !== 'connected' || !key}

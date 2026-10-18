@@ -463,6 +463,8 @@ mod tests {
             emote_type: None,
             owner_id: None,
             owner_name: None,
+            original_name: None,
+            owner_ref: None,
             width: None,
             height: None,
             modifier_flags: None,

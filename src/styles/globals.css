@@ -1946,6 +1946,22 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   padding-left: 0;
   padding-right: 0;
 }
+/* A profile stat tile's count, stepped by fitHeaderDensity: the full number
+   while it fits, its short form ("123.5M") once it would be cut. */
+.sn-stat-value .sn-stat-short,
+.sn-stat-value[data-density='1'] .sn-stat-full {
+  display: none;
+}
+.sn-stat-value[data-density='1'] .sn-stat-short {
+  display: inline;
+}
+/* The slow-mode count in the 28px send button: three characters at 13px
+   (up to 28.5px) would touch or cut the edges. 10px is 13px scaled with the
+   button (28/36), so it keeps the full button's margins. One size for the
+   whole countdown, so nothing jumps as it ticks. */
+.sn-composer-row[data-narrow] .sn-send-count {
+  font-size: 10px;
+}
 .sn-composer-row[data-narrow] .sn-composer-points-count {
   display: none;
 }
@@ -2995,7 +3011,6 @@ html[data-blur="off"] *::after {
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
-.atm-frost.atm-frost--flat,
 /* Blur off: a popover has nothing softening what is behind it, and at its
    capped glass strength (77.5% tint) the text under a menu read crisp through
    it. With no blur the tint is all there is, so it goes solid: the glass
@@ -3005,6 +3020,7 @@ html[data-blur="off"] .sn-popover {
   --sn-popover-tint: 100%;
 }
 
+.atm-frost.atm-frost--flat,
 html[data-blur="off"] .atm-frost {
   background-color: rgba(5, 6, 13, 0.66);
   -webkit-backdrop-filter: none;
@@ -3798,6 +3814,25 @@ html[data-motion="reduced"] .sub-progress-fill {
   animation: hype-train-flow-seamless 15s linear infinite;
 }
 
+/* The remaining/time label on the strip, stepped down by fitHeaderDensity
+   while it overflows its side: the subs go first, then the bits; the timer
+   always stays. Whole words leave, so no number is ever cut. */
+.hype-train-need[data-density='1'] .hype-train-subs,
+.hype-train-need[data-density='2'] .hype-train-left {
+  display: none;
+}
+/* The level side the same way: the train icon goes, "LVL n" stays whole. */
+.hype-train-level[data-density='1'] .hype-train-icon {
+  display: none;
+}
+
+/* The emote picker's source tabs, stepped down by fitHeaderDensity when the
+   panel is too narrow for every count: the counts go (their tooltips keep
+   the exact numbers), the logos stay. */
+.sn-emote-tabs[data-density='1'] .sn-emote-tab-count {
+  display: none;
+}
+
 /* Golden progress bar for Golden Kappa trains */
 .hype-train-progress-golden {
   background: linear-gradient(
@@ -4497,6 +4532,9 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
      bar. Plyr centres its thumb with a margin computed from this token, so it
      has to be the CAPSULE's height; the width is set separately below. */
   --plyr-range-thumb-height: var(--scrub-thumb-h);
+  /* Plyr nudges the box right by half a thumb to make room for the widened
+     range below; half the capsule's width, for the same reason as there. */
+  left: calc(var(--scrub-thumb-w) * 0.5);
 }
 
 .video-player-container .plyr__progress__container {
@@ -4506,6 +4544,22 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
 .video-player-container .plyr__progress input[type="range"] {
   height: var(--scrub-track-h);
   transition: height var(--scrub-grow-duration) var(--scrub-grow-ease);
+}
+
+/* Plyr widens the range by one thumb so the thumb's centre travels exactly
+   the progress box, which its tooltip and seek math measure. It sizes that
+   from the thumb HEIGHT (its thumb is round), and the height token above is
+   the capsule's 16px, but the capsule is only 4px wide: the thumb then
+   travelled 6px past each end of the box. Every finished seek wrote Plyr's
+   value back and pulled a held thumb up to 6px off the pointer, so a slow
+   drag hopped back and forth. Widen by the capsule's WIDTH instead, which
+   also keeps the VOD bar the live timeline's length (that one fills the
+   box itself). */
+.video-player-container .plyr__progress input[type="range"],
+.video-player-container .plyr__progress .plyr__progress__buffer {
+  margin-left: calc(var(--scrub-thumb-w) * -0.5);
+  margin-right: calc(var(--scrub-thumb-w) * -0.5);
+  width: calc(100% + var(--scrub-thumb-w));
 }
 
 /* `focus-within` as well as hover, so keyboard seeking gets the same bar the
@@ -5025,6 +5079,263 @@ html[data-watching] .drops-progress-inline {
   100% {
     background-position: 200% 0;
   }
+}
+
+/* Mod slider (components/chat/ModSlider.tsx). While a moderator drags a row's
+   left edge, everything in the row slides right by --mod-slide except the
+   track, which stays put and fills the gap with the chosen step. */
+.sn-mod-grip {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  z-index: 30;
+  width: 12px;
+  /* Grab, never a resize cursor: the chat's width splitter sits right beside
+     the first row's edge and wears ew-resize. */
+  cursor: grab;
+  touch-action: none;
+}
+.sn-mod-grip:active,
+.sn-mod-grip.is-active {
+  cursor: grabbing;
+}
+/* The grip itself: a small capsule with six dots, the drag handle people
+   already know, at the row's left edge while the row is hovered. Centered on
+   the row, so a long message keeps it in reach. The slider's grip and the
+   Tiles handle (ChatMessage) share it. */
+.sn-mod-grip-bar {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: min(22px, calc(100% - 8px));
+  translate: 0 -50%;
+  /* A tab on the row's edge, clear of the name that starts 12 px in. */
+  border-radius: 0 4px 4px 0;
+  transform-origin: left center;
+  background: var(--color-accent);
+  box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  /* Dot ink picked from the accent: near black on a light accent, white on a
+     dark one. The first line is the fallback. */
+  --sn-grip-ink: rgba(0, 0, 0, 0.6);
+  --sn-grip-ink: oklch(from var(--color-accent) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.8);
+  transition: opacity 150ms ease, scale 150ms ease, background-color 100ms ease;
+}
+.group:hover > .sn-mod-grip .sn-mod-grip-bar,
+.sn-mod-grip.is-hinted .sn-mod-grip-bar {
+  opacity: 0.9;
+}
+.sn-mod-grip:hover .sn-mod-grip-bar,
+.sn-mod-grip.is-active .sn-mod-grip-bar {
+  opacity: 1;
+  scale: 1.15;
+}
+/* While a step is armed the grip takes a light tint of that step, so it reads
+   as part of the track rather than a stray tab. */
+.sn-mod-grip.is-armed .sn-mod-grip-bar {
+  background: color-mix(in srgb, var(--mod-tint) 45%, #fff);
+  box-shadow: none;
+}
+/* Six dots, two columns of three, so the edge reads as something to take
+   hold of. Each 3 x 4 px tile carries one dot at its center. */
+.sn-mod-grip-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 6px;
+  height: 12px;
+  background: radial-gradient(circle, var(--sn-grip-ink) 0.85px, transparent 1.2px) 0 0 / 3px 4px repeat;
+}
+.sn-mod-sliding {
+  overflow: hidden;
+  /* Text pushed past the right edge fades out instead of a hard cut. */
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 24px);
+  mask-image: linear-gradient(to left, transparent, #000 24px);
+}
+.sn-mod-sliding > :not(.sn-mod-track) {
+  transform: translateX(var(--mod-slide, 0px));
+  /* Its own layer for the drag: the text moves without repainting. */
+  will-change: transform;
+}
+.sn-mod-sliding > [data-row-dock] {
+  visibility: hidden;
+}
+.sn-mod-returning > :not(.sn-mod-track) {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* The track spans the row; each layer in it follows the pull by transform
+   alone (scale for the fill, translate for the rest), so a drag frame costs no
+   layout and no paint. --mod-ratio is the pull as a share of the row width. */
+.sn-mod-track {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+.sn-mod-track-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left;
+  transform: scaleX(var(--mod-ratio, 0));
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  transition: background-color 100ms ease;
+  will-change: transform;
+}
+.sn-mod-track.is-armed .sn-mod-track-fill {
+  background: color-mix(in srgb, var(--mod-tint) 85%, transparent);
+}
+.sn-mod-track-window {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
+  will-change: transform;
+}
+.sn-mod-track-window-inner {
+  position: absolute;
+  inset: 0;
+  transform: translateX(calc(100% - var(--mod-slide, 0px)));
+  will-change: transform;
+}
+/* Ruler notches at the top and bottom edge where each step starts; never
+   behind the label's text. */
+.sn-mod-tick {
+  --sn-tick: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
+  position: absolute;
+  inset-block: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--sn-tick) 0 5px,
+    transparent 5px calc(100% - 5px),
+    var(--sn-tick) calc(100% - 5px)
+  );
+}
+.sn-mod-track.is-armed .sn-mod-tick {
+  --sn-tick: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.3);
+}
+.sn-mod-track.is-armed .sn-mod-tick.is-passed {
+  --sn-tick: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.55);
+}
+.sn-mod-track-cancel {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sn-mod-track-edge {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 10px;
+  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
+  background: linear-gradient(to left, rgba(0, 0, 0, 0.22), transparent);
+  will-change: transform;
+}
+.sn-mod-returning .sn-mod-track-fill {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), background-color 100ms ease;
+}
+.sn-mod-returning :is(.sn-mod-track-window, .sn-mod-track-window-inner, .sn-mod-track-edge) {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* The label rides back with the row and fades, so it is never cut letter by
+   letter at the left edge. */
+.sn-mod-returning .sn-mod-track-label {
+  opacity: 0;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 90ms ease-out;
+}
+/* Each step arms with a soft pop (the label is keyed by step). */
+@keyframes sn-mod-label-in {
+  from {
+    opacity: 0;
+    translate: -4px 0;
+    scale: 0.92;
+  }
+}
+.sn-mod-track-label {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 4px 7px;
+  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
+  transform-origin: right center;
+  will-change: transform;
+  /* Ink picked from the tint: near black on light steps (amber timeouts),
+     white on dark ones (Delete, Ban). White stays as the fallback. */
+  color: #fff;
+  color: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  animation: sn-mod-label-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Ban arms only after a short rest in its zone: meanwhile red fills the
+   track from the left, under the label of the step a release applies now. */
+.sn-mod-track-arming {
+  position: absolute;
+  inset: 0;
+  background: var(--color-error);
+  transform-origin: left;
+  animation: sn-mod-ban-fill 350ms linear forwards;
+}
+@keyframes sn-mod-ban-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+/* Line buttons (components/chat/ModLineButtons.tsx, chat/lineArt.ts): one
+   empty element per line a moderator can act on, showing a picture of the
+   buttons the list draws once (rest on its first row, one lit row per
+   button below; the list moves a hovered strip to its lit row). One box per
+   line on purpose: every flush of a fast chat restyles and repaints every
+   row, and three real buttons per row halved the frame rate at 400 msg/s.
+   Empty, so it has no line of its own and its bottom edge is its baseline;
+   the vertical-align centers it on the text the way the badge strip is. */
+.sn-mod-line {
+  display: inline-block;
+  width: var(--sn-line-w);
+  height: var(--sn-line-h);
+  margin-right: 0.45em;
+  vertical-align: calc(0.38em - var(--sn-line-h) / 2);
+  background: var(--sn-line-art) 0 0 / var(--sn-line-w) var(--sn-line-bh) no-repeat;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The step chips compress in place rather than wrap (fitHeaderDensity). */
+.sn-steps:is([data-density='1'], [data-density='2']) {
+  gap: 4px;
+}
+.sn-steps:is([data-density='1'], [data-density='2']) .sn-step-time {
+  padding-left: 8px;
+  padding-right: 2px;
+}
+.sn-steps:is([data-density='1'], [data-density='2']) .dropdown-label {
+  display: none;
+}
+.sn-steps[data-density='2'] .sn-step-word {
+  display: none;
+}
+.sn-steps[data-density='2'] .sn-step-toggle {
+  padding-inline: 8px;
 }
 
 /* Held-in-drag sweep: a light band crosses the message, then sits fully

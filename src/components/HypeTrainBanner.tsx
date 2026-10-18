@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import type { HypeTrainData } from '../types';
 import ConfettiBurst from './ConfettiBurst';
 import { Logger } from '../utils/logger';
+import { formatShortCount } from '../utils/streamStats';
+import { fitHeaderDensity } from './chat/fitHeaderDensity';
 
 // The decorated Twitch Hype Train bar, extracted from ChatWidget so every
 // surface (the main player chat, MultiChat split/tab panes, and the blended
@@ -82,6 +84,12 @@ export default function HypeTrainBanner({ train, confettiTarget, onExpire }: Hyp
   const [celebrationId, setCelebrationId] = useState(0);
   const onExpireRef = useRef(onExpire);
   onExpireRef.current = onExpire;
+  // Both sides of the strip step down in place while they overflow (CSS
+  // `.hype-train-level` / `.hype-train-need` say what each step drops).
+  const [levelEl, setLevelEl] = useState<HTMLDivElement | null>(null);
+  const [needEl, setNeedEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => (levelEl ? fitHeaderDensity(levelEl, 1, 0) : undefined), [levelEl]);
+  useEffect(() => (needEl ? fitHeaderDensity(needEl, 2, 0) : undefined), [needEl]);
 
   // Smooth countdown, updated every second locally. On hitting 0 it fires
   // onExpire (the owner clears the train) rather than waiting for the next poll.
@@ -190,34 +198,31 @@ export default function HypeTrainBanner({ train, confettiTarget, onExpire }: Hyp
             }`}
           />
         </div>
-        {/* Percentage / celebration content, centered within the strip */}
-        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-          {isLevelUpCelebration ? (
-            <>
-              {/* White flash (the confetti rains over the whole host container) */}
-              <div className="absolute inset-0 bg-white/40 animate-hype-flash" />
-              {/* Scrolling HYPE text */}
-              <div className="animate-hype-marquee whitespace-nowrap">
-                <span className="text-xl font-black text-white drop-shadow-glow mx-4">
-                  🎉 LEVEL UP! {celebrationMessage} 🎉 LEVEL UP! {celebrationMessage} 🎉
-                </span>
-              </div>
-            </>
-          ) : (
-            <span className="text-xl font-black text-white drop-shadow-lg tabular-nums">
-              {percentage}%
-            </span>
-          )}
-        </div>
+        {/* Celebration content over the whole strip */}
+        {isLevelUpCelebration && (
+          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+            {/* White flash (the confetti rains over the whole host container) */}
+            <div className="absolute inset-0 bg-white/40 animate-hype-flash" />
+            {/* Scrolling HYPE text */}
+            <div className="animate-hype-marquee whitespace-nowrap">
+              <span className="text-xl font-black text-white drop-shadow-glow mx-4">
+                🎉 LEVEL UP! {celebrationMessage} 🎉 LEVEL UP! {celebrationMessage} 🎉
+              </span>
+            </div>
+          </div>
+        )}
 
-        {/* Level (left) and remaining/time (right), centered within the strip */}
-        <div className="absolute inset-0 flex items-center justify-between px-2.5 z-10">
-          {/* Left side - train icon and level */}
-          <div className="flex items-center gap-1.5">
+        {/* Level (left), percentage (middle) and remaining/time (right) share
+            one row. The equal side columns keep the percentage centered on the
+            bar, and neither side can run into it. */}
+        <div className="absolute inset-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-2.5 z-10">
+          {/* Left side - train icon and level. Too narrow for both, the icon
+              goes and the level stays on one line. */}
+          <div ref={setLevelEl} className="hype-train-level flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
             {isGolden ? (
-              <span className="text-lg">✨</span>
+              <span className="hype-train-icon text-lg">✨</span>
             ) : (
-              <svg className="w-5 h-5 text-white" viewBox="0 0 15 13" fill="none">
+              <svg className="hype-train-icon w-5 h-5 shrink-0 text-white" viewBox="0 0 15 13" fill="none">
                 <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
               </svg>
             )}
@@ -226,19 +231,28 @@ export default function HypeTrainBanner({ train, confettiTarget, onExpire }: Hyp
             </span>
           </div>
 
-          {/* Right side - bits/subs remaining and time */}
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-white/80 drop-shadow-sm">
-              {remaining > 0 ? (
-                <>
-                  {bitsNeeded >= 1000 ? `${(bitsNeeded / 1000).toFixed(1)}K` : bitsNeeded} bits / {subsNeeded} subs left
-                </>
-              ) : '🎉'}
-            </span>
-            <span className="text-[10px] text-white/50">|</span>
-            <span className="text-[10px] text-white/70 drop-shadow-sm tabular-nums">
-              {timeRemaining}
-            </span>
+          {/* Middle - the percentage, kept in place (invisible) under the
+              celebration so the sides do not shift when it ends. */}
+          <span className={`text-xl font-black text-white drop-shadow-lg tabular-nums ${isLevelUpCelebration ? 'invisible' : ''}`}>
+            {percentage}%
+          </span>
+
+          {/* Right side - bits/subs remaining and time. Too narrow for all of
+              it, the subs go first, then the bits; the timer always stays. */}
+          <div ref={setNeedEl} className="hype-train-need flex min-w-0 overflow-hidden">
+            <div className="ml-auto flex items-center gap-1 whitespace-nowrap">
+              <span className="hype-train-left text-[10px] text-white/80 drop-shadow-sm tabular-nums">
+                {remaining > 0 ? (
+                  <>
+                    {formatShortCount(bitsNeeded)} bits<span className="hype-train-subs"> / {subsNeeded} subs</span> left
+                  </>
+                ) : '🎉'}
+              </span>
+              <span className="hype-train-left text-[10px] text-white/50">|</span>
+              <span className="text-[10px] text-white/70 drop-shadow-sm tabular-nums">
+                {timeRemaining}
+              </span>
+            </div>
           </div>
         </div>
       </div>

@@ -1,9 +1,11 @@
-// Twitch moderator actions, Helix-backed.
+// Twitch moderator actions for the phone's long-press sheet.
 //
-// The same two invokes the desktop message row uses. They live here because on
-// mobile the actions hang off a long-press sheet rather than a hover menu, and
-// because mod status has to be checked per channel once several rooms are open.
+// Ban, timeout, lift and delete go through the same Rust `moderate_chatter`
+// the desktop row uses. They live here because on mobile the actions hang off
+// a long-press sheet rather than a hover menu, and because mod status has to be
+// checked per channel once several rooms are open.
 import { invoke } from '@tauri-apps/api/core';
+import { moderateChatter } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
 
 /** Mod powers are read off your own badges in that channel, same rule as desktop. */
@@ -14,7 +16,7 @@ export function isModeratorFrom(userBadges: string | null | undefined): boolean 
 
 export async function deleteMessage(broadcasterId: string, messageId: string): Promise<boolean> {
   try {
-    await invoke('delete_chat_message', { broadcasterId, messageId });
+    await moderateChatter({ broadcasterId, action: { kind: 'delete', messageId } });
     return true;
   } catch (err) {
     Logger.error('[MobileMod] delete failed:', err);
@@ -29,11 +31,10 @@ export async function banUser(
   durationSeconds: number | null,
 ): Promise<boolean> {
   try {
-    await invoke('ban_user', {
+    await moderateChatter({
       broadcasterId,
       targetUserId,
-      duration: durationSeconds,
-      reason: null,
+      action: durationSeconds == null ? { kind: 'ban' } : { kind: 'timeout', seconds: durationSeconds },
     });
     return true;
   } catch (err) {
@@ -45,7 +46,7 @@ export async function banUser(
 /** Reverses both a ban and a timeout, which is what makes Undo possible. */
 export async function unbanUser(broadcasterId: string, targetUserId: string): Promise<boolean> {
   try {
-    await invoke('unban_user', { broadcasterId, targetUserId });
+    await moderateChatter({ broadcasterId, targetUserId, action: { kind: 'unban' } });
     return true;
   } catch (err) {
     Logger.error('[MobileMod] unban failed:', err);

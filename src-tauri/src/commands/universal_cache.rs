@@ -142,6 +142,7 @@ pub async fn get_cached_files(cache_type: String) -> Result<HashMap<String, Stri
         "emote" => CacheType::Emote,
         "third-party-badge" => CacheType::ThirdPartyBadge,
         "cosmetic" => CacheType::Cosmetic,
+        "streamnook" => CacheType::StreamNookArt,
         _ => return Err(format!("Invalid cache type: {}", cache_type)),
     };
 

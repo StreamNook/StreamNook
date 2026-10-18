@@ -110,6 +110,21 @@ public enum ComposerRoute: Equatable, Sendable {
     }
 }
 
+/// What becomes of the typed text once the core's dispatcher has answered, or failed to.
+public enum SlashAfterDispatch: Equatable, Sendable {
+    /// The core ran it: nothing goes to chat but what its answer says to send.
+    case done
+    /// The core does not run it (Twitch runs /me), or it is plain text: it goes to chat as typed.
+    case sendTyped
+    /// The dispatcher failed: a command stays in the draft and never reaches chat as text.
+    case keepDraft
+
+    public static func of(text: String, handled: Bool, dispatchFailed: Bool) -> SlashAfterDispatch {
+        if dispatchFailed { return text.hasPrefix("/") ? .keepDraft : .sendTyped }
+        return handled ? .done : .sendTyped
+    }
+}
+
 /// The core's answer to a Twitch send (`send_chat_message`): accepted or dropped with a reason.
 public struct SendResult: Decodable, Sendable, Equatable {
     public var isSent: Bool

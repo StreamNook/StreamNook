@@ -40,6 +40,7 @@ import {
 } from '../../stores/chatConnectionStore';
 import { useChannelState } from '../../stores/channelStateStore';
 import { nameFloor, useCapsuleName, useDockView } from '../../hooks/useChatDock';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { formatViewerCount } from '../../utils/streamStats';
 import { lastLiveLabel } from '../../utils/lastLive';
 import { isTwitchLogin, parseChannelInput } from '../../utils/parseChannelInput';
@@ -523,15 +524,7 @@ function PanelBody({ top }: { top: number }) {
   }, [top]);
 
   // A click outside the list (the capsule toggles on its own) closes it.
-  useEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      if (!target || panelRef.current?.contains(target) || target.closest('[data-dock-capsule]')) return;
-      setDockPanelOpen(false);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, []);
+  const markInside = useOutsidePress(true, [panelRef, '[data-dock-capsule]'], () => setDockPanelOpen(false));
 
   const close = () => setDockPanelOpen(false);
   const show = (key: string | null) => {
@@ -614,6 +607,7 @@ function PanelBody({ top }: { top: number }) {
   return (
     <motion.div
       ref={panelRef}
+      onPointerDownCapture={markInside}
       role="listbox"
       aria-label="Open chats"
       initial={{ opacity: 0, y: -4, scale: 0.98 }}
@@ -948,21 +942,14 @@ export function ChatDockTabs() {
     timer.current = setTimeout(() => setUnfoldRaw(null), 250);
   };
   // Pinned open: Escape or a click outside the row folds it.
+  const markInsideRow = useOutsidePress(unfold === 'pinned', [rowRef], () => setUnfoldRaw(null));
   useEffect(() => {
     if (unfold !== 'pinned') return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setUnfoldRaw(null);
     };
-    const onDown = (e: PointerEvent) => {
-      if (rowRef.current?.contains(e.target as Node)) return;
-      setUnfoldRaw(null);
-    };
     window.addEventListener('keydown', onKey);
-    document.addEventListener('pointerdown', onDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.removeEventListener('pointerdown', onDown, true);
-    };
+    return () => window.removeEventListener('keydown', onKey);
   }, [unfold]);
   if (!held) return null;
   const shownKey = shown ? chatKey(shown) : null;
@@ -980,6 +967,7 @@ export function ChatDockTabs() {
   return (
     <div
       ref={rowRef}
+      onPointerDownCapture={markInsideRow}
       className="pointer-events-auto flex min-w-0 items-center gap-1 pt-1.5"
       onPointerEnter={hoverOpen}
       onPointerLeave={hoverClose}

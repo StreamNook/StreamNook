@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::services::follow_lookup;
-use crate::services::twitch_service::TwitchService;
+use crate::services::twitch_service::{ChannelRole, TwitchService};
 
 const APP_CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 /// The client the app's other private GQL writes (poll votes, reward redeems)
@@ -481,6 +481,63 @@ pub async fn chat_rules(channel_login: &str) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Could not reach Twitch: {e}"))?;
     let body: Value = resp.json().await.map_err(|_| "Twitch sent an unreadable answer".to_string())?;
     rules_lines(channel_login, &body)
+}
+
+/// `/mods` and `/vips`. `listed` is the whole group, None when Twitch would
+/// not list it; `in_chat` is who of it is in chat now (Twitch's public
+/// chatters list), shown only then.
+pub fn role_list_lines(role: ChannelRole, listed: Option<&[String]>, signed_in: bool, in_chat: &[String]) -> Vec<String> {
+    let (group, list) = match role {
+        ChannelRole::Moderators => ("moderators", "moderator list"),
+        ChannelRole::Vips => ("VIPs", "VIP list"),
+    };
+    let line = match listed {
+        Some([]) => format!("There are no {group} of this channel."),
+        Some(all) => format!("The {group} of this channel are: {}", all.join(", ")),
+        None => {
+            let why = if signed_in {
+                format!("Twitch would not share this channel's {list}.")
+            } else {
+                format!("Sign in to see this channel's {list}.")
+            };
+            if in_chat.is_empty() {
+                why
+            } else {
+                format!("{why} In chat now: {}", in_chat.join(", "))
+            }
+        }
+    };
+    vec![line]
+}
+
+/// `/mods` and `/vips`: read signed in, since Twitch lists moderators only to
+/// a signed-in viewer.
+pub async fn role_list(
+    auth: &crate::services::twitch_auth_service::TwitchAuthService,
+    channel_login: &str,
+    role: ChannelRole,
+) -> Result<Vec<String>, String> {
+    let callers = crate::services::twitch_service::role_list_callers(Some(auth)).await;
+    let members = TwitchService::channel_role_members(channel_login, role, &callers)
+        .await
+        .map_err(|e| format!("Could not reach Twitch: {e}"))?;
+    let logins_of = |rows: &[Value], key: &str| -> Vec<String> {
+        rows.iter().filter_map(|r| r[key].as_str().map(str::to_string)).collect()
+    };
+    if let Some(members) = members {
+        return Ok(role_list_lines(role, Some(&logins_of(&members, "login")), true, &[]));
+    }
+    let group = match role {
+        ChannelRole::Moderators => "moderators",
+        ChannelRole::Vips => "vips",
+    };
+    let in_chat = TwitchService::get_public_chatters(channel_login)
+        .await
+        .ok()
+        .and_then(|c| c[group].as_array().map(|rows| logins_of(rows, "user_login")))
+        .unwrap_or_default();
+    let signed_in = callers.iter().any(|c| c.is_signed_in());
+    Ok(role_list_lines(role, None, signed_in, &in_chat))
 }
 
 /// `/sharedchat`: who is in this channel's Shared Chat session.
@@ -1870,6 +1927,26 @@ mod tests {
         assert_eq!(clean_login(""), None);
         assert_eq!(clean_login("no spaces"), None);
         assert_eq!(clean_login("a".repeat(26).as_str()), None);
+    }
+
+    #[test]
+    fn role_lists_name_the_group_or_say_why_not() {
+        let mods = ["alpha".to_string(), "beta".to_string()];
+        assert_eq!(
+            role_list_lines(ChannelRole::Moderators, Some(&mods), true, &[]),
+            ["The moderators of this channel are: alpha, beta"]
+        );
+        assert_eq!(role_list_lines(ChannelRole::Vips, Some(&[]), true, &[]), ["There are no VIPs of this channel."]);
+        // Twitch refused: signed out asks for a sign-in, signed in says Twitch refused,
+        // and either way the members in chat now are still named.
+        assert_eq!(
+            role_list_lines(ChannelRole::Moderators, None, false, &[]),
+            ["Sign in to see this channel's moderator list."]
+        );
+        assert_eq!(
+            role_list_lines(ChannelRole::Moderators, None, true, &["gamma".to_string()]),
+            ["Twitch would not share this channel's moderator list. In chat now: gamma"]
+        );
     }
 
     #[test]

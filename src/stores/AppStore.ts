@@ -393,7 +393,8 @@ interface AppState {
   showBadgesOverlay: boolean;
   badgesOverlayInitialPaintId: string | null;
   badgesOverlayInitialBadgeId: string | null;
-  badgesOverlayInitialStreamNook: boolean;
+  /** Open on the StreamNook tab; a string also opens that cosmetic's card. */
+  badgesOverlayInitialStreamNook: boolean | string;
   // Generic deep-link target for tabs without a dedicated detail modal (Twitch,
   // BetterTTV, Chat Clients): open the overlay on `tab` and filter to `query`
   // (a badge title) so the clicked badge surfaces. Set by openBadgesWithTarget.
@@ -607,7 +608,7 @@ interface AppState {
   setShowBadgesOverlay: (show: boolean) => void;
   openBadgesWithPaint: (paintId: string) => void;
   openBadgesWithBadge: (badgeId: string) => void;
-  openBadgesOnStreamNook: () => void;
+  openBadgesOnStreamNook: (slug?: string) => void;
   openBadgesWithTarget: (target: { tab: string; query?: string }) => void;
   setShowEmoteSetsOverlay: (show: boolean) => void;
   openEmoteSets: (opts?: { twitchId?: string; tab?: 'emotes' | 'sets' | 'editors' }) => void;
@@ -1816,9 +1817,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // sticky one has none and stays until it is dismissed or removed by id.
     const duration = options?.sticky ? 0 : type === 'live' ? 8000 : 5000;
 
-    // For live toasts, let ToastItem handle the timer (so we can pause on hover)
-    // For other toasts, use the simple auto-dismiss
-    if (type === 'live' || options?.sticky) {
+    // A live toast, or one carrying an action (Undo), leaves its timer to the
+    // surface that draws it, so hovering holds it: an Undo must never vanish
+    // under the pointer. Other toasts use the simple auto-dismiss.
+    if (type === 'live' || options?.sticky || action) {
       set(state => ({
         toasts: [...state.toasts, { id, message, type, action, duration, createdAt }]
       }));
@@ -3122,9 +3124,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     trackActivity('Opened Badges with Badge');
     set({ showBadgesOverlay: true, badgesOverlayInitialBadgeId: badgeId, badgesOverlayInitialPaintId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null });
   },
-  openBadgesOnStreamNook: () => {
+  openBadgesOnStreamNook: (slug?: string) => {
     trackActivity('Opened Badges on StreamNook');
-    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null });
+    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: slug || true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null });
   },
   openBadgesWithTarget: (target: { tab: string; query?: string }) => {
     trackActivity('Opened Badges with Target');

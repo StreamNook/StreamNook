@@ -216,7 +216,9 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
         if (url) {
           badgeData.push({
             key: `${b.name}/${b.version}`,
-            info: { localUrl: url, image_url_1x: url, image_url_4x: url, title: b.title },
+            // `provider` marks these as the platform's own badges, so a click
+            // opens the spotlight card and never the Twitch badge page.
+            info: { localUrl: url, image_url_1x: url, image_url_4x: url, title: b.title, provider: raw.provider },
           });
         }
       }

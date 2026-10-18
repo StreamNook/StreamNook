@@ -46,6 +46,12 @@
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
 
+        <!-- Google Cast. The SDK reads its configuration (receiver, no SDK
+             notification) from this class. -->
+        <meta-data
+          android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+          android:value="app.streamnook.CastOptionsProvider" />
+
         <!-- Push receiver. Renders live alerts pushed by notify.streamnook.app;
              harmless on devices without Play services (never invoked there,
              the WorkManager poll delivers instead). -->

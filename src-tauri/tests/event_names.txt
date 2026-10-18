@@ -16,6 +16,7 @@ badge-standing-changed
 badge-wall-sync
 bits-balance-changed
 bundle-update-progress
+cast://state
 channel-avatars
 channel-links
 channel-points-claim-available
@@ -105,6 +106,7 @@ streamnook-settings-updated
 streamnook:watch
 titlebar-drag-ended
 tray-open-multichat
+tv-screen://state
 twitch-channel-badges-changed
 twitch-login-complete
 twitch-login-error

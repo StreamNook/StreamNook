@@ -37,6 +37,9 @@ import {
 } from '../watch/watchLayout';
 import { SplitHandle } from '../watch/SplitHandle';
 import { MobilePlayer } from '../player/MobilePlayer';
+import { CastCard, CastEndedCard, TvCard } from '../cast/CastCard';
+import { castOwnsStream, isCastable, useCastState } from '../cast/castState';
+import { useTvScreenState } from '../cast/tvScreenState';
 import { MobileOfflineChin } from '../player/MobileOfflineRoom';
 import { useLiveVideoPaused } from '../player/liveVideo';
 import { MobileChatPane } from '../chat/MobileChatPane';
@@ -157,6 +160,7 @@ export const WatchScreen: React.FC = () => {
   const isLoading = useAppStore((s) => s.isLoading);
   const streamUrl = useAppStore((s) => s.streamUrl);
   const currentStream = useAppStore((s) => s.currentStream);
+  const restartStream = useAppStore((s) => s.restartStream);
   const currentHypeTrain = useAppStore((s) => s.currentHypeTrain);
   const exitStream = useAppStore((s) => s.exitStream);
   const playerMode = useMobileNavStore((s) => s.playerMode);
@@ -275,6 +279,34 @@ export const WatchScreen: React.FC = () => {
 
   const mini = !forceFull && playerMode === 'mini';
   const watching = !!streamUrl && streamUrl !== 'offline';
+
+  // A Cast device playing this stream takes the player's place; the phone is
+  // the remote and chat carries on. Rust decides everything (cast_session.rs);
+  // this only picks which card to draw.
+  const cast = useCastState();
+  const castOwns = castOwnsStream(cast, currentStream);
+  // When a session ends with this stream on the TV, the stream the phone holds
+  // is either a cast placeholder or a relay Rust stopped. Until the viewer
+  // picks something else the band offers "Watch on this phone" rather than
+  // starting the phone's player by itself (the session may have ended in a
+  // pocket). Keyed on the session ending, not on castOwns falling: opening a
+  // stream the TV cannot take (YouTube) also drops castOwns, and that one must
+  // simply play here.
+  const castConnected = cast.phase === 'casting';
+  const [castEndedUrl, setCastEndedUrl] = useState<string | null>(null);
+  const [prevCastConnected, setPrevCastConnected] = useState(castConnected);
+  if (castConnected !== prevCastConnected) {
+    setPrevCastConnected(castConnected);
+    setCastEndedUrl(!castConnected && isCastable(currentStream) ? streamUrl : null);
+  }
+  const castEnded =
+    !castOwns && !!streamUrl && (streamUrl === castEndedUrl || streamUrl.startsWith('cast://'));
+  // Playing on THIS screen: what keeps it awake, at 60 Hz, and PiP-eligible.
+  // TV screen mode: while the phone mirrors to a TV, Rust plays the stream
+  // full-frame there (TvScreen.kt) and the band shows the remote card.
+  const tv = useTvScreenState();
+  const tvOwns = watching && tv.active && !castOwns;
+  const playingHere = watching && !castOwns && !castEnded && !tvOwns;
   const channelId = currentStream?.user_id;
 
   // Side by side is decided by AVAILABLE WIDTH, not by orientation. An unfolded
@@ -462,8 +494,10 @@ export const WatchScreen: React.FC = () => {
   // Keep-awake follows playback, not the open layer: a paused stream lets the
   // screen sleep like any other paused video, and pressing play keeps it on
   // again. Its own effect, so a pause never touches PiP or the refresh rate.
+  // TV screen mode needs the screen on too: Android only shows the TV picture
+  // while the app is visible, and most phones stop mirroring when it sleeps.
   const videoPaused = useLiveVideoPaused();
-  const keepAwake = watching && !videoPaused;
+  const keepAwake = (playingHere && !videoPaused) || tvOwns;
   useEffect(() => {
     setKeepScreenOn(keepAwake);
     return () => setKeepScreenOn(false);
@@ -476,18 +510,18 @@ export const WatchScreen: React.FC = () => {
     // every frame at 90 for a picture that is 60 at most, and frame
     // presentation (RenderThread + GPU process + compositor) was the biggest
     // share of the app's CPU while watching. Restored when playback ends.
-    setPreferredRefreshRate(watching ? 60 : 0);
+    setPreferredRefreshRate(playingHere ? 60 : 0);
     // PiP eligibility is what makes leaving the app auto-enter a floating
     // window. Gated on the setting, because with it always on there was no way
     // to simply MINIMISE a stream: every exit became PiP. In 'audio' mode the
     // app just goes to the background, the stream drops to its audio-only
     // rendition, and the media notification is what brings it back.
-    setPipEligible(watching && backgroundMode !== 'audio');
+    setPipEligible(playingHere && backgroundMode !== 'audio');
     return () => {
       setPreferredRefreshRate(0);
       setPipEligible(false);
     };
-  }, [watching, backgroundMode]);
+  }, [playingHere, backgroundMode]);
 
   // Landscape is a viewing posture, never a browsing one: while the full watch
   // layer is up on a screen wider than it is tall, the status bar and the
@@ -1055,37 +1089,45 @@ export const WatchScreen: React.FC = () => {
             }
           }}
         >
-          <MobilePlayer
-            immersive={sideBySide || pip}
-            compact={mini || pip}
-            onMinimize={mini || pip ? undefined : () => setPlayerMode('mini')}
-            onToggleFullscreen={
-              largeToggle && !mini && !pip
-                ? () => setLargeChatHidden((v) => !v)
-                : sideBySide
-                  ? () => setLandscapeChat((v) => !v)
+          {castOwns ? (
+            <CastCard cast={cast} compact={mini || pip} />
+          ) : tvOwns ? (
+            <TvCard tv={tv} compact={mini || pip} />
+          ) : castEnded ? (
+            <CastEndedCard compact={mini || pip} onWatchHere={() => void restartStream()} />
+          ) : (
+            <MobilePlayer
+              immersive={sideBySide || pip}
+              compact={mini || pip}
+              onMinimize={mini || pip ? undefined : () => setPlayerMode('mini')}
+              onToggleFullscreen={
+                largeToggle && !mini && !pip
+                  ? () => setLargeChatHidden((v) => !v)
+                  : sideBySide
+                    ? () => setLandscapeChat((v) => !v)
+                    : undefined
+              }
+              chatOpen={largeToggle ? !largeChatHidden : chatOverlay || chatBeside}
+              // With chat floating over one edge, the controls keep to the
+              // picture that is still visible: otherwise the chat toggle sat
+              // under the very column it was meant to dismiss.
+              controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
+              layoutMode={twoColumns ? 'columns' : 'stacked'}
+              offlineCardBelow={offlineChin}
+              onToggleLayout={
+                // Nothing to arrange while chat is hidden.
+                canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
+                  ? () => {
+                      // Writes an explicit choice, so it stops tracking `auto` and
+                      // survives a restart.
+                      const next: WatchLayout = twoColumns ? 'stacked' : 'columns';
+                      setWatchLayout(next);
+                      writeWatchLayout(next);
+                    }
                   : undefined
-            }
-            chatOpen={largeToggle ? !largeChatHidden : chatOverlay || chatBeside}
-            // With chat floating over one edge, the controls keep to the
-            // picture that is still visible: otherwise the chat toggle sat
-            // under the very column it was meant to dismiss.
-            controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
-            layoutMode={twoColumns ? 'columns' : 'stacked'}
-            offlineCardBelow={offlineChin}
-            onToggleLayout={
-              // Nothing to arrange while chat is hidden.
-              canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
-                ? () => {
-                    // Writes an explicit choice, so it stops tracking `auto` and
-                    // survives a restart.
-                    const next: WatchLayout = twoColumns ? 'stacked' : 'columns';
-                    setWatchLayout(next);
-                    writeWatchLayout(next);
-                  }
-                : undefined
-            }
-          />
+              }
+            />
+          )}
           <DialIndicator dial={dial} />
           {/* IN-APP mini only. In system PiP the OS draws its own close and
               expand buttons over the window, so rendering ours too gave two
