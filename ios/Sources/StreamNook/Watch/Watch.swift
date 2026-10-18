@@ -744,7 +744,8 @@ final class Watch {
         error = nil
         player.replaceCurrentItem(with: item)
         player.play()
-        pip.eligible = true
+        // The audio-only rendition has no picture to float.
+        pip.eligible = !url.contains("/audio.m3u8")
         if firstPlayMS == nil { status = "Buffering" }
     }
 

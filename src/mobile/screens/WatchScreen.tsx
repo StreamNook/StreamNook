@@ -37,6 +37,7 @@ import { castOwnsStream, isCastable, useCastState } from '../cast/castState';
 import { useTvScreenState } from '../cast/tvScreenState';
 import { MobileOfflineChin } from '../player/MobileOfflineRoom';
 import { useLiveVideoPaused } from '../player/liveVideo';
+import { keepsAudioAfterPip } from '../player/lockScreenAudio';
 import { MobileChatPane } from '../chat/MobileChatPane';
 import {
   CHAT_TAB_STRIP_H,
@@ -166,7 +167,8 @@ export const WatchScreen: React.FC = () => {
   // numeric user_id; a Kick id would name an unrelated Twitch channel.
   const streamScoped = viewingStreamChat && isTwitchStream(currentStream);
   const chatChannelId = useActiveChatChannelId();
-  const backgroundMode = useAppStore((s) => s.settings.video_player?.background_mode) ?? 'pip';
+  // The viewer picked the audio-only rendition: there is no picture to float.
+  const audioOnly = useAppStore((s) => s.activeQuality === 'audio_only');
   // The landscape chat overlay shares its knobs with the desktop overlay:
   // opacity, width and side are one preference however big the screen is.
   const fsChat = useAppStore((s) => s.settings.fullscreen_chat);
@@ -466,14 +468,23 @@ export const WatchScreen: React.FC = () => {
     //   1. Reconcile the flag, or a `pip` left at true renders the stripped
     //      black player full screen in an app that is not pipped at all.
     //   2. Tear the stream down if the window was dismissed rather than
-    //      expanded, since otherwise it is still loaded and playing.
+    //      expanded, since otherwise it is still loaded and playing. With
+    //      Background play on it is meant to be playing: the audio carried on
+    //      (lockScreenAudio dropped it to the audio rendition), so it stays.
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       const native = isInPip();
       if (native !== null) apply(native);
-      if (consumePipClosed()) void exitStream();
+      if (consumePipClosed() && !keepsAudioAfterPip()) void exitStream();
     };
-    const onPipClosed = () => void exitStream();
+    const onPipClosed = () => {
+      if (!keepsAudioAfterPip()) {
+        void exitStream();
+        return;
+      }
+      // Handled: clear the native flag so the next open does not end the stream.
+      consumePipClosed();
+    };
 
     window.addEventListener('sn:pip', onPip);
     window.addEventListener('sn:pip-closed', onPipClosed);
@@ -507,16 +518,17 @@ export const WatchScreen: React.FC = () => {
     // share of the app's CPU while watching. Restored when playback ends.
     setPreferredRefreshRate(playingHere ? 60 : 0);
     // PiP eligibility is what makes leaving the app auto-enter a floating
-    // window. Gated on the setting, because with it always on there was no way
-    // to simply MINIMISE a stream: every exit became PiP. In 'audio' mode the
-    // app just goes to the background, the stream drops to its audio-only
-    // rendition, and the media notification is what brings it back.
-    setPipEligible(playingHere && backgroundMode !== 'audio');
+    // window, and it comes first whatever Background play says: that setting
+    // only decides what happens when the video cannot float (the system's PiP
+    // permission is off, the window was closed, the screen went off), where the
+    // stream drops to its audio rendition behind the media notification. The
+    // audio-only rendition has no picture, so it never floats.
+    setPipEligible(playingHere && !audioOnly);
     return () => {
       setPreferredRefreshRate(0);
       setPipEligible(false);
     };
-  }, [playingHere, backgroundMode]);
+  }, [playingHere, audioOnly]);
 
   // Landscape is a viewing posture, never a browsing one: while the full watch
   // layer is up on a screen wider than it is tall, the status bar and the

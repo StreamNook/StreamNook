@@ -799,12 +799,13 @@ class MainActivity : TauriActivity() {
     //   expand  -> the activity comes to the foreground (STARTED / RESUMED)
     //   close X -> the window is dismissed and the activity is on its way to
     //              stopped, so the lifecycle is still at CREATED here.
-    // Dismissing the window is the viewer saying they are done with the stream.
-    // Closing PiP does NOT finish the activity on this device (verified: the
-    // process and the ActivityRecord both survive), so without this the stream
-    // stays loaded and playing and reappears the next time the app is opened.
+    // Dismissing the window ends the stream, unless Background play is on, in
+    // which case the web shell keeps its audio going (it decides; see
+    // keepsAudioAfterPip). Closing PiP does NOT finish the activity on this
+    // device (verified: the process and the ActivityRecord both survive), so
+    // without this the stream stays loaded and reappears on the next open.
     if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
-      // Belt: stop it now, so audio does not carry on in the background.
+      // Belt: tell the shell now, so it can stop or carry on at once.
       webView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('sn:pip-closed'))",
         null,
