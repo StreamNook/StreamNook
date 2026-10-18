@@ -281,6 +281,66 @@ public struct MemberRank: Codable, Sendable, Equatable {
     public var lit: Bool { ["ethereal", "mythic", "ascendant"].contains(tier) }
 }
 
+/// One overview tile on a member's sheet (Rust `MemberStat`).
+public struct MemberStat: Codable, Sendable, Equatable, Identifiable {
+    /// The stat's visibility key (`hours`, `messages`, `streams`, `favorite_channel`,
+    /// `subs_gifted`, `twitch_age`, `followers`, `views`), which also picks its icon.
+    public var key: String
+    public var label: String
+    public var value: String
+    public var caption: String?
+    public var id: String { key }
+
+    public init(key: String, label: String, value: String, caption: String? = nil) {
+        self.key = key
+        self.label = label
+        self.value = value
+        self.caption = caption
+    }
+}
+
+/// One earned accolade (Rust `AccoladeMedal`): the desktop's medallion.
+public struct AccoladeMedal: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var label: String
+    /// The desktop's lucide icon name (`message-circle`).
+    public var icon: String
+    /// The two gradient stops, `#rrggbb`.
+    public var colors: [String]
+}
+
+/// One of a member's most-used emotes (Rust `TopEmote`).
+public struct TopEmote: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var provider: String
+    public var url: String
+    public var count: Int
+}
+
+/// A member's overview (ending on their profile views), accolades and top emotes (Rust
+/// `MemberProfile`), with what they hide already left out.
+public struct MemberProfile: Codable, Sendable, Equatable {
+    public var stats: [MemberStat]
+    public var accolades: [AccoladeMedal]
+    public var topEmotes: [TopEmote]
+
+    enum CodingKeys: String, CodingKey { case stats, accolades, topEmotes = "top_emotes" }
+
+    public init(stats: [MemberStat] = [], accolades: [AccoladeMedal] = [], topEmotes: [TopEmote] = []) {
+        self.stats = stats
+        self.accolades = accolades
+        self.topEmotes = topEmotes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        stats = (try? c.decodeIfPresent([MemberStat].self, forKey: .stats)) ?? []
+        accolades = (try? c.decodeIfPresent([AccoladeMedal].self, forKey: .accolades)) ?? []
+        topEmotes = (try? c.decodeIfPresent([TopEmote].self, forKey: .topEmotes)) ?? []
+    }
+}
+
 /// The 7TV picture renditions one surface draws.
 public struct AvatarPick: Codable, Sendable, Equatable, Hashable {
     public var still: String
@@ -305,11 +365,14 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
     public var atmosphere: Atmosphere?
     /// The Cologne event look instead of an Atmosphere.
     public var cologne: CologneLook?
+    /// A member's overview, accolades and top emotes; their StreamNook badges and relics ride
+    /// `groups`.
+    public var memberProfile: MemberProfile?
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login"
         case avatarURL = "avatar_url", picture, nameColor = "name_color", paint, groups, streamnook, member, atmosphere
-        case cologne
+        case cologne, memberProfile = "member_profile"
     }
 
     public init(from decoder: Decoder) throws {
@@ -327,6 +390,7 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
         member = try? c.decodeIfPresent(MemberRank.self, forKey: .member)
         atmosphere = try c.decodeIfPresent(Atmosphere.self, forKey: .atmosphere)
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
+        memberProfile = try? c.decodeIfPresent(MemberProfile.self, forKey: .memberProfile)
     }
 
     /// No badge in any group and not a member.

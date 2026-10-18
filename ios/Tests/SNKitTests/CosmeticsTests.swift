@@ -132,9 +132,13 @@ import Testing
         #expect(ext.paints.count == 2 && ext.sevenTvBadges.count == 2 && ext.twitchSelectable.count == 3)
         let sheet = try await core.invoke("user_profile_sheet", args: ["userId": "9", "login": "x", "displayName": "X"],
                                           as: ProfileSheetData.self)
-        #expect(sheet.groups.map(\.title) == ["Twitch", "7TV"] && sheet.streamnook != nil && !sheet.hasNoBadges)
+        #expect(sheet.groups.map(\.title) == ["Twitch", "7TV", "StreamNook"] && sheet.streamnook != nil && !sheet.hasNoBadges)
         #expect(sheet.member == MemberRank(number: 69, tier: "ascendant", label: "Nice", accent: "#22D3EE"))
         #expect(sheet.member?.lit == true)
+        #expect(sheet.memberProfile?.stats.first == MemberStat(key: "hours", label: "Hours watched", value: "1,300"))
+        #expect(sheet.memberProfile?.stats.first { $0.key == "favorite_channel" }?.caption == "313h watched")
+        #expect(sheet.memberProfile?.accolades.map(\.icon) == ["message-circle", "timer", "crown", "smile"])
+        #expect(sheet.memberProfile?.stats.last?.value == "4,321" && sheet.memberProfile?.topEmotes.first?.name == "Kappa")
         let me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
         #expect(me.badges.count == 2 && me.paint?.name == "Sunset")
         let standing = try await core.invoke("get_sub_standing", args: [:], as: SubStanding?.self)
@@ -152,6 +156,14 @@ import Testing
         _ = try await core.invoke("set_profile_theme", args: ["userId": "424242", "theme": "tier"])
         sn = try await core.invoke("cosmetics_picker_state", args: [:], as: StreamNookPickerState.self)
         #expect(sn.theme == "tier" && !sn.showChatToggle)
+    }
+
+    @Test func aMembersSheetWithoutTheMemberPartStillDecodes() throws {
+        let bare = ##"{"user_id":"5","groups":[],"member_profile":{"stats":[{"key":"hours","label":"Hours watched","value":"3"}],"accolades":[{"id":"og","label":"OG","icon":"crown","colors":["#fbbf24","#d97706"]}],"top_emotes":[{"id":"e","name":"KEKW","provider":"bttv","url":"https://x/e","count":9}]}}"##
+        let sheet = try JSONDecoder().decode(ProfileSheetData.self, from: Data(bare.utf8))
+        #expect(sheet.memberProfile?.stats.count == 1 && sheet.memberProfile?.topEmotes.first?.count == 9)
+        let none = try JSONDecoder().decode(ProfileSheetData.self, from: Data(#"{"user_id":"5"}"#.utf8))
+        #expect(none.memberProfile == nil)
     }
 
     @Test func profileAnswersCarryTheWornAtmosphere() async throws {

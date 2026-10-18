@@ -23,13 +23,17 @@ final class ProfileSheetModel {
 
     /// The signed-in viewer's Twitch id: your own sheet shows your picture without the medal.
     let ownID: String?
+    /// A section to scroll to (drive steps: `member`, `recent`).
+    var scrollTarget: String?
+    @ObservationIgnored private weak var store: CosmeticsStore?
 
     static let historyLimit = 50
 
-    init(target: ProfileTarget, core: CoreBridge, ownID: String? = nil) {
+    init(target: ProfileTarget, core: CoreBridge, ownID: String? = nil, store: CosmeticsStore? = nil) {
         self.target = target
         self.core = core
         self.ownID = ownID
+        self.store = store
     }
 
     /// Another person's StreamNook badge rides their picture; your own picture carries no marks.
@@ -41,6 +45,7 @@ final class ProfileSheetModel {
     }
 
     func start() {
+        store?.activeProfile = self
         let core = core
         let target = target
         tasks.append(Task { [weak self] in
@@ -144,6 +149,20 @@ struct ProfileSheet: View {
     static let avatar: CGFloat = 76
 
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                .onChange(of: model.scrollTarget) { _, section in
+                    guard let section else { return }
+                    withAnimation { proxy.scrollTo(section, anchor: .top) }
+                    model.scrollTarget = nil
+                }
+        }
+        .fittedSheet(maxFraction: 0.8)
+        .onAppear { model.start() }
+        .onDisappear { model.stop() }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
@@ -173,7 +192,10 @@ struct ProfileSheet: View {
                         .foregroundStyle(SN.textMuted)
                         .padding(.top, 16)
                 }
-                recent.padding(.top, 20)
+                if let member = sheet?.memberProfile {
+                    MemberSections(profile: member).padding(.top, 20).id("member")
+                }
+                recent.padding(.top, 20).id("recent")
             }
             .padding(.horizontal, 16)
         }
@@ -182,9 +204,6 @@ struct ProfileSheet: View {
             AtmosphereGlow(look: sheet?.atmosphere?.look, tint: nameColor(sheet?.nameColor ?? target.color))
                 .frame(height: Self.glow)
         }
-        .fittedSheet(maxFraction: 0.8)
-        .onAppear { model.start() }
-        .onDisappear { model.stop() }
     }
 
     // MARK: Identity
@@ -230,9 +249,12 @@ struct ProfileSheet: View {
 
     private func badgeGroup(_ group: ProfileBadgeGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ProfileSectionHeader(PlatformMark.Platform(named: group.title) == nil ? group.title : "Badges",
-                                 platform: PlatformMark.Platform(named: group.title),
-                                 detail: "\(group.badges.count)")
+            // A brand's group sits under its real mark (StreamNook's is the Penrose); "Relics"
+            // and "Chat clients" keep their words.
+            let platform = PlatformMark.Platform(named: group.title)
+            let streamNook = group.title == "StreamNook"
+            ProfileSectionHeader(platform == nil && !streamNook ? group.title : "Badges", platform: platform,
+                                 streamNook: streamNook, detail: "\(group.badges.count)")
             FlowLayout(spacing: 8) {
                 ForEach(group.badges) { badge in
                     ProfileBadgeButton(badge: badge) { model.picked = badge }
