@@ -58,6 +58,15 @@ fn requested_scopes() -> String {
     format!("{SCOPES} {OPTIONAL_SCOPES}")
 }
 
+/// Whether a token's granted scopes leave out `scope`.
+fn lacks_scope(granted: &[String], scope: &str) -> bool {
+    !granted.iter().any(|g| g == scope)
+}
+
+/// What /warn says to a sign-in from before warnings were asked for.
+const WARN_SCOPE_MISSING: &str =
+    "Warnings need one more Twitch permission. Sign in to Twitch again from your accounts to grant it; nothing else changes.";
+
 const TOKEN_FILE_NAME: &str = ".twitch_token";
 
 /// Normalize a GQL Language enum spelling ("FR", "ZH_HK") to the Helix form
@@ -6635,6 +6644,23 @@ impl TwitchService {
         Ok(())
     }
 
+    /// The scopes Twitch says `token` carries (`oauth2/validate`).
+    async fn token_scopes(token: &str) -> Result<Vec<String>> {
+        let response = crate::services::http::client()
+            .get("https://id.twitch.tv/oauth2/validate")
+            .header(AUTHORIZATION, format!("OAuth {token}"))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Twitch did not accept the sign-in (HTTP {})", response.status().as_u16()));
+        }
+        let data: serde_json::Value = response.json().await?;
+        Ok(data["scopes"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default())
+    }
+
     /// Warn a chat user (Helix: POST /moderation/warnings)
     pub async fn warn_chat_user(
         broadcaster_id: &str,
@@ -6643,6 +6669,12 @@ impl TwitchService {
     ) -> Result<()> {
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
+        // The warnings scope is optional: a sign-in from before it was asked for
+        // lacks it, and is asked to sign in again rather than refused blind.
+        let granted = Self::token_scopes(&token).await?;
+        if lacks_scope(&granted, "moderator:manage:warnings") {
+            return Err(anyhow::anyhow!(WARN_SCOPE_MISSING));
+        }
         let user_info = Self::get_user_info().await?;
         let moderator_id = &user_info.id;
 
@@ -6956,6 +6988,13 @@ mod scope_check_tests {
             .filter(|s| s != "moderator:manage:shield_mode")
             .collect();
         assert_eq!(missing_scopes(SCOPES, &before), ["moderator:manage:shield_mode"]);
+    }
+
+    #[test]
+    fn warn_asks_for_the_scope_only_when_the_sign_in_lacks_it() {
+        use super::lacks_scope;
+        assert!(lacks_scope(&granted(SCOPES), "moderator:manage:warnings"));
+        assert!(!lacks_scope(&granted(&requested_scopes()), "moderator:manage:warnings"));
     }
 
     #[test]
