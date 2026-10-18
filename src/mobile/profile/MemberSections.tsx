@@ -34,14 +34,14 @@ const Medallion: React.FC<{ medal: AccoladeMedalView }> = ({ medal }) => {
   const Icon = ACCOLADE_ICONS[medal.icon] ?? Star;
   const [from, to] = medal.colors;
   return (
-    <div className="flex flex-col items-center gap-1.5 min-w-0" role="img" aria-label={medal.label}>
+    <div className="flex flex-col items-center gap-1.5 min-w-0" role="img" aria-label={medal.label.replace(/­/g, '')}>
       <span
         className="flex w-11 h-11 items-center justify-center rounded-full"
         style={{ backgroundImage: `linear-gradient(140deg, ${from}, ${to ?? from})`, boxShadow: MEDALLION_BEVEL }}
       >
         <Icon size={18} strokeWidth={2} className="text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]" aria-hidden="true" />
       </span>
-      <span className="max-w-[64px] text-center text-[11px] font-medium leading-tight text-textPrimary line-clamp-2">
+      <span className="w-full text-center text-[11px] font-medium leading-tight text-textPrimary line-clamp-2 [hyphens:manual]">
         {medal.label}
       </span>
     </div>
