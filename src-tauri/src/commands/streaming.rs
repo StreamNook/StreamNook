@@ -1027,13 +1027,16 @@ pub fn get_stream_prefetch_present() -> bool {
 /// cannot measure it itself (AVPlayer): it passes the programme date of the
 /// frame it shows, in Unix milliseconds. With `target_ms` the answer carries a
 /// catch-up rate toward that distance. Also drains the relay's record of the
-/// player's requests since the previous call.
+/// player's requests since the previous call. `playlist_behind_ms` (how far the
+/// player sits behind its playlist's end) words the readout when the relay has
+/// no parts to measure against (the whole-segment route).
 #[tauri::command]
 pub fn get_relay_live_distance(
     player_pdt_ms: Option<f64>,
     target_ms: Option<i64>,
+    playlist_behind_ms: Option<f64>,
 ) -> crate::services::relay_probe::LiveDistance {
-    crate::services::relay_probe::report(player_pdt_ms, target_ms)
+    crate::services::relay_probe::report(player_pdt_ms, target_ms, playlist_behind_ms)
 }
 
 /// Enable or disable the experimental parts-based low-latency origin at runtime.

@@ -883,8 +883,14 @@ final class Watch {
             report(transfer, core: core)
         }
         let pdt = item.currentDate().map { $0.timeIntervalSince1970 * 1000 }
+        // The playlist's end minus the playhead: the readout's fallback where the relay has no
+        // parts to measure against (the whole-segment route).
+        let edge = item.seekableTimeRanges.last.map { $0.timeRangeValue.end.seconds }
+        let now = item.currentTime().seconds
+        let playlistBehind = edge.flatMap { end in end.isFinite && now.isFinite ? max(0, end - now) * 1000 : nil }
         guard let distance = try? await core.invoke(
-            "get_relay_live_distance", args: ["playerPdtMs": pdt, "targetMs": catchUpTargetMS],
+            "get_relay_live_distance",
+            args: ["playerPdtMs": pdt, "targetMs": catchUpTargetMS, "playlistBehindMs": playlistBehind],
             as: LiveDistance.self
         ) else { return }
         behindMS = distance.behindMs
