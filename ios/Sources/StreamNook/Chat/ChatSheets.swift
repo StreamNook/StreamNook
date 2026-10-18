@@ -51,13 +51,10 @@ struct ChatMenuSheet: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                     } header: {
-                        Text("This chat is in")
-                            .foregroundStyle(Color(red: 0x8C / 255, green: 0xA0 / 255, blue: 0xA7 / 255))
+                        ListHeader(text: "This chat is in")
                     } footer: {
                         if let standing = modes.standing {
-                            Text(standing)
-                                .font(.sn(12.5))
-                                .foregroundStyle(SN.textSecondary)
+                            ListFooter(text: standing)
                         }
                     }
                 }
@@ -186,16 +183,11 @@ struct ChatMenuSheet: View {
                     }
                 } footer: {
                     if session.isModerator, session.moderatorTools {
-                        Text("Long-press any message for delete, timeout and ban.")
-                            .font(.sn(12.5))
-                            .foregroundStyle(SN.textSecondary)
+                        ListFooter(text: "Long-press any message for delete, timeout and ban.")
                     }
                 }
             }
-            .listSectionSpacing(16)
-            .contentMargins(.top, 4, for: .scrollContent)
-            .scrollContentBackground(.hidden)
-            .tint(SN.textPrimary)
+            .snGroupedList()
         }
         .presentationDragIndicator(.visible)
         // Nothing to read here: the role comes from the room, the relationship from the core's

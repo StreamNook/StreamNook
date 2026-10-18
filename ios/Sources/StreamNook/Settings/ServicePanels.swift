@@ -14,63 +14,56 @@ struct AdFreePanel: View {
 
     var body: some View {
         let on = store.bool("video_player.ad_bypass_enabled", true)
-        VStack(alignment: .leading, spacing: 16) {
-            MasterCard(symbol: "checkmark.shield", title: "Ad-free playback",
-                       detail: on ? "Routes the playlist through a public relay and removes ad segments before the player sees them."
-                                  : "Streams play exactly as Twitch serves them.",
-                       path: "video_player.ad_bypass_enabled", fallback: true)
-            if on {
-                let source = Self.describe(model.watch.lastStart)
-                GroupLabel("This stream")
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(source.label).font(.sn(14.5, 600)).foregroundStyle(SN.textPrimary)
-                    Text(source.detail).font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .snPanel()
-                GroupLabel("Good to know")
-                VStack(alignment: .leading, spacing: 10) {
+        SettingsBlock(title: "Ad-free") {
+            ToggleRow(title: "Ad-free playback", path: "video_player.ad_bypass_enabled", fallback: true,
+                      detail: on ? "Routes the playlist through a public relay and removes ad segments before the player sees them."
+                                 : "Streams play exactly as Twitch serves them.")
+        }
+        if on {
+            let source = Self.describe(model.watch.lastStart)
+            SettingsBlock(title: "This stream") {
+                SettingRow(title: source.label, detail: source.detail, icon: "play.tv") { EmptyView() }
+            }
+            SettingsBlock(title: "Good to know") {
+                Label {
                     Text("A Turbo subscription or a sub to the channel is already ad-free through Twitch itself, and gives you the highest quality tiers. Those streams skip the relay.")
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+                } icon: {
+                    Image(systemName: "crown")
+                }
+                Label {
                     Text("Low Latency stays off while this is on. Both want to build the playlist the player reads, and only one of them can.")
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+                } icon: {
+                    Image(systemName: "bolt.slash")
                 }
-                .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .snPanel()
-                VStack(alignment: .leading, spacing: 0) {
-                    Button {
-                        withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                                .font(.system(size: 15)).foregroundStyle(SN.textSecondary)
-                            Text("Relays").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(SN.textMuted)
-                                .rotationEffect(.degrees(relaysOpen ? 90 : 0))
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .contentShape(Rectangle())
+            }
+            SettingsBlock(title: "Relays") {
+                Button {
+                    withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
+                } label: {
+                    HStack {
+                        Label("Relays", systemImage: "point.3.connected.trianglepath.dotted")
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(SN.textMuted)
+                            .rotationEffect(.degrees(relaysOpen ? 90 : 0))
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityValue(relaysOpen ? "Shown" : "Hidden")
-                    if relaysOpen {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
-                            Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
-                            SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
-                                             limit: 4000, monospaced: true, multiline: true)
-                        }
-                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 14)
-                        .transition(.opacity)
-                    }
+                    .contentShape(Rectangle())
                 }
-                .snPanel()
+                .buttonStyle(.plain)
+                .accessibilityValue(relaysOpen ? "Shown" : "Hidden")
+                if relaysOpen {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
+                        Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
+                        SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
+                                         limit: 4000, monospaced: true, multiline: true)
+                    }
+                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 4)
+                    .transition(.opacity)
+                }
             }
         }
     }
@@ -552,36 +545,37 @@ struct SupportPanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        Section {
             community
-            SettingsBlock(title: "Diagnostics", detail: "How much StreamNook writes to its log file, and where to find that file when someone asks you for it.") {
-                ToggleRow(title: "Detailed log", path: "error_reporting_enabled", fallback: true,
-                          detail: "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
-                          help: "Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it.")
-                WideRow(title: "Log export",
-                        detail: "Shares your logs as one zip, so you can save it to Files or send it straight to an app for a bug report.") {
-                    SettingButton(title: "Share", symbol: "square.and.arrow.up") { Task { await export() } }
-                        .padding(.top, 10)
+                .padding(.vertical, 12)
+                .task {
+                    while !Task.isCancelled {
+                        if let next = try? await model.core.invoke("get_community_invite", args: [:], as: Invite.self) { invite = next }
+                        try? await Task.sleep(for: .seconds(60))
+                    }
                 }
-            }
-            SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them.") {
-                SettingRow(title: "Channels and emotes",
-                           detail: "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
-                           help: "Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted.") { EmptyView() }
-                SettingRow(title: "Version and platform",
-                           detail: "Records which build you are on, your operating system, and whether your updater is working.",
-                           help: "This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current.") { EmptyView() }
-                SettingRow(title: "Linked accounts",
-                           detail: "Records which other platforms you have connected, so they survive a reinstall.") { EmptyView() }
+        } header: {
+            ListHeader(text: "Community")
+        }
+        SettingsBlock(title: "Diagnostics", detail: "How much StreamNook writes to its log file, and where to find that file when someone asks you for it.") {
+            ToggleRow(title: "Detailed log", path: "error_reporting_enabled", fallback: true,
+                      detail: "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
+                      help: "Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it.")
+            WideRow(title: "Log export",
+                    detail: "Shares your logs as one zip, so you can save it to Files or send it straight to an app for a bug report.") {
+                SettingButton(title: "Share", symbol: "square.and.arrow.up") { Task { await export() } }
+                    .padding(.top, 10)
             }
         }
-        .frame(maxWidth: 400)
-        .frame(maxWidth: .infinity)
-        .task {
-            while !Task.isCancelled {
-                if let next = try? await model.core.invoke("get_community_invite", args: [:], as: Invite.self) { invite = next }
-                try? await Task.sleep(for: .seconds(60))
-            }
+        SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them.") {
+            SettingRow(title: "Channels and emotes",
+                       detail: "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
+                       help: "Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted.") { EmptyView() }
+            SettingRow(title: "Version and platform",
+                       detail: "Records which build you are on, your operating system, and whether your updater is working.",
+                       help: "This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current.") { EmptyView() }
+            SettingRow(title: "Linked accounts",
+                       detail: "Records which other platforms you have connected, so they survive a reinstall.") { EmptyView() }
         }
     }
 

@@ -27,63 +27,61 @@ struct ThemePanel: View {
 
     var body: some View {
         let current = store.string("theme", "winters-glass")
-        VStack(alignment: .leading, spacing: 20) {
+        Section {
             header(current)
+                .task(id: "\(store.string("oled_accent"))|\((store.value("custom_themes") as? [Any])?.count ?? 0)") { await load() }
             GlassinessCard()
             FontCard()
-            if let catalog {
-                if !catalog.custom.isEmpty {
-                    category(symbol: "paintbrush.pointed", name: "Your Themes", description: "Your own creations", cards: catalog.custom,
-                             current: current)
-                }
-                ForEach(catalog.categories, id: \.id) { cat in
-                    category(symbol: Self.symbol(cat.id), name: cat.name, description: cat.description,
-                             cards: catalog.themes.filter { $0.category == cat.id }, current: current)
-                    if cat.id == "signature", current == catalog.oledID {
-                        OledAccentCard(accents: catalog.accents)
-                    }
-                }
-            } else {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20)
-            }
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles").font(.system(size: 14)).foregroundStyle(SN.accent)
-                Text("Create a custom theme to match your setup exactly.").font(.sn(12)).foregroundStyle(SN.textSecondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SN.surface.opacity(0.5)) }
-            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(SN.borderSubtle, lineWidth: 1) }
+        } header: {
+            ListHeader(text: "Theme")
         }
-        .task(id: "\(store.string("oled_accent"))|\((store.value("custom_themes") as? [Any])?.count ?? 0)") { await load() }
+        .id("Theme")
+        if let catalog {
+            if !catalog.custom.isEmpty {
+                category(name: "Your Themes", description: "Your own creations", cards: catalog.custom, current: current)
+            }
+            ForEach(catalog.categories, id: \.id) { cat in
+                category(name: cat.name, description: cat.description,
+                         cards: catalog.themes.filter { $0.category == cat.id }, current: current,
+                         oledAccents: cat.id == "signature" && current == catalog.oledID ? catalog.accents : nil)
+            }
+        } else {
+            Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20) }
+        }
+        Section {
+            Label {
+                Text("Create a custom theme to match your setup exactly.").font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+            } icon: {
+                Image(systemName: "sparkles")
+            }
+        }
     }
 
+    /// The picked theme's name beside the row's title.
     private func header(_ current: String) -> some View {
         let cards = (catalog?.themes ?? []) + (catalog?.custom ?? [])
         let name = cards.first { $0.id == current }?.name ?? "Frosted Glass"
-        return HStack(spacing: 8) {
-            Image(systemName: "paintpalette").font(.system(size: 18)).foregroundStyle(SN.accent)
-            SettingTitle(title: "Theme", paths: ["theme"], helpOpen: .constant(false), font: .sn(16, 600)) {
-                await model.loadTheme()
+        return Label {
+            HStack(spacing: 8) {
+                SettingTitle(title: "Theme", paths: ["theme"], helpOpen: .constant(false)) {
+                    await model.loadTheme()
+                }
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle().fill(SN.accent).frame(width: 14, height: 14)
+                    Text(name).font(.sn(12.5)).foregroundStyle(SN.textSecondary).lineLimit(1)
+                }
             }
-            Spacer()
-            HStack(spacing: 6) {
-                Circle().fill(SN.accent).frame(width: 16, height: 16)
-                Text(name).font(.sn(12)).foregroundStyle(SN.textSecondary).lineLimit(1)
-            }
+        } icon: {
+            Image(systemName: SettingIcons.symbol(paths: ["theme"], title: "Theme"))
         }
     }
 
-    private func category(symbol: String, name: String, description: String, cards: [Card], current: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 16)).foregroundStyle(SN.textSecondary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(name).font(.sn(14, 600)).foregroundStyle(SN.textSecondary)
-                    Text(description).font(.sn(12)).foregroundStyle(SN.textMuted)
-                }
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
+    /// A category: its swatch grid on the card, its line under it, and the OLED accent beside the OLED theme.
+    private func category(name: String, description: String, cards: [Card], current: String,
+                          oledAccents: [(name: String, value: String)]? = nil) -> some View {
+        Section {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(cards) { card in
                     ThemeCard(card: card, picked: card.id == current) {
                         Task {
@@ -93,6 +91,12 @@ struct ThemePanel: View {
                     }
                 }
             }
+            .padding(.vertical, 6)
+            if let oledAccents { OledAccentCard(accents: oledAccents) }
+        } header: {
+            ListHeader(text: name)
+        } footer: {
+            ListFooter(text: description)
         }
         .id(name)
     }
@@ -188,37 +192,39 @@ private struct GlassinessCard: View {
 
     var body: some View {
         let stored = store.double("glass_transparency", 100)
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "drop").font(.system(size: 16)).foregroundStyle(SN.textSecondary)
-                SettingTitle(title: "Glassiness", paths: ["glass_transparency"], helpOpen: .constant(false), font: .sn(14, 600))
-                Spacer()
-                Text("\(Int(live ?? stored))%").font(.sn(13, 500).monospacedDigit()).foregroundStyle(SN.textSecondary)
-            }
-            Slider(value: Binding(get: { live ?? stored }, set: { value in
-                live = value
-                model.look.preview(glassiness: value / 100)
-            }), in: 0...100, step: 1) { editing in
-                guard !editing, let value = live else { return }
-                Task {
-                    if Int(value) != Int(stored) { await store.set("glass_transparency", Int(value)) }
-                    await model.loadSettings()
-                    live = nil
+        Label {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    SettingTitle(title: "Glassiness", paths: ["glass_transparency"], helpOpen: .constant(false))
+                    Spacer()
+                    Text("\(Int(live ?? stored))%").font(.sn(13, 500).monospacedDigit()).foregroundStyle(SN.textSecondary)
                 }
+                Slider(value: Binding(get: { live ?? stored }, set: { value in
+                    live = value
+                    model.look.preview(glassiness: value / 100)
+                }), in: 0...100, step: 1) { editing in
+                    guard !editing, let value = live else { return }
+                    Task {
+                        if Int(value) != Int(stored) { await store.set("glass_transparency", Int(value)) }
+                        await model.loadSettings()
+                        live = nil
+                    }
+                }
+                .tint(SN.accent)
+                .accessibilityLabel("Glassiness")
+                HStack {
+                    Text("Solid")
+                    Spacer()
+                    Text("Frosted glass")
+                }
+                .font(.sn(12)).foregroundStyle(SN.textMuted)
+                Text("How see-through and frosted every surface is, for every theme. 100% is the signature glass; 0% removes all transparency and blur for a completely flat, solid look.")
+                    .font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
             }
-            .tint(SN.accent)
-            .accessibilityLabel("Glassiness")
-            HStack {
-                Text("Solid")
-                Spacer()
-                Text("Frosted glass")
-            }
-            .font(.sn(12)).foregroundStyle(SN.textMuted)
-            Text("How see-through and frosted every surface is, for every theme. 100% is the signature glass; 0% removes all transparency and blur for a completely flat, solid look.")
-                .font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: SettingIcons.symbol(paths: ["glass_transparency"], title: "Glassiness"))
         }
-        .padding(14)
-        .snPanel()
+        .padding(.vertical, 4)
     }
 }
 
@@ -232,40 +238,40 @@ private struct FontCard: View {
 
     var body: some View {
         let picked = store.string("font", "satoshi").isEmpty ? "satoshi" : store.string("font", "satoshi")
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "textformat").font(.system(size: 16)).foregroundStyle(SN.textSecondary)
-                SettingTitle(title: "Font", paths: ["font"], helpOpen: .constant(false), font: .sn(14, 600))
-            }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(Self.fonts, id: \.1) { name, id in
-                    let on = id == picked
-                    Button {
-                        Task {
-                            await store.set("font", id)
-                            await model.loadSettings()
+        Label {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingTitle(title: "Font", paths: ["font"], helpOpen: .constant(false))
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(Self.fonts, id: \.1) { name, id in
+                        let on = id == picked
+                        Button {
+                            Task {
+                                await store.set("font", id)
+                                await model.loadSettings()
+                            }
+                        } label: {
+                            HStack {
+                                Text(name)
+                                    .font(Typeface.font(15, 400, face: id))
+                                    .foregroundStyle(SN.textPrimary).lineLimit(1)
+                                Spacer(minLength: 4)
+                                if on { Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.accent) }
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .frame(minHeight: 44)
+                            .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? SN.accent.opacity(0.1) : .clear) }
+                            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? SN.accent : SN.borderSubtle, lineWidth: 1) }
+                            .contentShape(Rectangle())
                         }
-                    } label: {
-                        HStack {
-                            Text(name)
-                                .font(Typeface.font(15, 400, face: id))
-                                .foregroundStyle(SN.textPrimary).lineLimit(1)
-                            Spacer(minLength: 4)
-                            if on { Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.accent) }
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(minHeight: 44)
-                        .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? SN.accent.opacity(0.1) : .clear) }
-                        .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? SN.accent : SN.borderSubtle, lineWidth: 1) }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(on ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
+        } icon: {
+            Image(systemName: SettingIcons.symbol(paths: ["font"], title: "Font"))
         }
-        .padding(14)
-        .snPanel()
+        .padding(.vertical, 4)
     }
 }
 
@@ -278,35 +284,35 @@ private struct OledAccentCard: View {
 
     var body: some View {
         let accent = store.string("oled_accent", "#a064ff").lowercased()
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "drop").font(.system(size: 14)).foregroundStyle(SN.accent)
+        Label {
+            VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 1) {
-                    SettingTitle(title: "OLED accent", paths: ["oled_accent"], helpOpen: .constant(false), font: .sn(14, 600)) {
+                    SettingTitle(title: "OLED accent", paths: ["oled_accent"], helpOpen: .constant(false)) {
                         await model.loadTheme()
                     }
-                    Text("The glow color on pure black").font(.sn(12)).foregroundStyle(SN.textMuted)
+                    Text("The glow color on pure black").font(.sn(12)).foregroundStyle(SN.textSecondary)
                 }
-            }
-            HStack(spacing: 8) {
-                ForEach(accents, id: \.value) { preset in
-                    Button { save(preset.value) } label: {
-                        Circle().fill(RGBA(css: preset.value)?.color ?? .gray).frame(width: 28, height: 28)
-                            .overlay { Circle().stroke(accent == preset.value ? SN.textPrimary : .clear, lineWidth: 2) }
-                            .frame(width: 34, height: 44).contentShape(Rectangle())
+                HStack(spacing: 8) {
+                    ForEach(accents, id: \.value) { preset in
+                        Button { save(preset.value) } label: {
+                            Circle().fill(RGBA(css: preset.value)?.color ?? .gray).frame(width: 28, height: 28)
+                                .overlay { Circle().stroke(accent == preset.value ? SN.textPrimary : .clear, lineWidth: 2) }
+                                .frame(width: 34, height: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.name)
+                        .accessibilityAddTraits(accent == preset.value ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(preset.name)
-                    .accessibilityAddTraits(accent == preset.value ? .isSelected : [])
                 }
+                ColorPicker("Custom color", selection: Binding(get: { RGBA(css: accent)?.color ?? .purple }, set: { color in
+                    save(SettingColor.hex(color))
+                }), supportsOpacity: false)
+                .font(.sn(13)).foregroundStyle(SN.textSecondary)
             }
-            ColorPicker("Custom color", selection: Binding(get: { RGBA(css: accent)?.color ?? .purple }, set: { color in
-                save(SettingColor.hex(color))
-            }), supportsOpacity: false)
-            .font(.sn(13)).foregroundStyle(SN.textSecondary)
+        } icon: {
+            Image(systemName: SettingIcons.symbol(paths: ["oled_accent"], title: "OLED accent"))
         }
-        .padding(14)
-        .snPanel()
+        .padding(.vertical, 4)
     }
 
     private func save(_ hex: String) {
