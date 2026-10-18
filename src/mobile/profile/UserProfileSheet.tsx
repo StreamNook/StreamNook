@@ -1,8 +1,8 @@
 // Tap a name in chat, see who they are, in the same shape as your own card:
-// their Atmosphere as a band across the top, their picture cut into its edge
-// with their StreamNook badge on it as a medal, their name in their paint below
-// the art, their sub in this room, every badge they have under its platform's
-// mark, and what they said this session. No actions.
+// their Atmosphere glowing behind them, their picture with their StreamNook
+// badge on it as a medal (never on your own), their name in their paint, their
+// sub in this room, every badge they have under its platform's mark, and what
+// they said this session. No actions.
 //
 // Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
 // badge groups merged and deduped per provider, the worn paint, the Helix
@@ -11,6 +11,7 @@
 // out.
 import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from '../../stores/AppStore';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
 import type { ProfileBadge, ProfileSheetView } from '../../types/profileView';
@@ -292,7 +293,9 @@ const ProfileBody: React.FC<{
       badges: group.badges.filter((b) => !failedImages.has(badgeImageKey(b))),
     }))
     .filter((group) => group.badges.length > 0);
-  const member = !!sheet?.streamnook;
+  // Your own picture carries no marks, here as on your card.
+  const ownId = useAppStore((s) => s.currentUser?.user_id);
+  const medal = !!sheet?.streamnook && !(ownId && ownId === (sheet?.user_id || user.userId));
   const name = sheet?.display_name || user.displayName;
   // Before Rust answers, the login line comes from what the row carried.
   const login =
@@ -314,7 +317,7 @@ const ProfileBody: React.FC<{
               platformUrl={sheet?.avatar_url}
               picture={sheet?.picture}
               size={AVATAR}
-              medal={medalUrl(sheet?.streamnook)}
+              medal={medal ? medalUrl(sheet?.streamnook) : null}
               medalLabel={sheet?.streamnook?.label}
             />
           </div>
@@ -383,7 +386,7 @@ const ProfileBody: React.FC<{
 
         {/* A member's StreamNook badge is the medal on their picture, so it has
             no group of its own here. */}
-        {sheet && groups.length === 0 && !member && (
+        {sheet && groups.length === 0 && !medal && (
           <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
 
