@@ -321,13 +321,17 @@ public struct TopEmote: Codable, Sendable, Equatable, Identifiable {
 /// A member's overview (ending on their profile views), accolades and top emotes (Rust
 /// `MemberProfile`), with what they hide already left out.
 public struct MemberProfile: Codable, Sendable, Equatable {
+    /// Their relics, the featured one first; the sheet's StreamNook block leads with them.
+    public var relics: [ProfileBadge]
     public var stats: [MemberStat]
     public var accolades: [AccoladeMedal]
     public var topEmotes: [TopEmote]
 
-    enum CodingKeys: String, CodingKey { case stats, accolades, topEmotes = "top_emotes" }
+    enum CodingKeys: String, CodingKey { case relics, stats, accolades, topEmotes = "top_emotes" }
 
-    public init(stats: [MemberStat] = [], accolades: [AccoladeMedal] = [], topEmotes: [TopEmote] = []) {
+    public init(relics: [ProfileBadge] = [], stats: [MemberStat] = [], accolades: [AccoladeMedal] = [],
+                topEmotes: [TopEmote] = []) {
+        self.relics = relics
         self.stats = stats
         self.accolades = accolades
         self.topEmotes = topEmotes
@@ -335,6 +339,7 @@ public struct MemberProfile: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        relics = (try? c.decodeIfPresent([ProfileBadge].self, forKey: .relics)) ?? []
         stats = (try? c.decodeIfPresent([MemberStat].self, forKey: .stats)) ?? []
         accolades = (try? c.decodeIfPresent([AccoladeMedal].self, forKey: .accolades)) ?? []
         topEmotes = (try? c.decodeIfPresent([TopEmote].self, forKey: .topEmotes)) ?? []
@@ -365,7 +370,7 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
     public var atmosphere: Atmosphere?
     /// The Cologne event look instead of an Atmosphere.
     public var cologne: CologneLook?
-    /// A member's overview, accolades and top emotes; their StreamNook badges and relics ride
+    /// A member's relics, overview, accolades and top emotes; their StreamNook badges ride
     /// `groups`.
     public var memberProfile: MemberProfile?
 

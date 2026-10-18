@@ -53,11 +53,17 @@ private struct ComposerBar: View {
             if let failure = model.failure {
                 failureChip(failure)
             }
+            if model.cheer.shown != nil {
+                CheerBar(model: model)
+            }
             inputRow(slowWait: model.slowWait)
         }
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
+        // The wallet reads Rust's channel state for this room and follows its pushes.
+        .task { await model.wallet?.start() }
+        .onDisappear { model.wallet?.stop() }
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
@@ -216,7 +222,7 @@ private struct ComposerBar: View {
                     .accessibilityLabel("Chat commands")
                 }
                 // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
-                if !session.isKick { WalletButton(session: session) { model.panel = .none } }
+                if let wallet = model.wallet { WalletButton(wallet: wallet, session: session) { model.panel = .none } }
             }
             .padding(.leading, 4)
             .padding(.trailing, 5)
@@ -237,6 +243,9 @@ private struct ComposerBar: View {
                         Text("\(slowWait)")
                             .font(.system(size: 14, weight: .semibold).monospacedDigit())
                             .foregroundStyle(Color(ChatTheme.textPrimary))
+                    } else if model.canSend, let gem = model.cheer.draft?.iconURL {
+                        // The message cheers: Send spends, so it wears the gem.
+                        RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
                     } else {
                         Image(systemName: model.canSend || model.sending ? "paperplane.fill" : "ellipsis")
                             .font(.system(size: 18, weight: .bold))
@@ -248,9 +257,12 @@ private struct ComposerBar: View {
                 .frame(width: 44, height: 44)
             }
             .glassEffect(.regular.interactive(), in: .circle)
-            .disabled(model.sending || (model.canSend && slowWait > 0))
-            .opacity(model.sending ? 0.5 : 1)
-            .accessibilityLabel(model.canSend ? (slowWait > 0 ? "Send again in \(slowWait) seconds" : "Send") : "Chat options")
+            .disabled(model.sending || (model.canSend && slowWait > 0) || model.cheerBlocked)
+            .opacity(model.sending || model.cheerBlocked ? 0.5 : 1)
+            .accessibilityLabel(model.canSend
+                ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
+                    : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
+                : "Chat options")
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)

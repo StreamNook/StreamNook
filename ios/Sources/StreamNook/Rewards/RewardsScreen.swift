@@ -8,6 +8,8 @@ struct RewardsScreen: View {
     let model: AppModel
 
     private var rewards: RewardsStore { model.rewards }
+    /// The marker under the last row; the bottom safe area already spans the tab bar.
+    private static let end = "rewards-end"
 
     var body: some View {
         @Bindable var rewards = rewards
@@ -22,9 +24,17 @@ struct RewardsScreen: View {
                     } else {
                         SignedOutRewards(model: model)
                     }
+                    Color.clear.frame(height: 0).id(RewardsScreen.end)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
+            }
+            .onChange(of: rewards.scrollToEnd) { _, asked in
+                guard asked else { return }
+                rewards.scrollToEnd = false
+                withAnimation(SNMotion.run(SNMotion.settle)) {
+                    scroller.scrollTo(RewardsScreen.end, anchor: .bottom)
+                }
             }
         }
         .scrollIndicators(.hidden)

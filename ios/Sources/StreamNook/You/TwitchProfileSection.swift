@@ -85,10 +85,7 @@ struct TwitchProfileSection: View {
                     CosmeticImage(pick.animated ?? pick.still, fallbacks: pick.animated == nil ? [] : [pick.still],
                                   animate: pick.animated != nil, fill: true)
                 } else {
-                    ZStack {
-                        SN.surface
-                        PlatformMark(platform: .sevenTV, size: 12, color: SN.textMuted)
-                    }
+                    PlatformMark(platform: .sevenTV, size: 12, color: SN.textMuted)
                 }
             }
             rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV" : "Shown in chat")
@@ -107,11 +104,12 @@ struct TwitchProfileSection: View {
         .padding(.vertical, 10)
     }
 
-    /// A 44 point round picture with its platform's mark on the corner, so each picture says whose
-    /// it is without words.
+    /// A 44 point round picture on black, as every picture of yours sits, with its platform's mark
+    /// on the corner, so each picture says whose it is without words.
     private func pictureFrame<Content: View>(mark: PlatformMark.Platform, @ViewBuilder content: () -> Content) -> some View {
         content()
             .frame(width: 44, height: 44)
+            .background(Color.black)
             .clipShape(Circle())
             .overlay { Circle().stroke(Color.white.opacity(0.1), lineWidth: 1) }
             .overlay(alignment: .bottomTrailing) {

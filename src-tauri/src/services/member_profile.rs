@@ -84,6 +84,10 @@ pub struct TopEmote {
 /// hides it or has nothing in it.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct MemberProfile {
+    /// Their relics with art, the featured one first. The sheet's StreamNook
+    /// block leads with them, ahead of every badge group.
+    #[serde(default)]
+    pub relics: Vec<ProfileBadge>,
     /// The overview, in the desktop card's order, ending on how many times
     /// other people opened their profile.
     pub stats: Vec<MemberStat>,
@@ -378,7 +382,7 @@ pub fn build(f: &MemberFacts) -> MemberProfile {
             .collect()
     };
 
-    MemberProfile { stats: tiles, accolades, top_emotes }
+    MemberProfile { relics: Vec::new(), stats: tiles, accolades, top_emotes }
 }
 
 const TOP_EMOTES: usize = 8;
@@ -481,13 +485,12 @@ async fn count_view(member_id: &str) -> Option<u64> {
     }
 }
 
-/// What a member's sheet adds for them: the member sections, their StreamNook
-/// badges, their relics, and whether they hide their badge collection (which
+/// What a member's sheet adds for them: the member sections (relics included),
+/// their StreamNook badges, and whether they hide their badge collection (which
 /// hides every badge group, as on desktop).
 pub struct MemberSheet {
     pub profile: MemberProfile,
     pub streamnook: Vec<ProfileBadge>,
-    pub relics: Vec<ProfileBadge>,
     pub hide_badges: bool,
 }
 
@@ -506,10 +509,13 @@ impl MemberReads {
         let catalog = registry::catalog();
         self.facts.cosmetics = seventv_cosmetics + owned.len() as u64;
         let hidden = &self.facts.hidden;
+        let mut profile = build(&self.facts);
+        if !is_stat_hidden(hidden, "relics") {
+            profile.relics = relics(&owned, self.featured.as_deref(), &catalog);
+        }
         MemberSheet {
-            profile: build(&self.facts),
+            profile,
             streamnook: streamnook_badges(registry::member_badge(&self.member_id, false).as_ref(), &owned, &catalog),
-            relics: if is_stat_hidden(hidden, "relics") { Vec::new() } else { relics(&owned, self.featured.as_deref(), &catalog) },
             hide_badges: is_stat_hidden(hidden, "badge_collection"),
         }
     }
@@ -751,7 +757,7 @@ mod tests {
     #[test]
     fn the_shape_keeps_the_keys_both_phones_decode() {
         let v = serde_json::to_value(build(&facts())).unwrap();
-        for key in ["stats", "accolades", "top_emotes"] {
+        for key in ["relics", "stats", "accolades", "top_emotes"] {
             assert!(v.get(key).is_some(), "{key}");
         }
         assert_eq!(v["stats"][0]["key"], "hours");

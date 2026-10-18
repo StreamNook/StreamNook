@@ -79,6 +79,18 @@ enum FakeWallet {
         ]
     }
 
+    static var bitsState: [String: Any] {
+        let gem = { (n: Int) in "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/\(n)/2.gif" }
+        let tiers = [1, 100, 1000].map { ["bits": $0, "url": gem($0), "color": "#9c3ee8"] as [String: Any] }
+        return [
+            "enabled": true, "cheer_min": 1, "emote_min": 1, "pick_min": 1, "pick_max": 10_000,
+            "quick_amounts": [1, 100, 500, 1000], "balance": 300,
+            "cheermotes": [["prefix": "Nook", "custom": true, "tiers": tiers] as [String: Any],
+                           ["prefix": "Cheer", "custom": false, "tiers": tiers] as [String: Any]],
+            "icons": tiers,
+        ]
+    }
+
     static var emotes: [[String: Any]] { [
         ["id": "25", "token": "nookHype", "emote_type": "SUBSCRIPTIONS",
          "modifications": [["id": "25_BW", "modifier_id": "MOD_BW", "token": "nookHype_BW"],
