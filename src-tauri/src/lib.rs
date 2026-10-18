@@ -39,6 +39,9 @@ use commands::moderation_tools::{
     get_user_pronouns, moderate_chatter, resolve_automod_message, set_user_note,
     update_channel_info, upload_image,
 };
+use commands::stream_manager::{
+    check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
+};
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
     badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
@@ -2069,6 +2072,12 @@ pub fn run() {
             create_stream_marker,
             warn_chat_user,
             update_shield_mode,
+            // Stream manager
+            get_stream_manager,
+            check_stream_info,
+            stream_manager_act,
+            get_reward_queue,
+            search_raid_targets,
             // Discord commands (desktop-only — Discord Rich Presence)
             #[cfg(desktop)]
             connect_discord,

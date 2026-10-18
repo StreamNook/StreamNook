@@ -14,7 +14,9 @@ export interface ChannelToolContext {
 export interface ChannelToolSections {
   /** Chat modes, moderation and your mod settings: every row is a Helix call. */
   moderate: boolean;
-  /** Twitch's poll and prediction create endpoints are broadcaster-only. */
+  /** The stream manager rows (stream info, polls, predictions, raid, ads,
+   *  rewards queue). Moderators get them too: Rust offers each role only what
+   *  Twitch lets it do, through Twitch's own GQL where Helix is broadcaster-only. */
   polls: boolean;
   drops: boolean;
   any: boolean;
@@ -22,7 +24,7 @@ export interface ChannelToolSections {
 
 export function channelToolSections(ctx: ChannelToolContext): ChannelToolSections {
   const moderate = ctx.isTwitch && ctx.isModerator;
-  const polls = ctx.isTwitch && ctx.isBroadcaster && !ctx.isVodReplay;
+  const polls = ctx.isTwitch && (ctx.isBroadcaster || ctx.isModerator) && !ctx.isVodReplay;
   const drops = ctx.hasDropsCampaign;
   return { moderate, polls, drops, any: moderate || polls || drops };
 }

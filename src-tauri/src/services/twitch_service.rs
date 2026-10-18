@@ -52,15 +52,22 @@ const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit chan
 /// stored sign-in without one is kept (no reset of every account), and the
 /// command that needs it asks for a fresh sign-in when it is used.
 //   moderator:manage:warnings: /warn (Helix POST moderation/warnings)
-const OPTIONAL_SCOPES: &str = "moderator:manage:warnings";
+//   channel:read:ads, channel:manage:ads: the stream manager's ad schedule
+//     (Helix GET channels/ads) and Snooze (POST channels/ads/schedule/snooze)
+const OPTIONAL_SCOPES: &str = "moderator:manage:warnings channel:read:ads channel:manage:ads";
 
 /// What a sign-in asks Twitch for: the required scopes, then the optional ones.
 fn requested_scopes() -> String {
     format!("{SCOPES} {OPTIONAL_SCOPES}")
 }
 
+/// The app's Helix client id, for services that make their own Helix calls.
+pub(crate) fn helix_client_id() -> &'static str {
+    CLIENT_ID
+}
+
 /// Whether a token's granted scopes leave out `scope`.
-fn lacks_scope(granted: &[String], scope: &str) -> bool {
+pub(crate) fn lacks_scope(granted: &[String], scope: &str) -> bool {
     !granted.iter().any(|g| g == scope)
 }
 
@@ -6673,7 +6680,7 @@ impl TwitchService {
     }
 
     /// The scopes Twitch says `token` carries (`oauth2/validate`).
-    async fn token_scopes(token: &str) -> Result<Vec<String>> {
+    pub(crate) async fn token_scopes(token: &str) -> Result<Vec<String>> {
         let response = crate::services::http::client()
             .get("https://id.twitch.tv/oauth2/validate")
             .header(AUTHORIZATION, format!("OAuth {token}"))
