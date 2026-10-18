@@ -85,7 +85,8 @@ struct MainShell: View {
                 }
         }
         .overlay {
-            if showsTabBar(tab) { TabBarFloor() }
+            // Not on Chats: its composer sits right above the bar and would fade into it.
+            if showsTabBar(tab) && tab != .chats { TabBarFloor() }
         }
     }
 
