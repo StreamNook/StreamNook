@@ -8,8 +8,8 @@
 // the provider list below.
 //
 // Layout follows the house glass rules: a `.glass-panel`
-// frames each client, tiles are for-show `.glass-tile` surfaces (not buttons,
-// the only action is the "open site" button in the header), colour lives on
+// frames each client, tiles are `.glass-tile` buttons that open the badge's
+// spotlight card (the header keeps the "open site" button), colour lives on
 // the mark, and the only accent is the owned ring. ~46 tiles across seven
 // clients, so nothing collapses; search narrows within every section.
 
@@ -27,6 +27,8 @@ import dankchatLogo from '../assets/dankchat-logo.png';
 import chatsenLogo from '../assets/chatsen-logo.png';
 import chattyLogo from '../assets/chatty-logo.png';
 import { Logger } from '../utils/logger';
+import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
+import { thirdPartyBadgeRef } from '../utils/badgeSpotlight';
 
 export type ChatClientProvider =
   | 'ffz'
@@ -155,8 +157,12 @@ function BadgeTile({ badge }: { badge: ChatClientBadge }) {
       }
       side="top"
     >
-      <div
-        className={`glass-tile relative flex flex-col items-center gap-2 px-2 py-3 ${
+      <button
+        type="button"
+        aria-label={badge.title}
+        // Already inside the Badges overlay, so the card offers no way back here.
+        onClick={() => openBadgeSpotlight(thirdPartyBadgeRef(badge), { fromBadges: true })}
+        className={`glass-tile relative flex w-full cursor-pointer flex-col items-center gap-2 px-2 py-3 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${
           badge.owned ? 'ring-1 ring-inset ring-accent/60' : ''
         }`}
       >
@@ -185,7 +191,7 @@ function BadgeTile({ badge }: { badge: ChatClientBadge }) {
         >
           {badge.title}
         </span>
-      </div>
+      </button>
     </Tooltip>
   );
 }

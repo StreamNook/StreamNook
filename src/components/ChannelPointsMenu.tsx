@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { MessageSquareText, Search, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
 import { ChannelReward, ChannelRewardsSnapshot, RedeemOutcome, RewardBlock, UnlockedEmote } from '../types';
@@ -10,6 +10,7 @@ import { Logger } from '../utils/logger';
 import { rewardStatusText } from '../utils/rewardStatus';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
+import { useOutsidePress } from '../hooks/useOutsidePress';
 
 /** Opening a reward re-reads the list when it is older than this. */
 const REWARDS_STALE_MS = 30_000;
@@ -339,17 +340,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
   // A press outside the popover closes it, as the commands menu beside it
   // does. A sheet closes on its own backdrop, a pane with its wallet.
-  useEffect(() => {
-    if (isSheet || isPane) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (menuRef.current?.contains(t)) return;
-      if (ignoreRef?.current?.contains(t)) return;
-      onClose();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [isSheet, isPane, onClose, ignoreRef]);
+  const markInside = useOutsidePress(!isSheet && !isPane, [menuRef, ignoreRef], onClose);
 
   // Escape backs out of the open view first, then clears a search, then
   // closes the menu.
@@ -684,6 +675,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   return (
     <motion.div
       ref={menuRef}
+      onPointerDownCapture={markInside}
       {...popoverMotion}
       className={
         isSheet
@@ -851,7 +843,11 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             ) : shownRewards.length === 0 ? (
               <p className="px-4 py-6 text-center text-[12px] text-textMuted">No rewards match “{query.trim()}”</p>
             ) : (
-              shownRewards.map((reward) => {
+              // Rust drops a reward that turned off or sold out while the menu
+              // is open; it folds away (and one coming back unfolds) instead of
+              // the rows below jumping.
+              <AnimatePresence initial={false}>
+              {shownRewards.map((reward) => {
                 const available = reward.availability.redeemable;
                 const status = rewardStatusText(reward.availability, nowMs, 'label');
                 const about = reward.prompt?.trim() || reward.description?.trim() || null;
@@ -865,7 +861,14 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                   : null;
 
                 return (
-                  <div key={reward.id} className="px-1.5">
+                  <motion.div
+                    key={reward.id}
+                    className="overflow-hidden px-1.5"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                  >
                     <button
                       type="button"
                       onClick={() => openDetail(reward)}
@@ -914,9 +917,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                         )}
                       </span>
                     </button>
-                  </div>
+                  </motion.div>
                 );
-              })
+              })}
+              </AnimatePresence>
             )}
           </div>
         </>

@@ -8,12 +8,23 @@
 
 # Tauri mobile plugins are instantiated reflectively by PluginManager.
 -keep class app.streamnook.TwitchLoginPlugin { *; }
+-keep class app.streamnook.CastPlugin { *; }
+-keep class app.streamnook.CastLoadArgs { *; }
+-keep class app.streamnook.CastControlArgs { *; }
+-keep class app.streamnook.TvShowArgs { *; }
+
+# The Cast SDK instantiates its options provider from the class name in the
+# manifest's OPTIONS_PROVIDER_CLASS_NAME entry.
+-keep class app.streamnook.CastOptionsProvider { *; }
 
 # The JNI symbol Rust exports is derived from this class's fully qualified name,
 # so a rename breaks the binding at call time rather than at build time. The
 # default androidx rules would likely cover it via -keepclasseswithmembernames,
 # but this only fails in release builds, which is the worst place to find out.
 -keep class app.streamnook.NotifyBridge {
+    native <methods>;
+}
+-keep class app.streamnook.CastBridge {
     native <methods>;
 }
 

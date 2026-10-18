@@ -126,6 +126,19 @@ dependencies {
     // google-services plugin below: FirebaseApp never initializes, every call
     // site catches, and delivery falls back to the WorkManager poll.
     implementation("com.google.firebase:firebase-messaging:24.1.0")
+    // Google Cast sender. Pinned to 22.0.0 for the same Kotlin-metadata trap:
+    // 22.1.0 and later declare kotlin-stdlib 2.1.0, which the 1.9.25 plugin
+    // cannot read; 22.0.0 declares no stdlib at all. It has everything used here
+    // (async CastContext, CastMediaOptions without the SDK's notification), and
+    // pulls mediarouter 1.6.0 for the device picker. Without Play services
+    // (microG included) CastContext fails to load and casting is hidden.
+    implementation("com.google.android.gms:play-services-cast-framework:22.0.0")
+    // TV screen mode's player (TvScreen.kt). Media3 1.8 declares no
+    // kotlin-stdlib, so the Kotlin 1.9.25 trap above does not apply; check the
+    // POM before bumping. ui is only for PlayerView's surface + letterboxing.
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
+    implementation("androidx.media3:media3-ui:1.8.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

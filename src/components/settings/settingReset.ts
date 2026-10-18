@@ -138,6 +138,24 @@ export function useSettingReset() {
   };
 }
 
+/** A fresh install's value at `path` (Rust's defaults), or undefined until
+ *  they load. For a row whose control writes several keys at once, so its
+ *  arrow compares what the viewer sees, not each stored key. */
+export function useSettingDefault(path: string): unknown {
+  const [defaults, setDefaults] = useState<Settings | null>(cached);
+  useEffect(() => {
+    if (defaults) return;
+    let live = true;
+    void loadDefaults().then((d) => {
+      if (live && d) setDefaults(d);
+    });
+    return () => {
+      live = false;
+    };
+  }, [defaults]);
+  return defaults ? read(defaults, path) : undefined;
+}
+
 /** Restores a row's settings and returns the settings it saved. */
 export type ResetFn = () => Settings;
 

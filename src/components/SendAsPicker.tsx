@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, ChevronDown, User } from 'lucide-react';
 import { useSendAccountStore } from '../stores/sendAccountStore';
 import { Tooltip } from './ui/Tooltip';
 import { SevenTvAvatar } from './SevenTvAvatar';
+import { useOutsidePress } from '../hooks/useOutsidePress';
 
 /** A linked Twitch account's face; its Twitch id draws its 7TV picture. */
 function Avatar({ url, size, userId }: { url: string | null; size: number; userId: string }) {
@@ -40,14 +41,7 @@ export default function SendAsPicker() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const markInside = useOutsidePress(open, [ref], () => setOpen(false));
 
   if (accounts.length < 2) return null;
 
@@ -56,7 +50,7 @@ export default function SendAsPicker() {
   const isAlt = !selected.is_primary;
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} onPointerDownCapture={markInside} className="relative">
       <Tooltip content={`Sending as @${selected.login}`} side="top">
         <button
           type="button"

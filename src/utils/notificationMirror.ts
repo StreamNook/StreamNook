@@ -33,7 +33,11 @@ export type NoticeAction =
   | { type: 'whisper'; userId: string; login: string; name: string; avatar: string | null }
   | { type: 'drops' }
   | { type: 'badges' }
-  | { type: 'changelog'; version: string | null };
+  | { type: 'changelog'; version: string | null }
+  /** Open this channel with its rewards showing. */
+  | { type: 'rewards'; channel: string }
+  /** Open Settings on this tab. */
+  | { type: 'settings'; tab: string };
 
 /** Where a reply typed into a Windows notification goes (`NoticeReply`). */
 export type NoticeReply =

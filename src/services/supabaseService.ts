@@ -6,6 +6,12 @@ import { getClientConfig } from './clientConfig';
 import { Logger } from '../utils/logger';
 import type { Atmosphere } from './atmospheres';
 import { DEV_ATMOSPHERES } from './devAtmospheres';
+import {
+    requestStreamnookArt,
+    streamnookArtUrlsIn,
+    subscribeStreamnookArt,
+    withStreamnookArtCopies,
+} from './streamnookArt';
 import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
 import type { ActiveEquipment, CosmeticSlot } from './cosmetics/types';
 // Supabase client singleton
@@ -1397,6 +1403,72 @@ const bumpAtmospheresVersion = () => {
     notify(atmospheresVersionSubscribers, 'Atmospheres');
 };
 
+// Each atmosphere as Rust's snapshot delivered it, before its art on
+// cdn.streamnook.app is pointed at Rust's disk copies. The catalog is rebuilt
+// from these when a copy lands, so art the webview could not load still arrives.
+let atmosphereSources: Map<string, Atmosphere> = new Map();
+// Atmospheres whose art was asked of Rust since the catalog loaded: `id` for the
+// look alone, `id+all` for the look plus the Cologne add-ons (coin, frame).
+const atmosphereArtAsked = new Set<string>();
+
+/** An atmosphere with its CDN art pointed at Rust's disk copies, where there are some. */
+const withAtmosphereArtCopies = (a: Atmosphere): Atmosphere => ({
+    ...a,
+    swatch: withStreamnookArtCopies(a.swatch),
+    baseLayers: withStreamnookArtCopies(a.baseLayers),
+    image: withStreamnookArtCopies(a.image),
+    layers: withStreamnookArtCopies(a.layers),
+    layers2: withStreamnookArtCopies(a.layers2),
+    chromeTexture: withStreamnookArtCopies(a.chromeTexture),
+    chromeCoin: withStreamnookArtCopies(a.chromeCoin),
+    chromeFrame: withStreamnookArtCopies(a.chromeFrame),
+});
+
+const sameAtmosphereArt = (a: Atmosphere, b: Atmosphere): boolean =>
+    a.swatch === b.swatch && a.baseLayers === b.baseLayers && a.image === b.image &&
+    a.layers === b.layers && a.layers2 === b.layers2 && a.chromeTexture === b.chromeTexture &&
+    a.chromeCoin === b.chromeCoin && a.chromeFrame === b.chromeFrame;
+
+/**
+ * Ask Rust for copies of an atmosphere's art the first time something reads it,
+ * so art stays lazy: only atmospheres a picker lists or a member wears are
+ * fetched. A listing needs the look; a worn Cologne look can add its coin and
+ * frame, so a single read asks for those too.
+ */
+const askAtmosphereArt = (id: string, withAddOns: boolean): void => {
+    const key = withAddOns ? `${id}+all` : id;
+    if (atmosphereArtAsked.has(key)) return;
+    atmosphereArtAsked.add(key);
+    const a = atmosphereSources.get(id);
+    if (!a) return;
+    const values = [a.swatch, a.baseLayers, a.image, a.layers, a.layers2, a.chromeTexture];
+    if (withAddOns) values.push(a.chromeCoin, a.chromeFrame);
+    for (const url of values.flatMap(streamnookArtUrlsIn)) requestStreamnookArt(url);
+};
+
+// A copy landed (or the cache was cleared): repoint the catalog and repaint the
+// atmospheres whose art changed. Unchanged entries keep their identity.
+subscribeStreamnookArt(() => {
+    if (atmosphereSources.size === 0) return;
+    let changed = false;
+    const next = new Map<string, Atmosphere>();
+    for (const [id, source] of atmosphereSources) {
+        const mapped = withAtmosphereArtCopies(source);
+        const current = atmospheresCatalog.get(id);
+        if (current && sameAtmosphereArt(current, mapped)) {
+            next.set(id, current);
+        } else {
+            next.set(id, mapped);
+            changed = true;
+        }
+    }
+    if (changed) {
+        atmospheresCatalog = next;
+        bumpAtmospheresVersion();
+    }
+});
+
+
 /**
  * Tell everything that reads "is this person a member" to look again.
  *
@@ -1435,7 +1507,11 @@ const applySnapshot = (snap: RegistrySnapshot) => {
     if (import.meta.env.DEV) {
         for (const a of DEV_ATMOSPHERES) nextAtmospheres.set(a.id, a);
     }
-    atmospheresCatalog = nextAtmospheres;
+    // Atmosphere art loads lazily at its render sites, and its disk copies
+    // follow the same rule: asked for on the first read (askAtmosphereArt).
+    atmosphereSources = nextAtmospheres;
+    atmosphereArtAsked.clear();
+    atmospheresCatalog = new Map([...nextAtmospheres].map(([id, a]) => [id, withAtmosphereArtCopies(a)]));
     snRegistryLoaded = snap.membersLoaded;
     cosmeticsLoaded = snap.cosmeticsLoaded;
     atmospheresLoaded = snap.atmospheresLoaded;
@@ -1634,12 +1710,16 @@ export const subscribeToProfileThemeChanges = (
 /** Sync read: an atmosphere definition by id (null if unknown / not loaded). */
 export const getAtmosphereEntry = (id: string | undefined | null): Atmosphere | null => {
     if (!id) return null;
-    return atmospheresCatalog.get(id) ?? null;
+    const atmosphere = atmospheresCatalog.get(id) ?? null;
+    if (atmosphere) askAtmosphereArt(id, true);
+    return atmosphere;
 };
 
-/** Sync read: the full catalog (in sort_order, as Rust read it). */
-export const listAtmosphereEntries = (): Atmosphere[] =>
-    Array.from(atmospheresCatalog.values());
+/** Sync read: the full catalog (already in sort_order from the load query). */
+export const listAtmosphereEntries = (): Atmosphere[] => {
+    for (const id of atmospheresCatalog.keys()) askAtmosphereArt(id, false);
+    return Array.from(atmospheresCatalog.values());
+};
 
 /** For React useSyncExternalStore: subscribe to / read the catalog version. */
 export const subscribeAtmospheresVersion = (cb: () => void): (() => void) => {

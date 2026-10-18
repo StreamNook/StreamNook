@@ -437,6 +437,8 @@ async fn refresh_viewers(inner: &Inner) {
     let mut went_live: Vec<TwitchStream> = Vec::new();
     // Channels whose live/offline answer changed, or arrived for the first time.
     let mut live_flipped: Vec<String> = Vec::new();
+    // Live channels and the start of the stream they are in.
+    let mut streams_seen: Vec<(String, String)> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
@@ -460,6 +462,9 @@ async fn refresh_viewers(inner: &Inner) {
                 if !s.answered || before.viewer_count.is_some() != now.viewer_count.is_some() {
                     live_flipped.push(login.clone());
                 }
+                if let Some(start) = &now.started_at {
+                    streams_seen.push((login.clone(), start.clone()));
+                }
                 if before.started_at.is_none() && now.started_at.is_some() {
                     if let Some(row) = rows.get(id) {
                         went_live.push(row.clone());
@@ -478,6 +483,10 @@ async fn refresh_viewers(inner: &Inner) {
     // count moving is no reason to judge them again.
     for login in live_flipped {
         crate::services::channel_rewards::note_live_changed(&login);
+    }
+    // A new stream starts every per-stream reward count again.
+    for (login, start) in streams_seen {
+        crate::services::channel_rewards::note_stream_seen(&login, &start);
     }
     for (login, l) in changed {
         emit(

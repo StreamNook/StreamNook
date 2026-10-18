@@ -17,6 +17,7 @@ import { Tooltip } from '../ui/Tooltip';
 import { BitsPane } from './BitsPane';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { useFitAbove } from '../../hooks/useFitAbove';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { useAppStore } from '../../stores/AppStore';
 import { getBitsState, type BitsState } from '../../services/bitsService';
 import { formatShortCount } from '../../utils/streamStats';
@@ -330,28 +331,21 @@ export function WalletMenu({ channelLogin, channelId, points, bits: bitsFace, on
 
   // A press outside closes it. The Points tab backs out of its own views on
   // Escape; the Bits tab has none, so Escape closes.
+  const markInside = useOutsidePress(true, [menuRef, ignoreRef], onClose);
   useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (menuRef.current?.contains(t) || ignoreRef.current?.contains(t)) return;
-      onClose();
-    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && shown === 'bits') onClose();
     };
-    document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [onClose, ignoreRef, shown]);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, shown]);
 
   const tabs = walletTabs(points, bits);
 
   return (
     <motion.div
       ref={menuRef}
+      onPointerDownCapture={markInside}
       initial={{ opacity: 0, y: 6, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 6, scale: 0.98 }}

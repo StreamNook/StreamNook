@@ -248,7 +248,7 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun mediaSessionStart(title: String, artist: String, artUrl: String, playing: Boolean) {
       if (tearingDown) return
-      MediaPlaybackService.wanted = true
+      MediaPlaybackService.webWanted = true
       val i = Intent(this@MainActivity, MediaPlaybackService::class.java).apply {
         action = if (MediaPlaybackService.isRunning) {
           MediaPlaybackService.ACTION_UPDATE
@@ -269,8 +269,8 @@ class MainActivity : TauriActivity() {
     /** Tear the session down when playback ends or the stream is closed. */
     @JavascriptInterface
     fun mediaSessionStop() {
-      val wasWanted = MediaPlaybackService.wanted
-      MediaPlaybackService.wanted = false
+      val wasWanted = MediaPlaybackService.webWanted
+      MediaPlaybackService.webWanted = false
       // Send the stop whenever a start may still be in flight, not only when
       // the service already reports running: the start is asynchronous and a
       // stop issued inside that window used to be dropped, leaving the service
@@ -690,6 +690,12 @@ class MainActivity : TauriActivity() {
     )
     super.onCreate(savedInstanceState)
 
+    // Google Cast. Brings the SDK up (or reports it unavailable: no Play
+    // services) and picks up a session it resumes from a previous launch.
+    CastRemote.init(this)
+    // TV screen mode: watch for a mirrored display that takes a presentation.
+    TvScreen.init(this)
+
     // Cold start from a notification tap. Stashed for the shell to drain once
     // it mounts; there is no WebView to talk to at this point.
     intent?.getStringExtra(NotifyWorker.EXTRA_CHANNEL)?.takeIf { it.isNotEmpty() }?.let {
@@ -1049,7 +1055,10 @@ class MainActivity : TauriActivity() {
     // no app, no PiP window and an inert card. Three belts, cheapest first.
     if (isFinishing) {
       tearingDown = true
-      MediaPlaybackService.wanted = false
+      // Both owners: the TV keeps playing on its own, but a card with no app
+      // behind it is the "audio with nothing on screen" report all over again.
+      MediaPlaybackService.webWanted = false
+      MediaPlaybackService.castWanted = false
       webView?.let { wv ->
         // 1. Tell the page to end the stream through the same command the
         //    card's Stop uses. NOT video.pause(): a bare pause fires the
@@ -1080,6 +1089,8 @@ class MainActivity : TauriActivity() {
     // The sink captures this activity's WebView, so leaving it installed after
     // the activity dies would hold a destroyed view alive and post into it.
     MediaPlaybackService.commandSink = null
+    // The presentation belongs to this activity; the TV goes back to mirroring.
+    TvScreen.release()
     super.onDestroy()
     // 3. Release the WebContents itself. wry has already been told the webview
     //    is gone (WryActivity.onDestroy), so nothing on the Rust side will
@@ -1097,6 +1108,21 @@ class MainActivity : TauriActivity() {
       }
       webView = null
     }
+  }
+
+  /**
+   * While casting, the volume keys turn the TV up and down, as every Cast app's
+   * do. The SDK only does this itself through its own media session, which is
+   * switched off here (CastOptionsProvider) so the phone shows one card, not two.
+   */
+  override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+    val up = event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
+    val down = event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+    if ((up || down) && CastRemote.isCasting) {
+      if (event.action == android.view.KeyEvent.ACTION_DOWN) CastRemote.stepVolume(up)
+      return true
+    }
+    return super.dispatchKeyEvent(event)
   }
 
   companion object {

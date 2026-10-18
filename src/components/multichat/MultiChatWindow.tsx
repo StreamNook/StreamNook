@@ -32,6 +32,7 @@ import { itemSevenTvId, offlineSuggestions } from '../multi-nook/channelSearch';
 import { SevenTvAvatar } from '../SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { lastLiveLabel } from '../../utils/lastLive';
+import { fitCount } from '../../utils/fitNumber';
 import {
   isYouTubeChannelId,
   isYouTubeLegacyPath,
@@ -65,6 +66,7 @@ import ViewerCounter from './ViewerCounter';
 import { useMultiChatLive } from './useMultiChatLive';
 import { liveWord, type SourceLive } from './multiChatLive';
 import { isImeComposing } from '../../utils/imeComposing';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import CommandPalette from '../CommandPalette';
 import InputContextMenuHost from '../InputContextMenuHost';
 import ClipModal from '../ClipModal';
@@ -103,6 +105,7 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
 import SplitLayout from './SplitLayout';
+import BadgeSpotlightHost from '../BadgeSpotlightHost';
 import { registerPaneFocusController } from '../../keybindings/paneFocusController';
 import {
   columnCount,
@@ -671,6 +674,8 @@ export default function MultiChatWindow() {
     members: [],
   });
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const markInsidePicker = useOutsidePress(pickerOpen, [pickerRef], () => setPickerOpen(false));
   const [moderatedSet, setModeratedSet] = useState<Set<string>>(new Set());
   useEffect(() => {
     let active = true;
@@ -1916,6 +1921,8 @@ export default function MultiChatWindow() {
       {/* Drag-to-moderate overlay (portals to document.body): brings the main
           app's drag mod tooling into the MultiChat command center. */}
       <ModerationDragLayer />
+      {/* Badge clicks here open their card in this window, not main. */}
+      <BadgeSpotlightHost />
       {/* This window has no full ToastManager (that one also fires live-stream
           notifications); a minimal surface paints add-channel feedback etc. */}
       <MultiChatToasts />
@@ -2121,7 +2128,7 @@ export default function MultiChatWindow() {
               ))}
             </div>
             {modsMode && moderatedTwitch.length > 1 && (
-              <div className="relative">
+              <div ref={pickerRef} onPointerDownCapture={markInsidePicker} className="relative">
                 <button
                   type="button"
                   onClick={() => setPickerOpen((v) => !v)}
@@ -2152,7 +2159,6 @@ export default function MultiChatWindow() {
                 </button>
                 {pickerOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
                     <div
                       className="absolute left-0 top-full z-50 mt-1 min-w-[180px] overflow-hidden rounded-lg border border-borderSubtle py-1 shadow-lg"
                       style={{ background: 'color-mix(in srgb, rgb(18 18 20) calc(98% + (1 - var(--glass-strength, 1)) * 2%), transparent)' }}
@@ -2466,6 +2472,8 @@ function GoLiveControl({
     setView('menu');
     setOpen((v) => !v);
   };
+  // The menu is portaled out but stays inside the wrapper in React.
+  const markInside = useOutsidePress(open, [wrapRef], () => setOpen(false));
   const openEdit = () => {
     setSavedSources(readGoLiveSources());
     setView('edit');
@@ -2503,6 +2511,7 @@ function GoLiveControl({
   return (
     <div
       ref={wrapRef}
+      onPointerDownCapture={markInside}
       data-tauri-drag-region="false"
       // Same glass treatment as the channel tabs + add button it sits beside, so
       // the live control reads as part of the strip instead of a flat one-off.
@@ -2558,8 +2567,6 @@ function GoLiveControl({
         </button>
       </Tooltip>
       {open && pos && createPortal(
-        <>
-          <div className="fixed inset-0 z-[1000]" onClick={() => setOpen(false)} />
           <div
             className="glass-panel fixed z-[1001] w-56 rounded-lg border border-borderLight p-1 shadow-xl"
             // Opaque themed surface: a live backdrop-blur flickers over the chat.
@@ -2677,8 +2684,7 @@ function GoLiveControl({
                 </button>
               </>
             )}
-          </div>
-        </>,
+          </div>,
         document.body,
       )}
     </div>
@@ -3315,7 +3321,8 @@ function TabButton({
   const [lastSeen, setLastSeen] = useState(mentionCount);
   if (isVisible && lastSeen !== mentionCount) setLastSeen(mentionCount);
   const unread = Math.max(0, mentionCount - lastSeen);
-  const unreadLabel = unread > 99 ? '99+' : String(unread);
+  // Capped at 9+ so it fits the tab's right padding, clear of the name.
+  const unreadLabel = fitCount(unread, 9);
   const label = entry.channelName || entry.channel;
   const state = liveWord(live);
   const isLive = state === 'Live';
@@ -3374,9 +3381,13 @@ function TabButton({
             <span className="blend-live-dot pointer-events-none absolute -right-1.5 -top-0.5" aria-hidden />
           )}
         </span>
+        {/* The unread count sits in the right padding, in the remove
+            button's slot (it gives way to it on hover), so it never covers
+            the name. Centered a little right of the slot so a "9+" clears
+            the live dot. */}
         {unread > 0 && !isVisible && (
           <span
-            className="absolute right-7 top-1/2 grid h-4 min-w-[1rem] -translate-y-1/2 place-items-center rounded-full bg-accent px-1.5 text-[10px] font-bold leading-none text-background"
+            className="absolute right-[12px] top-1/2 grid h-[14px] min-w-[14px] translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-accent px-[3px] text-[9px] font-bold leading-none text-background transition-opacity group-hover:opacity-0"
             aria-label={`${unread} unread message${unread === 1 ? '' : 's'}`}
           >
             {unreadLabel}
@@ -3551,6 +3562,9 @@ function AddChannelPanel({
   // panes, and the cursor hits the chat first). Positioned fixed at the trigger.
   const providerTriggerRef = useRef<HTMLButtonElement>(null);
   const [providerMenuPos, setProviderMenuPos] = useState<{ top: number; left: number } | null>(null);
+  // The trigger's wrapper: the portaled list stays inside it in React.
+  const providerWrapRef = useRef<HTMLDivElement>(null);
+  const markInsideProviderMenu = useOutsidePress(providerMenuOpen, [providerWrapRef], () => setProviderMenuOpen(false));
 
   // Profile images from Helix `/users` — `get_followed_streams` doesn't
   // include `profile_image_url`, so we batch-fetch by user id and cache here.
@@ -3659,7 +3673,7 @@ function AddChannelPanel({
     // + hint, instead of leaving a big blank area where the list would be.
     <div className={`flex flex-col border-b border-borderSubtle bg-glass-raised/0 backdrop-blur-sm ${isTwitch ? 'max-h-[60%]' : ''}`}>
       <div className="flex items-center gap-2 px-3 py-2">
-        <div className="relative">
+        <div ref={providerWrapRef} onPointerDownCapture={markInsideProviderMenu} className="relative">
           <button
             ref={providerTriggerRef}
             type="button"
@@ -3686,11 +3700,10 @@ function AddChannelPanel({
             providerMenuPos &&
             createPortal(
               <>
-                {/* Backdrop catches the outside click; both are portaled to body and
-                    fixed-positioned so they sit ABOVE the chat panes (the add-bar's
-                    backdrop-blur would otherwise trap them below). Opaque themed
-                    surface (not translucent glass): a live blur flickers over chat. */}
-                <div className="fixed inset-0 z-[1000]" onClick={() => setProviderMenuOpen(false)} />
+                {/* Portaled to body and fixed-positioned so it sits ABOVE the chat
+                    panes (the add-bar's backdrop-blur would otherwise trap it
+                    below). Opaque themed surface (not translucent glass): a live
+                    blur flickers over chat. */}
                 <div
                   role="listbox"
                   className="fixed z-[1001] min-w-[7.5rem] overflow-hidden rounded-md border border-borderLight shadow-lg"

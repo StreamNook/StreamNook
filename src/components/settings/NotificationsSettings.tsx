@@ -113,6 +113,17 @@ const ToastPositionPicker = ({
   );
 };
 
+// Shows a sample system notification ("Try one" lines).
+const TryButton = ({ onClick }: { onClick: () => void }) => (
+  <button
+    onClick={onClick}
+    className="glass-button flex items-center gap-2 px-3 py-1.5 rounded-lg text-textPrimary text-xs font-medium"
+  >
+    <Bell size={14} />
+    Send
+  </button>
+);
+
 const NotificationsSettings = () => {
   const { settings, updateSettings, currentUser, addToast } = useAppStore();
   const resetFor = useSettingReset();
@@ -179,6 +190,17 @@ const NotificationsSettings = () => {
       await invoke('test_system_notification');
     } catch (error) {
       Logger.error('Failed to send test system notification:', error);
+    }
+  };
+
+  // A sample channel points or prediction notification as the system shows
+  // it, with the extras turned on above. Sample numbers; nothing is spent.
+  const handleTestPoints = async (kind: 'one' | 'prediction') => {
+    try {
+      await invoke('test_points_notification', { kind });
+    } catch (error) {
+      Logger.error('Failed to send test points notification:', error);
+      addToast(`Could not show the sample: ${error}`, 'error');
     }
   };
 
@@ -309,15 +331,7 @@ const NotificationsSettings = () => {
                 <SubControls>
                   <SubControl
                     title="Try one"
-                    control={
-                      <button
-                        onClick={handleTestSystemNotification}
-                        className="glass-button flex items-center gap-2 px-3 py-1.5 rounded-lg text-textPrimary text-xs font-medium"
-                      >
-                        <Bell size={14} />
-                        Send
-                      </button>
-                    }
+                    control={<TryButton onClick={handleTestSystemNotification} />}
                   />
                 </SubControls>
               )}
@@ -437,7 +451,10 @@ const NotificationsSettings = () => {
             <SettingsRow
               title="Channel points"
               onReset={resetFor(['live_notifications.show_channel_points_notifications', true])}
-              description="A notification confirms each channel points bonus claimed for you."
+              description="A notification for the points you earn: bonus chests, raids, watch streaks and prediction results, with the channel's face and its own name for its points."
+              help={IS_WINDOWS_DESKTOP
+                ? 'While StreamNook is in the background, points for watching do not pop up. Each channel keeps one entry in Action Center with what it gave you this session, and a newer notification for a channel replaces its older one. Rewards button adds a button that opens the channel\'s rewards, and Next reward adds a bar toward the cheapest reward you cannot afford yet. Both need System notifications.'
+                : 'While StreamNook is in the background, points for watching do not pop up.'}
               control={
                 <Toggle
                   enabled={liveNotifications.show_channel_points_notifications ?? true}
@@ -446,7 +463,67 @@ const NotificationsSettings = () => {
                   })}
                 />
               }
-            />
+            >
+              {(liveNotifications.show_channel_points_notifications ?? true) && (liveNotifications.use_native_notifications ?? false) && (
+                <SubControls>
+                  {IS_WINDOWS_DESKTOP && (
+                    <SubControl
+                      title="Rewards button"
+                      onReset={resetFor(['live_notifications.points_rewards_button', false])}
+                      control={
+                        <Toggle
+                          enabled={liveNotifications.points_rewards_button ?? false}
+                          onChange={() => updateLiveNotifications({
+                            points_rewards_button: !(liveNotifications.points_rewards_button ?? false)
+                          })}
+                        />
+                      }
+                    />
+                  )}
+                  {IS_WINDOWS_DESKTOP && (
+                    <SubControl
+                      title="Next reward"
+                      onReset={resetFor(['live_notifications.points_next_reward', false])}
+                      control={
+                        <Toggle
+                          enabled={liveNotifications.points_next_reward ?? false}
+                          onChange={() => updateLiveNotifications({
+                            points_next_reward: !(liveNotifications.points_next_reward ?? false)
+                          })}
+                        />
+                      }
+                    />
+                  )}
+                  <SubControl
+                    title="Try one"
+                    control={<TryButton onClick={() => handleTestPoints('one')} />}
+                  />
+                </SubControls>
+              )}
+            </SettingsRow>
+
+            <SettingsRow
+              title="Predictions"
+              onReset={resetFor(['live_notifications.show_prediction_notifications', false])}
+              description="When a prediction opens on a channel you are watching while StreamNook is in the background, with its choices and how long betting stays open. Clicking it opens the stream."
+              control={
+                <Toggle
+                  enabled={liveNotifications.show_prediction_notifications ?? false}
+                  onChange={() => updateLiveNotifications({
+                    show_prediction_notifications: !(liveNotifications.show_prediction_notifications ?? false)
+                  })}
+                />
+              }
+            >
+              {(liveNotifications.show_prediction_notifications ?? false) && (liveNotifications.use_native_notifications ?? false) && (
+                <SubControls>
+                  <SubControl
+                    title="Try one"
+                    control={<TryButton onClick={() => handleTestPoints('prediction')} />}
+                  />
+                </SubControls>
+              )}
+            </SettingsRow>
 
             <SettingsRow
               title="New badges"
