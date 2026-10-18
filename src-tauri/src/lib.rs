@@ -2511,6 +2511,8 @@ pub fn run() {
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,
+            services::chat_warning::acknowledge_chat_warning,
+            services::mod_history::get_chatter_mod_history,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

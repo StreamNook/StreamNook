@@ -28,6 +28,15 @@ pub async fn web_session_token(auth: &TwitchAuthService) -> Result<String, Strin
     }
 }
 
+/// The app's twitch.tv web session from anywhere in the core, or `None` when
+/// the viewer is not signed in to Twitch (or the app has not started yet).
+pub async fn app_web_session() -> Option<String> {
+    use tauri::Manager;
+    let app = crate::services::providers::app_handle()?;
+    let auth = app.try_state::<crate::models::settings::AppState>().map(|s| s.twitch_auth.clone())?;
+    web_session_token(&auth).await.ok().filter(|t| !t.is_empty())
+}
+
 /// POST one inline GQL operation. `token` is the web session for calls made as
 /// the viewer, `None` for public data. GraphQL `errors` are logged under `tag`
 /// and returned in the JSON for the caller to read, never swallowed.

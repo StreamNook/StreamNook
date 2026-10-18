@@ -324,6 +324,9 @@ impl ChannelPointsWebSocketService {
         // User predictions results
         topics.push(format!("predictions-user-v1.{}", user_id));
 
+        // A moderator's warning to the viewer, and its acknowledgement.
+        topics.push(format!("chatrooms-user-v1.{}", user_id));
+
         // Note: Removed raid topics to reduce count per channel
         // This allows 24 channels per connection: 24*2 + 2 global = 50 topics exactly
 
@@ -544,6 +547,12 @@ impl ChannelPointsWebSocketService {
                             }
                             "predictions-user-v1" => {
                                 Self::handle_self_prediction_event(message_data, app_handle).await;
+                            }
+                            "chatrooms-user-v1" => {
+                                // Every connection carries the user topics, so
+                                // a warning can arrive more than once; applying
+                                // it again changes nothing.
+                                crate::services::chat_warning::on_pubsub(message_data).await;
                             }
                             "predictions-channel-v1" => {
                                 Self::handle_prediction_event(

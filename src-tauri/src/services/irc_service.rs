@@ -2902,6 +2902,13 @@ impl IrcService {
             // A running /spam or /pyramid there hears refusals and bans.
             if let (Some(id), Some(ch)) = (msg_id.as_deref(), extract_channel_from_irc_line(trimmed)) {
                 crate::services::chat_burst::note_notice(&ch, id);
+                // A send refused because of a warning locks the box behind
+                // its Acknowledge button.
+                if crate::services::chat_warning::is_warned_refusal(Some(id), None) {
+                    tokio::spawn(async move {
+                        crate::services::chat_warning::on_refusal(&ch, Some("msg_warned"), None).await;
+                    });
+                }
             }
 
             // A suspended channel can never confirm its JOIN; forget it so the

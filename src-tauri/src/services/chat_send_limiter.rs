@@ -446,7 +446,7 @@ impl Limiter {
         if let Some(v) = m.r9k {
             out.insert("r9k".into(), v.into());
         }
-        let view = describe_with(
+        let mut view = describe_with(
             &ModesIn {
                 slow_seconds: m.slow_seconds.unwrap_or(0),
                 followers_only_minutes: m.followers_only_minutes.unwrap_or(-1),
@@ -457,6 +457,11 @@ impl Limiter {
             self.standing(channel),
             self.own_follow(channel, Utc::now()),
         );
+        view.warning = self
+            .channels
+            .get(&key(channel))
+            .and_then(|f| f.room_id.as_deref())
+            .and_then(crate::services::chat_warning::view);
         out.insert("modes".into(), serde_json::to_value(view).unwrap_or_default());
         Some(out)
     }
@@ -584,6 +589,22 @@ pub fn note_room_id(channel: &str, room_id: &str) {
     }
 }
 
+/// `channel`'s user id, once a ROOMSTATE named it.
+pub fn room_id_of(channel: &str) -> Option<String> {
+    limiter().channels.get(&key(channel)).and_then(|f| f.room_id.clone())
+}
+
+/// Every open channel whose user id is `room_id` (a chat can be open under
+/// more than one key, a popout beside the main window).
+pub fn channels_with_room_id(room_id: &str) -> Vec<String> {
+    limiter()
+        .channels
+        .iter()
+        .filter(|(_, f)| f.room_id.as_deref() == Some(room_id))
+        .map(|(channel, _)| channel.clone())
+        .collect()
+}
+
 /// Whether the account's follow of `channel` should be looked up now: the room
 /// is followers-only, the account is not known to be privileged there, and it
 /// has not been asked. Returns the channel's user id and marks it asked, so
@@ -655,6 +676,7 @@ pub fn room_state_fields(channel: &str) -> Option<serde_json::Map<String, serde_
 /// The signed-in account changed: roles and history belong to the old one.
 pub fn reset_account() {
     *limiter() = Limiter::default();
+    crate::services::chat_warning::reset_account();
 }
 
 /// Wait for a send slot in `channel` (bare login). Errors carry the refusal in
