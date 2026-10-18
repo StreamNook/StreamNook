@@ -135,7 +135,7 @@ export const ChatsScreen: React.FC = () => {
     >
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none]">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none] sn-fade-top">
           <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 64px) + 16px)" />
         </div>
       ) : (

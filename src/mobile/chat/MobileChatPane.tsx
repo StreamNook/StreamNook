@@ -670,7 +670,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean; strip?: boolean }> =
         // long-press on text by starting its OWN text selection, which wins the
         // gesture and the fan never arms. Chat text needs no selection anyway —
         // the fan's Copy bucket is the way to take a message.
-        className="flex-1 min-h-0 relative select-none [-webkit-touch-callout:none]"
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'}`}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}

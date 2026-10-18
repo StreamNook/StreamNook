@@ -109,6 +109,13 @@ body:has(.sn-mobile) .glass-input:focus {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
+/* The same at the top: a list that scrolls up under a header or the status
+   bar fades out over 24px instead of showing a cut line of text. */
+.sn-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+
 /* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
    the chat wash at 70%, faded in from both sides and down from just under the
    top to nothing well before the bottom, so no edge of the art ever shows.
