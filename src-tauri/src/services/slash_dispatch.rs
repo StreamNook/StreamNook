@@ -1878,12 +1878,15 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
                         .await,
                 ],
             };
-            if let Some(Err(e)) = results.into_iter().find(Result::is_err) {
+            let failure = results.into_iter().find_map(Result::err);
+            if let Some(e) = &failure {
                 log::warn!("[nuke] action failed for {}: {e}", a.username);
             }
+            failure
         }
     });
-    futures::future::join_all(calls).await;
+    // Each user's first failure, so the toast never reads as a clean sweep when it was not.
+    let failures: Vec<String> = futures::future::join_all(calls).await.into_iter().flatten().collect();
     let users = affected.len();
     let record = nuke::remember(&login, c.id(), &parsed, affected, now);
     if parsed.future_seconds > 0 {
@@ -1899,7 +1902,10 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
         nuke::set_closer(record, task);
     }
     o.say(nuke::ran_line(&parsed, matched, users));
-    o.ok(format!("/nuke: {matched} message(s), {users} user(s)"));
+    match failures.first() {
+        None => o.ok(format!("/nuke: {matched} message(s), {users} user(s)")),
+        Some(first) => o.err(format!("/nuke: {} of {users} user(s) failed: {first}", failures.len())),
+    }
 }
 
 /// The extended commands that work in any platform's chat.

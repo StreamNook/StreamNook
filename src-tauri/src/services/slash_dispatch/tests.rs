@@ -941,6 +941,21 @@ fn sweep_entry(id: &str, user: &str, text: &str, ts: i64) -> SweepEntry {
 }
 
 #[tokio::test]
+async fn a_nuke_with_failed_bans_says_so() {
+    let fake = Fake::new();
+    *fake.history.lock().unwrap() = vec![
+        sweep_entry("1", "a", "buy followers", 999_990_000),
+        sweep_entry("2", "b", "buy followers now", 999_995_000),
+    ];
+    fake.answer(|cmd, args| {
+        if cmd == "ban_user" && args["targetUserId"] == "b" { Err("they are already banned".into()) } else { Ok(Value::Null) }
+    });
+    let o = run_in(&fake, "nukefail", "/nuke buy followers ban 1m").await;
+    assert!(toast(&o, ToastKind::Success).is_empty(), "no clean-sweep toast");
+    assert_eq!(toast(&o, ToastKind::Error), ["/nuke: 1 of 2 user(s) failed: they are already banned"]);
+}
+
+#[tokio::test]
 async fn nuke_sweeps_the_window_and_undo_lifts_the_bans() {
     let fake = Fake::new();
     *fake.history.lock().unwrap() = vec![
