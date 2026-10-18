@@ -82,6 +82,7 @@ pub mod seventv_cosmetics;
 pub mod sn_cosmetics;
 pub mod seventv_cosmetics_fetch;
 pub mod streamnook_api;
+pub mod stream_manager;
 pub mod streaming;
 pub mod subscriptions;
 pub mod twitch;
