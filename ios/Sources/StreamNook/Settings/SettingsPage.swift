@@ -8,31 +8,32 @@ struct SettingsPage: View {
 
     var body: some View {
         ScrollViewReader { reader in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    if model.settingsStore.loaded {
-                        switch section {
-                        case .player: PlayerPanel()
-                        case .chat: ChatSettingsPanel()
-                        case .adFree: AdFreePanel()
-                        case .notifications: NotificationsPanel()
-                        case .cache: CachePanel()
-                        case .theme: ThemePanel()
-                        case .support: SupportPanel()
-                        case .changed: ChangedPanel()
-                        case .backup: BackupPanel()
-                        default: EmptyNote(text: "\(section.title) settings are built next.", hint: nil)
-                        }
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
+            List {
+                if model.settingsStore.loaded {
+                    switch section {
+                    case .player: PlayerPanel()
+                    case .chat: ChatSettingsPanel()
+                    case .adFree: AdFreePanel()
+                    case .notifications: NotificationsPanel()
+                    case .cache: CachePanel()
+                    case .theme: ThemePanel()
+                    case .support: SupportPanel()
+                    case .changed: ChangedPanel()
+                    case .backup: BackupPanel()
+                    default: EmptyNote(text: "\(section.title) settings are built next.", hint: nil)
                     }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
+                        .listRowBackground(Color.clear)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
                 // "page-end" brings the bottom of a page without named sections into view.
-                .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id("page-end") }
+                Color.clear.frame(height: 1)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    .id("page-end")
             }
+            .snGroupedList()
             .scrollIndicators(.hidden)
             .onChange(of: SettingsAnchor.shared.target) { _, target in
                 guard let target else { return }
