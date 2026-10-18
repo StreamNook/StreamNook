@@ -65,6 +65,48 @@ fn prefs() -> Prefs {
     PREFS.read().ok().and_then(|p| p.clone()).unwrap_or_default()
 }
 
+/// The viewer's own name color and nickname for one chatter
+/// (`chat_customization.user_overrides`), which only they see.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UserOverride {
+    pub nickname: Option<String>,
+    pub color: Option<String>,
+}
+
+/// Overrides by key: a Twitch user id, or `<provider>:<id>` elsewhere.
+static OVERRIDES: RwLock<Option<HashMap<String, UserOverride>>> = RwLock::new(None);
+
+/// The key an override is stored under for a chatter on `provider`.
+pub fn override_key(provider: &str, user_id: &str) -> String {
+    if provider.is_empty() || provider == "twitch" {
+        user_id.to_string()
+    } else {
+        format!("{provider}:{user_id}")
+    }
+}
+
+fn user_overrides_from(settings: &Settings) -> Option<HashMap<String, UserOverride>> {
+    let map = settings.extra.get("chat_customization")?.get("user_overrides")?.as_object()?;
+    let text = |v: &Value, key: &str| {
+        v.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+    let out: HashMap<String, UserOverride> = map
+        .iter()
+        .map(|(key, v)| (key.clone(), UserOverride { nickname: text(v, "nickname"), color: text(v, "color") }))
+        .filter(|(_, o)| o.nickname.is_some() || o.color.is_some())
+        .collect();
+    (!out.is_empty()).then_some(out)
+}
+
+/// The viewer's override for a chatter, if they set one.
+pub fn user_override(provider: &str, user_id: &str) -> Option<UserOverride> {
+    if user_id.is_empty() {
+        return None;
+    }
+    let guard = OVERRIDES.read().ok()?;
+    guard.as_ref()?.get(&override_key(provider, user_id)).cloned()
+}
+
 /// Called with every settings change, next to the rule engine's refresh.
 pub fn refresh(settings: &Settings) {
     let d = &settings.chat_design;
@@ -80,6 +122,10 @@ pub fn refresh(settings: &Settings) {
     };
     if let Ok(mut guard) = PREFS.write() {
         *guard = Some(next);
+    }
+    let overrides = user_overrides_from(settings);
+    if let Ok(mut guard) = OVERRIDES.write() {
+        *guard = overrides;
     }
 }
 
@@ -1187,7 +1233,8 @@ pub fn stamp(msg: &mut ChatMessage) {
 /// Stamps `metadata.view` whatever the switch says.
 pub fn stamp_view(msg: &mut ChatMessage) {
     let prefs = prefs();
-    let name_color = shown_color(msg.color.as_deref(), &prefs);
+    let own = user_override(&msg.provider, &msg.user_id).unwrap_or_default();
+    let name_color = shown_color(own.color.as_deref().or(msg.color.as_deref()), &prefs);
     note_seen(&msg.username, &name_color);
     let channel = msg.channel.trim_start_matches('#').to_lowercase();
     let worn = known_cosmetics(msg);
@@ -1207,12 +1254,32 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         parent_spans,
         atmosphere: theme.as_ref().and_then(|t| t.chat_atmosphere().map(String::from)),
         cologne: theme.as_ref().and_then(|t| t.chat_cologne()),
+        nickname: own.nickname,
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_overrides_read_from_settings() {
+        let mut settings = Settings::default();
+        settings.extra.insert(
+            "chat_customization".into(),
+            serde_json::json!({ "user_overrides": {
+                "7": { "user_id": "7", "nickname": " Cake ", "color": "#ff0000" },
+                "kick:9": { "user_id": "kick:9", "color": "#00ff00" },
+                "8": { "user_id": "8", "nickname": "" }
+            } }),
+        );
+        let map = user_overrides_from(&settings).unwrap();
+        assert_eq!(map.len(), 2, "an entry with nothing set is skipped");
+        assert_eq!(map["7"], UserOverride { nickname: Some("Cake".into()), color: Some("#ff0000".into()) });
+        assert_eq!(override_key("kick", "9"), "kick:9");
+        assert_eq!(override_key("twitch", "7"), "7");
+        assert!(user_overrides_from(&Settings::default()).is_none());
+    }
 
     fn text(s: &str) -> MessageSegment {
         MessageSegment::Text { content: s.to_string() }
