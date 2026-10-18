@@ -23,6 +23,8 @@ import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery } from '../rewards/badgeGalleryStore';
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
 import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
+import { ScreenHeader } from '../ui/ScreenHeader';
+import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { ProviderMark } from '../../components/ProviderLogo';
 import {
   blurbText,
@@ -38,6 +40,10 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 
 type RewardsTab = 'drops' | 'badges';
+const REWARDS_TABS: Segment<RewardsTab>[] = [
+  { value: 'drops', label: 'Drops' },
+  { value: 'badges', label: 'Badges' },
+];
 
 /**
  * One game, collapsed to a single row until you open it.
@@ -355,21 +361,12 @@ export const RewardsScreen: React.FC = () => {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="px-4 pt-3 pb-2 shrink-0">
-        <h1 className="text-xl font-bold text-textPrimary mb-2.5">Rewards</h1>
-        {/* The tab pair wears the glaze; the open tab is the darker pill inside it. */}
-        <div className="flex w-fit gap-1 p-1 chrome-glaze chrome-glaze--flat">
-          {(['drops', 'badges'] as RewardsTab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                tab === t ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
-              }`}
-            >
-              {t === 'drops' ? 'Drops' : 'Badges'}
-            </button>
-          ))}
+      <div className="shrink-0">
+        {/* The same header as Following and Browse, so the title sits on one
+            baseline on every tab. */}
+        <ScreenHeader title="Rewards" />
+        <div className="flex px-4 pb-2">
+          <SegmentedControl<RewardsTab> label="Rewards" segments={REWARDS_TABS} value={tab} onChange={setTab} />
         </div>
       </div>
       <PullToRefresh onRefresh={tab === 'drops' ? () => load(dropsQuery, true) :() => loadBadgeGallery(badgeSort, true)}>
