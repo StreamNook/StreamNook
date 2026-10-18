@@ -21,13 +21,13 @@ import { Logger } from '../../utils/logger';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
-import { AtmosphereBand, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
-import { brandFor, identityNameSize, medalUrl } from './identity';
+import { AtmosphereGlow, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
+import { brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
 
-const BAND = 92;
+/** How far down the sheet their Atmosphere's glow reaches: the picture and
+ *  the name, fading out above what follows. */
+const GLOW = 200;
 const AVATAR = 76;
-/** The cutout ring at this avatar size (CutoutAvatar's own rule). */
-const RING = Math.max(3, Math.round(AVATAR * 0.05));
 
 export interface SheetUser {
   userId: string;
@@ -305,36 +305,35 @@ const ProfileBody: React.FC<{
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
       <div className="flex flex-col pb-2">
-        {/* Their Atmosphere as the band, else a quiet tint of their name color;
-            the picture cut into its lower edge, the name below it, never on it. */}
-        <div className="rounded-2xl overflow-hidden">
-          <AtmosphereBand swatch={sheet?.atmosphere?.swatch} tint={shownColor} height={BAND} radius={0} />
-        </div>
-        <div className="pl-2.5" style={{ marginTop: -(AVATAR / 2 + RING) }}>
-          <CutoutAvatar
-            platformUrl={sheet?.avatar_url}
-            picture={sheet?.picture}
-            size={AVATAR}
-            medal={medalUrl(sheet?.streamnook)}
-            medalLabel={sheet?.streamnook?.label}
-          />
-        </div>
-
-        <div className="pt-2 min-w-0">
-          <PaintedName
-            text={name}
-            paint={paint}
-            color={shownColor}
-            className="block font-bold leading-tight break-words"
-            style={{ fontSize: identityNameSize(name) - 2 }}
-          />
-          {(login || wearing) && (
-            <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
-              {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
-              {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
-              {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
-            </div>
-          )}
+        {/* Their Atmosphere glowing behind the picture and name across the
+            sheet's full width, else a faint glow of their name color. */}
+        <div className="relative -mx-4 px-4 pt-3">
+          <AtmosphereGlow atm={glowAtmosphere(sheet?.atmosphere?.id)} tint={shownColor} height={GLOW} />
+          <div className="relative">
+            <CutoutAvatar
+              platformUrl={sheet?.avatar_url}
+              picture={sheet?.picture}
+              size={AVATAR}
+              medal={medalUrl(sheet?.streamnook)}
+              medalLabel={sheet?.streamnook?.label}
+            />
+          </div>
+          <div className="relative pt-3 min-w-0">
+            <PaintedName
+              text={name}
+              paint={paint}
+              color={shownColor}
+              className="block font-bold leading-tight break-words"
+              style={{ fontSize: identityNameSize(name) - 2 }}
+            />
+            {(login || wearing) && (
+              <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
+                {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
+                {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
+              </div>
+            )}
+          </div>
         </div>
 
         {standing && (

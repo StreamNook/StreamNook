@@ -1,8 +1,9 @@
 // The pieces every identity surface shares (your You card, the Edit profile
 // preview, a chatter's profile sheet), so the three keep one shape: the
-// Atmosphere as a band across the top, the picture cut into the band's lower
-// edge with the StreamNook badge on it as a medal, and the name below the art,
-// never on it. The iPhone draws the same shape from You/IdentityViews.swift.
+// Atmosphere as a glow behind the picture and name, the picture alone on a
+// black disc (another person's StreamNook badge on it as a medal), and the
+// name beside or below it. The iPhone draws the same shape from
+// You/IdentityViews.swift.
 import React, { useEffect, useRef, useState } from 'react';
 import { Check } from 'phosphor-react';
 import { ProviderMark } from '../../components/ProviderLogo';
@@ -53,37 +54,6 @@ export const BrandMark: React.FC<{ brand: Brand; size: number; className?: strin
   }
   return <ProviderMark provider={brand} size={size} className={className} />;
 };
-
-/**
- * A member's Atmosphere as a band: its swatch, the full-strength art the picker
- * shows (the chat row's wash is built to sit dim behind text and reads near
- * black as a banner). Without one, a quiet wash of `tint` so the card keeps
- * its shape.
- */
-export const AtmosphereBand: React.FC<{
-  swatch?: string | null;
-  tint: string;
-  height: number;
-  /** The card's corner radius, so the band's top corners follow it. */
-  radius: number;
-}> = ({ swatch, tint, height, radius }) => (
-  <div
-    aria-hidden="true"
-    className="relative overflow-hidden pointer-events-none bg-tertiary"
-    style={{ height, borderTopLeftRadius: radius, borderTopRightRadius: radius }}
-  >
-    {swatch ? (
-      <div className="absolute inset-0" style={{ background: swatch }} />
-    ) : (
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage: `radial-gradient(280px circle at 0% 0%, color-mix(in srgb, ${tint} 42%, transparent), transparent), radial-gradient(240px circle at 100% 100%, color-mix(in srgb, ${tint} 18%, transparent), transparent)`,
-        }}
-      />
-    )}
-  </div>
-);
 
 /**
  * A member's Atmosphere as the air around their identity (Brandon: the band
