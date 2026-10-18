@@ -34,15 +34,15 @@ struct CheerBar: View {
     private func words(_ shown: CheerCheck) -> some View {
         switch model.cheer.status {
         case .sending?:
-            Text("Cheering \(Self.bits(shown.total))...").foregroundStyle(Color(ChatTheme.textSecondary))
+            Text("Cheering \(Self.bits(shown.total))...").foregroundStyle(SN.textSecondary)
         case .refused(_, let problem, _, _)?:
             Text(problem).foregroundStyle(ComposerInk.warning)
         case .held?, nil:
             if model.cheer.status == nil, let problem = shown.problems.first {
                 Text(problem).foregroundStyle(ComposerInk.warning)
             } else {
-                (Text("Cheering \(Self.bits(shown.total))").fontWeight(.semibold).foregroundStyle(Color(ChatTheme.textPrimary))
-                    + Text(shown.left.map { " · \($0.formatted()) left" } ?? "").foregroundStyle(Color(ChatTheme.textSecondary)))
+                (Text("Cheering \(Self.bits(shown.total))").fontWeight(.semibold).foregroundStyle(SN.textPrimary)
+                    + Text(shown.left.map { " · \($0.formatted()) left" } ?? "").foregroundStyle(SN.textSecondary))
             }
         }
     }
@@ -53,12 +53,12 @@ struct CheerBar: View {
         case .held(let check)?:
             Button("Cheer \(check.total.formatted())") { Task { await model.sendCheer(check) } }
                 .font(.sn(12.5, 600))
-                .foregroundStyle(Color(ChatTheme.accent))
+                .foregroundStyle(SN.accent)
                 .accessibilityLabel("Cheer \(Self.bits(check.total))")
         case .refused(let check, _, true, _)?:
             Button("Cheer without the message") { Task { await model.sendCheer(check, continueAnyway: true) } }
                 .font(.sn(12.5, 600))
-                .foregroundStyle(Color(ChatTheme.accent))
+                .foregroundStyle(SN.accent)
         default:
             EmptyView()
         }

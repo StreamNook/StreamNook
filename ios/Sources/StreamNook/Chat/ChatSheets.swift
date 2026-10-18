@@ -168,7 +168,7 @@ struct ChatMenuSheet: View {
             .listSectionSpacing(16)
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollContentBackground(.hidden)
-            .tint(Color(ChatTheme.textPrimary))
+            .tint(SN.textPrimary)
         }
         .presentationDragIndicator(.visible)
         // Only while the sheet is open: the follow and subscription lookups and the role.
@@ -271,10 +271,10 @@ struct ChatCommandSheet: View {
                                 HStack(alignment: .top) {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("/\(row.name)").font(.sn(14, 500))
-                                            .foregroundStyle(Color(ChatTheme.textPrimary))
+                                            .foregroundStyle(SN.textPrimary)
                                         Text(row.description)
                                             .font(.sn(12.5))
-                                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                                            .foregroundStyle(SN.textSecondary)
                                         if let lock = row.lock {
                                             Text(lock).font(.sn(11.5)).foregroundStyle(.tertiary)
                                         }
@@ -292,7 +292,7 @@ struct ChatCommandSheet: View {
                     }
                 }
             }
-            .tint(Color(ChatTheme.textPrimary))
+            .tint(SN.textPrimary)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search commands")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()

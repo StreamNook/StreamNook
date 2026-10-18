@@ -28,7 +28,10 @@ final class Look {
 
     /// Takes the palette of the theme the core resolved.
     func apply(palette: Palette, themeID: String) {
-        if palette != self.palette { self.palette = palette }
+        if palette != self.palette {
+            self.palette = palette
+            ChatTheme.use(palette)
+        }
         self.themeID = themeID
     }
 

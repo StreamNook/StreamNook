@@ -83,7 +83,7 @@ struct ChatLabView: View {
                     videoStandIn
                         .aspectRatio(16 / 9, contentMode: .fit)
                     ChatPanel(session: session)
-                        .background(Color(ChatTheme.background))
+                        .background(SN.background)
                 }
             }
         }
