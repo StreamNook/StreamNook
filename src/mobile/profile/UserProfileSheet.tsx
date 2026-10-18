@@ -22,7 +22,7 @@ import { Logger } from '../../utils/logger';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
-import { AtmosphereGlow, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
+import { AtmosphereGlow, BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader } from './IdentityParts';
 import { brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
 
 /** How far down the sheet their Atmosphere's glow reaches: the picture and
@@ -312,7 +312,7 @@ const ProfileBody: React.FC<{
             sheet's full width, else a faint glow of their name color. */}
         <div className="relative -mx-4 px-4 pt-3">
           <AtmosphereGlow atm={glowAtmosphere(sheet?.atmosphere?.id)} tint={shownColor} height={GLOW} />
-          <div className="relative">
+          <div className="relative flex items-start gap-3">
             <CutoutAvatar
               platformUrl={sheet?.avatar_url}
               picture={sheet?.picture}
@@ -320,6 +320,12 @@ const ProfileBody: React.FC<{
               medal={medal ? medalUrl(sheet?.streamnook) : null}
               medalLabel={sheet?.streamnook?.label}
             />
+            <div className="flex-1" />
+            {sheet?.member && (
+              <div className="pt-1.5">
+                <MemberRankMark rank={sheet.member} />
+              </div>
+            )}
           </div>
           <div className="relative pt-3 min-w-0">
             <PaintedName

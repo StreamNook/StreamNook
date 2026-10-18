@@ -14,7 +14,9 @@ import type { AtmosphereWashData } from '../../components/overlay/AtmosphereChat
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere } from '../../services/atmospheres';
 import type { PaintV4 } from '../../services/paintStyle';
-import type { AvatarPick } from '../../types/profileView';
+import type { AvatarPick, MemberRank } from '../../types/profileView';
+// The rank number's display serif, the one the desktop card's tier mark uses.
+import '@fontsource-variable/fraunces/wght-italic.css';
 import streamnookMark from '../../assets/streamnook-logo-128.webp';
 import { SEVENTV_BLUE, nameColorOr, type Brand } from './identity';
 
@@ -199,6 +201,44 @@ export const CutoutAvatar: React.FC<{
         </span>
       )}
       {explaining && <PictureNote sevenTv={showsSevenTv} />}
+    </div>
+  );
+};
+
+/**
+ * A member's place in line on the right of their sheet, as the desktop card's
+ * hero draws it: Nº and the number in the display serif, a hairline, then the
+ * rank's name in small caps. The first three ranks wear their color on the
+ * number; the rest keep the text color. The iPhone draws the same mark
+ * (`MemberRankMark` in You/IdentityViews.swift).
+ */
+export const MemberRankMark: React.FC<{ rank: MemberRank }> = ({ rank }) => {
+  const lit = rank.tier === 'ethereal' || rank.tier === 'mythic' || rank.tier === 'ascendant';
+  return (
+    <div
+      className="flex flex-col items-end shrink-0"
+      role="img"
+      aria-label={`StreamNook member number ${rank.number}, ${rank.label}`}
+    >
+      <div className="flex items-baseline gap-1">
+        <span className="text-[11px] font-light text-textMuted">Nº</span>
+        <span
+          className="text-[34px] leading-none italic font-light tabular-nums"
+          style={{ fontFamily: "'Fraunces Variable', serif", color: lit ? rank.accent : 'var(--color-text-primary)' }}
+        >
+          {rank.number.toLocaleString()}
+        </span>
+      </div>
+      <div
+        className="mt-2 h-px w-12"
+        style={{ background: `linear-gradient(to right, transparent, color-mix(in srgb, ${rank.accent} 50%, transparent), transparent)` }}
+      />
+      <div
+        className="mt-2 text-[10px] font-semibold uppercase tracking-[0.22em] leading-none"
+        style={{ color: lit ? rank.accent : 'var(--color-text-secondary)' }}
+      >
+        {rank.label}
+      </div>
     </div>
   );
 };
