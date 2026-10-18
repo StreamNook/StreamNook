@@ -19,11 +19,18 @@ const StatTile: React.FC<{ stat: MemberStatView }> = ({ stat }) => {
   return (
     <div className="glass-panel rounded-xl p-3 min-w-0">
       <div className="flex items-center gap-1.5 min-w-0">
-        <Icon size={11} strokeWidth={2.5} className="shrink-0" style={{ color: mark?.color ?? '#aebfca' }} aria-hidden="true" />
-        <span className="text-[12px] text-textMuted truncate">{stat.label}</span>
+        {/* One width for every icon, so the labels start on one line. */}
+        <span className="w-3.5 shrink-0 flex justify-center" aria-hidden="true">
+          <Icon size={11} strokeWidth={2} style={{ color: mark?.color ?? '#aebfca' }} />
+        </span>
+        <span className="text-[12px] text-textSecondary truncate">{stat.label}</span>
       </div>
       <div className="mt-1 text-[17px] leading-tight font-bold tabular-nums text-textPrimary truncate">{stat.value}</div>
-      {stat.caption && <div className="mt-1 text-[12px] text-textMuted truncate">{stat.caption}</div>}
+      {/* Every tile keeps the caption line, so the grid is one even block;
+          the caption hugs its value. */}
+      <div className={`text-[12px] text-textMuted truncate ${stat.caption ? '' : 'invisible'}`} aria-hidden={!stat.caption}>
+        {stat.caption ?? ' '}
+      </div>
     </div>
   );
 };
@@ -34,14 +41,14 @@ const Medallion: React.FC<{ medal: AccoladeMedalView }> = ({ medal }) => {
   const Icon = ACCOLADE_ICONS[medal.icon] ?? Star;
   const [from, to] = medal.colors;
   return (
-    <div className="flex flex-col items-center gap-1.5 min-w-0" role="img" aria-label={medal.label.replace(/­/g, '')}>
+    <div className="flex flex-col items-center gap-1 min-w-0" role="img" aria-label={medal.label.replace(/\u00ad/g, '')}>
       <span
         className="flex w-11 h-11 items-center justify-center rounded-full"
         style={{ backgroundImage: `linear-gradient(140deg, ${from}, ${to ?? from})`, boxShadow: MEDALLION_BEVEL }}
       >
         <Icon size={18} strokeWidth={2} className="text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]" aria-hidden="true" />
       </span>
-      <span className="w-full text-center text-[11px] font-medium leading-tight text-textPrimary line-clamp-2 [hyphens:manual]">
+      <span className="w-full text-center text-[11px] font-medium leading-tight text-textSecondary line-clamp-2 [hyphens:manual]">
         {medal.label}
       </span>
     </div>
@@ -85,7 +92,7 @@ export const MemberSections: React.FC<{ profile: MemberProfileView }> = ({ profi
 
       {profile.accolades.length > 0 && (
         <div className="mt-5">
-          <SectionHeader title="Accolades" detail={String(profile.accolades.length)} className="mb-3" />
+          <SectionHeader title="Accolades" detail={String(profile.accolades.length)} className="mb-2" />
           <div className="grid grid-cols-5 gap-x-2 gap-y-3">
             {profile.accolades.map((a) => (
               <Medallion key={a.id} medal={a} />
