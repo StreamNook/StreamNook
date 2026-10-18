@@ -4843,12 +4843,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to update chat settings: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to update chat settings"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -4874,9 +4875,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to clear chat: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to clear chat"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5146,9 +5148,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to add moderator: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to add moderator"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5172,9 +5175,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to remove moderator: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to remove moderator"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5198,9 +5202,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to add VIP: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to add VIP"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5224,9 +5229,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to remove VIP: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to remove VIP"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5350,12 +5356,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to update suspicious user status: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to update suspicious user status"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5660,9 +5667,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to block user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to block user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5687,9 +5695,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to unblock user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to unblock user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6127,12 +6136,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to send announcement: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to send chat announcement"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6158,9 +6168,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to send shoutout: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to send shoutout"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6188,9 +6199,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to start commercial: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to start commercial"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6534,9 +6546,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to start raid: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to start raid"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6560,9 +6573,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to cancel raid: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to cancel raid"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6595,12 +6609,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to create stream marker: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to create stream marker"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6639,9 +6654,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to warn user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to warn user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
