@@ -13,7 +13,8 @@
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
-  --sn-tabbar-h: 56px;
+  /* 64: the tabs carry labels under their icons. */
+  --sn-tabbar-h: 64px;
   --sn-safe-t: var(--sn-inset-t, env(safe-area-inset-top, 0px));
   --sn-safe-r: var(--sn-inset-r, env(safe-area-inset-right, 0px));
   --sn-safe-b: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));

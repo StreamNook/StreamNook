@@ -4,8 +4,10 @@
 // 8dp higher than Following's), and their controls moved between tabs.
 import React from 'react';
 
-/** The large title's size, as the iPhone draws its tab titles (32, 700). */
-export const SCREEN_TITLE_CLASS = 'text-[32px] font-bold leading-[38px] tracking-[-0.01em] text-textPrimary';
+/** The large title (Brandon: large, like the iPhone): Material 3's large top
+ *  app bar headline, 28 bold, the Android step nearest the iPhone's 32/700, so
+ *  the screen's name leads the page. */
+export const SCREEN_TITLE_CLASS = 'text-[28px] font-bold leading-[34px] tracking-[-0.01em] text-textPrimary';
 
 export const ScreenHeader: React.FC<{
   title: string;

@@ -34,13 +34,18 @@ export const CategoryTile: React.FC<{
    *  than one fixed size that is too soft on a dense screen and too heavy on a
    *  narrow column. */
   boxArt?: string | null;
-  /** Live viewers across the category, when the source counted them. */
+  /** Live viewers across the category, when the source counted them. Dims the
+   *  line at zero. */
   viewers?: number | null;
+  /** The words under the name, as Rust serves them with the category
+   *  (`viewers_line`, one compact format for every shell). The local format
+   *  stands in only for a caller that does not pass it yet. */
+  viewersText?: string | null;
   /** Search results give the name two lines; browsing keeps one. */
   twoLineName?: boolean;
   onPress: () => void;
-}> = ({ name, art, boxArt, viewers, twoLineName = false, onPress }) => {
-  const line = viewersLine(viewers);
+}> = ({ name, art, boxArt, viewers, viewersText, twoLineName = false, onPress }) => {
+  const line = viewersText ?? viewersLine(viewers);
   // Rounded up to 30 px steps (in artPixelWidth), so a fold, a rotation or a
   // fractional column width lands on a handful of sizes the cache already
   // holds instead of a new request per pixel.

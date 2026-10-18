@@ -2040,6 +2040,9 @@ export interface TwitchGame {
 
 export interface TwitchCategory extends TwitchGame {
   viewer_count?: number;
+  /** The tile's words for `viewer_count`, from Rust's one compact format
+   *  (services/count_text.rs); absent when nobody counted. */
+  viewers_line?: string;
   tags?: string[];
 }
 
