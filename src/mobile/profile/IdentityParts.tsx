@@ -244,12 +244,20 @@ export const MemberRankMark: React.FC<{ rank: MemberRank }> = ({ rank }) => {
 };
 
 /** Which of your two pictures shows where, as the avatar's tap explains it. */
+/** glass-exempt: the popover tint laid over solid black. A glass theme's own
+ *  background color carries alpha, so the tint alone still let the card's
+ *  rows read through the note's last line on the phone. */
+const PICTURE_NOTE_SURFACE: React.CSSProperties = {
+  background:
+    'linear-gradient(color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent), color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent)), #000',
+};
+
 const PictureNote: React.FC<{ sevenTv: boolean }> = ({ sevenTv }) => (
-  // The solid popover surface: glass let the card's own rows read through
-  // the note's last line.
+  // glass-exempt: the solid popover surface over black (see above).
   <div
     role="note"
     className="absolute left-0 top-full mt-2 z-30 w-[290px] max-w-[calc(100vw-32px)] sn-popover sn-popover--static shadow-lg rounded-xl p-4 flex flex-col gap-2.5"
+    style={PICTURE_NOTE_SURFACE}
   >
     <NoteLine brand="seventv">
       {sevenTv
