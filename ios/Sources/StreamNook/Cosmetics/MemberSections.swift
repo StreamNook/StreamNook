@@ -53,7 +53,7 @@ struct MemberSections: View {
     }
 
     private var accolades: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             ProfileSectionHeader("Accolades", detail: "\(profile.accolades.count)")
             // Five to a row, as on Android.
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 5),
@@ -71,19 +71,28 @@ private struct MemberStatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
+                // One width for every symbol, so the labels start on one line.
                 Image(systemName: Self.symbol[stat.key] ?? "chart.bar")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(nameColor(Self.tint[stat.key] ?? "#aebfca"))
-                Text(stat.label).font(.sn(12)).foregroundStyle(SN.textMuted).lineLimit(1)
+                    .frame(width: 14, alignment: .center)
+                Text(stat.label).font(.sn(12)).foregroundStyle(SN.textSecondary).lineLimit(1)
             }
             Text(stat.value)
                 .font(.sn(17, 700).monospacedDigit())
                 .foregroundStyle(SN.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-            if let caption = stat.caption {
-                Text(caption).font(.sn(12)).foregroundStyle(SN.textMuted).lineLimit(1).minimumScaleFactor(0.8)
-            }
+            // Every tile keeps the caption line, so the grid is one even block; the caption
+            // hugs its value.
+            Text(stat.caption ?? " ")
+                .font(.sn(12))
+                .foregroundStyle(SN.textMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .opacity(stat.caption == nil ? 0 : 1)
+                .accessibilityHidden(stat.caption == nil)
+                .padding(.top, -3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
@@ -109,7 +118,7 @@ private struct AccoladeMedallion: View {
     let medal: AccoladeMedal
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             ZStack {
                 Circle().fill(LinearGradient(colors: medal.colors.map { nameColor($0) },
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -124,7 +133,7 @@ private struct AccoladeMedallion: View {
             .frame(width: 44, height: 44)
             Text(medal.label)
                 .font(.sn(11, 500))
-                .foregroundStyle(SN.textPrimary)
+                .foregroundStyle(SN.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
