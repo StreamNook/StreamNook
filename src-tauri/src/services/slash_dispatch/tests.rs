@@ -195,6 +195,25 @@ async fn me_goes_to_chat_as_typed() {
 }
 
 #[tokio::test]
+async fn ending_a_poll_says_why_it_could_not() {
+    let fake = Fake::new();
+    // A moderator: Twitch takes this only from the owner, so it is refused up front.
+    let mod_try = run(&fake, "/endpoll").await;
+    assert_eq!(toast(&mod_try, ToastKind::Error), ["/endpoll: only the broadcaster can end a poll on Twitch"]);
+    assert!(fake.calls("get_active_poll").is_empty());
+
+    *fake.role.lock().unwrap() = Role::Broadcaster;
+    // A lookup Twitch refused is an error, never "no poll".
+    fake.answer(|cmd, _| if cmd == "get_active_poll" { Err("you are not a moderator in this channel".into()) } else { Ok(Value::Null) });
+    let refused = run(&fake, "/cancelpoll").await;
+    assert_eq!(toast(&refused, ToastKind::Error), ["Couldn't read the running poll: you are not a moderator in this channel"]);
+    // No poll really running.
+    fake.answer(|_, _| Ok(Value::Null));
+    let none = run(&fake, "/endpoll").await;
+    assert_eq!(toast(&none, ToastKind::Error), ["No poll is running right now"]);
+}
+
+#[tokio::test]
 async fn mods_and_vips_run_here_and_never_reach_chat() {
     let fake = Fake::new();
     fake.answer(|cmd, _| match cmd {
@@ -304,6 +323,8 @@ async fn slow_and_followers_read_their_lengths() {
 #[tokio::test]
 async fn deletepoll_archives_the_running_poll() {
     let fake = Fake::new();
+    // Polls are the channel owner's to end.
+    *fake.role.lock().unwrap() = Role::Broadcaster;
     let o = run(&fake, "/deletepoll").await;
     assert_eq!(fake.calls("end_poll"), vec![json!({ "broadcasterId": "42", "pollId": "poll-9", "status": "ARCHIVED" })]);
     assert_eq!(toast(&o, ToastKind::Success), vec!["Poll canceled"]);

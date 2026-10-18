@@ -1612,7 +1612,18 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 o.err(format!("/{}: no active channel", c.command));
                 return Ok(Flow::Done);
             }
-            let active = b.invoke("get_active_poll", json!({ "broadcasterId": id })).await.unwrap_or(Value::Null);
+            // Twitch reads and ends polls only on the channel owner's own token.
+            if b.role(&login) != Role::Broadcaster {
+                o.err(format!("/{}: only the broadcaster can end a poll on Twitch", c.command));
+                return Ok(Flow::Done);
+            }
+            let active = match b.invoke("get_active_poll", json!({ "broadcasterId": id })).await {
+                Ok(active) => active,
+                Err(e) => {
+                    o.err(format!("Couldn't read the running poll: {e}"));
+                    return Ok(Flow::Done);
+                }
+            };
             let Some(poll_id) = active["id"].as_str().filter(|s| !s.is_empty()).map(str::to_string) else {
                 o.err("No poll is running right now");
                 return Ok(Flow::Done);
