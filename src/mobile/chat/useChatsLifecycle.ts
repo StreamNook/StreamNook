@@ -6,8 +6,10 @@
 // chat pane, which only exists while a pane is on screen; with the Chats screen
 // there can be two panes or none, and the player closing must still retire the
 // stream tab (a kept one stays as one of your chats).
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { useMobileNavStore } from '../navStore';
 import { streamProvider } from '../../utils/streamProvider';
 import { useChatTabsStore } from './chatTabsStore';
 
@@ -41,6 +43,26 @@ export function useChatsLifecycle(): void {
     streamProv,
     syncStreamTab,
   ]);
+
+  // The room on screen, for the mentions hub: mentions there are read as they
+  // land. Chat shows on the Chats tab (unless the full player covers it) and
+  // under the full player; the mini player's chat is hidden.
+  const activeChannel = useChatTabsStore((s) => s.activeChannel);
+  const activeTab = useMobileNavStore((s) => s.activeTab);
+  const playerMode = useMobileNavStore((s) => s.playerMode);
+  const streamUrl = useAppStore((s) => s.streamUrl);
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState === 'visible');
+  useEffect(() => {
+    const on = () => setPageVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const playerFull = !!streamUrl && playerMode === 'full';
+  const shown = pageVisible && !!activeChannel && (playerFull || activeTab === 'chats');
+  const onScreen = shown ? activeChannel : null;
+  useEffect(() => {
+    void invoke('chat_tabs_visible', { rooms: onScreen ? [onScreen] : [] }).catch(() => {});
+  }, [onScreen]);
 
   // Background: with no player, every room is left once Rust's park delay has
   // passed (Rust refuses while a stream tab exists, so audio-only playback

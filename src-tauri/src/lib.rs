@@ -2441,6 +2441,8 @@ pub fn run() {
             #[cfg(mobile)]
             commands::chat_tabs::chat_tabs_keep,
             #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_visible,
+            #[cfg(mobile)]
             commands::chat_tabs::chat_room_from_link,
             #[cfg(mobile)]
             commands::chat_tabs::search_chat_rooms,

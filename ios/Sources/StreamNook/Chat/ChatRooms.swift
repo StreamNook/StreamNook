@@ -143,6 +143,11 @@ final class ChatRooms {
         change("chat_tabs_connect", [:])
     }
 
+    /// The rooms on screen right now, for the mentions hub (mentions there are read as they land).
+    func setVisible(_ rooms: [String]) {
+        Task { _ = try? await core.invoke("chat_tabs_visible", args: ["rooms": rooms]) }
+    }
+
     /// Keeps the stream's chat after the player closes, or lets it close with it.
     func keep(_ channel: String, _ keep: Bool) {
         Task {

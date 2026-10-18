@@ -145,6 +145,15 @@ pub fn chat_tabs_park(app: AppHandle) -> ChatTabsChange {
     change
 }
 
+/// The rooms on screen right now (the Chats tab and the chat under the player),
+/// empty when none is. Mentions arriving in a room you are looking at are read
+/// already; the mentions hub takes this set as it is.
+#[tauri::command]
+pub fn chat_tabs_visible(rooms: Vec<String>) {
+    let rooms: Vec<String> = rooms.into_iter().map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
+    log::debug!("[ChatTabs] on screen: {rooms:?}");
+}
+
 /// Keeps the stream's chat after the player closes, or lets it close with it.
 #[tauri::command]
 pub fn chat_tabs_keep(app: AppHandle, channel: String, keep: bool) -> ChatTabsView {

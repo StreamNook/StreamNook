@@ -58,6 +58,9 @@ struct MainShell: View {
         .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
         // Whoever signs in gets their own saved chats.
         .onChange(of: model.signedIn) { _, _ in model.chat.load() }
+        // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
+        // player covers it) and under the full player.
+        .onChange(of: onScreenRoom, initial: true) { _, room in model.chat.setVisible(room.map { [$0] } ?? []) }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
         // selected ring's color).
         .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
@@ -75,6 +78,13 @@ struct MainShell: View {
             MenuSampleSheet(sample: sample)
         }
         #endif
+    }
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var onScreenRoom: String? {
+        guard scenePhase == .active, model.signedIn, let room = model.chat.state.activeChannel else { return nil }
+        return nav.shellCovered || nav.tab == .chats ? room : nil
     }
 
     private func stack<Content: View>(_ tab: MobileTab, @ViewBuilder content: () -> Content) -> some View {
