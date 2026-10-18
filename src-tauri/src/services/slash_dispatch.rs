@@ -803,15 +803,36 @@ struct User {
     avatar: Option<String>,
 }
 
-async fn lookup(b: &dyn Backend, login: &str) -> Option<User> {
-    let v = b.invoke("get_user_by_login", json!({ "login": login })).await.ok()?;
-    let id = v["id"].as_str()?.to_string();
-    Some(User {
+/// Someone's account, `None` when Twitch has no such account, or why the lookup
+/// failed (signed out, offline, a Helix refusal): never taken for "not found".
+async fn find_user(b: &dyn Backend, login: &str) -> Result<Option<User>, String> {
+    let v = match b.invoke("get_user_by_login", json!({ "login": login })).await {
+        Ok(v) => v,
+        Err(e) if e.contains("not found") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(id) = v["id"].as_str().map(str::to_string) else { return Ok(None) };
+    Ok(Some(User {
         id,
         login: v["login"].as_str().unwrap_or(login).to_string(),
         display_name: v["display_name"].as_str().unwrap_or(login).to_string(),
         avatar: v["profile_image_url"].as_str().map(str::to_string),
-    })
+    }))
+}
+
+/// The account, or the line that says why there is none: `missing` when Twitch
+/// has no such account, the failure when the lookup itself failed.
+async fn user_or_why(b: &dyn Backend, who: &str, missing: String) -> Result<User, String> {
+    match find_user(b, who).await {
+        Ok(Some(user)) => Ok(user),
+        Ok(None) => Err(missing),
+        Err(e) => Err(format!("Couldn't look up {who}: {e}")),
+    }
+}
+
+/// Someone's account when the lookup worked and found one.
+async fn lookup(b: &dyn Backend, login: &str) -> Option<User> {
+    find_user(b, login).await.ok().flatten()
 }
 
 fn is_broadcaster_of(ctx: &Ctx) -> bool {
@@ -1154,12 +1175,12 @@ async fn on_user(
     args: impl FnOnce(&User) -> Value,
     done: String,
 ) -> Result<(), String> {
-    match lookup(c.b(), username).await {
-        Some(user) => {
+    match user_or_why(c.b(), username, format!("User {username} not found")).await {
+        Ok(user) => {
             c.b().invoke(cmd, args(&user)).await?;
             o.ok(done);
         }
-        None => o.err(format!("User {username} not found")),
+        Err(why) => o.err(why),
     }
     Ok(())
 }
@@ -1533,9 +1554,9 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Done);
             }
             let username = strip_first_at(c.arg(0));
-            match lookup(b, &username).await {
-                Some(u) => o.ui = Some(Ui::OpenUserCard { user_id: u.id, login: u.login, display_name: u.display_name }),
-                None => o.err(format!("User {username} not found")),
+            match user_or_why(b, &username, format!("User {username} not found")).await {
+                Ok(u) => o.ui = Some(Ui::OpenUserCard { user_id: u.id, login: u.login, display_name: u.display_name }),
+                Err(why) => o.err(why),
             }
         }
         "refresh" => {
@@ -2102,9 +2123,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "join", "/join <channel>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch channel named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let shown = if user.display_name.is_empty() { user.login.clone() } else { user.display_name.clone() };
             o.ui = Some(Ui::DockJoin { login: user.login, channel_id: user.id, display_name: shown.clone(), avatar_url: user.avatar });
@@ -2146,9 +2170,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "setcolor", "/setcolor <user> <color|off>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let off = is_off_word(&value);
             if !off && !is_color(&value) {
@@ -2179,9 +2206,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "setname", "/setname <user> <nickname|off>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let off = is_off_word(&nickname);
             b.invoke(
@@ -2361,9 +2391,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 o.err("Commands can only nest three deep");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch channel named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let there = Ctx {
                 b: c.ctx.b.clone(),
@@ -2453,9 +2486,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             if !need_channel(c, o) || !need_staff(c, o) {
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let reason = c.from(1).trim().to_string();
             b.invoke("ban_user", json!({ "broadcasterId": id, "targetUserId": user.id, "duration": 1, "reason": opt(&reason) }))
@@ -2713,9 +2749,12 @@ async fn favorite(c: &Call<'_>, o: &mut Outcome, add: bool) -> Result<(), String
         o.err(format!("/{}: name a channel or open one", c.typed));
         return Ok(());
     }
-    let Some(user) = lookup(b, &who).await else {
-        o.err(format!("There is no Twitch channel named {who}"));
-        return Ok(());
+    let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+        Ok(user) => user,
+        Err(why) => {
+            o.err(why);
+            return Ok(());
+        }
     };
     let settings = b.settings();
     let mut favorites: Vec<Value> = settings["favorite_streamers"].as_array().cloned().unwrap_or_default();

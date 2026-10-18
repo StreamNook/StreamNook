@@ -195,6 +195,15 @@ async fn me_goes_to_chat_as_typed() {
 }
 
 #[tokio::test]
+async fn a_failed_lookup_is_never_called_not_found() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "get_user_by_login" { Err("User 'ghost' not found".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/usercard ghost").await, ToastKind::Error), ["User ghost not found"]);
+    fake.answer(|cmd, _| if cmd == "get_user_by_login" { Err("error sending request".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/usercard bob").await, ToastKind::Error), ["Couldn't look up bob: error sending request"]);
+}
+
+#[tokio::test]
 async fn ending_a_poll_says_why_it_could_not() {
     let fake = Fake::new();
     // A moderator: Twitch takes this only from the owner, so it is refused up front.
