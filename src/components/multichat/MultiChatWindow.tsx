@@ -11,7 +11,8 @@
 //   #/multichat?id=<windowId>&channel=<login>&channelId=<roomId>
 //
 // `id` keys the localStorage entry so the window restores its tab set across
-// re-launches. `channel`+`channelId` seed the window when first opened from a
+// re-launches; Rust keeps a copy that restores it when window storage was
+// cleared (utils/multichatSaved.ts). `channel`+`channelId` seed the window when first opened from a
 // "Pop out chat" action; once persisted state exists it takes precedence.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -97,6 +98,7 @@ import {
 } from '../../themes';
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { MULTICHAT_BASE_WIDTH, openMultiChatWindow } from '../../utils/multichatWindow';
+import { saveMultichatState } from '../../utils/multichatSaved';
 import { Tooltip } from '../ui/Tooltip';
 import { TabScroller } from '../ui/TabScroller';
 import { Logger } from '../../utils/logger';
@@ -363,6 +365,8 @@ function persistState(
   } catch (err) {
     Logger.warn('[MultiChatWindow] localStorage write failed:', err);
   }
+  // Rust keeps a copy that outlives window storage.
+  if (windowId) saveMultichatState(windowId, payload);
 }
 
 // Whether the activity + mod-log panes keep collecting (and keep their data in

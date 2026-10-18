@@ -18,6 +18,9 @@ pub mod chat_tabs;
 // The chats docked in the main window (desktop only).
 #[cfg(desktop)]
 pub mod chat_dock;
+// MultiChat windows' saved tabs and layout (desktop only).
+#[cfg(desktop)]
+pub mod multichat_saved;
 pub mod sounds;
 pub mod chat_identity;
 pub mod chat_query;

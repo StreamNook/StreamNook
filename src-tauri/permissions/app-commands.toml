@@ -55,6 +55,8 @@ allow = [
   "show_docked_chat",
   "reorder_chat_dock",
   "set_docked_chat_light",
+  "get_multichat_window_state",
+  "save_multichat_window_state",
   "get_chat_dock_live",
   "open_plugin_window",
   "close_main_window",

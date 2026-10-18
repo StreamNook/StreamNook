@@ -840,6 +840,7 @@ mod tests {
         let mut t = ChatTabs::default();
         t.add(&room("twitch", "a", Some("1"), "A"));
         t.sync_stream(Some(&room("twitch", "s", Some("2"), "S")));
+        t.set_active("s");
         let saved = t.saved();
         assert_eq!(saved.tabs.iter().map(|t| t.channel.as_str()).collect::<Vec<_>>(), ["a"]);
         assert_eq!(saved.active, None, "the stream tab on screen is not saved");

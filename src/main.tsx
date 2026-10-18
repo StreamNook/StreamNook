@@ -15,7 +15,13 @@ import './bootPreload';
 const App = lazy(() => import('./App.tsx'));
 const MobileApp = lazy(() => import('./mobile/MobileApp.tsx'));
 const ProfileCardPage = lazy(() => import('./pages/ProfileCardPage.tsx'));
-const MultiChatWindow = lazy(() => import('./components/multichat/MultiChatWindow.tsx'));
+// A MultiChat window whose saved tabs were cleared from window storage gets them
+// back from Rust before the window reads them (utils/multichatSaved.ts).
+const MultiChatWindow = lazy(() =>
+  import('./utils/multichatSaved')
+    .then((m) => m.restoreSavedMultichat())
+    .then(() => import('./components/multichat/MultiChatWindow.tsx')),
+);
 const ChatOverlayWindow = lazy(() => import('./components/multichat/ChatOverlayWindow'));
 const PluginWindowHost = lazy(() => import('./plugins-ui/PluginWindowHost.tsx'));
 const EmotePaletteWindow = lazy(() => import('./components/chat/EmotePaletteWindow.tsx'));

@@ -1713,6 +1713,10 @@ pub fn run() {
             #[cfg(desktop)]
             commands::chat_dock::set_docked_chat_light,
             #[cfg(desktop)]
+            commands::multichat_saved::get_multichat_window_state,
+            #[cfg(desktop)]
+            commands::multichat_saved::save_multichat_window_state,
+            #[cfg(desktop)]
             services::chat_dock_live::get_chat_dock_live,
             #[cfg(desktop)]
             open_plugin_window,
