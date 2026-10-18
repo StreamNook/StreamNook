@@ -118,6 +118,7 @@ async fn collect_badges() -> Vec<OutItem> {
             feed::classify(&feed_id, &hash, available).await
         };
         if !action.stores() {
+            crate::commands::badge_service::heal_enrichment(badge).await;
             continue;
         }
 
@@ -331,6 +332,13 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_pollOnce<'local>(
     };
 
     let items = runtime.block_on(collect_all());
+    // The badge collector stores each drop's earn window in the universal
+    // cache, whose manifest only reaches disk on a 30 s debounce. This process
+    // is often gone well before that, while the feed state recording the drop
+    // as seen is written at once, so the app would skip the drop as unchanged
+    // and never learn its window: missing badges that never read Available.
+    let _ = crate::services::universal_cache_service::flush_manifest_now();
+    drop(runtime);
     let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
     match env.new_string(json) {
         Ok(s) => s.into_raw(),
