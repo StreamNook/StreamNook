@@ -43,13 +43,12 @@ final class Look {
     /// How much of the opaque floor shows under a glass surface.
     var floorOpacity: Double { 1 - glassiness }
 
-    #if DEBUG
-    /// For drive steps that show a state without writing settings.
+    /// Shows a state without writing settings: the Glassiness slider while it is dragged, and
+    /// drive steps.
     func preview(glassiness: Double? = nil, motion: MotionMode? = nil) {
         if let glassiness { self.glassiness = glassiness }
         if let motion { self.motion = motion }
     }
-    #endif
 }
 
 /// The theme's colours by name, read from the look in force, so a theme change repaints whatever
