@@ -113,8 +113,7 @@ struct ChatLabView: View {
 /// - `chatresume` taps Resume live
 /// - `chatperf:SECONDS` logs frame pacing and memory every five seconds, then a summary
 /// - `chattype:TEXT` puts TEXT in the composer, `chatsend` sends it
-/// - `chatfocus` focuses the composer (raises the keyboard; a room whose mode blocks the viewer
-///   keeps the field disabled, so it stays down), `chatblur` lowers it
+/// - `chatfocus` focuses the composer (raises the keyboard), `chatblur` lowers it
 /// - `chatpicker`, `chatmenu`, `chatcommands` open the emote picker, the chat menu, the command list
 /// - `chatreply` drafts a reply to the newest row
 /// - `chatmod[:off]` turns the room's moderator tools on (or off) for the fan
@@ -176,11 +175,6 @@ enum ChatDrive {
             await composer?.send()
         case "chatfocus":
             composer?.requestFocus(true)
-            // Logs whether the keyboard came up, and if not whether the room disabled the field
-            // (a mode that blocks the viewer, such as followers-only).
-            try? await Task.sleep(for: .milliseconds(600))
-            let field = composer.flatMap { draftField(holding: $0.draft) }
-            log.notice("drive focus field \(field != nil) enabled \(field?.isEnabled ?? false) focused \(field?.isFirstResponder ?? false)")
         case "chatblur":
             composer?.requestFocus(false)
         case "chatpicker":
@@ -264,18 +258,6 @@ enum ChatDrive {
         }
         log.notice("drive chatadd \(row.userLogin, privacy: .public) live \(row.isLive)")
         rooms.add(row)
-    }
-
-    /// The on-screen text field showing `draft` (the composer's), searched through the scene's
-    /// windows.
-    private static func draftField(holding draft: String) -> UITextField? {
-        func search(_ view: UIView) -> UITextField? {
-            if let field = view as? UITextField, field.text == draft, field.window != nil, !field.isHidden { return field }
-            for sub in view.subviews { if let found = search(sub) { return found } }
-            return nil
-        }
-        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
-        return windows.lazy.compactMap { search($0) }.first
     }
 
     /// The first Browse channel whose chat has pinned messages, opened beside the stream.
