@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { MobileSheet } from '../ui/MobileSheet';
+import { Button } from '../ui/Button';
 import { Logger } from '../../utils/logger';
 import { BrandMark } from './IdentityParts';
 import { usePicksStore } from './picksStore';
@@ -70,27 +71,21 @@ async function prepareImage(file: File, kind: ImageKind): Promise<{ base64: stri
   return { base64: await blobToBase64(blob), preview: URL.createObjectURL(blob) };
 }
 
-/** A row's action: a glass pill inside a full-size touch target. */
+/** A row's action: the phone's row button. */
 const ChangePill: React.FC<{
   label: string;
   onClick: () => void;
   disabled?: boolean;
   ariaLabel?: string;
 }> = ({ label, onClick, disabled, ariaLabel }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    aria-label={ariaLabel}
-    className="sn-touch shrink-0 flex items-center disabled:opacity-50"
-  >
-    <span className="glass-button px-3.5 h-8 flex items-center rounded-full text-[13px] font-semibold text-textPrimary whitespace-nowrap">
-      {label}
-    </span>
-  </button>
+  <Button size="row" onClick={onClick} disabled={disabled} aria-label={ariaLabel} className="whitespace-nowrap">
+    {label}
+  </Button>
 );
 
+/** As tall as the row button it stands in for, so the row keeps its height. */
 const Spinner: React.FC = () => (
-  <span className="sn-touch shrink-0 flex items-center justify-center" aria-label="Uploading">
+  <span className="h-[34px] w-11 shrink-0 flex items-center justify-center" aria-label="Uploading">
     <span className="w-5 h-5 rounded-full border-2 border-textSecondary/30 border-t-textSecondary animate-spin" />
   </span>
 );
@@ -99,7 +94,14 @@ const Spinner: React.FC = () => (
  *  each picture says whose it is without words. */
 const PictureFrame: React.FC<{ brand: 'twitch' | 'seventv'; children: React.ReactNode }> = ({ brand, children }) => (
   <div className="relative shrink-0" aria-hidden="true">
-    <div className="w-11 h-11 rounded-full overflow-hidden bg-surface ring-1 ring-white/10">{children}</div>
+    {/* glass-exempt: the theme's raised surface made solid, so a picture with
+        transparent parts never shows the panel through it. */}
+    <div
+      className="w-11 h-11 rounded-full overflow-hidden ring-1 ring-white/10"
+      style={{ background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background)' }}
+    >
+      {children}
+    </div>
     <span
       className="absolute -bottom-[3px] -right-1 rounded-full bg-tertiary flex items-center justify-center"
       style={{ width: 17, height: 17 }}
@@ -374,15 +376,9 @@ export const ProfileEditSection: React.FC<ProfileEditSectionProps> = ({
           />
         </label>
         {changed && (
-          <button
-            onClick={() => void saveName()}
-            disabled={!sameName || savingName}
-            className="sn-touch shrink-0 flex items-center disabled:opacity-45"
-          >
-            <span className="px-3.5 h-8 flex items-center rounded-full bg-accent text-background text-[13px] font-bold">
-              {savingName ? 'Saving' : 'Save'}
-            </span>
-          </button>
+          <Button size="row" kind="primary" onClick={() => void saveName()} disabled={!sameName || savingName}>
+            {savingName ? 'Saving' : 'Save'}
+          </Button>
         )}
       </div>
 
@@ -457,19 +453,12 @@ const BioSheet: React.FC<{ open: boolean; initial: string; onClose: () => void }
           {count}/{BIO_LIMIT}
         </div>
         <div className="flex gap-3 pt-1">
-          <button
-            onClick={onClose}
-            className="sn-touch flex-1 h-[50px] rounded-full glass-button text-[16px] font-semibold text-textPrimary"
-          >
+          <Button onClick={onClose} className="flex-1">
             Cancel
-          </button>
-          <button
-            onClick={() => void save()}
-            disabled={saving || over || text === initial}
-            className="sn-touch flex-1 h-[50px] rounded-full bg-accent text-background text-[16px] font-semibold disabled:opacity-45"
-          >
+          </Button>
+          <Button kind="primary" onClick={() => void save()} disabled={saving || over || text === initial} className="flex-1">
             {saving ? 'Saving' : 'Save'}
-          </button>
+          </Button>
         </div>
       </div>
     </MobileSheet>

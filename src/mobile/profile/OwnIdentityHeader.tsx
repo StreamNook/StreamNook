@@ -116,7 +116,7 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
       >
         <span className="text-[15px] font-semibold text-textPrimary shrink-0">Edit profile</span>
         <span className="flex-1 min-w-0 text-[12.5px] text-textMuted truncate">
-          Pictures, bio, Atmosphere, paint, color
+          Pictures, bio, atmosphere, paint, color
         </span>
         <ChevronRight size={16} className="text-textMuted shrink-0" />
       </button>

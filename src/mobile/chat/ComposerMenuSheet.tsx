@@ -1,6 +1,6 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
-import React from 'react';
+import React, { useState } from 'react';
 import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
@@ -13,7 +13,7 @@ import {
 import { MobileSheet } from '../ui/MobileSheet';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
-import type { ProviderId } from '../../types/providers';
+import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
@@ -25,6 +25,10 @@ const MODE_ICONS: Record<RoomModeKind, LucideIcon> = {
   slow: ModeSlow,
   unique: ModeUnique,
 };
+
+// Every action row's glyph: phosphor's outline weight, one size, centered in
+// the same 24px box, so no row's icon out-pulls another.
+const ICON = 22;
 
 interface Props {
   open: boolean;
@@ -68,6 +72,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
 }) => {
   const row =
     'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70 disabled:opacity-45';
+  const iconBox = 'flex w-6 h-6 shrink-0 items-center justify-center';
 
   // The desktop client's follow logic, ported rather than reimplemented: this
   // hook lives in hooks/ precisely so several surfaces can share it, and it
@@ -99,6 +104,36 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   const terms = platformTerms(provider);
   const canSubscribe = !!activeChannel && (provider === 'twitch' || provider === 'kick');
 
+  // Follow sits at the top; Unfollow at the bottom with the other row that
+  // takes something away. Where the row sits is decided once per opening, so
+  // a tap flips its label in place (the confirmation) instead of moving it.
+  const [lastOpen, setLastOpen] = useState(open);
+  const [followSlot, setFollowSlot] = useState<'top' | 'bottom' | null>(null);
+  if (open !== lastOpen) {
+    setLastOpen(open);
+    if (open) setFollowSlot(null);
+  }
+  if (open && followSlot === null && isFollowing !== null) setFollowSlot(isFollowing ? 'bottom' : 'top');
+  // Held back until the status is known (`isFollowing` is null while
+  // checking) rather than guessing a label and flipping it a moment later.
+  // The sheet stays open on tap.
+  const followRow =
+    channelId && isFollowing !== null && followSlot !== null ? (
+      <button
+        onClick={() => void handleFollowClick()}
+        disabled={followLoading}
+        className={`${row} ${isFollowing ? '!text-error' : ''}`}
+      >
+        <span className={iconBox}>
+          {isFollowing ? <HeartBreak size={ICON} /> : <Heart size={ICON} className="text-success" />}
+        </span>
+        <span className="flex-1 text-left">
+          {isFollowing ? 'Unfollow' : 'Follow'}
+          {activeLabel ? ` ${activeLabel}` : ''}
+        </span>
+      </button>
+    ) : null;
+
   return (
     <MobileSheet open={open} onClose={onClose} title={activeLabel ?? 'Chat'} maxHeightFraction={0.5}>
       <div className="flex flex-col">
@@ -122,7 +157,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
                     <span className="flex w-[19px] h-[19px] shrink-0 items-center justify-center" aria-hidden>
                       <Icon size={14} strokeWidth={2.2} className="text-textMuted" />
                     </span>
-                    <p className="flex-1 min-w-0 text-[13.5px] leading-[19px]">
+                    <p className="flex-1 min-w-0 text-[13px] leading-[19px]">
                       <span className="font-medium text-textSecondary">{mode.compact}</span>{' '}
                       <span className="text-textMuted">{mode.detail}</span>
                     </p>
@@ -131,35 +166,14 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               })}
             </div>
             {roomModes.standing && (
-              <div className="mt-2 pl-[31px] text-[12.5px] leading-snug text-textSecondary">
+              <div className="mt-2 pl-[31px] text-[12px] leading-snug text-textSecondary">
                 {roomModes.standing}
               </div>
             )}
           </div>
         )}
-        {/* Follow / unfollow. Green heart to follow, red broken heart to
-            unfollow, matching the desktop overlay's Heart / HeartBreak pair.
-            Held back until the status is known (`isFollowing` is null while
-            checking) rather than guessing a label and flipping it a moment
-            later. The sheet stays open on tap: the row reflects the new state
-            in place, which is the confirmation. */}
-        {channelId && isFollowing !== null && (
-          <button
-            onClick={() => void handleFollowClick()}
-            disabled={followLoading}
-            className={`${row} ${isFollowing ? '!text-error' : '!text-success'}`}
-          >
-            {isFollowing ? (
-              <HeartBreak size={19} weight="fill" className="shrink-0" />
-            ) : (
-              <Heart size={19} weight="fill" className="shrink-0" />
-            )}
-            <span className="flex-1 text-left">
-              {isFollowing ? 'Unfollow' : 'Follow'}
-              {activeLabel ? ` ${activeLabel}` : ''}
-            </span>
-          </button>
-        )}
+        {/* Follow, at the top when you do not follow yet. */}
+        {followRow && followSlot === 'top' && followRow}
 
         {/* Subscribe, or resubscribe, or gift once subscribed: the same three
             states the desktop control shows, in the platform's own words. The
@@ -172,16 +186,18 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             }}
             className={row}
           >
-            {subscriberBadgeUrl ? (
-              <img src={subscriberBadgeUrl} alt="" draggable={false} className="w-[19px] h-[19px] shrink-0" />
-            ) : (
-              <Star size={19} weight="fill" className="text-accent shrink-0" />
-            )}
+            <span className={iconBox}>
+              {subscriberBadgeUrl ? (
+                <img src={subscriberBadgeUrl} alt="" draggable={false} className="w-[22px] h-[22px]" />
+              ) : (
+                <Star size={ICON} style={{ color: PROVIDERS[provider].color }} />
+              )}
+            </span>
             <span className="flex-1 text-left">
               {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
               {!isSubscribed && activeLabel ? ` to ${activeLabel}` : ''}
             </span>
-            {isSubscribed && <span className="text-[12.5px] text-textMuted">Subscribed</span>}
+            {isSubscribed && <span className="text-[12px] text-textMuted">Subscribed</span>}
           </button>
         )}
 
@@ -192,7 +208,9 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           }}
           className={row}
         >
-          <ChatsCircle size={19} className="text-textSecondary shrink-0" />
+          <span className={iconBox}>
+            <ChatsCircle size={ICON} className="text-textSecondary" />
+          </span>
           <span className="flex-1 text-left">Add a chat</span>
         </button>
 
@@ -204,7 +222,9 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           disabled={!activeChannel}
           className={row}
         >
-          <ArrowsClockwise size={19} className="text-textSecondary shrink-0" />
+          <span className={iconBox}>
+            <ArrowsClockwise size={ICON} className="text-textSecondary" />
+          </span>
           <span className="flex-1 text-left">Reload this chat</span>
         </button>
 
@@ -216,23 +236,35 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             }}
             className={row}
           >
-            <Terminal size={19} className="text-textSecondary shrink-0" />
+            <span className={iconBox}>
+              <Terminal size={ICON} className="text-textSecondary" />
+            </span>
             <span className="flex-1 text-left">Chat commands</span>
           </button>
         )}
 
         {/* Only offered where the actions would actually succeed: Helix rejects
-            them without mod powers in this specific channel. */}
+            them without mod powers in this specific channel. On or off reads
+            from the color and the trailing word; the glyph keeps its weight. */}
         {isModerator && (
           <button onClick={onToggleModTools} className={row}>
-            <ShieldCheck
-              size={19}
-              weight={modToolsOn ? 'fill' : 'regular'}
-              className={modToolsOn ? 'text-accent shrink-0' : 'text-textSecondary shrink-0'}
-            />
+            <span className={iconBox}>
+              <ShieldCheck size={ICON} className={modToolsOn ? 'text-accent' : 'text-textSecondary'} />
+            </span>
             <span className="flex-1 text-left">Moderator tools</span>
-            <span className="text-[12.5px] text-textMuted">{modToolsOn ? 'On' : 'Off'}</span>
+            <span className="text-[12px] text-textMuted">{modToolsOn ? 'On' : 'Off'}</span>
           </button>
+        )}
+
+        {isModerator && modToolsOn && (
+          <div className="px-2 pb-1 text-[12px] text-textMuted leading-snug">
+            Long-press any message for delete, timeout and ban.
+          </div>
+        )}
+
+        {/* The rows that take something away, last and set apart. */}
+        {(onCloseChat || (followRow && followSlot === 'bottom')) && (
+          <div className="my-1 mx-2 border-t border-borderSubtle" />
         )}
 
         {onCloseChat && (
@@ -243,16 +275,14 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             }}
             className={`${row} !text-error`}
           >
-            <X size={19} className="shrink-0" />
+            <span className={iconBox}>
+              <X size={ICON} />
+            </span>
             <span className="flex-1 text-left">Close this chat</span>
           </button>
         )}
 
-        {isModerator && modToolsOn && (
-          <div className="mt-2 px-2 text-[12.5px] text-textMuted leading-snug">
-            Long-press any message for delete, timeout and ban.
-          </div>
-        )}
+        {followRow && followSlot === 'bottom' && followRow}
       </div>
     </MobileSheet>
   );

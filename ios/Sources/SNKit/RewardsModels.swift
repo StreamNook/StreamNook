@@ -9,7 +9,7 @@ public struct RewardsDrops: Decodable, Sendable, Equatable {
     public var available: [DropsGroup]
     public var earned: [EarnedDrop]
     public var inProgressEmpty: String
-    /// `Nothing matches "rust".` when a search left every list empty; empty or nil otherwise.
+    /// `Nothing matches “rust”.` when a search left every list empty; empty or nil otherwise.
     public var noMatch: String?
 
     enum CodingKeys: String, CodingKey {

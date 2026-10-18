@@ -97,6 +97,10 @@ export interface OfflineCardProps {
   onWatchLive?: (live: TwitchStream) => void;
   /** A MultiNook tile: smaller avatar and padding, no latest broadcast. */
   compact?: boolean;
+  /** What to draw. `all` layers the card over the art (the desktop). The phone
+   *  draws the two apart, so no text sits over the art: `art` is the art
+   *  alone filling the player, `card` is the card alone, laid out in flow. */
+  part?: 'all' | 'art' | 'card';
 }
 
 /**
@@ -115,6 +119,7 @@ export function OfflineCard({
   vodBusy,
   onWatchLive,
   compact = false,
+  part = 'all',
 }: OfflineCardProps) {
   const name = room?.display_name || fallbackName;
   const avatar = room?.avatar_url || fallbackAvatar;
@@ -143,16 +148,123 @@ export function OfflineCard({
   const waiting = Math.max(0, (room?.chatters ?? 0) - 1);
   // A rare golden peepoSad, while it is waiting (not once they go live).
   const shiny = !!room?.shiny && state === 'offline';
+  // Earned where the golden one is drawn: the art, never the card alone.
+  const drawsArt = part !== 'card';
   useEffect(() => {
-    if (shiny) earnOfflineAccolade(SHINY_ACCOLADE_ID);
-  }, [shiny]);
+    if (shiny && drawsArt) earnOfflineAccolade(SHINY_ACCOLADE_ID);
+  }, [shiny, drawsArt]);
   const driftRef = useRef<HTMLDivElement>(null);
   // A dead-on corner hit, like the old DVD logo: a burst of confetti.
   const [cornerHits, setCornerHits] = useState(0);
-  useDriftCorners(driftRef, drifting, () => {
+  useDriftCorners(driftRef, drifting && drawsArt, () => {
     setCornerHits((n) => n + 1);
     earnOfflineAccolade(PERFECT_CORNER_ACCOLADE_ID);
   });
+
+  const card = (
+    <div
+      // A short player scrolls the card inside itself rather than clipping it.
+      className={`glass-flyout flex min-h-0 w-full flex-col overflow-y-auto ${compact ? 'gap-3' : 'gap-4'}`}
+      style={{ borderRadius: compact ? 14 : 16, padding: compact ? 14 : 20, scrollbarWidth: 'none' }}
+    >
+      <div className="flex items-center gap-3">
+        {avatar ? (
+          <SevenTvAvatar
+            cosmeticsId={room?.user_id}
+            px={compact ? 36 : 44}
+            motion="animate"
+            src={avatar}
+            alt=""
+            draggable={false}
+            className={`${face} shrink-0 rounded-full object-cover ${state === 'offline' ? '' : 'ring-2 ring-live/80'}`}
+          />
+        ) : (
+          <div className={`${face} flex shrink-0 items-center justify-center rounded-full bg-white/10 text-base font-bold text-white`}>
+            {name.charAt(0).toUpperCase()}
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <h2 className={`truncate font-semibold text-textPrimary ${compact ? 'text-sm' : 'text-base'}`}>{name}</h2>
+          <OfflineStatusLine live={state !== 'offline'} facts={facts} className="mt-0.5" />
+        </div>
+      </div>
+
+      {state === 'joining' ? (
+        <div className="flex items-center gap-2 text-xs text-textSecondary">
+          <Loader2 size={14} className="animate-spin" />
+          Starting the stream
+        </div>
+      ) : state === 'live' && live && onWatchLive ? (
+        <button
+          type="button"
+          onClick={() => onWatchLive(live)}
+          className="flex h-9 items-center justify-center gap-2 rounded-lg bg-live text-sm font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+        >
+          <Play size={14} fill="currentColor" />
+          Watch live
+        </button>
+      ) : null}
+
+      {/* The latest broadcast is one action, not a preview: it plays in the
+          player this card sits in. */}
+      {state !== 'joining' && vod && onPlayVod && (
+        <button
+          type="button"
+          onClick={onPlayVod}
+          disabled={vodBusy}
+          title={vod.title || undefined}
+          className="glass-button relative flex h-9 items-center gap-2 overflow-hidden rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
+        >
+          <Play size={13} fill="currentColor" className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate">
+            {vod.resume_secs != null ? 'Resume' : 'Watch'} the {vod.category ? `${vod.category} ` : ''}stream from{' '}
+            {agoLabel(vod.created_at) ?? 'last time'}
+          </span>
+          <span className="shrink-0 tabular-nums text-textSecondary">
+            {vod.resume_secs != null ? `at ${formatVodTime(vod.resume_secs)}` : durationLabel(vod.length_seconds)}
+          </span>
+          {/* How far in, the same bar a VOD card carries. Rust picked the
+              position; the room starts the VOD there. */}
+          {vod.resume_secs != null && vod.length_seconds > 0 && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-accent"
+              style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
+            />
+          )}
+        </button>
+      )}
+
+      {/* No "Check again": Rust already watches for the go-live (EventSub at
+          once when signed in, the shared minute poll always). */}
+      {state === 'offline' && (
+        <div className="flex min-w-0 items-center gap-3 text-xs text-textSecondary">
+          <p className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+            {next ? (
+              <>
+                <CalendarClock size={13} className="shrink-0" />
+                <span className="truncate">
+                  Next stream <span className="text-textPrimary">{nextStreamLabel(next.start_at)}</span>
+                  {next.category ? ` · ${next.category}` : ''}
+                </span>
+              </>
+            ) : (
+              <span className="truncate">The stream starts here when they go live.</span>
+            )}
+          </p>
+          {/* Waiting buddies: everyone else in the chat right now. */}
+          {waiting > 0 && (
+            <span className="flex shrink-0 items-center gap-1 tabular-nums" title="In the chat right now, waiting with you">
+              <Users size={13} className="shrink-0" />
+              {formatShortCount(waiting)} waiting
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  if (part === 'card') return card;
 
   return (
     <motion.div
@@ -165,11 +277,17 @@ export function OfflineCard({
       {image ? (
         // Letterboxed like the stream it stands in for: offline art is drawn
         // for a 16:9 player and often has text at its edges, which cropping cut.
-        <img src={image} alt="" draggable={false} className="absolute inset-0 h-full w-full bg-black object-contain" />
+        // Alone (the phone), it fills the player like a picture.
+        <img
+          src={image}
+          alt=""
+          draggable={false}
+          className={`absolute inset-0 h-full w-full bg-black ${part === 'art' ? 'object-cover' : 'object-contain'}`}
+        />
       ) : (
         <div className="absolute inset-0 bg-gradient-to-br from-accent/10 via-background to-black" />
       )}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/30 to-black/15" />
+      {part === 'all' && <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/30 to-black/15" />}
 
       {/* peepoSad drifting around the player like an old DVD logo, waiting for
           them with you (peepoHappy once they go live): the room's mood, under
@@ -203,108 +321,11 @@ export function OfflineCard({
       )}
       {cornerHits > 0 && <ConfettiBurst key={cornerHits} />}
 
-      <div className={`relative z-10 flex max-h-[calc(100%-24px)] w-[calc(100%-32px)] flex-col ${compact ? 'max-w-[320px]' : 'max-w-[460px]'}`}>
-      <div
-        // A short player scrolls the card inside itself rather than clipping it.
-        className={`glass-flyout flex min-h-0 w-full flex-col overflow-y-auto ${compact ? 'gap-3' : 'gap-4'}`}
-        style={{ borderRadius: compact ? 14 : 16, padding: compact ? 14 : 20, scrollbarWidth: 'none' }}
-      >
-        <div className="flex items-center gap-3">
-          {avatar ? (
-            <SevenTvAvatar
-              cosmeticsId={room?.user_id}
-              px={compact ? 36 : 44}
-              motion="animate"
-              src={avatar}
-              alt=""
-              draggable={false}
-              className={`${face} shrink-0 rounded-full object-cover ${state === 'offline' ? '' : 'ring-2 ring-live/80'}`}
-            />
-          ) : (
-            <div className={`${face} flex shrink-0 items-center justify-center rounded-full bg-white/10 text-base font-bold text-white`}>
-              {name.charAt(0).toUpperCase()}
-            </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <h2 className={`truncate font-semibold text-textPrimary ${compact ? 'text-sm' : 'text-base'}`}>{name}</h2>
-            <OfflineStatusLine live={state !== 'offline'} facts={facts} className="mt-0.5" />
-          </div>
+      {part === 'all' && (
+        <div className={`relative z-10 flex max-h-[calc(100%-24px)] w-[calc(100%-32px)] flex-col ${compact ? 'max-w-[320px]' : 'max-w-[460px]'}`}>
+          {card}
         </div>
-
-        {state === 'joining' ? (
-          <div className="flex items-center gap-2 text-xs text-textSecondary">
-            <Loader2 size={14} className="animate-spin" />
-            Starting the stream
-          </div>
-        ) : state === 'live' && live && onWatchLive ? (
-          <button
-            type="button"
-            onClick={() => onWatchLive(live)}
-            className="flex h-9 items-center justify-center gap-2 rounded-lg bg-live text-sm font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
-          >
-            <Play size={14} fill="currentColor" />
-            Watch live
-          </button>
-        ) : null}
-
-        {/* The latest broadcast is one action, not a preview: it plays in the
-            player this card sits in. */}
-        {state !== 'joining' && vod && onPlayVod && (
-          <button
-            type="button"
-            onClick={onPlayVod}
-            disabled={vodBusy}
-            title={vod.title || undefined}
-            className="glass-button relative flex h-9 items-center gap-2 overflow-hidden rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
-          >
-            <Play size={13} fill="currentColor" className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {vod.resume_secs != null ? 'Resume' : 'Watch'} the {vod.category ? `${vod.category} ` : ''}stream from{' '}
-              {agoLabel(vod.created_at) ?? 'last time'}
-            </span>
-            <span className="shrink-0 tabular-nums text-textSecondary">
-              {vod.resume_secs != null ? `at ${formatVodTime(vod.resume_secs)}` : durationLabel(vod.length_seconds)}
-            </span>
-            {/* How far in, the same bar a VOD card carries. Rust picked the
-                position; the room starts the VOD there. */}
-            {vod.resume_secs != null && vod.length_seconds > 0 && (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-accent"
-                style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
-              />
-            )}
-          </button>
-        )}
-
-        {/* No "Check again": Rust already watches for the go-live (EventSub at
-            once when signed in, the shared minute poll always). */}
-        {state === 'offline' && (
-          <div className="flex min-w-0 items-center gap-3 text-xs text-textSecondary">
-            <p className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
-              {next ? (
-                <>
-                  <CalendarClock size={13} className="shrink-0" />
-                  <span className="truncate">
-                    Next stream <span className="text-textPrimary">{nextStreamLabel(next.start_at)}</span>
-                    {next.category ? ` · ${next.category}` : ''}
-                  </span>
-                </>
-              ) : (
-                <span className="truncate">The stream starts here when they go live.</span>
-              )}
-            </p>
-            {/* Waiting buddies: everyone else in the chat right now. */}
-            {waiting > 0 && (
-              <span className="flex shrink-0 items-center gap-1 tabular-nums" title="In the chat right now, waiting with you">
-                <Users size={13} className="shrink-0" />
-                {formatShortCount(waiting)} waiting
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-      </div>
+      )}
     </motion.div>
   );
 }
