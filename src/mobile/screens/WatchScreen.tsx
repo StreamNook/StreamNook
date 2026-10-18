@@ -92,8 +92,9 @@ const EDGE_GAP = 12;
 // The mini box's side gutter: the pages' own 16 px, so its edge lines up with
 // the cards under it. Used by the clamp, the resting spot and the snap alike.
 const MINI_GUTTER = 16;
-// Clearance so the resting mini player never sits under the floating pill bar.
-const BOTTOM_GAP = 104;
+// Clearance so the resting mini player never sits under the floating pill bar
+// (64 px tall with its labels).
+const BOTTOM_GAP = 112;
 
 // Where the mini player is ALLOWED to be.
 //
