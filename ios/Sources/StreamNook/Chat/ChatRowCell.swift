@@ -107,8 +107,14 @@ final class ChatRowCell: UIView {
         CATransaction.commit()
     }
 
+    /// Whether an attachment moves: emotes follow the chat's animate setting, badges always do
+    /// (as on desktop). The shared clock stills both under Reduce Motion.
+    private func moves(_ attachment: RowAttachment) -> Bool {
+        attachment.animate && (animateImages || attachment.kind == .badge)
+    }
+
     private func load(_ url: String, into image: AnimatedImageLayer, attachment: RowAttachment, isBase: Bool) {
-        let animate = attachment.animate && animateImages
+        let animate = moves(attachment)
         let revision = layout?.revision
         let id = layout?.id
         let unsized = attachment.kind == .emote || attachment.kind == .gif
@@ -232,7 +238,7 @@ final class ChatRowCell: UIView {
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count
             for _ in 0..<count where i < imageLayers.count {
-                imageLayers[i].show(imageLayers[i].image, animate: attachment.animate && animateImages)
+                imageLayers[i].show(imageLayers[i].image, animate: moves(attachment))
                 i += 1
             }
         }
