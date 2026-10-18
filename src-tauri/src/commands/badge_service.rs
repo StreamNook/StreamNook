@@ -528,6 +528,30 @@ pub(crate) async fn heal_enrichment(
     kept()
 }
 
+/// Merge back into the gallery any drop the feed recorded whose gallery entry
+/// was lost the same way as its window (see `heal_enrichment`): a badge absent
+/// from the gallery has no tile and can never reach the missing strip. Reads
+/// the gallery once for the whole batch. True when it merged one.
+async fn heal_gallery(badges: &[crate::services::badge_polling_service::BadgeNotification]) -> bool {
+    let Ok(Some(gallery)) = crate::commands::badges::get_cached_global_badges().await else {
+        return false;
+    };
+    let present: std::collections::HashSet<(&str, &str)> = gallery
+        .data
+        .iter()
+        .flat_map(|s| s.versions.iter().map(move |v| (s.set_id.as_str(), v.id.as_str())))
+        .collect();
+    let mut merged = false;
+    for badge in badges {
+        if !present.contains(&(badge.badge_set_id.as_str(), badge.badge_version.as_str())) {
+            merged |= crate::commands::badges::merge_pushed_badge_into_global_cache(badge)
+                .await
+                .unwrap_or(false);
+        }
+    }
+    merged
+}
+
 /// Ingest a batch of drops from the real-time feed (the badge WebSocket, or its
 /// `latest.json` poll fallback).
 ///
@@ -558,7 +582,7 @@ pub async fn ingest_badge_drops(
 
     let _ = crate::commands::badges::prune_invalid_global_badges().await;
 
-    let mut stored_any = false;
+    let mut stored_any = if seeding { false } else { heal_gallery(&badges).await };
     for badge in &badges {
         let feed_id = badge.feed_id();
         let hash = badge.content_hash();

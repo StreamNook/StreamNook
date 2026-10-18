@@ -618,10 +618,17 @@ pub fn order(mut tiles: Vec<(BadgeTile, u32)>, sort: Sort) -> Vec<BadgeTile> {
 /// The wall in `sort`, from the standing and the caches. Kicks the session's
 /// metadata backfill once.
 pub async fn get(app: &crate::rt::AppHandle, sort: Sort, force: bool) -> BadgeWall {
+    // A forced read (pull to refresh) takes Twitch's current list; otherwise
+    // the cached one, which may be days old. First, so the standing (and its
+    // missing strip, built from the cached list) sees it too.
+    let fresh = if force { crate::commands::badges::refresh_global_badges().await.ok() } else { None };
     let standing = crate::services::badge_standing::get_standing(app, force).await;
-    let catalogue = match crate::commands::badges::get_cached_global_badges().await {
-        Ok(Some(r)) if !r.data.is_empty() => Some(r),
-        _ => crate::commands::badges::fetch_global_badges().await.ok(),
+    let catalogue = match fresh {
+        Some(r) if !r.data.is_empty() => Some(r),
+        _ => match crate::commands::badges::get_cached_global_badges().await {
+            Ok(Some(r)) if !r.data.is_empty() => Some(r),
+            _ => crate::commands::badges::fetch_global_badges().await.ok(),
+        },
     };
     let now = chrono::Utc::now().timestamp_millis();
     let missing = missing_now(&standing, now);
