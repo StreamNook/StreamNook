@@ -4782,6 +4782,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Use EmotePos struct
         // emotes format: 25:0-4,12-16/1902:6-10 ...
@@ -5118,6 +5125,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Parse emotes from user's message content (if any)
         let emotes_str = tag_map.get("emotes").unwrap_or(&"");
@@ -5343,11 +5357,14 @@ impl IrcService {
     /// again with it; the ones whose emotes change are patched in place in each
     /// home chat (`HISTORY_SEGMENTS`, segments and view), so nothing on screen
     /// moves and nothing waited for the set.
-    pub(crate) async fn restamp_partner_rows(partner: &EmoteLookup, rows: Vec<(String, String)>) {
+    pub(crate) async fn restamp_partner_rows(room_id: &str, partner: Option<&EmoteLookup>, rows: Vec<(String, String)>) {
         let mut by_home: HashMap<String, Vec<Value>> = HashMap::new();
         for (home, raw) in rows {
             let home_lookup = channel_parse_lookup().read().ok().and_then(|g| g.get(&home).cloned());
-            if !crate::services::shared_chat_emotes::words_change(irc_trailing_text(&raw), partner, home_lookup.as_deref()) {
+            let emotes_change = partner.is_some_and(|p| {
+                crate::services::shared_chat_emotes::words_change(irc_trailing_text(&raw), p, home_lookup.as_deref())
+            });
+            if !emotes_change && !crate::services::shared_chat_emotes::badges_change(&raw, room_id) {
                 continue;
             }
             let parsed = match irc_command(&raw) {
@@ -5361,6 +5378,7 @@ impl IrcService {
                 "id": msg.id,
                 "segments": msg.segments,
                 "parent_segments": msg.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()),
+                "badges": msg.badges,
             });
             if let Some(view) = &msg.metadata.view {
                 row["view"] = json!(view);
@@ -5368,7 +5386,7 @@ impl IrcService {
             by_home.entry(home).or_default().push(row);
         }
         for (home, rows) in by_home {
-            debug!("[SharedChat] {home}: {} partner rows now wear their room's emotes", rows.len());
+            debug!("[SharedChat] {home}: {} partner rows now wear their room's emotes and badges", rows.len());
             let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": home, "rows": rows });
             send_to_bridge(BridgeFrame::channel(&home, frame.to_string()), false).await;
         }

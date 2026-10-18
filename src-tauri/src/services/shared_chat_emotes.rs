@@ -1,13 +1,16 @@
-//! Shared Chat rows wear the emotes of the chat they were sent in.
+//! Shared Chat rows wear the emotes and badges of the chat they were sent in.
 //!
 //! In a Twitch Shared Chat, rows from a partner channel arrive in the home room
 //! with `source-room-id` naming the partner. Their senders type the partner's
 //! 7TV, BetterTTV and FrankerFaceZ emotes, so such a row parses with that room's
 //! set (which carries every provider's globals) and never with the home room's,
-//! the way Chatterino draws them. The first row from a room not seen yet starts
-//! one fetch of its set through the shared emote service (so a partner that is
-//! also open in another chat reuses its cached set); rows parsed before it lands
-//! use the home table and are re-stamped once it does, so nothing waits.
+//! the way Chatterino draws them. Their subscriber, bits and other channel badges
+//! (`source-badges`) are that room's too, so the row carries the room's own badge
+//! art; global badges are untouched. The first row from a room not seen yet
+//! starts one fetch of its emote set (through the shared emote service, so a
+//! partner also open in another chat reuses its cached set) and its channel
+//! badges; rows parsed before they land use the home table and are re-stamped
+//! once they do, so nothing waits.
 //!
 //! A room's set lives while a chat that showed it is open, and at most
 //! `MAX_ROOMS` rooms are held.
@@ -64,7 +67,7 @@ pub(crate) fn lookup_for(home: &str, room_id: &str, raw: &str) -> Option<Arc<Emo
         if let Some(lookup) = &room.lookup {
             return Some(lookup.clone());
         }
-        if room.pending.len() < MAX_PENDING {
+        if room.pending.len() < MAX_PENDING && !room.pending.iter().any(|(h, r)| h == home && r == raw) {
             room.pending.push_back((home.to_string(), raw.to_string()));
         }
         let may_retry = room.failed_at.map_or(true, |at| at.elapsed() >= RETRY_AFTER);
@@ -100,22 +103,24 @@ fn evict_for_new_room(map: &mut HashMap<String, Room>) {
 }
 
 async fn fetch(room_id: String) {
-    let set = fetch_set(&room_id).await;
-    let landed = match set {
-        Some(set) => install(&room_id, &set),
-        None => {
-            if let Ok(mut map) = rooms().lock() {
-                if let Some(room) = map.get_mut(&room_id) {
-                    room.fetching = false;
-                    room.failed_at = Some(Instant::now());
-                }
-            }
-            log::warn!("[SharedChat] emote set for room {room_id} did not load; partner rows keep the home set");
-            return;
+    let (set, badges_ok) = tokio::join!(fetch_set(&room_id), fetch_badges(&room_id));
+    if set.is_none() {
+        log::warn!("[SharedChat] emote set for room {room_id} did not load; partner rows keep the home set");
+    }
+    let Some((lookup, pending)) = install(&room_id, set.as_ref(), badges_ok) else { return };
+    if !pending.is_empty() {
+        crate::services::irc_service::IrcService::restamp_partner_rows(&room_id, lookup.as_deref(), pending).await;
+    }
+}
+
+/// Reads the room's channel badges into the art every row view draws from.
+async fn fetch_badges(room_id: &str) -> bool {
+    match crate::commands::badges::fetch_channel_badges(room_id.to_string()).await {
+        Ok(_) => true,
+        Err(e) => {
+            log::debug!("[SharedChat] badges for room {room_id}: {e}");
+            false
         }
-    };
-    if let Some((lookup, pending)) = landed {
-        crate::services::irc_service::IrcService::restamp_partner_rows(&lookup, pending).await;
     }
 }
 
@@ -134,19 +139,57 @@ async fn fetch_set(room_id: &str) -> Option<EmoteSet> {
     }
 }
 
-/// Puts a room's set in place; answers its lookup and the rows waiting for it.
-/// A set smaller than the one already held does not replace it.
-pub(crate) fn install(room_id: &str, set: &EmoteSet) -> Option<(Arc<EmoteLookup>, Vec<(String, String)>)> {
-    let lookup = EmoteLookup::build(set);
+/// Puts what a room fetch brought in place (its emote set, when it loaded, and
+/// whether its channel badges did); answers the room's lookup and, when
+/// anything landed, the rows waiting for it. A set smaller than the one already
+/// held does not replace it, and a failed set fetch may be retried later.
+pub(crate) fn install(
+    room_id: &str,
+    set: Option<&EmoteSet>,
+    badges_landed: bool,
+) -> Option<(Option<Arc<EmoteLookup>>, Vec<(String, String)>)> {
     let mut map = rooms().lock().ok()?;
     let room = map.get_mut(room_id)?;
     room.fetching = false;
-    room.failed_at = None;
-    if room.lookup.as_ref().map_or(true, |held| held.len() <= lookup.len()) {
-        room.lookup = Some(lookup.clone());
+    match set {
+        Some(set) => {
+            room.failed_at = None;
+            let lookup = EmoteLookup::build(set);
+            if room.lookup.as_ref().map_or(true, |held| held.len() <= lookup.len()) {
+                room.lookup = Some(lookup);
+            }
+        }
+        None => room.failed_at = Some(Instant::now()),
     }
-    let pending: Vec<(String, String)> = room.pending.drain(..).collect();
-    Some((room.lookup.clone().unwrap_or(lookup), pending))
+    let pending = if set.is_some() || badges_landed { room.pending.drain(..).collect() } else { Vec::new() };
+    Some((room.lookup.clone(), pending))
+}
+
+/// Gives a partner row's badges its room's own art (subscriber, bits and the
+/// channel's custom badges, its FFZ moderator and VIP art). Global badges keep
+/// no carried art: every renderer draws those from the global set.
+pub(crate) fn wear_room_badges(room_id: &str, badges: &mut [crate::models::chat_layout::Badge]) {
+    for badge in badges.iter_mut() {
+        if badge.image_url_1x.is_some() {
+            continue;
+        }
+        if let Some((url, title)) = crate::services::chat_row_view::room_badge_art(room_id, &badge.name, &badge.version) {
+            badge.image_url_1x = Some(url.clone());
+            badge.image_url_2x = Some(url.clone());
+            badge.image_url_4x = Some(url);
+            badge.title.get_or_insert(title);
+        }
+    }
+}
+
+/// Whether a partner row (`raw`) has a badge its room's own set now draws.
+pub(crate) fn badges_change(raw: &str, room_id: &str) -> bool {
+    let tags = raw.strip_prefix('@').and_then(|r| r.split_once(' ')).map(|(t, _)| t).unwrap_or("");
+    let badges = tags.split(';').find_map(|t| t.strip_prefix("source-badges=")).unwrap_or("");
+    badges.split(',').filter(|b| !b.is_empty()).any(|b| {
+        let (set, version) = b.split_once('/').unwrap_or((b, ""));
+        crate::services::chat_row_view::room_badge_art(room_id, set, version).is_some()
+    })
 }
 
 /// The home chat `home` was left: rooms no other open chat shows are dropped.
@@ -262,7 +305,7 @@ mod tests {
         assert_eq!(pending_for_test("990").map(|(_, waiting)| waiting), Some(1));
 
         // It lands: the queued row is handed back, and new rows parse with it.
-        let (_, waiting) = install("990", &partner).expect("room known");
+        let (_, waiting) = install("990", Some(&partner), false).expect("room known");
         assert_eq!(waiting.len(), 1);
         let rows = IrcService::parse_historical_messages(vec![line(
             "b",
@@ -276,6 +319,33 @@ mod tests {
         let rows = IrcService::parse_historical_messages(vec![line("c", None, "partnerEmote homeEmote")]).await;
         assert_eq!(emote_names(&rows[0].segments), vec!["homeEmote".to_string()]);
         reset_for_test();
+    }
+
+    #[test]
+    fn a_partner_row_wears_its_rooms_badges_and_globals_carry_nothing() {
+        use crate::models::chat_layout::Badge;
+        crate::services::chat_row_view::note_twitch_badges(
+            Some("991"),
+            [("subscriber", "12", "https://static-cdn.jtvnw.net/badges/v1/partner-sub-12/2", "1-Year Subscriber")],
+        );
+        let badge = |name: &str, version: &str| Badge {
+            name: name.into(),
+            version: version.into(),
+            image_url_1x: None,
+            image_url_2x: None,
+            image_url_4x: None,
+            title: None,
+            description: None,
+        };
+        let mut badges = vec![badge("subscriber", "12"), badge("premium", "1")];
+        wear_room_badges("991", &mut badges);
+        assert_eq!(badges[0].image_url_2x.as_deref(), Some("https://static-cdn.jtvnw.net/badges/v1/partner-sub-12/2"));
+        assert_eq!(badges[0].title.as_deref(), Some("1-Year Subscriber"));
+        assert!(badges[1].image_url_1x.is_none(), "a global badge keeps no carried art");
+
+        let raw = "@badges=premium/1;source-badges=subscriber/12,premium/1;room-id=12;source-room-id=991 :a!a@a.tmi.twitch.tv PRIVMSG #h :hi";
+        assert!(badges_change(raw, "991"));
+        assert!(!badges_change(raw, "no-such-room"));
     }
 
     #[test]
