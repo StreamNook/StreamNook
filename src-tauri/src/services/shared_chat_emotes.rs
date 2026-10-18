@@ -214,6 +214,8 @@ mod tests {
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,
+            original_name: None,
+            owner_ref: None,
         }
     }
 
