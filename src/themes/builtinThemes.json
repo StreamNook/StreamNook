@@ -1,5 +1,121 @@
 {
   "oledSecondaryLighten": 51,
+  "glassBlurOffMaxStrength": 0.45,
+  "effects": {
+    "prism": {
+      "levelFloor": 0.6,
+      "colors": {
+        "cobalt": [40, 78, 220],
+        "blue": [70, 130, 255],
+        "cyan": [110, 215, 245],
+        "ice": [190, 240, 255],
+        "ivory": [246, 240, 225],
+        "yellow": [245, 216, 110],
+        "amber": [240, 170, 70],
+        "red": [225, 70, 50]
+      },
+      "gradients": {
+        "streak": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.16, "at": 45 },
+            { "color": "cyan", "alpha": 0.2, "at": 50 },
+            { "color": "ivory", "alpha": 0.2, "at": 55 },
+            { "color": "yellow", "alpha": 0.16, "at": 59 },
+            { "color": "amber", "alpha": 0.11, "at": 64 },
+            { "color": "red", "alpha": 0.05, "at": 69 },
+            { "at": 76 }
+          ]
+        },
+        "streakSoft": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.1, "at": 45 },
+            { "color": "cyan", "alpha": 0.13, "at": 50 },
+            { "color": "ivory", "alpha": 0.13, "at": 55 },
+            { "color": "yellow", "alpha": 0.1, "at": 59 },
+            { "color": "amber", "alpha": 0.07, "at": 64 },
+            { "color": "red", "alpha": 0.03, "at": 69 },
+            { "at": 76 }
+          ]
+        },
+        "streakFaint": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.06, "at": 45 },
+            { "color": "cyan", "alpha": 0.08, "at": 50 },
+            { "color": "ivory", "alpha": 0.09, "at": 55 },
+            { "color": "yellow", "alpha": 0.07, "at": 59 },
+            { "color": "amber", "alpha": 0.04, "at": 64 },
+            { "at": 74 }
+          ]
+        },
+        "bloomCool": {
+          "size": [64, 48],
+          "center": [4, 0],
+          "stops": [
+            { "color": "cobalt", "alpha": 0.3, "at": 0 },
+            { "color": "blue", "alpha": 0.22, "at": 18 },
+            { "color": "cyan", "alpha": 0.16, "at": 34 },
+            { "color": "ivory", "alpha": 0.08, "at": 52 },
+            { "at": 74 }
+          ]
+        },
+        "bloomCoolSoft": {
+          "size": [58, 42],
+          "center": [0, 0],
+          "stops": [
+            { "color": "cobalt", "alpha": 0.18, "at": 0 },
+            { "color": "cyan", "alpha": 0.12, "at": 30 },
+            { "color": "ivory", "alpha": 0.06, "at": 50 },
+            { "at": 72 }
+          ]
+        },
+        "bloomWarm": {
+          "size": [48, 36],
+          "center": [98, 102],
+          "stops": [
+            { "color": "amber", "alpha": 0.16, "at": 0 },
+            { "color": "red", "alpha": 0.07, "at": 40 },
+            { "at": 72 }
+          ]
+        },
+        "bloomIce": {
+          "size": [60, 50],
+          "center": [100, 0],
+          "stops": [
+            { "color": "ice", "alpha": 0.18, "at": 0 },
+            { "color": "ivory", "alpha": 0.08, "at": 36 },
+            { "at": 70 }
+          ]
+        },
+        "catch": {
+          "angle": 104,
+          "stops": [
+            { "at": 54 },
+            { "color": "cyan", "alpha": 0.22, "at": 64 },
+            { "color": "ivory", "alpha": 0.34, "at": 70 },
+            { "color": "yellow", "alpha": 0.24, "at": 75 },
+            { "color": "amber", "alpha": 0.12, "at": 82 },
+            { "at": 91 }
+          ]
+        }
+      },
+      "surfaces": {
+        "shell": ["bloomCool", "streakSoft", "bloomWarm"],
+        "dialog": ["bloomCool", "streak", "bloomWarm"],
+        "modal": ["bloomCool", "streak"],
+        "panel": ["bloomCoolSoft", "streakSoft"],
+        "popover": ["bloomIce", "streakSoft"],
+        "card": ["streakFaint"],
+        "press": ["catch"]
+      },
+      "selection": { "color": "ice", "alpha": 0.34 }
+    }
+  },
   "categories": [
     {
       "id": "signature",
