@@ -57,7 +57,8 @@ struct MainShell: View {
             await youAvatar.refresh(model: model)
         }
         .sheet(item: $cosmetics.profile) { target in
-            ProfileSheet(model: ProfileSheetModel(target: target, core: model.core, ownID: model.signIn.user?.id))
+            ProfileSheet(model: ProfileSheetModel(target: target, core: model.core, ownID: model.signIn.user?.id,
+                                                  store: cosmetics))
         }
         .sheet(item: $model.clip) { link in
             ClipSheet(url: link.url, model: model)
