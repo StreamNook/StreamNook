@@ -149,7 +149,6 @@ import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { fitCount, fitSeconds } from '../utils/fitNumber';
 import { lastLiveLabel } from '../utils/lastLive';
-import { parseTimeoutSeconds } from '../utils/timeoutDuration';
 import { moderateChatter, moderateWithToast, type ModAction, type ModRequest } from '../services/moderation';
 import { openBadgeInfo } from '../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../utils/badgeSpotlight';
@@ -3237,6 +3236,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const runModeration = async (
       verb: 'ban' | 'timeout' | 'unban',
       seconds: number | null,
+      typed: string | null = null,
     ) => {
       if (!isModerator) {
         notice(`You don't have moderator permissions in this channel.`);
@@ -3264,7 +3264,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               : seconds === null
                 ? { kind: 'ban' }
                 : { kind: 'timeout', seconds },
-          reason: verb === 'unban' ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          reason: verb === 'unban' || typed !== null ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          typed,
         });
         useAppStore.getState().addToast(outcome.message, 'success');
       } catch (err) {
@@ -3279,17 +3280,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       case 'ban':
         await runModeration('ban', null);
         return;
-      case 'timeout': {
-        // No length means Twitch's default ten minutes; a length that is not one is said so,
-        // never quietly turned into ten minutes.
-        const secs = args[1] === undefined ? 600 : parseTimeoutSeconds(args[1]);
-        if (secs === null) {
-          notice(`"${args[1]}" isn't a timeout length. Use seconds or 30s, 10m, 1h, 2d, 1w.`);
-          return;
-        }
-        await runModeration('timeout', secs);
+      case 'timeout':
+        // Rust reads the length and reason as every app does: a leading length,
+        // else Twitch's ten minutes with every word as the reason.
+        await runModeration('timeout', 600, args.slice(1).join(' '));
         return;
-      }
       // Clears their messages with the shortest timeout the platform has
       // (a minute on Kick).
       case 'purge':

@@ -1243,15 +1243,11 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Usage);
             }
             let username = clean_login(c.arg(0));
-            let length = parse_delay(c.arg(1));
-            let reason = c.from(if length.is_none() { 1 } else { 2 });
-            let secs = match length {
-                None => 600,
-                Some(ms) => (ms / 1000).max(1),
-            };
+            let (secs, reason) = moderation::typed_timeout(&c.from(1));
+            let reason = reason.unwrap_or_default();
             // What Twitch will really apply (it stops at 14 days), said the way
             // every other moderation surface says it ("Timed out bob for 10m").
-            let secs = moderation::applied_timeout(moderation::Platform::Twitch, u32::try_from(secs).unwrap_or(u32::MAX));
+            let secs = moderation::applied_timeout(moderation::Platform::Twitch, secs);
             let done = mod_words(&ModAction::Timeout { seconds: secs }, &username);
             on_user(c, o, &username, "ban_user", |u| {
                 json!({ "broadcasterId": id, "targetUserId": u.id, "duration": secs, "reason": opt(&reason) })
