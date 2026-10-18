@@ -161,11 +161,18 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
       <div className="flex-1 min-w-0">
         {/* The chip and the time ride the title line as one group, so they
             share a center whether or not a note line follows. */}
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span aria-hidden className="min-w-[3.5rem] flex-1 text-[13px] font-medium text-textPrimary truncate">
+        {/* When the chips and the time do not fit beside a readable title (two
+            chips, a narrow phone), they move under it, right-aligned, instead
+            of running past the card's edge. The title wraps to two lines, then
+            an ellipsis. */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0">
+          <span
+            aria-hidden
+            className="min-w-[5rem] flex-1 text-[13px] leading-4 font-medium text-textPrimary line-clamp-2 [overflow-wrap:anywhere]"
+          >
             {row.title}
           </span>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             <EarnPill chips={row.chips} iconsOnly={row.icons_only} title={row.title} />
             {row.time_left && (
               // Closing within a day is the one time worth raising a voice.
