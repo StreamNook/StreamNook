@@ -194,8 +194,7 @@ private struct GlassinessCard: View {
                 Spacer()
                 Text("\(Int(live ?? stored))%").font(.sn(13, 500).monospacedDigit()).foregroundStyle(SN.textSecondary)
             }
-            // Typed out: the release build's type checker otherwise reads this as Binding<Double?>.
-            Slider(value: Binding<Double>(get: { live ?? stored }, set: { (value: Double) in
+            Slider(value: Binding(get: { live ?? stored }, set: { value in
                 live = value
                 model.look.preview(glassiness: value / 100)
             }), in: 0...100, step: 1) { editing in
