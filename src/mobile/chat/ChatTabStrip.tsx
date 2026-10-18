@@ -56,7 +56,10 @@ const ChatTabStripImpl: React.FC<{
   /** Controls after the rooms, outside their glass (the Chats screen's play
    *  and add buttons). */
   trailing?: React.ReactNode;
-}> = ({ always = false, trailing }) => {
+  /** The bar's height. The Chats screen's header is taller, so its 40 px
+   *  capsules get air above the separator instead of sitting on it. */
+  height?: number;
+}> = ({ always = false, trailing, height = CHAT_TAB_STRIP_H }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   // Platform marks only earn their place when the open rooms span platforms;
   // with every tab on Kick (or every tab on Twitch) they say nothing.
@@ -101,7 +104,7 @@ const ChatTabStripImpl: React.FC<{
   return (
     <div
       className="shrink-0 flex items-center gap-1.5 px-2 border-b border-borderSubtle"
-      style={{ height: CHAT_TAB_STRIP_H }}
+      style={{ height }}
     >
       {/* Two equal sides hold the rooms in the middle; the controls live in
           the right side, so they never pull the center off. The right side

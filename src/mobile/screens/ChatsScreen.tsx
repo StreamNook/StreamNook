@@ -23,6 +23,10 @@ import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
 import { formatViewerCount } from '../../utils/streamStats';
 
+/** The Chats header's room strip: 40 px capsules with 7 px of air above and
+ *  below, so they sit clear of the separator under them. */
+const CHATS_STRIP_H = 54;
+
 /** The room on screen as the player's start reads it; Rust fills what a tab
  *  does not know (title, category, the live row). */
 function asStream(tab: ChatTab): TwitchStream {
@@ -185,13 +189,13 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     },
   };
 
-  // The handle: a grabber at the top center, which also closes on a tap. Its
-  // row is the gap between the status bar and the rooms.
+  // The handle: a compact grabber at the top center, which also closes on a
+  // tap. The rooms below get the air (CHATS_STRIP_H), not the grabber row.
   const grabber = (
     <button
       onClick={exitChats}
       aria-label="Close chats"
-      className="mx-auto flex h-6 w-16 shrink-0 items-start justify-center pt-2"
+      className="mx-auto flex h-4 w-16 shrink-0 items-start justify-center pt-1.5"
     >
       <span className="block h-[5px] w-9 rounded-full bg-textMuted/45" />
     </button>
@@ -235,7 +239,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           moves to it; the room row still scrolls sideways). */}
       <div className="shrink-0 flex flex-col [touch-action:pan-x]" {...headerHandlers}>
         {grabber}
-        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} />}
+        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} height={CHATS_STRIP_H} />}
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.

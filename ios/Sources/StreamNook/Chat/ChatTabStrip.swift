@@ -12,6 +12,9 @@ struct ChatTabStrip: View {
     let rooms: ChatRooms
     /// Controls after the rooms, outside their glass (the Chats tab's play and add buttons).
     var trailing: AnyView?
+    /// The bar's height. The Chats header is taller, so its 40 pt capsules get air above the
+    /// separator instead of sitting on it.
+    var height: CGFloat = ChatTabStrip.height
 
     static let height: CGFloat = 45
 
@@ -35,7 +38,7 @@ struct ChatTabStrip: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 10)
-        .frame(height: Self.height)
+        .frame(height: height)
         .overlay(alignment: .bottom) {
             // Quiet: the capsule's own rim already sits just above it.
             SN.borderSubtle.opacity(0.6).frame(height: 1).accessibilityHidden(true)

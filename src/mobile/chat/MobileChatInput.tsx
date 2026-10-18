@@ -498,10 +498,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
     <div
       className="shrink-0 border-t border-borderSubtle"
       style={{
-        // The Chats screen sets --sn-composer-floor so the box clears the tab
-        // bar; the keyboard, when up, covers the bar and wins.
-        paddingBottom:
-          'max(calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px), var(--sn-composer-floor, 0px))',
+        paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
         transition: 'padding-bottom 0.15s ease-out',
       }}
     >

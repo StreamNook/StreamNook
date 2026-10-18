@@ -42,6 +42,11 @@ struct ChatsScreen: View {
                 Color.clear
             }
         }
+        // The composer sits on the home indicator's inset the way the watch chat's does: the
+        // bottom container inset (which still held the hidden tab bar's room) is ignored, and
+        // only what the watch layer keeps below the chat is kept (the inset less 24 pt).
+        .padding(.bottom, Self.bottomKeep)
+        .ignoresSafeArea(.container, edges: .bottom)
         .background(SN.background)
         .offset(y: drop)
         .toolbar(.hidden, for: .navigationBar)
@@ -66,17 +71,19 @@ struct ChatsScreen: View {
             Button {
                 model.nav.exitChats()
             } label: {
+                // Compact: the rooms below get the air, not this row.
                 Capsule()
                     .fill(SN.textMuted.opacity(0.45))
                     .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                    .frame(width: 64, height: 24, alignment: .top)
+                    .padding(.top, 6)
+                    .frame(width: 64, height: 16, alignment: .top)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close chats")
             if model.signedIn, !rooms.tabs.isEmpty {
-                ChatTabStrip(rooms: rooms, trailing: AnyView(controls))
+                // 40 pt capsules with 7 pt of air above and below, clear of the separator.
+                ChatTabStrip(rooms: rooms, trailing: AnyView(controls), height: 54)
             }
         }
         .contentShape(Rectangle())
@@ -99,6 +106,14 @@ struct ChatsScreen: View {
                     }
                 }
         )
+    }
+
+    /// What stays below the chat: the window's home-indicator inset less the 24 pt the watch
+    /// chat reaches into it, so the field ends just clear of the indicator on both screens.
+    @MainActor private static var bottomKeep: CGFloat {
+        let inset = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom ?? 0
+        return max(0, inset - 24)
     }
 
     /// Keep-awake is on in settings, and there is chat to read.
