@@ -521,6 +521,9 @@ pub async fn member_reads(member_id: &str, login: &str) -> Option<MemberReads> {
     registry::ready(std::time::Duration::from_secs(3)).await;
     let number = registry::member_number(member_id)?;
     let id = digits(member_id);
+    let equipment_query = format!("select=slot,cosmetic_slug&twitch_user_id=eq.{id}");
+    let emotes_query =
+        format!("select=emote_id,emote_name,provider,image_url,count&twitch_user_id=eq.{id}&order=count.desc&limit={TOP_EMOTES}");
     let (prefs, stats, favorite, saved, equipment, emotes, ivr, counted) = tokio::join!(
         crate::services::member_theme::try_profile_prefs(member_id),
         first_row("user_stats", format!("select=*&user_id=eq.{id}")),
@@ -529,14 +532,8 @@ pub async fn member_reads(member_id: &str, login: &str) -> Option<MemberReads> {
             format!("select=channel_login,channel_name,minutes&twitch_user_id=eq.{id}&order=minutes.desc&limit=1"),
         ),
         crate::services::profile_view::accolades(member_id),
-        crate::services::streamnook_backend::select(
-            "user_cosmetic_equipment",
-            &format!("select=slot,cosmetic_slug&twitch_user_id=eq.{id}"),
-        ),
-        crate::services::streamnook_backend::select(
-            "user_emote_usage",
-            &format!("select=emote_id,emote_name,provider,image_url,count&twitch_user_id=eq.{id}&order=count.desc&limit={TOP_EMOTES}"),
-        ),
+        crate::services::streamnook_backend::select("user_cosmetic_equipment", &equipment_query),
+        crate::services::streamnook_backend::select("user_emote_usage", &emotes_query),
         async {
             if login.is_empty() {
                 None
