@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, ChevronDown } from 'lucide-react';
 import { CardChip } from '../ui/CardChip';
 import { useAppStore } from '../../stores/AppStore';
@@ -130,6 +130,43 @@ export const MissingNowStrip = ({
   );
 };
 
+/** Whether a card's top line (title, then the earn pill) is too narrow for the
+ *  pill's words beside the title's shortest width. Measured: the pill's width
+ *  depends on its steps, and the card's on how many fit on a row. The full
+ *  pill's width is remembered, so a wider card brings the words back. */
+function useCompactPill() {
+  const lineRef = useRef<HTMLDivElement>(null);
+  const fullPillPx = useRef(0);
+  const compactRef = useRef(false);
+  const [compact, setCompact] = useState(false);
+
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if (!line) return;
+    const fit = () => {
+      const title = line.firstElementChild as HTMLElement | null;
+      const pill = line.lastElementChild as HTMLElement | null;
+      if (!title || !pill || title === pill) return;
+      if (!compactRef.current) fullPillPx.current = pill.offsetWidth;
+      const style = getComputedStyle(line);
+      const need = parseFloat(getComputedStyle(title).minWidth) + parseFloat(style.columnGap) + fullPillPx.current;
+      const next = line.clientWidth < need;
+      if (next !== compactRef.current) {
+        compactRef.current = next;
+        setCompact(next);
+      }
+    };
+    // Fires once on observe (before the first paint), then on every resize.
+    // The pill is watched too: it grows when the font finishes loading.
+    const observer = new ResizeObserver(fit);
+    observer.observe(line);
+    if (line.lastElementChild) observer.observe(line.lastElementChild);
+    return () => observer.disconnect();
+  }, []);
+
+  return { lineRef, compact };
+}
+
 const MissingCard = ({
   badge,
   icons,
@@ -141,6 +178,7 @@ const MissingCard = ({
 }) => {
   const category = badge.category;
   const left = timeLeftLabel(badge.ends_ms);
+  const compactPill = useCompactPill();
 
   const openCategory = () => {
     if (!category) return;
@@ -164,9 +202,10 @@ const MissingCard = ({
         />
       </button>
       <div className="flex-1 min-w-0">
-        {/* The title and how it is earned share the top line; the chips keep
-            their width and the title gives way, truncating with a tooltip. */}
-        <div className="flex items-center gap-2 min-w-0">
+        {/* The title and how it is earned share the top line; the title gives
+            way first, truncating with a tooltip, and when even its shortest
+            width leaves too little room the pill drops its words. */}
+        <div ref={compactPill.lineRef} className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpen}
             title={badge.title}
@@ -174,7 +213,7 @@ const MissingCard = ({
           >
             {badge.title}
           </button>
-          <EarnChips earn={badge.earn} icons={icons} />
+          <EarnChips earn={badge.earn} icons={icons} iconsOnly={compactPill.compact} />
         </div>
         <div className="flex items-center gap-2 mt-1">
           {left && <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-success">{left}</span>}
