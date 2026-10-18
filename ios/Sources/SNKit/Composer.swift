@@ -115,15 +115,18 @@ public struct SendResult: Decodable, Sendable, Equatable {
     public var isSent: Bool
     public var dropReason: String?
     public var messageID: String?
+    /// The message cheers, so Rust held it rather than sending it as chat.
+    public var cheer: CheerCheck?
 
     enum CodingKeys: String, CodingKey {
-        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id"
+        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id", cheer
     }
 
-    public init(isSent: Bool, dropReason: String? = nil, messageID: String? = nil) {
+    public init(isSent: Bool, dropReason: String? = nil, messageID: String? = nil, cheer: CheerCheck? = nil) {
         self.isSent = isSent
         self.dropReason = dropReason
         self.messageID = messageID
+        self.cheer = cheer
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,11 +134,12 @@ public struct SendResult: Decodable, Sendable, Equatable {
         isSent = try c.decodeIfPresent(Bool.self, forKey: .isSent) ?? true
         dropReason = try c.decodeIfPresent(String.self, forKey: .dropReason)
         messageID = try c.decodeIfPresent(String.self, forKey: .messageID)
+        cheer = try c.decodeIfPresent(CheerCheck.self, forKey: .cheer)
     }
 
-    /// The chat line for a dropped message.
+    /// The chat line for a dropped message. A held cheer is no drop: the cheer bar takes it.
     public var dropLine: String? {
-        isSent ? nil : "Your message was not sent: \(dropReason ?? "the room refused it")"
+        isSent || cheer != nil ? nil : "Your message was not sent: \(dropReason ?? "the room refused it")"
     }
 }
 

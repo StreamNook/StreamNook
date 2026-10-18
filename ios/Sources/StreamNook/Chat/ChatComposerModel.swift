@@ -28,6 +28,7 @@ final class ChatComposerModel {
         didSet {
             guard draft != oldValue else { return }
             suggest()
+            checkCheer()
             // Editing the message that failed is a new message.
             if let failure, draft.trimmingCharacters(in: .whitespacesAndNewlines) != failure.text { self.failure = nil }
         }
@@ -48,14 +49,21 @@ final class ChatComposerModel {
     private var suggestSeq = 0
     /// Asks the field to take or give up focus (drive steps, inserts).
     private(set) var focusRequest: (Int, Bool) = (0, false)
+    /// A cheer from the box: Rust's live check, then held, sending or refused (ChatComposerCheer.swift).
+    var cheer = CheerFlow()
+    @ObservationIgnored var cheerCheck: Task<Void, Never>?
 
     func requestFocus(_ on: Bool) {
         focusRequest = (focusRequest.0 + 1, on)
     }
 
+    /// The room's channel wallet (points and bits); Twitch rooms only.
+    let wallet: WalletModel?
+
     init(session: ChatSession) {
         self.session = session
         picker = EmotePickerModel(session: session)
+        wallet = session.isKick ? nil : WalletModel(login: session.channel, core: session.core)
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending }
@@ -190,6 +198,12 @@ final class ChatComposerModel {
                 "pinAfterSend": pin ? true : nil,
             ])
             let result = (try? JSONDecoder().decode(SendResult.self, from: Data(json.utf8))) ?? SendResult(isSent: true)
+            if let held = result.cheer {
+                // The message cheers: Rust held it. The cheer bar takes it from here, and the
+                // text stays in the box until a cheer actually goes out.
+                await heldCheer(held)
+                return false
+            }
             if result.dropLine != nil {
                 failure = Failure(text: text, why: result.dropReason ?? "the room refused it")
                 return false

@@ -36,6 +36,8 @@ final class CosmeticsStore {
     var scrollTarget: String?
     /// The Cosmetics screen while it is open (drive steps reach its taps through it).
     @ObservationIgnored weak var activeScreen: CosmeticsScreenModel?
+    /// The profile sheet while it is open (drive steps scroll it through this).
+    @ObservationIgnored weak var activeProfile: ProfileSheetModel?
     /// Bumped when the registries change, so open surfaces re-read.
     private(set) var registryVersion = 0
     @ObservationIgnored private var core: CoreBridge?

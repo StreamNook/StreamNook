@@ -12,7 +12,9 @@ struct BadgesSegment: View {
 
     var body: some View {
         @Bindable var rewards = rewards
-        Group {
+        // A stable container, not a Group: on a Group the modifiers below ride each branch, so
+        // every Loading -> wall switch re-ran the forced load and looped.
+        VStack(alignment: .leading, spacing: 0) {
             if let wall = rewards.wall, !wall.tiles.isEmpty {
                 content(wall)
             } else if rewards.wallLoading || rewards.wall?.loading ?? true {
@@ -100,6 +102,7 @@ private struct BadgeTileView: View {
             Text(tile.word.isEmpty ? " " : tile.word)
                 .font(.sn(9.5, 600))
                 .foregroundStyle(BadgeWords.color(tile))
+                .lineLimit(1)
         }
         .padding(8)
         .frame(maxWidth: .infinity, minHeight: 112, alignment: .top)
@@ -305,12 +308,10 @@ private struct MissingRowView: View {
         HStack(spacing: 12) {
             RewardArt(url: row.image, width: 36, height: 36, radius: 0, fit: true, placeholder: nil)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(row.title)
-                        .font(.sn(13, 500))
-                        .foregroundStyle(SN.textPrimary)
-                        .lineLimit(1)
-                    EarnPill(chips: row.chips, iconsOnly: row.iconsOnly)
+                // The words of the pill go first, then the name ends in "…": nothing leaves the card.
+                ViewThatFits(in: .horizontal) {
+                    titleLine(iconsOnly: row.iconsOnly)
+                    titleLine(iconsOnly: true)
                 }
                 if row.randomNote != nil || row.channelsNote != nil {
                     HStack(spacing: 8) {
@@ -335,6 +336,7 @@ private struct MissingRowView: View {
                 Text(row.timeLeft)
                     .font(.sn(11, 500))
                     .foregroundStyle(row.urgent == true ? SN.warning : SN.textSecondary)
+                    .fixedSize()
             }
         }
         .padding(.horizontal, 12)
@@ -342,6 +344,16 @@ private struct MissingRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .snPanel()
         .accessibilityElement(children: .combine)
+    }
+
+    private func titleLine(iconsOnly: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text(row.title)
+                .font(.sn(13, 500))
+                .foregroundStyle(SN.textPrimary)
+                .lineLimit(1)
+            EarnPill(chips: row.chips, iconsOnly: iconsOnly)
+        }
     }
 }
 

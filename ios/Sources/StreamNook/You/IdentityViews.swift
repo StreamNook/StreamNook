@@ -200,6 +200,36 @@ extension View {
     func wornMarks(_ worn: Bool, radius: CGFloat = SNRadius.panel) -> some View { modifier(WornMarks(worn: worn, radius: radius)) }
 }
 
+/// A member's place in line on the right of their sheet, as the desktop card's hero draws it:
+/// Nº and the number in the display serif, a hairline, then the rank's name in small caps. The
+/// first three ranks wear their color on the number; the rest keep the text color.
+struct MemberRankMark: View {
+    let rank: MemberRank
+
+    var body: some View {
+        let tint = nameColor(rank.accent)
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Nº").font(.system(size: 11, weight: .light)).foregroundStyle(SN.textMuted)
+                Text(rank.number.formatted())
+                    .font(.system(size: 34, weight: .light, design: .serif).italic())
+                    .monospacedDigit()
+                    .foregroundStyle(rank.lit ? tint : SN.textPrimary)
+            }
+            LinearGradient(colors: [.clear, tint.opacity(0.5), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 48, height: 1)
+                .padding(.top, 8)
+            Text(rank.label.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(2.2)
+                .foregroundStyle(rank.lit ? tint : SN.textSecondary)
+                .padding(.top, 8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("StreamNook member number \(rank.number), \(rank.label)")
+    }
+}
+
 /// A name's color from the core's `#rrggbb`, Twitch purple when it has none.
 func nameColor(_ hex: String?) -> Color {
     Color(cgColor: FillPainter.color(hex ?? "#9147ff") ?? CGColor(red: 0.57, green: 0.28, blue: 1, alpha: 1))
