@@ -47,6 +47,17 @@ const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 //   moderator:manage:shield_mode: /shield and /shieldoff (Helix
 //     PUT moderation/shield_mode refuses the token without it)
 const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users moderator:manage:shield_mode";
+/// Scopes every new sign-in asks for, that the token check never requires: a
+/// stored sign-in without one is kept (no reset of every account), and the
+/// command that needs it asks for a fresh sign-in when it is used.
+//   moderator:manage:warnings: /warn (Helix POST moderation/warnings)
+const OPTIONAL_SCOPES: &str = "moderator:manage:warnings";
+
+/// What a sign-in asks Twitch for: the required scopes, then the optional ones.
+fn requested_scopes() -> String {
+    format!("{SCOPES} {OPTIONAL_SCOPES}")
+}
+
 const TOKEN_FILE_NAME: &str = ".twitch_token";
 
 /// Normalize a GQL Language enum spelling ("FR", "ZH_HK") to the Helix form
@@ -984,13 +995,14 @@ impl TwitchService {
     }
 
     fn authorize_url(state: &str, force_verify: bool) -> Result<String> {
+        let scopes = requested_scopes();
         let url = reqwest::Url::parse_with_params(
             "https://id.twitch.tv/oauth2/authorize",
             &[
                 ("client_id", CLIENT_ID),
                 ("redirect_uri", REDIRECT_URI),
                 ("response_type", "code"),
-                ("scope", SCOPES),
+                ("scope", scopes.as_str()),
                 ("force_verify", if force_verify { "true" } else { "false" }),
                 ("state", state),
             ],
@@ -1035,7 +1047,8 @@ impl TwitchService {
     }
 
     async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
-        let params = [("client_id", CLIENT_ID), ("scopes", SCOPES)];
+        let scopes = requested_scopes();
+        let params = [("client_id", CLIENT_ID), ("scopes", scopes.as_str())];
 
         let response = client
             .post("https://id.twitch.tv/oauth2/device")
@@ -1075,9 +1088,10 @@ impl TwitchService {
 
             tokio::time::sleep(Duration::from_secs(poll_interval)).await;
 
+            let scopes = requested_scopes();
             let params = [
                 ("client_id", CLIENT_ID),
-                ("scopes", SCOPES),
+                ("scopes", scopes.as_str()),
                 ("device_code", device_code),
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ];
@@ -6920,7 +6934,7 @@ mod pin_tests {
 
 #[cfg(test)]
 mod scope_check_tests {
-    use super::{missing_scopes, SCOPES};
+    use super::{missing_scopes, requested_scopes, SCOPES};
 
     fn granted(scopes: &str) -> Vec<String> {
         scopes.split_whitespace().map(str::to_string).collect()
@@ -6942,6 +6956,18 @@ mod scope_check_tests {
             .filter(|s| s != "moderator:manage:shield_mode")
             .collect();
         assert_eq!(missing_scopes(SCOPES, &before), ["moderator:manage:shield_mode"]);
+    }
+
+    #[test]
+    fn an_optional_scope_is_asked_for_but_never_resets_a_sign_in() {
+        // Every new sign-in asks for it...
+        assert!(requested_scopes().split_whitespace().any(|s| s == "moderator:manage:warnings"));
+        assert!(!SCOPES.split_whitespace().any(|s| s == "moderator:manage:warnings"));
+        // ...but a stored token without it misses nothing the token check requires,
+        // and that check clears accounts (reset_all) only when something is missing.
+        assert!(missing_scopes(SCOPES, &granted(SCOPES)).is_empty());
+        let with_it: Vec<String> = granted(&requested_scopes());
+        assert!(missing_scopes(SCOPES, &with_it).is_empty());
     }
 
     #[test]
