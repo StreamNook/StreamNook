@@ -2354,27 +2354,25 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const isFromSharedChat = sourceRoomId && currentRoomId && sourceRoomId !== currentRoomId;
 
   // The partner channel this row came from, read once per room from the core
-  // (hooks before any conditional return). Seeded from the cache, so a row
-  // that mounts after the first never flashes in unmarked.
+  // (hooks before any conditional return). Read from the shared cache during
+  // render, so a row that mounts after the first never flashes in unmarked;
+  // only a room not known yet asks, and its answer lands here.
   const sourceDark = isThemeDark();
-  const [sharedSource, setSharedSource] = useState<SharedSource | null>(() =>
-    isFromSharedChat && sourceRoomId ? (sharedSourceCache.get(sharedSourceKey(sourceRoomId, sourceDark)) ?? null) : null,
-  );
+  const sourceKey = isFromSharedChat && sourceRoomId ? sharedSourceKey(sourceRoomId, sourceDark) : null;
+  const [askedSource, setAskedSource] = useState<{ key: string; source: SharedSource } | null>(null);
+  const sharedSource = sourceKey
+    ? (sharedSourceCache.get(sourceKey) ?? (askedSource?.key === sourceKey ? askedSource.source : null))
+    : null;
   useEffect(() => {
-    if (!isFromSharedChat || !sourceRoomId) return;
-    const cached = sharedSourceCache.get(sharedSourceKey(sourceRoomId, sourceDark));
-    if (cached) {
-      setSharedSource(cached);
-      return;
-    }
+    if (!sourceKey || !sourceRoomId || sharedSourceCache.has(sourceKey)) return;
     let live = true;
     void askSharedSource(sourceRoomId, sourceDark).then((found) => {
-      if (live && found) setSharedSource(found);
+      if (live && found) setAskedSource({ key: sourceKey, source: found });
     });
     return () => {
       live = false;
     };
-  }, [isFromSharedChat, sourceRoomId, sourceDark]);
+  }, [sourceKey, sourceRoomId, sourceDark]);
   const fetchedChannelName = sharedSource?.login ?? null;
   const channelProfileImage = sharedSource?.avatar_url ?? null;
 
