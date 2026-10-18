@@ -264,7 +264,8 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         sender_id: msg.user_id.clone(),
         sender_login: msg.username.to_lowercase(),
         sender_name: if msg.display_name.is_empty() { msg.username.clone() } else { msg.display_name.clone() },
-        sender_color: msg.color.clone(),
+        // The color the chat row shows, so a dark name stays readable.
+        sender_color: Some(crate::services::chat_row_view::readable_color(msg.color.as_deref())),
         text: msg.content.chars().take(MAX_TEXT).collect(),
         kind,
         reply_parent_id: msg.tags.get("reply-parent-msg-id").cloned(),
