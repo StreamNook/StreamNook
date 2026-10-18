@@ -167,10 +167,13 @@ public struct ProviderCategory: Decodable, Sendable, Hashable, Identifiable {
     public var name: String
     public var thumbnail: String
     public var viewerCount: Int
+    /// The tile's words for `viewerCount`, from the core's one compact format.
+    public var viewersLine: String?
 
     enum CodingKeys: String, CodingKey {
         case provider, id, name, thumbnail
         case viewerCount = "viewer_count"
+        case viewersLine = "viewers_line"
     }
 
     public init(provider: String = "kick", id: String, name: String, thumbnail: String = "", viewerCount: Int = 0) {
@@ -188,11 +191,13 @@ public struct ProviderCategory: Decodable, Sendable, Hashable, Identifiable {
         name = try c.decode(String.self, forKey: .name)
         thumbnail = (try? c.decodeIfPresent(String.self, forKey: .thumbnail)) ?? ""
         viewerCount = (try? c.decodeIfPresent(Int.self, forKey: .viewerCount)) ?? 0
+        viewersLine = try? c.decodeIfPresent(String.self, forKey: .viewersLine)
     }
 
     /// The same tile Twitch's categories use: the thumbnail as the art (none: a quiet block).
     public var tile: TwitchCategory {
-        TwitchCategory(id: id, name: name, boxArtURL: thumbnail.isEmpty ? nil : thumbnail, viewerCount: viewerCount)
+        TwitchCategory(id: id, name: name, boxArtURL: thumbnail.isEmpty ? nil : thumbnail, viewerCount: viewerCount,
+                       viewersLine: viewersLine)
     }
 
     /// Kick has no category search: the loaded list filtered by name.

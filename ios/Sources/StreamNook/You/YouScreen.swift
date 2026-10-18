@@ -78,21 +78,19 @@ struct YouScreen: View {
     }
 }
 
-/// Signed out, the card keeps its shape: the quiet band, an empty avatar, why to sign in, and the
+/// Signed out, the card keeps its shape: a quiet glow, an empty picture, why to sign in, and the
 /// Twitch sign-in.
 private struct SignedOutIdentityCard: View {
     let model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AtmosphereBand(look: nil).frame(height: OwnIdentityCard.band)
-            Circle().fill(SN.surface)
+            Circle().fill(Color.black)
                 .frame(width: OwnIdentityCard.avatar, height: OwnIdentityCard.avatar)
                 .overlay { Image(systemName: "person.fill").font(.system(size: 30)).foregroundStyle(SN.textMuted) }
-                .padding(4)
-                .background { Circle().fill(SN.background).overlay { Circle().fill(SN.floor) } }
-                .padding(.leading, 12)
-                .padding(.top, -(OwnIdentityCard.avatar / 2 + 4))
+                .overlay { Circle().strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5) }
+                .padding(.leading, 16)
+                .padding(.top, 16)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Not signed in").font(.sn(24, 700)).foregroundStyle(SN.textPrimary)
                 Text("Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.")
@@ -101,10 +99,11 @@ private struct SignedOutIdentityCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 12)
             SignInButton(model: model, maxWidth: .infinity)
                 .padding(16)
         }
+        .background(alignment: .top) { AtmosphereGlow(look: nil).frame(height: OwnIdentityCard.glow) }
         .clipShape(RoundedRectangle(cornerRadius: OwnIdentityCard.radius, style: .continuous))
         .snPanel(radius: OwnIdentityCard.radius)
     }

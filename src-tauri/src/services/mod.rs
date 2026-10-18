@@ -153,6 +153,7 @@ pub mod follow_lookup;
 pub mod streamnook_backend;
 pub mod css_fill;
 pub mod cosmetics_registry;
+pub mod member_profile;
 pub mod member_theme;
 pub mod profile_view;
 pub mod flv_fmp4;

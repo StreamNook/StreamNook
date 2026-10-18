@@ -5,6 +5,7 @@ import {
   resolveCosmeticAsset,
 } from '../../components/cosmeticAssets';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
+import { houseSlug } from './memberIcons';
 import type {
   ExternalPickerView,
   SnMemberBadge,
@@ -60,6 +61,13 @@ export function medalUrl(sn: SnMemberBadge | null | undefined): string | null {
     COSMETIC_ASSET_BY_SLUG[DEFAULT_COSMETIC_SLUG] ??
     null
   );
+}
+
+/** A badge image a renderer can load: bundled house art for a
+ *  `streamnook-house:<slug>` URL, any other URL as it is. */
+export function badgeArt(url: string): string {
+  const slug = houseSlug(url);
+  return (slug && COSMETIC_ASSET_BY_SLUG[slug]) || url;
 }
 
 /** The badges you wear, in chat's order: Twitch, 7TV, StreamNook last. */

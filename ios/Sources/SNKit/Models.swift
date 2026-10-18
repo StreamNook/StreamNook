@@ -108,19 +108,24 @@ public struct TwitchCategory: Codable, Sendable, Hashable, Identifiable {
     /// Live viewers across the category, summed by the core; the top list carries it, search
     /// results do not.
     public var viewerCount: Int?
+    /// The tile's words for `viewerCount` ("353K viewers"), in the one compact format the core
+    /// serves with every category (services/count_text.rs); absent when nobody counted.
+    public var viewersLine: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case boxArtURL = "box_art_url"
         case viewerCount = "viewer_count"
+        case viewersLine = "viewers_line"
     }
 
-    public init(id: String, name: String, boxArtURL: String? = nil, viewerCount: Int? = nil) {
+    public init(id: String, name: String, boxArtURL: String? = nil, viewerCount: Int? = nil, viewersLine: String? = nil) {
         self.id = id
         self.name = name
         self.boxArtURL = boxArtURL
         self.viewerCount = viewerCount
+        self.viewersLine = viewersLine
     }
 }
 
