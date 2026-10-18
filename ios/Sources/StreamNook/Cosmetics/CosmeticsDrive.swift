@@ -7,7 +7,8 @@ import SwiftUI
 ///
 /// - `profile:LOGIN` opens the profile sheet for a Twitch login (in the watched room when there is
 ///   one); `profile:row` opens it for the newest chatter in the watched room's chat, carrying the
-///   row's colour and badges as a name tap does; `profile:close` closes it
+///   row's colour and badges as a name tap does; `profile:close` closes it; `profile:mod` opens it
+///   for a chatter in a room the viewer moderates (FakeCore only: its card tools and history)
 /// - `cosmetics:open:KEY` opens a collapsible section (`paints`, `seventvBadges`, `twitch`);
 ///   `cosmetics:scroll:ID` scrolls the screen to `badge`, `atmosphere`, `seventv` or `twitch`
 /// - `cosmetics:dump` logs what the core answers for the screen (read only)
@@ -39,6 +40,13 @@ enum CosmeticsDrive {
             model.cosmetics.activeProfile?.scrollTarget = String(scroll.dropFirst("scroll:".count))
         case let group where group.hasPrefix("open:"):
             model.cosmetics.activeProfile?.open(String(group.dropFirst("open:".count)))
+        case "mod":
+            guard model.core is FakeCore else {
+                log.error("drive profile: the moderator card runs on FakeCore only")
+                return
+            }
+            model.cosmetics.open(ProfileTarget(userID: "42", login: "grumpy_gus", displayName: "Grumpy_Gus", color: "#C49BFF",
+                                               roomID: session?.roomID ?? "1", roomLogin: session?.channel ?? "zackrawrr"))
         case "row":
             guard let session, let message = session.pipeline.recentMessages(60).last(where: { !$0.isSystem }) else {
                 log.error("drive profile: no chat row")

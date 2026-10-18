@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, memo } from 'react';
 import ChatMessage from './ChatMessage';
+import HeldMessageRow from './chat/HeldMessageRow';
 import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
@@ -108,6 +109,8 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
     if (prev.message.id !== next.message.id) return false;
     // Same row re-stamped by Rust with new segments (see chatMessageAreEqual).
     if (prev.message.segments !== next.message.segments) return false;
+    // A held AutoMod row folds in place once decided.
+    if (prev.message.automodHeld !== next.message.automodHeld) return false;
   }
   if (prev.isHighlighted !== next.isHighlighted) return false;
   if (prev.moderationContext?.type !== next.moderationContext?.type ||
@@ -174,6 +177,9 @@ const MessageRow = memo(function MessageRow({
       }`}
       style={style}
     >
+      {typeof message !== 'string' && message.automodHeld ? (
+        <HeldMessageRow row={message.automodHeld} />
+      ) : (
       <ChatMessage
         message={message}
         onUsernameClick={onUsernameClick}
@@ -191,6 +197,7 @@ const MessageRow = memo(function MessageRow({
         sourceMark={sourceProvider}
         modLine={modLine}
       />
+      )}
     </div>
   );
 }, messageRowAreEqual);

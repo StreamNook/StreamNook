@@ -44,7 +44,7 @@ final class ProfileSheetModel {
             pickedGroup = nil
         }
     }
-    @ObservationIgnored private let core: CoreBridge
+    @ObservationIgnored let core: CoreBridge
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     /// The user key whose history is being followed: the target's id, or for a login-only
     /// target (a mention, the long-press Profile item) the id the core resolved.
@@ -167,8 +167,10 @@ final class ProfileSheetModel {
 /// glowing behind them, their picture with their StreamNook badge on it as a medal (never on your
 /// own) and a member's number on the right, their name in their paint, their sub in this room, a
 /// member's StreamNook block (relics, overview, top emotes, accolades), every badge they have under
-/// its platform's mark (two rows each until opened), and what they said this session. No
-/// actions; the system sheet sized to its content, at most 80% of the screen.
+/// its platform's mark (two rows each until opened), and what they said this session. Under
+/// their sub, the viewer's own note and name color for them, and in a room the viewer moderates,
+/// the Moderate buttons and their history there (`ChatterToolsSections`). The system sheet sized
+/// to its content, at most 80% of the screen.
 struct ProfileSheet: View {
     @State var model: ProfileSheetModel
 
@@ -209,6 +211,11 @@ struct ProfileSheet: View {
                 if let standing = model.standing {
                     SubStandingTile(standing: standing, wornArt: wornSubArt)
                         .padding(.top, 16)
+                }
+                // In a room: the viewer's own note and color, and Moderate and History where they
+                // moderate (Rust decides who may be moderated).
+                if !target.userID.isEmpty {
+                    ChatterToolsSections(model: ChatterToolsModel(target: target, core: model.core))
                 }
                 // A member's StreamNook block comes first: their relics, then the overview,
                 // top emotes and accolades.

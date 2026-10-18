@@ -1452,8 +1452,20 @@ export interface ModerationSettings {
   // message's moderation controls. First entry is the prefilled default.
   saved_ban_reasons?: string[];
   // Timeout durations (seconds) offered on the hover dock and drag dial.
-  // Default [1, 600, 3600, 86400].
+  // Default [1, 600, 3600, 86400]. The phones' user card shows the first four.
   timeout_presets?: number[];
+  // The viewer's own buttons on a user card in channels they moderate
+  // (Rust services/chatter_card.rs reads them; at most six are shown).
+  card_actions?: ModCardAction[];
+}
+
+export interface ModCardAction {
+  label: string;
+  kind: 'timeout' | 'ban' | 'unban' | 'warn';
+  /** Timeout length in seconds (timeouts only). */
+  seconds?: number;
+  /** Sent with the action; a warning without one asks for it. */
+  reason?: string;
 }
 
 export interface ModLogEvent {

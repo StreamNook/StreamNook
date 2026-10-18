@@ -117,6 +117,10 @@ struct ChatLabView: View {
 /// - `chatpicker`, `chatmenu`, `chatcommands` open the emote picker, the chat menu, the command list
 /// - `chatreply` drafts a reply to the newest row
 /// - `chatmod[:off]` turns the room's moderator tools on (or off) for the fan
+/// - `chatheld[:decided]` shows a message AutoMod held in the room (or folds it as denied), as the
+///   core's `AUTOMOD_HELD` frame would; local only, nothing reaches Twitch
+/// - `chatwarn[:off]` puts a moderator's warning on the room's words (or takes it away), as the
+///   core's ROOMSTATE would; local only
 /// - `chatclose` closes the stage
 ///
 /// The watch page's rooms:
@@ -134,6 +138,40 @@ struct ChatLabView: View {
 /// - `findstreak` opens the first followed live channel with a watch streak to share
 @MainActor
 enum ChatDrive {
+    /// The frame the core sends when AutoMod holds a message, or once it is decided.
+    static func heldFrame(channel: String, decided: Bool) -> String {
+        var frame: [String: Any] = [
+            "type": "AUTOMOD_HELD", "channel": channel,
+            "held": [
+                "message_id": "drive-held-1", "channel": channel, "broadcaster_id": "1", "user_id": "42",
+                "user_login": "grumpy_gus", "user_name": "Grumpy_Gus", "text": "this game is so broken, what a joke",
+                "reason": "automod", "category": "swearing", "level": 2,
+                "held_at_ms": Int64(Date().timeIntervalSince1970 * 1000), "status": decided ? "denied" : "held",
+                "label": "Held by AutoMod \u{00B7} Swearing, level 2",
+            ] as [String: Any],
+        ]
+        if decided {
+            frame["line"] = "Denied Grumpy_Gus\u{2019}s held message"
+            frame["by"] = "kay_lee"
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// A ROOMSTATE whose words carry (or drop) a pending warning.
+    static func warnFrame(channel: String, on: Bool) -> String {
+        var modes: [String: Any] = ["modes": [Any](), "slow_seconds": 0]
+        if on {
+            modes["warning"] = [
+                "title": "A moderator warned you",
+                "detail": "\u{201C}Keep it friendly, no slurs.\u{201D} You can chat again after you acknowledge it.",
+                "action": "Acknowledge", "prompt": "Acknowledge the warning to chat", "short": "Warned",
+            ]
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: ["type": "ROOMSTATE", "channel": channel, "modes": modes])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     private static weak var model: AppModel?
     /// The chat stage when it is open, otherwise the watch layer's room.
     static var currentSession: ChatSession? { ChatLab.session ?? model?.chat.activeSession }
@@ -195,6 +233,12 @@ enum ChatDrive {
             currentList?.debugEndFan()
         case "chatmod":
             currentSession?.moderatorTools = value != "off"
+        case "chatheld":
+            guard let session = currentSession else { return true }
+            session.pipeline.ingest(heldFrame(channel: session.channel, decided: value == "decided"))
+        case "chatwarn":
+            guard let session = currentSession else { return true }
+            session.pipeline.ingest(warnFrame(channel: session.channel, on: value != "off"))
         case "chatclose":
             ChatLab.close()
         case "chatadd":

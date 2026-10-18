@@ -2283,6 +2283,41 @@
   },
   {
    "page": "chat",
+   "section": "Moderation",
+   "title": "Timeout lengths",
+   "paths": [
+    "moderation.timeout_presets"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The four timeout lengths on a user card in channels you moderate, also the hover dock's on desktop.",
+   "aliases": [
+    "timeout",
+    "presets",
+    "mod",
+    "moderator",
+    "ban length"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Moderation",
+   "title": "Card buttons",
+   "paths": [
+    "moderation.card_actions"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Your own buttons on a user card in channels you moderate: a timeout, ban, unban or warning with a saved reason.",
+   "aliases": [
+    "custom mod actions",
+    "mod buttons",
+    "warn",
+    "moderator"
+   ]
+  },
+  {
+   "page": "chat",
    "section": "Nicknames",
    "title": "Nicknames",
    "paths": [

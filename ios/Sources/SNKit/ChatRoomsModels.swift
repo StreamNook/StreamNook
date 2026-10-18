@@ -292,7 +292,8 @@ extension ChatSocketFrame {
         switch self {
         case .row(let message): raw = message.channel
         case .roomState(let channel, _), .clearMessage(let channel, _), .clearChat(let channel, _, _, _),
-             .cosmetics(let channel, _, _, _), .patch(let channel, _), .notice(let channel, _, _):
+             .cosmetics(let channel, _, _, _), .patch(let channel, _), .notice(let channel, _, _),
+             .held(let channel, _):
             raw = channel
         case .status, .other, .member: raw = nil
         }

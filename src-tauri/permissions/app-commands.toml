@@ -731,5 +731,9 @@ allow = [
   "chat_send_acquire",
   "chat_send_budget",
   "chat_send_paced",
+  "acknowledge_chat_warning",
+  "get_chatter_mod_history",
+  "get_chatter_card_tools",
+  "set_card_timeout_length",
   "save_stream_screenshot",
 ]

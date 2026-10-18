@@ -36,6 +36,8 @@ import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 import { streamProvider } from '../../utils/streamProvider';
+import { useAutomodStore } from '../../stores/automodStore';
+import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -168,6 +170,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       blocked: view?.blocked ?? null,
       reason: view?.reason ?? null,
       view: view && view.modes.length > 0 ? view : null,
+      warning: view?.warning ?? null,
     };
   }, [roomState]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
@@ -482,6 +485,8 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   /** Pull the author and body out of a rendered row's message id. */
   const describeMessage = useCallback(
     (messageId: string) => {
+      // A held message has its own Allow and Deny, and nothing to reply to yet.
+      if (isHeldRowId(messageId)) return null;
       for (const message of messages) {
         if (getMessageId(message) !== messageId) continue;
         try {
@@ -529,13 +534,25 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       window.removeEventListener('streamnook-clear-local-chat', clearRows);
     };
   }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  // Messages AutoMod held, inline where they arrived, for a moderator of this
+  // room: Allow and Deny on the row, which folds once someone decides it.
+  const heldKey = isModerator && activeChannel ? activeChannel.toLowerCase() : '';
+  const heldNow = useAutomodStore((s) => (heldKey ? s.held[heldKey] : undefined));
+  const decidedNow = useAutomodStore((s) => (heldKey ? s.decided[heldKey] : undefined));
+  useEffect(() => {
+    if (heldKey) void useAutomodStore.getState().seed(heldKey);
+  }, [heldKey]);
+  const heldMessages = useMemo(() => heldRows(heldNow, decidedNow).map(heldRowMessage), [heldNow, decidedNow]);
   const shownMessages = useMemo(() => {
-    if (!hiddenRows || hiddenRows.channel !== activeChannel) return messages;
-    return messages.filter((m) => {
-      const id = getMessageId(m);
-      return !id || !hiddenRows.ids.has(id);
-    });
-  }, [hiddenRows, activeChannel, messages, getMessageId]);
+    const visible =
+      !hiddenRows || hiddenRows.channel !== activeChannel
+        ? messages
+        : messages.filter((m) => {
+            const id = getMessageId(m);
+            return !id || !hiddenRows.ids.has(id);
+          });
+    return mergeHeld(visible, heldMessages);
+  }, [hiddenRows, activeChannel, messages, getMessageId, heldMessages]);
 
   // Suppress the synthesized contextmenu entirely: the fan-out owns the hold now,
   // and letting both fire would open a menu behind the fan.

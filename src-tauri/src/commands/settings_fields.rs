@@ -58,6 +58,10 @@ pub fn frontend_owned_defaults() -> Value {
             "smooth_scroll_on_resume": true,
             "message_buffer_cap": 100,
         },
+        "moderation": {
+            "timeout_presets": [1, 600, 3600, 86400],
+            "card_actions": [],
+        },
         "message_repeat": {
             "mode": "off",
             "match": "normalized",

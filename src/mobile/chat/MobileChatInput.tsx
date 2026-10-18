@@ -38,7 +38,8 @@ import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
-import type { RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import type { ChatWarningView, RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import { WarningBox } from './WarningBox';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
@@ -96,6 +97,9 @@ export interface ChatGating {
   /** The room's modes in full for the chat menu, whatever the composer's
    *  room-mode icons are set to. */
   view?: RoomModeView | null;
+  /** A moderator's warning you have not acknowledged: the field stays locked
+   *  behind the Acknowledge box above it. */
+  warning?: ChatWarningView | null;
 }
 
 interface Props {
@@ -450,7 +454,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // slow-mode wait, else "Send a message" (nothing when Settings hides it). A
   // mode that only may hold you back is said once, by its icon at the field's
   // end; the chat menu names it in full.
-  const placeholder = gating.blocked
+  const placeholder = gating.warning
+    ? gating.warning.prompt
+    : gating.blocked
     ? (gating.reason ?? 'Chat restricted')
     : slowWait > 0
       ? `Slow mode: you can send again in ${slowWait}s`
@@ -504,6 +510,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
           placeholder alone says why the field is dead, and it says it in the
           field you were about to type in. The chat menu carries the room's full
           state, and now the Follow action alongside it. */}
+      {/* A moderator's warning: what they said, and Acknowledge, the one way to
+          chat here again. Where the room's words live, so it cannot scroll away;
+          Rust unlocks the field once Twitch takes the acknowledgement. */}
+      {gating.warning && channelId && <WarningBox warning={gating.warning} roomId={channelId} />}
       {/* A message the room did not take. The text stays in the field; this
           says why once, beside it, with the two ways forward. */}
       {shownFailure && (
@@ -612,7 +622,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The placeholder says why, in the
               // field's ordinary placeholder ink: a statement, not an alarm.
-              disabled={!!gating.blocked}
+              disabled={!!gating.blocked || !!gating.warning}
               spellCheck={spellcheck}
               autoCorrect={spellcheck ? 'on' : 'off'}
               rows={1}

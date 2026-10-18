@@ -2549,6 +2549,10 @@ pub fn run() {
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,
+            services::chat_warning::acknowledge_chat_warning,
+            services::mod_history::get_chatter_mod_history,
+            services::chatter_card::get_chatter_card_tools,
+            services::chatter_card::set_card_timeout_length,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

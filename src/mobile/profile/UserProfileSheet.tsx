@@ -2,7 +2,9 @@
 // their Atmosphere glowing behind them, their picture with their StreamNook
 // badge on it as a medal (never on your own), their name in their paint, their
 // sub in this room, every badge they have under its platform's mark, and what
-// they said this session. No actions.
+// they said this session. Under their sub, the viewer's own note and name
+// color, and in a room the viewer moderates, Moderate and History
+// (ChatterTools).
 //
 // Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
 // badge groups merged and deduped per provider, the worn paint, the Helix
@@ -25,6 +27,7 @@ import type { SubStanding } from '../../types';
 import { AtmosphereGlow, BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader } from './IdentityParts';
 import { badgeArt, brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
 import { MemberSections } from './MemberSections';
+import { ChatterTools } from './ChatterTools';
 
 /** How far down the sheet their Atmosphere's glow reaches: the picture and
  *  the name, fading out above what follows. */
@@ -354,6 +357,18 @@ const ProfileBody: React.FC<{
           <div className="mt-4">
             <SubStandingRow standing={standing} badgeArt={wornSubBadgeArt(wornBadges)} size="sheet" />
           </div>
+        )}
+
+        {/* The viewer's own note and name color for them, and Moderate and
+            History where the viewer moderates (Rust decides who may be). */}
+        {userId && (
+          <ChatterTools
+            userId={userId}
+            login={username}
+            displayName={user.displayName}
+            channelId={channelId}
+            channelName={channelName}
+          />
         )}
 
         {/* Tapping a badge names it here rather than in a tooltip, which does

@@ -114,6 +114,11 @@ pub struct RoomModeView {
     pub blocked: Option<ModeKind>,
     /// What a disabled message box says while `blocked` is set.
     pub reason: Option<String>,
+    /// A moderator's warning the viewer has not acknowledged: the box stays
+    /// locked behind its Acknowledge button. Filled in by the chat limiter,
+    /// which knows the room (`chat_warning`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<crate::services::chat_warning::WarningView>,
 }
 
 /// The longest full label the prompt uses; past it the compact form reads
@@ -330,7 +335,7 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
             None => "Follow to chat".to_string(),
         },
     });
-    RoomModeView { modes, chip, exempt, prompt, prompt_short, standing: standing_line, slow_seconds, blocked, reason }
+    RoomModeView { modes, chip, exempt, prompt, prompt_short, standing: standing_line, slow_seconds, blocked, reason, warning: None }
 }
 
 #[cfg(test)]

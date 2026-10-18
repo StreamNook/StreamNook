@@ -2,6 +2,7 @@ import { parseBadges } from './twitchBadges';
 import type { SongMatch } from '../utils/songId';
 import type { ProviderId } from '../types/providers';
 import { kickBadgeImage } from '../utils/kickBadges';
+import type { HeldRowData } from '../stores/automodStore';
 
 // Message segment types - matches Rust MessageSegment enum
 export type MessageSegment =
@@ -154,6 +155,8 @@ export interface BackendChatMessage {
   metadata?: MessageMetadata;
   // Local-only: the "/song" result card (album art + clickable service links).
   songCard?: SongMatch;
+  // Local-only: a message AutoMod held, drawn with Allow and Deny (phones).
+  automodHeld?: HeldRowData;
 }
 
 // Frontend-facing reply info (camelCase for consistency)

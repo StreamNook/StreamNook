@@ -462,6 +462,10 @@ pub struct RowView {
     /// color floored for the theme), when already known as the row is stamped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::services::shared_chat_source::SharedSource>,
+    /// The viewer's own nickname for the author, shown in place of their
+    /// name (`chat_customization.user_overrides`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
