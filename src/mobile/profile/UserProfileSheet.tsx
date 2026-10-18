@@ -127,7 +127,8 @@ const BadgeGrid: React.FC<{
   return (
     <div className="mt-5">
       <SectionHeader title={brand ? 'Badges' : title} brand={brand} detail={String(badges.length)} className="mb-2" />
-      <div className="flex flex-wrap gap-2">
+      {/* Eight across on every phone, so two rows are always the first 16. */}
+      <div className="grid grid-cols-8 gap-2 justify-items-start">
         {shown.map((b, i) => (
           <button
             key={`${b.id}-${i}`}
