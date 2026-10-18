@@ -79,16 +79,20 @@ struct CosmeticsPreviewRow: View {
 /// The chat row's Atmosphere wash in SwiftUI, through the same layer the chat list draws with.
 struct WashView: UIViewRepresentable {
     let look: AtmosphereLook
+    /// Hold the curtains still and move only their opacity (an identity's glow).
+    var breathe = false
 
     func makeUIView(context: Context) -> WashHost { WashHost() }
 
     func updateUIView(_ view: WashHost, context: Context) {
         view.look = look
+        view.breathe = breathe
         view.setNeedsLayout()
     }
 
     final class WashHost: UIView {
         var look: AtmosphereLook?
+        var breathe = false
         private let wash = AtmosphereWashLayer()
 
         override init(frame: CGRect) {
@@ -103,7 +107,7 @@ struct WashView: UIViewRepresentable {
             super.layoutSubviews()
             guard let look, bounds.width > 0, bounds.height > 0 else { return }
             wash.show(look, cologne: nil, size: bounds.size, scale: traitCollection.displayScale,
-                      animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
+                      animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full, breathe: breathe)
         }
     }
 }
