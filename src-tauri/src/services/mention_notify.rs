@@ -1,7 +1,7 @@
-//! A notification when someone mentions you, replies to you, or uses one of
-//! your highlight phrases, in a chat you have joined while StreamNook is not
-//! the window in use. `mention_inbox::on_verdict` decides what counts and calls
-//! this once per newly filed entry.
+//! The desktop notification for a mention, a reply to you, or one of your
+//! highlight phrases, while StreamNook is not the window in use.
+//! `mention_inbox` decides what counts and whether to announce it (setting,
+//! streamer mode, the per-chat cooldown); this only builds and delivers it.
 //!
 //! `chat_rules` already decides what a mention is, the same judgment the
 //! mention sound (`mention_ping`) uses. This turns the ones worth a notice into
@@ -10,57 +10,9 @@
 //! main window is in use. The notice opens the chat at that message and, as a
 //! Windows notification on Twitch, takes a reply posted as a threaded reply.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, RwLock};
-use std::time::{Duration, Instant};
-
-use once_cell::sync::Lazy;
-
 use crate::commands::notification_mirror::{MirroredNotice, NoticeAction, NoticeReply};
 use crate::models::chat_layout::ChatMessage;
 use crate::services::mention_inbox::{room_key, MentionKind};
-use crate::models::settings::Settings;
-
-/// One channel notifies at most this often, so a chat that keeps @-ing you is
-/// one notice, not a stack.
-const CHANNEL_COOLDOWN: Duration = Duration::from_secs(20);
-/// A message older than this when it arrives is replay, not news.
-const MAX_AGE_MS: i64 = 15_000;
-
-static ENABLED: RwLock<bool> = RwLock::new(false);
-static LAST: Lazy<Mutex<HashMap<String, Instant>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-
-/// Re-read the setting. Called on load and on every save, with `mention_ping`.
-pub fn refresh(settings: &Settings) {
-    let on = settings.live_notifications.enabled && settings.live_notifications.show_mention_notifications;
-    if let Ok(mut g) = ENABLED.write() {
-        *g = on;
-    }
-}
-
-fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
-    msg.tags.get("tmi-sent-ts").and_then(|v| v.parse::<i64>().ok())
-}
-
-/// Whether this live message earns a notice now. Pure apart from the clock
-/// and the cooldown table it is handed.
-fn should_notify(
-    channel: &str,
-    sent_at: Option<i64>,
-    now_ms: i64,
-    now: Instant,
-    last: &mut HashMap<String, Instant>,
-) -> bool {
-    if sent_at.is_some_and(|t| now_ms - t > MAX_AGE_MS) {
-        return false;
-    }
-    if last.get(channel).is_some_and(|t| now.duration_since(*t) < CHANNEL_COOLDOWN) {
-        return false;
-    }
-    last.retain(|_, t| now.duration_since(*t) < CHANNEL_COOLDOWN);
-    last.insert(channel.to_string(), now);
-    true
-}
 
 /// The notice for `msg`. `avatar` is the sender's picture when it was found.
 fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> MirroredNotice {
@@ -92,31 +44,8 @@ fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> M
     }
 }
 
-/// Called once for each newly filed inbox entry.
-pub fn on_live_message(msg: &ChatMessage, kind: MentionKind) {
-    if msg.id.is_empty() {
-        return;
-    }
-    if !ENABLED.read().map(|g| *g).unwrap_or(false) {
-        return;
-    }
-    if crate::services::streamer_mode::StreamerMode::is_active() {
-        return;
-    }
-    let channel = msg.channel.trim_start_matches('#').to_lowercase();
-    let fire = match LAST.lock() {
-        Ok(mut last) => should_notify(
-            &channel,
-            sent_at_ms(msg),
-            chrono::Utc::now().timestamp_millis(),
-            Instant::now(),
-            &mut last,
-        ),
-        Err(_) => false,
-    };
-    if !fire {
-        return;
-    }
+/// Show the notification for an entry `mention_inbox` decided to announce.
+pub fn deliver(msg: &ChatMessage, kind: MentionKind) {
     let Some(app) = crate::services::providers::app_handle() else { return };
     let msg = msg.clone();
     tauri::async_runtime::spawn(async move {
@@ -135,18 +64,7 @@ pub fn on_live_message(msg: &ChatMessage, kind: MentionKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn one_notice_per_channel_per_cooldown_and_never_for_replay() {
-        let mut last = HashMap::new();
-        let t0 = Instant::now();
-        let now_ms = 1_000_000;
-        assert!(should_notify("a", Some(now_ms - 1_000), now_ms, t0, &mut last));
-        assert!(!should_notify("a", Some(now_ms), now_ms, t0 + Duration::from_secs(5), &mut last));
-        assert!(should_notify("b", None, now_ms, t0 + Duration::from_secs(5), &mut last));
-        assert!(should_notify("a", None, now_ms, t0 + CHANNEL_COOLDOWN, &mut last));
-        assert!(!should_notify("c", Some(now_ms - MAX_AGE_MS - 1), now_ms, t0, &mut last));
-    }
+    use std::collections::HashMap;
 
     #[test]
     fn the_notice_opens_the_message_and_replies_in_its_thread() {

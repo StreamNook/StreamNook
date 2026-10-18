@@ -868,8 +868,6 @@ pub fn run() {
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
     services::mention_inbox::refresh(&settings);
-    #[cfg(desktop)]
-    services::mention_notify::refresh(&settings);
     services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings

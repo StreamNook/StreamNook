@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -32,6 +33,13 @@ pub const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Message text kept per entry, in characters.
 const MAX_TEXT: usize = 500;
 pub const CHANGED_EVENT: &str = "mention-inbox-changed";
+/// Phones: an entry to show as a notification now (the payload is the entry).
+pub const NOTIFY_EVENT: &str = "mention-notify";
+/// One chat notifies at most this often, so a chat that keeps @-ing you is
+/// one notification, not a stack.
+const NOTIFY_COOLDOWN: Duration = Duration::from_secs(20);
+/// A live message older than this when it arrives is replay, not news.
+const NOTIFY_MAX_AGE_MS: i64 = 15_000;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -274,6 +282,8 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
 struct Config {
     highlight_words: bool,
     muted: HashSet<String>,
+    /// Notifications on and "Mentions and replies" on.
+    notify: bool,
 }
 
 struct State {
@@ -293,7 +303,7 @@ fn state() -> &'static Mutex<Option<State>> {
 
 fn config() -> Config {
     CONFIG
-        .get_or_init(|| RwLock::new(Config { highlight_words: true, muted: HashSet::new() }))
+        .get_or_init(|| RwLock::new(Config { highlight_words: true, muted: HashSet::new(), notify: false }))
         .read()
         .map(|c| c.clone())
         .unwrap_or_default()
@@ -308,11 +318,34 @@ pub fn refresh(settings: &Settings) {
     let next = Config {
         highlight_words: settings.mentions.highlight_words,
         muted: settings.mentions.muted_channels.iter().map(|c| c.trim().to_lowercase()).collect(),
+        notify: settings.live_notifications.enabled && settings.live_notifications.show_mention_notifications,
     };
     if let Ok(mut g) = CONFIG.get_or_init(|| RwLock::new(Config::default())).write() {
         *g = next;
     }
 }
+
+/// Whether a newly filed live entry is announced now. Pure apart from the
+/// clocks and the cooldown table it is handed.
+fn should_notify(
+    room: &str,
+    sent_at: Option<i64>,
+    now_ms: i64,
+    now: Instant,
+    last: &mut HashMap<String, Instant>,
+) -> bool {
+    if sent_at.is_some_and(|t| now_ms - t > NOTIFY_MAX_AGE_MS) {
+        return false;
+    }
+    if last.get(room).is_some_and(|t| now.duration_since(*t) < NOTIFY_COOLDOWN) {
+        return false;
+    }
+    last.retain(|_, t| now.duration_since(*t) < NOTIFY_COOLDOWN);
+    last.insert(room.to_string(), now);
+    true
+}
+
+static NOTIFY_LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -453,9 +486,21 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     if mentioned || reply {
         crate::services::mention_ping::on_live_message(msg, mentioned, reply);
     }
-    if !visible {
-        #[cfg(desktop)]
-        crate::services::mention_notify::on_live_message(msg, kind);
+    if visible || !cfg.notify || crate::services::streamer_mode::StreamerMode::is_active() {
+        return;
+    }
+    let fire = match NOTIFY_LAST.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        Ok(mut last) => should_notify(&entry.room, sent_at_ms(msg), now_ms(), Instant::now(), &mut last),
+        Err(_) => false,
+    };
+    if !fire {
+        return;
+    }
+    #[cfg(desktop)]
+    crate::services::mention_notify::deliver(msg, kind);
+    #[cfg(mobile)]
+    if let Some(app) = crate::services::providers::app_handle() {
+        let _ = app.emit(NOTIFY_EVENT, &entry);
     }
 }
 
@@ -640,6 +685,18 @@ mod tests {
             name_hit: None,
             phrase_hit: phrase,
         }
+    }
+
+    #[test]
+    fn one_notification_per_chat_per_cooldown_and_never_for_replay() {
+        let mut last = HashMap::new();
+        let t0 = Instant::now();
+        let now_ms = 1_000_000;
+        assert!(should_notify("a", Some(now_ms - 1_000), now_ms, t0, &mut last));
+        assert!(!should_notify("a", Some(now_ms), now_ms, t0 + Duration::from_secs(5), &mut last));
+        assert!(should_notify("b", None, now_ms, t0 + Duration::from_secs(5), &mut last));
+        assert!(should_notify("a", None, now_ms, t0 + NOTIFY_COOLDOWN, &mut last));
+        assert!(!should_notify("c", Some(now_ms - NOTIFY_MAX_AGE_MS - 1), now_ms, t0, &mut last));
     }
 
     #[test]
