@@ -84,12 +84,8 @@ struct CosmeticsScreen: View {
         if let user {
             let look = (screen.sn?.theme).flatMap { $0 == "tier" ? nil : AtmosphereCatalog.shared.look($0) }
             VStack(alignment: .leading, spacing: 0) {
-                AtmosphereBand(look: look, tint: nameColor(screen.ext?.chatColor))
-                    .frame(height: 60)
-                    .animation(.easeOut(duration: 0.25), value: screen.sn?.theme)
-                HStack(alignment: .bottom, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
                     CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56, local: localPicture)
-                        .padding(.top, -31)
                     HStack(spacing: 6) {
                         PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint ?? identity?.paint,
                                     fallback: nameColor(screen.ext?.chatColor), shadows: .all)
@@ -100,11 +96,10 @@ struct CosmeticsScreen: View {
                             PreviewBadge(url: url)
                         }
                     }
-                    .padding(.bottom, 2)
-                    .padding(.top, 3)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
+                .padding(.top, 12)
                 if screen.sn != nil || screen.ext != nil {
                     ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen,
                                       fallbackPaint: identity?.paint, framed: false)
@@ -113,6 +108,11 @@ struct CosmeticsScreen: View {
                 }
             }
             .padding(.bottom, 12)
+            .background(alignment: .top) {
+                AtmosphereGlow(look: look, tint: nameColor(screen.ext?.chatColor))
+                    .frame(height: 120)
+                    .animation(.easeOut(duration: 0.25), value: screen.sn?.theme)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .snPanel(radius: 18)
             // Pinned over moving content, so it is solid at any Glassiness: choices pass behind it,
