@@ -71,6 +71,37 @@ pub async fn source(room_id: &str, dark: bool) -> Option<SharedSource> {
     }
 }
 
+/// The partner channel behind `room_id` if it is already known, without
+/// waiting: for code that stamps a row as it arrives. A room not yet known is
+/// looked up in the background, so its later rows carry it.
+pub fn cached(room_id: &str, dark: bool) -> Option<SharedSource> {
+    if room_id.is_empty() {
+        return None;
+    }
+    if let Ok(cache) = cache().try_lock() {
+        match cache.get(room_id) {
+            Some(Entry::Known(found)) => return Some(themed(found.clone(), dark)),
+            Some(Entry::Failed(at)) if at.elapsed() < RETRY_AFTER => return None,
+            _ => {}
+        }
+    }
+    warm(vec![room_id.to_string()]);
+    None
+}
+
+/// Looks the given rooms up in the background (a Shared Chat session's
+/// partners as the chat joins it), so their first rows already carry them.
+pub fn warm(room_ids: Vec<String>) {
+    if room_ids.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        for id in room_ids {
+            let _ = source(&id, true).await;
+        }
+    });
+}
+
 fn themed(mut found: SharedSource, dark: bool) -> SharedSource {
     found.color = floored(&found.color, dark);
     found
