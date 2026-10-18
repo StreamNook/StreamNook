@@ -1,24 +1,37 @@
+import Synchronization
 import UIKit
 
-/// Chat's colours as UIKit takes them: the design system's theme tokens (text, surface, border,
-/// accent and status tones) plus chat's own highlight tones. Immutable, so the pipeline's
-/// background layout reads them freely.
+/// Chat's colours as UIKit takes them: the theme in force (text, surface, border, accent and
+/// status tones, the same palette the rest of the app draws with) plus chat's own highlight tones.
+/// The look hands each new palette over with `use`; the pipeline lays rows out on its own queue,
+/// so the colours sit behind a lock, and a change posts `changed` so laid-out rows are redone.
 enum ChatTheme {
-    private static let theme = Palette.frostedGlass
-    static let textPrimary = theme.textPrimary.uiColor
-    static let textSecondary = theme.textSecondary.uiColor
-    static let textMuted = theme.textMuted.uiColor
-    static let borderSubtle = theme.borderSubtle.uiColor
-    static let surface = theme.surface.uiColor
-    static let accent = theme.accent.uiColor
-    static let info = theme.info.uiColor
-    static let warning = theme.warning.uiColor
-    static let error = theme.error.uiColor
-    static let success = theme.success.uiColor
+    private static let current = Mutex(Colors(Palette.frostedGlass))
+    /// Posted after `use` takes a new palette.
+    static let changed = Notification.Name("app.streamnook.chat.theme")
+
+    /// Takes the palette the look now draws with.
+    static func use(_ palette: Palette) {
+        let next = Colors(palette)
+        current.withLock { $0 = next }
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    private static var now: Colors { current.withLock { $0 } }
+    static var textPrimary: UIColor { now.textPrimary }
+    static var textSecondary: UIColor { now.textSecondary }
+    static var textMuted: UIColor { now.textMuted }
+    static var borderSubtle: UIColor { now.borderSubtle }
+    static var surface: UIColor { now.surface }
+    static var accent: UIColor { now.accent }
+    static var info: UIColor { now.info }
+    static var warning: UIColor { now.warning }
+    static var error: UIColor { now.error }
+    static var success: UIColor { now.success }
+    static var background: UIColor { now.background }
     static let highlightOrange = color("#ff8c1a")!
     static let highlightRed = color("#ff4d4d")!
     static let highlightCyan = color("#22d3ee")!
-    static let background = theme.background.uiColor
     /// The colour Twitch gives a chatter who never picked one.
     static let fallbackName = color("#9147FF")!
 
@@ -33,5 +46,25 @@ enum ChatTheme {
             return UIColor(red: channel(24), green: channel(16), blue: channel(8), alpha: channel(0))
         }
         return UIColor(red: channel(16), green: channel(8), blue: channel(0), alpha: 1)
+    }
+
+    /// One palette's chat colours, made once and only read after.
+    private final class Colors: @unchecked Sendable {
+        let textPrimary, textSecondary, textMuted, borderSubtle, surface, accent: UIColor
+        let info, warning, error, success, background: UIColor
+
+        init(_ p: Palette) {
+            textPrimary = p.textPrimary.uiColor
+            textSecondary = p.textSecondary.uiColor
+            textMuted = p.textMuted.uiColor
+            borderSubtle = p.borderSubtle.uiColor
+            surface = p.surface.uiColor
+            accent = p.accent.uiColor
+            info = p.info.uiColor
+            warning = p.warning.uiColor
+            error = p.error.uiColor
+            success = p.success.uiColor
+            background = p.background.uiColor
+        }
     }
 }

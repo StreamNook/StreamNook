@@ -37,6 +37,7 @@ final class ChatPipeline: @unchecked Sendable {
 
     @MainActor weak var list: ChatListView?
     private var failureObserver: NSObjectProtocol?
+    private var themeObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
          onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -50,10 +51,19 @@ final class ChatPipeline: @unchecked Sendable {
             guard let url = note.userInfo?["url"] as? String else { return }
             self?.dropBadge(url)
         }
+        // A new theme redoes every row in the new colours.
+        themeObserver = NotificationCenter.default.addObserver(forName: ChatTheme.changed, object: nil, queue: nil) { [weak self] _ in
+            self?.themeChanged()
+        }
     }
 
     deinit {
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
+
+    private func themeChanged() {
+        queue.async { [self] in relayoutAll() }
     }
 
     // MARK: Input

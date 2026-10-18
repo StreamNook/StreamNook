@@ -175,7 +175,7 @@ struct PointsArt: View {
         } else {
             PointsGlyph()
                 .fill(style: FillStyle(eoFill: true))
-                .foregroundStyle(Color(ChatTheme.textSecondary))
+                .foregroundStyle(SN.textSecondary)
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         }
