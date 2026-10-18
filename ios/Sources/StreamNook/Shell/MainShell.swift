@@ -18,19 +18,29 @@ struct MainShell: View {
         @Bindable var cosmetics = model.cosmetics
         let immersive = landscape && nav.shellCovered
         ZStack {
+            // Icons only, as on Android (Brandon: no text labels in the bar); each name stays the
+            // tab's accessibility label.
             TabView(selection: $nav.tab) {
-                Tab(MobileTab.following.title, systemImage: Symbol.following, value: MobileTab.following) {
+                Tab(value: MobileTab.following) {
                     stack(.following) { FollowingScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .following, symbol: Symbol.following)
                 }
-                Tab(MobileTab.browse.title, systemImage: Symbol.browse, value: MobileTab.browse) {
+                Tab(value: MobileTab.browse) {
                     stack(.browse) { BrowseScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .browse, symbol: Symbol.browse)
                 }
-                Tab(MobileTab.chats.title, systemImage: Symbol.chats, value: MobileTab.chats) {
+                Tab(value: MobileTab.chats) {
                     stack(.chats) { ChatsScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .chats, symbol: Symbol.chats)
                 }
                 .badge(model.chat.state.mentionTotal)
-                Tab(MobileTab.rewards.title, systemImage: Symbol.rewards, value: MobileTab.rewards) {
+                Tab(value: MobileTab.rewards) {
                     stack(.rewards) { RewardsScreen(model: model) }
+                } label: {
+                    TabIcon(tab: .rewards, symbol: Symbol.rewards)
                 }
                 Tab(value: MobileTab.you) {
                     stack(.you) { YouScreen(model: model) }
@@ -131,6 +141,16 @@ struct MainShell: View {
         case .myClips:
             MyClipsScreen(model: model)
         }
+    }
+}
+
+/// A tab's glyph alone, named for VoiceOver by the tab's title.
+private struct TabIcon: View {
+    let tab: MobileTab
+    let symbol: String
+
+    var body: some View {
+        Image(systemName: symbol).accessibilityLabel(tab.title)
     }
 }
 

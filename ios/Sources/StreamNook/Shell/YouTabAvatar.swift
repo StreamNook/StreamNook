@@ -104,14 +104,14 @@ struct YouTabLabel: View {
     let selected: Bool
 
     var body: some View {
-        Label {
-            Text(MobileTab.you.title)
-        } icon: {
+        // Icons only, like the other tabs; the title stays the accessibility label.
+        Group {
             if let image = selected ? avatar.ringed : avatar.plain {
                 Image(uiImage: image).renderingMode(.original)
             } else {
                 Image(systemName: Symbol.you)
             }
         }
+        .accessibilityLabel(MobileTab.you.title)
     }
 }
