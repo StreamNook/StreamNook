@@ -4,6 +4,7 @@ import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { useAppStore } from '../stores/AppStore';
 import { usePinStore } from '../stores/pinStore';
 import { Logger } from './logger';
+import { moderateChatter } from '../services/moderation';
 import {
   customCommandWins,
   expandUserCommand,
@@ -169,8 +170,14 @@ export const handleSlashCommand = async (
           const reason = argsWithoutCommand.slice(1).join(' ');
           const user = await lookupUser(username);
           if (user) {
-            await invoke('ban_user', { broadcasterId, targetUserId: user.id, duration: null, reason: reason || null });
-            addToast(`Banned ${username}`, 'success');
+            const done = await moderateChatter({
+              broadcasterId,
+              targetUserId: user.id,
+              targetName: username,
+              action: { kind: 'ban' },
+              reason: reason || null,
+            });
+            addToast(done.message, 'success');
           } else {
             addToast(`User ${username} not found`, 'error');
           }
@@ -188,8 +195,14 @@ export const handleSlashCommand = async (
           const user = await lookupUser(username);
           if (user) {
             const safeDuration = lengthMs === null ? 600 : Math.max(1, Math.floor(lengthMs / 1000));
-            await invoke('ban_user', { broadcasterId, targetUserId: user.id, duration: safeDuration, reason: reason || null });
-            addToast(`Timed out ${username} for ${safeDuration}s`, 'success');
+            const done = await moderateChatter({
+              broadcasterId,
+              targetUserId: user.id,
+              targetName: username,
+              action: { kind: 'timeout', seconds: safeDuration },
+              reason: reason || null,
+            });
+            addToast(done.message, 'success');
           } else {
             addToast(`User ${username} not found`, 'error');
           }
@@ -203,8 +216,13 @@ export const handleSlashCommand = async (
           const username = cleanLogin(argsWithoutCommand[0]);
           const user = await lookupUser(username);
           if (user) {
-            await invoke('unban_user', { broadcasterId, targetUserId: user.id });
-            addToast(`Unbanned ${username}`, 'success');
+            const done = await moderateChatter({
+              broadcasterId,
+              targetUserId: user.id,
+              targetName: username,
+              action: { kind: 'unban', timeout: typed === 'untimeout' },
+            });
+            addToast(done.message, 'success');
           } else {
             addToast(`User ${username} not found`, 'error');
           }
@@ -488,31 +506,6 @@ export const handleSlashCommand = async (
         return true;
       }
 
-      // ────────────────────────────────────────────────────────
-      // IRC passthrough — commands handled natively by Twitch IRC
-      // ────────────────────────────────────────────────────────
-      case 'mods':
-      case 'vips': {
-        // Use GQL ChatViewers query — works for ANY authenticated user
-        // (Helix Get Moderators requires broadcaster_id == access token user_id)
-        const chatters = await invoke<{ moderators?: { login: string }[]; vips?: { login: string }[] }>(
-          'get_chatters_by_role', { channelLogin: broadcasterLogin }
-        );
-        if (command === 'mods') {
-          const mods = (chatters.moderators || []).map(m => m.login).filter(Boolean);
-          const modMsg = mods.length > 0
-            ? `The moderators of this channel are: ${mods.join(', ')}`
-            : 'There are no moderators of this channel.';
-          window.dispatchEvent(new CustomEvent('twitch-system-message', { detail: { message: modMsg } }));
-        } else {
-          const vips = (chatters.vips || []).map(v => v.login).filter(Boolean);
-          const vipMsg = vips.length > 0
-            ? `The VIPs of this channel are: ${vips.join(', ')}`
-            : 'There are no VIPs of this channel.';
-          window.dispatchEvent(new CustomEvent('twitch-system-message', { detail: { message: vipMsg } }));
-        }
-        return true;
-      }
       // ────────────────────────────────────────────────────────
       // Suspicious User Management (Mod/Broadcaster)
       // ────────────────────────────────────────────────────────
@@ -997,7 +990,13 @@ export const handleSlashCommand = async (
         }
         const reason = argsWithoutCommand.slice(1).join(' ');
         try {
-          await invoke('ban_user', { broadcasterId, targetUserId, duration: null, reason: reason || null });
+          await moderateChatter({
+            broadcasterId,
+            targetUserId,
+            targetName: `user ID ${targetUserId}`,
+            action: { kind: 'ban' },
+            reason: reason || null,
+          });
           addToast(`Banned user ID ${targetUserId}`, 'success');
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);

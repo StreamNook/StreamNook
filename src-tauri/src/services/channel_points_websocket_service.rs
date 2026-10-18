@@ -833,6 +833,20 @@ impl ChannelPointsWebSocketService {
                 .unwrap_or_default()
         );
 
+        // A settled prediction gets its own notification (won, lost, refunded).
+        #[cfg(desktop)]
+        if let Some(result) = result_type.clone() {
+            tauri::async_runtime::spawn(crate::services::points_notify::prediction_result(
+                app_handle.clone(),
+                channel_id.clone(),
+                event_id.clone(),
+                outcome_id.clone(),
+                result,
+                points,
+                points_won,
+            ));
+        }
+
         let _ = app_handle.emit(
             "prediction-self-updated",
             json!({
@@ -959,6 +973,15 @@ impl ChannelPointsWebSocketService {
                             "Emitted prediction-created event to frontend: {:?}",
                             emit_result.is_ok()
                         );
+                        #[cfg(desktop)]
+                        if let Some(cid) = channel_id.as_deref() {
+                            crate::services::points_notify::note_prediction(cid, &message_data["data"]["event"]);
+                            tauri::async_runtime::spawn(crate::services::points_notify::prediction_started(
+                                app_handle.clone(),
+                                cid.to_string(),
+                                prediction_id.to_string(),
+                            ));
+                        }
                     }
                 }
                 "event-updated" => {
@@ -1014,6 +1037,10 @@ impl ChannelPointsWebSocketService {
                             "Prediction updated on {}: {} - Status: {} - Winner: {:?}",
                             channel_display, title, status, winning_outcome_id
                         );
+                        #[cfg(desktop)]
+                        if let Some(cid) = channel_id.as_deref() {
+                            crate::services::points_notify::note_prediction(cid, &message_data["data"]["event"]);
+                        }
 
                         // Emit update to frontend
                         let _ = app_handle.emit(
@@ -1036,6 +1063,8 @@ impl ChannelPointsWebSocketService {
                         let title = event.get("title").and_then(|v| v.as_str()).unwrap_or("");
 
                         debug!("Prediction locked on {}: {}", channel_display, title);
+                        #[cfg(desktop)]
+                        crate::services::points_notify::prediction_closed(app_handle, prediction_id);
 
                         let _ = app_handle.emit(
                             "prediction-locked",
@@ -1055,6 +1084,13 @@ impl ChannelPointsWebSocketService {
                         let winning_outcome_id =
                             event.get("winning_outcome_id").and_then(|v| v.as_str());
 
+                        #[cfg(desktop)]
+                        {
+                            if let Some(cid) = channel_id.as_deref() {
+                                crate::services::points_notify::note_prediction(cid, &message_data["data"]["event"]);
+                            }
+                            crate::services::points_notify::prediction_closed(app_handle, prediction_id);
+                        }
                         let winner_display = winning_outcome_id.unwrap_or("cancelled");
                         debug!(
                             "Prediction ended on {}: {} - Winner: {}",

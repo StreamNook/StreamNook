@@ -26,6 +26,38 @@ pub async fn get_streamer_mode_state() -> Result<StreamerModeState, String> {
     Ok(StreamerMode::state())
 }
 
+/// Ban, time out, lift, or delete on any platform. The service picks the
+/// platform API, applies its timeout rules and words the result.
+#[tauri::command]
+pub async fn moderate_chatter(
+    request: crate::services::moderation::ModRequest,
+) -> Result<crate::services::moderation::ModOutcome, String> {
+    crate::services::moderation::moderate(request).await.map_err(|e| e.to_string())
+}
+
+/// The timeout steps the dock and the row slider offer on `provider`, as that
+/// platform will apply them, ending in Ban. `presets` is the list the page is
+/// showing (it can be a moment ahead of the saved copy while a settings edit
+/// is in flight); without it the saved list is used.
+#[tauri::command]
+pub fn get_mod_timeout_steps(
+    provider: Option<String>,
+    presets: Option<Vec<u32>>,
+) -> Vec<crate::services::moderation::ModStep> {
+    crate::services::moderation::steps_for(provider.as_deref(), presets)
+}
+
+/// The row slider's steps on `provider`: Delete, the timeouts that platform
+/// applies, Ban, each as the viewer turned them on. `config` is the page's
+/// copy of those settings; without it the saved one is used.
+#[tauri::command]
+pub fn get_mod_slider_steps(
+    provider: Option<String>,
+    config: Option<crate::services::moderation::SliderConfig>,
+) -> Vec<crate::services::moderation::ModStep> {
+    crate::services::moderation::slider_steps_for(provider.as_deref(), config)
+}
+
 /// `/settitle` and `/setgame`: broadcaster-only Helix channel update.
 #[tauri::command]
 pub async fn update_channel_info(

@@ -10,6 +10,7 @@ import { Logger } from '../utils/logger';
 import { formatCostShort, newTransactionId, rewardKind, rewardStatusText, rewardTakesText } from '../utils/rewardStatus';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
+import { useOutsidePress } from '../hooks/useOutsidePress';
 
 /** Opening a reward re-reads the list when it is older than this. */
 const REWARDS_STALE_MS = 30_000;
@@ -351,17 +352,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
   // A press outside the popover closes it, as the commands menu beside it
   // does. A sheet closes on its own backdrop, a pane with its wallet.
-  useEffect(() => {
-    if (isSheet || isPane) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (menuRef.current?.contains(t)) return;
-      if (ignoreRef?.current?.contains(t)) return;
-      onClose();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [isSheet, isPane, onClose, ignoreRef]);
+  const markInside = useOutsidePress(!isSheet && !isPane, [menuRef, ignoreRef], onClose);
 
   // Escape backs out of the open view first, then clears a search, then
   // closes the menu.
@@ -732,6 +723,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   return (
     <motion.div
       ref={menuRef}
+      onPointerDownCapture={markInside}
       {...popoverMotion}
       className={
         isSheet

@@ -20,6 +20,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { usePinStore } from '../../stores/pinStore';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useFitAbove } from '../../hooks/useFitAbove';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
 export interface DropsTool {
   gameName: string;
@@ -137,17 +138,10 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
     }
   };
 
-  // Close when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setIsConfirmingClear(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const markInside = useOutsidePress(isOpen, [containerRef], () => {
+    setIsOpen(false);
+    setIsConfirmingClear(false);
+  });
 
   const handleToggleSetting = async (setting: string, currentValue: boolean | number) => {
     if (isPending || !broadcasterId) return;
@@ -217,7 +211,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   return (
     // Not positioned on purpose: the menu anchors to the composer's own
     // `relative` block, so it spans the whole message box like the emote menu.
-    <div className="static inline-flex flex-shrink-0 self-center" ref={containerRef}>
+    <div className="static inline-flex flex-shrink-0 self-center" ref={containerRef} onPointerDownCapture={markInside}>
       <Tooltip content={collecting ? `Tools (collecting drops for ${drops?.gameName})` : 'Tools'} side="top">
         <button
           onClick={() => {

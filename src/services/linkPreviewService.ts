@@ -20,7 +20,8 @@ export type LinkPreviewKind =
   | 'discord'
   | 'steam'
   | 'spotify'
-  | 'instagram';
+  | 'instagram'
+  | 'reddit';
 
 // Mirrors the Rust `LinkPreview` struct (serde keeps snake_case field names).
 export interface LinkPreview {

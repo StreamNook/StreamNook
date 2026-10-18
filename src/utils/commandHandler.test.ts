@@ -69,11 +69,24 @@ import { EXTENDED_COMMANDS, helpLines, parseDelay, parseSettingValue, sendPaced 
 
 const run = (line: string) => handleSlashCommand(line, '42', 'chan', vi.fn());
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd).map((c) => c[1]);
+// Bans and timeouts go through Rust `moderate_chatter`; read them back as
+// (channel, chatter, seconds or null for a ban, reason).
+const bans = () =>
+  calls('moderate_chatter')
+    .map((c) => c?.request as { broadcasterId?: string; targetUserId?: string; action: { kind: string; seconds?: number }; reason?: string | null })
+    .filter((r) => r.action.kind === 'ban' || r.action.kind === 'timeout')
+    .map((r) => ({
+      broadcasterId: r.broadcasterId,
+      targetUserId: r.targetUserId,
+      duration: r.action.kind === 'timeout' ? r.action.seconds : null,
+      reason: r.reason ?? null,
+    }));
 
 beforeEach(() => {
   invoke.mockReset();
   invoke.mockImplementation(async (cmd: string) => {
     if (cmd === 'get_user_by_login') return { id: '7', login: 'bob', display_name: 'Bob' };
+    if (cmd === 'moderate_chatter') return { appliedSeconds: null, message: 'done', undoable: true };
     if (cmd === 'get_active_poll') return { id: 'poll-9' };
     if (cmd.startsWith('slash_')) return 'ok';
     return null;
@@ -152,16 +165,16 @@ describe('dispatch', () => {
   it('runs aliases through the same call as the full name', async () => {
     await run('/b bob spamming');
     await run('/ban bob spamming');
-    const bans = calls('ban_user');
-    expect(bans).toHaveLength(2);
-    expect(bans[0]).toEqual(bans[1]);
-    expect(bans[0]).toMatchObject({ broadcasterId: '42', targetUserId: '7', duration: null, reason: 'spamming' });
+    const made = bans();
+    expect(made).toHaveLength(2);
+    expect(made[0]).toEqual(made[1]);
+    expect(made[0]).toMatchObject({ broadcasterId: '42', targetUserId: '7', duration: null, reason: 'spamming' });
   });
 
   it('/p and /purge time out for one second', async () => {
     await run('/p bob');
     await run('/purge bob rude');
-    expect(calls('ban_user')).toEqual([
+    expect(bans()).toEqual([
       { broadcasterId: '42', targetUserId: '7', duration: 1, reason: null },
       { broadcasterId: '42', targetUserId: '7', duration: 1, reason: 'rude' },
     ]);
@@ -216,7 +229,7 @@ describe('dispatch', () => {
     expect(addToast).toHaveBeenCalledWith('Usage: /ban <username> [reason]', 'info');
     expect(await run('/purge')).toBe(true);
     expect(addToast).toHaveBeenCalledWith('Usage: /purge <username> [reason]', 'info');
-    expect(calls('ban_user')).toEqual([]);
+    expect(bans()).toEqual([]);
   });
 
   it('/editor asks for confirmation before granting', async () => {

@@ -20,10 +20,12 @@ import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
 import { makeKey, parseKey } from '../utils/providerKey';
+import { onWalletRequest, takeWalletRequest } from '../utils/walletRequest';
 import { isHomeRow, rowProvider } from '../utils/chatAuthority';
 import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
 import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
 import { sendToSource } from '../utils/sendToSource';
+import { varyRepeat } from '../utils/sentContent';
 import { ProviderMark } from './ProviderLogo';
 import BlendBar, { type BlendView } from './chat/BlendBar';
 import { BlendSourcesButton } from './chat/BlendSourcesButton';
@@ -152,8 +154,9 @@ import { Logger } from '../utils/logger';
 const chatDrafts = new Map<string, string>();
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
+import { fitCount, fitSeconds } from '../utils/fitNumber';
 import { lastLiveLabel } from '../utils/lastLive';
-import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
+import { moderateChatter, moderateWithToast, type ModAction, type ModRequest } from '../services/moderation';
 import { openBadgeInfo } from '../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../utils/badgeSpotlight';
 
@@ -648,7 +651,9 @@ const PausedNewCount = ({ sliceKeys, isPaused }: { sliceKeys: string; isPaused: 
   }, [isPaused, sliceKeys]);
   if (!isPaused || !sliceKeys || anchor === null) return null;
   const delta = Math.max(0, sumLive() - anchor);
-  return delta > 0 ? <> ({delta} new)</> : null;
+  // Capped at 99+: a busy room passes thousands in seconds, and the pill
+  // must stay one line.
+  return delta > 0 ? <> ({fitCount(delta)} new)</> : null;
 };
 
 const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp, onFilterIdChange }: ChatWidgetProps = {}) => {
@@ -1002,10 +1007,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Per-channel drafts: switching channels parks the unsent text and brings
   // back whatever was typed there before (module-level, survives remounts).
   const draftKeyRef = useRef<string | null>(null);
-  // Slow-mode countdown: the wall-clock of our last send; the composer shows
-  // the remaining wait while roomState.slow is on.
-  const [lastSentAt, setLastSentAt] = useState(0);
-  const [slowNow, setSlowNow] = useState(0);
+  // Slow-mode countdown: the wall-clock of our last chat line and the room it
+  // went to (another room's send starts no wait here); the composer shows the
+  // remaining wait while roomState.slow is on.
+  const [lastSent, setLastSent] = useState<{ channel: string | null; at: number } | null>(null);
+  // The seconds left, with the deadline they were counted for. A count kept
+  // for an older deadline is never shown: a deadline compared with a clock
+  // that was never read put the whole epoch on the send button.
+  const [slowTick, setSlowTick] = useState({ until: 0, left: 0 });
   // A YouTube send whose answer came back without its posted row counts as
   // sent. Rust watches chat for the row and says so here when it never came,
   // so the text can be put back and sent again.
@@ -1139,6 +1148,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     if (activeView === 'modroom' && !modRoomEligible) setActiveView('chat');
   }, [activeView, modRoomEligible, isTwitch]);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
+  const emoteButtonRef = useRef<HTMLButtonElement>(null);
   // While the picker is open, fill the emote disk cache aggressively (the user is
   // actively waiting on these); the matching cleanup drops back to the polite
   // background trickle on close. Ref-counted in the service so split panes /
@@ -2077,21 +2087,34 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Rust's words carry the wait that applies to you (none for a VIP); a frame
   // without words (a YouTube send cooldown) carries only the raw wait.
   const slowSeconds = roomState?.modes ? roomState.modes.slow_seconds : (roomState?.slow ?? 0);
-  const slowRemaining =
-    slowSeconds > 0 && lastSentAt > 0 && !isModerator
-      ? Math.max(0, Math.ceil((lastSentAt + slowSeconds * 1000 - slowNow) / 1000))
+  const slowUntil =
+    slowSeconds > 0 && !isModerator && lastSent && lastSent.channel === panelChannelKey
+      ? lastSent.at + slowSeconds * 1000
       : 0;
+  // Never more than the room's own wait, even if the wall clock jumped back.
+  const slowRemaining =
+    slowUntil > 0 && slowTick.until === slowUntil ? Math.min(slowSeconds, slowTick.left) : 0;
   useEffect(() => {
-    if (slowSeconds <= 0 || lastSentAt <= 0 || isModerator) return;
-    const until = lastSentAt + slowSeconds * 1000;
-    if (Date.now() >= until) return;
-    const id = window.setInterval(() => {
-      const now = Date.now();
-      setSlowNow(now);
-      if (now >= until) window.clearInterval(id);
-    }, 250);
-    return () => window.clearInterval(id);
-  }, [slowSeconds, lastSentAt, isModerator]);
+    if (slowUntil <= 0) return;
+    // Every count reads the clock against this deadline, including the first,
+    // so slow mode turning on long after a send counts straight to 0.
+    let interval = 0;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((slowUntil - Date.now()) / 1000));
+      // Same second, same object: the composer re-renders once a second.
+      setSlowTick((prev) => (prev.until === slowUntil && prev.left === left ? prev : { until: slowUntil, left }));
+      if (left === 0) window.clearInterval(interval);
+    };
+    const first = window.setTimeout(tick, 0);
+    interval = window.setInterval(tick, 250);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(interval);
+      // A count lives only as long as the timer keeping it current: back on
+      // this channel later, an old count must not show for the same deadline.
+      setSlowTick((prev) => (prev.until === 0 ? prev : { until: 0, left: 0 }));
+    };
+  }, [slowUntil]);
   // Replay still wins: it is a different feed entirely, not a merge of live ones.
   const blendOverride = useMemo(
     () =>
@@ -2481,6 +2504,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
     : null;
   const chestWaiting = !!availableClaim && !autoClaimWatching;
+
+  // A notification's Rewards button: open the wallet once this chat shows the
+  // channel it named (the click may have just started that stream).
+  const walletChannel = isTwitch ? currentStream?.user_login : undefined;
+  useEffect(() => {
+    const take = () => {
+      if (takeWalletRequest(walletChannel)) setShowChannelPointsMenu(true);
+    };
+    take();
+    return onWalletRequest(take);
+  }, [walletChannel]);
 
   // A click on the chest button (auto-claim off). Rust claims it and reports
   // the claim; the `watched-chest-claimed` listener below shows the "+N".
@@ -3057,12 +3091,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
       return { items, idx, t: items[idx] };
     };
-    const fmtDur = (s: number) => (s < 60 ? `${s}s` : s < 3600 ? `${s / 60}m` : `${s / 3600}h`);
-    const act = async (
-      run: (t: ModMsg, broadcasterId: string) => Promise<unknown>,
-      label: (t: ModMsg) => string,
-      advance: boolean,
-    ) => {
+    // Rust `moderate_chatter` picks the platform API for `provider` and words
+    // the toast with what the platform really applied.
+    const request = (t: ModMsg, b: string, action: ModAction): ModRequest => ({
+      provider,
+      broadcasterId: b,
+      channel: youtubeSlug,
+      targetUserId: t.userId,
+      targetName: t.displayName,
+      action,
+    });
+    // Through `moderateWithToast`, so a key ban or timeout gets the same words
+    // and Undo as every other surface.
+    const act = async (action: (t: ModMsg) => ModAction, advance: boolean) => {
       const f = focused();
       if (!f) return;
       const broadcasterId = broadcasterIdRef.current;
@@ -3070,17 +3111,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         useAppStore.getState().addToast('No channel to moderate', 'warning');
         return;
       }
-      try {
-        await run(f.t, broadcasterId);
-        useAppStore.getState().addToast(label(f.t), 'success');
-        if (advance) {
-          const older = f.items[f.idx - 1];
-          if (older) focusAt(f.items, f.idx - 1);
-          else setModFocusId(null);
-        }
-      } catch (err) {
-        Logger.error('[Mod] keyboard action failed:', err);
-        useAppStore.getState().addToast('Moderation action failed', 'error');
+      const outcome = await moderateWithToast(request(f.t, broadcasterId, action(f.t)));
+      if (outcome && advance) {
+        const older = f.items[f.idx - 1];
+        if (older) focusAt(f.items, f.idx - 1);
+        else setModFocusId(null);
       }
     };
 
@@ -3097,60 +3132,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           detail: { userId: f.t.userId, username: f.t.username, displayName: f.t.displayName },
         }));
       },
-      deleteFocused: () => void act(
-        (t, b) =>
-          isTwitch
-            ? invoke('delete_chat_message', { broadcasterId: b, messageId: t.deleteId })
-            : provider === 'youtube'
-            ? invoke('youtube_delete_message', { channel: youtubeSlug, messageId: t.deleteId })
-            : invoke('kick_delete_message', { messageId: t.deleteId }),
-        (t) => `Deleted message from ${t.displayName}`,
-        true,
-      ),
-      timeoutFocused: (seconds: number) => void act(
-        (t, b) =>
-          isTwitch
-            ? invoke('ban_user', { broadcasterId: b, targetUserId: t.userId, duration: seconds, reason: null })
-            : provider === 'youtube'
-            ? invoke('youtube_ban_user', { channel: youtubeSlug, targetChannelId: t.userId, durationSeconds: seconds })
-            : invoke('kick_ban_user', {
-                broadcasterUserId: Number(b),
-                targetUserId: Number(t.userId),
-                durationMinutes: kickTimeoutMinutes(seconds),
-                reason: null,
-              }),
-        // Kick rounds to whole minutes, so name the duration it really applies.
-        (t) =>
-          `Timed out ${t.displayName} (${fmtDur(
-            provider === 'kick' ? kickAppliedSeconds(seconds) : seconds,
-          )})`,
-        true,
-      ),
-      banFocused: () => void act(
-        (t, b) =>
-          isTwitch
-            ? invoke('ban_user', { broadcasterId: b, targetUserId: t.userId, duration: null, reason: null })
-            : provider === 'youtube'
-            ? invoke('youtube_ban_user', { channel: youtubeSlug, targetChannelId: t.userId, durationSeconds: null })
-            : invoke('kick_ban_user', {
-                broadcasterUserId: Number(b),
-                targetUserId: Number(t.userId),
-                durationMinutes: null,
-                reason: null,
-              }),
-        (t) => `Banned ${t.displayName}`,
-        true,
-      ),
-      unbanFocused: () => void act(
-        (t, b) =>
-          isTwitch
-            ? invoke('unban_user', { broadcasterId: b, targetUserId: t.userId })
-            : provider === 'youtube'
-            ? invoke('youtube_unban_user', { channel: youtubeSlug, targetChannelId: t.userId })
-            : invoke('kick_unban_user', { broadcasterUserId: Number(b), targetUserId: Number(t.userId) }),
-        (t) => `Unbanned ${t.displayName}`,
-        false,
-      ),
+      deleteFocused: () => void act((t) => ({ kind: 'delete', messageId: t.deleteId }), true),
+      timeoutFocused: (seconds: number) => void act(() => ({ kind: 'timeout', seconds }), true),
+      banFocused: () => void act(() => ({ kind: 'ban' }), true),
+      unbanFocused: () => void act(() => ({ kind: 'unban' }), false),
     };
     registerChatModController(controller);
     return () => {
@@ -3207,13 +3192,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
   };
 
-  // Per-channel last-sent cache for the bypass-duplicate feature. Keyed by
-  // currentStream user_id so switching channels resets the tracking.
+  // Per-channel last-sent text (as sent, suffix included) for the
+  // bypass-duplicate feature, keyed by the chat the line went to.
   const lastSentRef = useRef<Map<string, string>>(new Map());
-  // Invisible Plane-14 tag character that Twitch's duplicate-message detector
-  // ignores but the IRC pipeline accepts. Used to bypass the rejection when
-  // the user opts in. Single char, takes no visual space in chat.
-  const DUPLICATE_BYPASS_SUFFIX = ' \u{E0000}';
 
   // Slash commands on a Kick/YouTube channel. The Twitch handler is Helix, GQL
   // and raw IRC end to end, so nothing here may fall through to it. Moderation
@@ -3295,41 +3276,27 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         );
         return;
       }
+      // Rust `moderate_chatter` routes Kick and YouTube and words the result
+      // with what the platform applied (Kick's whole minutes, YouTube's 5m).
       try {
-        if (verb === 'unban') {
-          await (isYouTube
-            ? invoke('youtube_unban_user', { channel: youtubeSlug, targetChannelId: target.user_id })
-            : invoke('kick_unban_user', {
-                broadcasterUserId: Number(broadcasterId),
-                targetUserId: Number(target.user_id),
-              }));
-          useAppStore.getState().addToast(`Unbanned ${target.display_name || target.username}`, 'success');
-          return;
-        }
-        const reason = args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null;
-        await (isYouTube
-          ? invoke('youtube_ban_user', {
-              channel: youtubeSlug,
-              targetChannelId: target.user_id,
-              durationSeconds: seconds,
-            })
-          : invoke('kick_ban_user', {
-              broadcasterUserId: Number(broadcasterId),
-              targetUserId: Number(target.user_id),
-              durationMinutes: seconds === null ? null : kickTimeoutMinutes(seconds),
-              reason,
-            }));
-        useAppStore
-          .getState()
-          .addToast(
-            verb === 'ban'
-              ? `Banned ${target.display_name || target.username}`
-              : `Timed out ${target.display_name || target.username}`,
-            'success',
-          );
+        const outcome = await moderateChatter({
+          provider: isYouTube ? 'youtube' : 'kick',
+          broadcasterId,
+          channel: youtubeSlug,
+          targetUserId: target.user_id,
+          targetName: target.display_name || target.username,
+          action:
+            verb === 'unban'
+              ? { kind: 'unban' }
+              : seconds === null
+                ? { kind: 'ban' }
+                : { kind: 'timeout', seconds },
+          reason: verb === 'unban' ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+        });
+        useAppStore.getState().addToast(outcome.message, 'success');
       } catch (err) {
         Logger.error('[Provider] moderation command failed:', err);
-        useAppStore.getState().addToast('Moderation action failed', 'error');
+        useAppStore.getState().addToast(String(err), 'error');
       }
     };
 
@@ -3379,7 +3346,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   };
 
   const handleSendMessage = async (opts?: { keepInput?: boolean }) => {
-    setLastSentAt(Date.now());
+    // A chat line that went out to this room starts its slow-mode wait. A
+    // command, a failed send or a reply sent to another platform's room
+    // leaves the wait alone.
+    const sendStartedAt = Date.now();
+    const sendChannel = panelChannelKey;
+    const noteChatLineSent = () => setLastSent({ channel: sendChannel, at: sendStartedAt });
     // Twitch sends need the Twitch account; a provider send needs only that
     // platform's own connection, so a Kick/YouTube user with no Twitch login
     // can still talk.
@@ -3389,24 +3361,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       const keepInput = !!opts?.keepInput;
       let messageToSend = messageInput;
 
-      // Bypass duplicate — if this message is identical to the last one we
-      // sent on this channel, append the invisible suffix so Twitch accepts
-      // the second send. Skipped for slash commands (which Twitch doesn't
-      // dedupe) and resub/streak modes (different code path entirely).
-      const channelKey = currentStream?.user_id || '_';
+      // Bypass duplicate: a repeat of the last line sent here goes out varied
+      // or plain, whichever differs from that line (varyRepeat). Skipped for
+      // slash commands (which Twitch doesn't dedupe) and resub/streak modes
+      // (different code path entirely).
+      const channelKey = sendChannel || '_';
       if (
         isTwitch &&
         inputSettings?.bypass_duplicate &&
         !messageToSend.startsWith('/') &&
         !isResubMode &&
-        !isWatchStreakMode &&
-        lastSentRef.current.get(channelKey) === messageToSend
+        !isWatchStreakMode
       ) {
-        messageToSend = messageToSend + DUPLICATE_BYPASS_SUFFIX;
+        messageToSend = varyRepeat(messageToSend, lastSentRef.current.get(channelKey));
       }
-      // Record what we sent (the original, pre-suffix form) so a third send
-      // of the same text also triggers the bypass.
-      lastSentRef.current.set(channelKey, messageInput);
+      // What actually went out, so the next repeat flips the other way.
+      lastSentRef.current.set(channelKey, messageToSend.trimEnd());
 
       // Push the sent text onto the arrow-key recall history. De-dupe against
       // the immediately-previous entry and cap the buffer. Reset the navigation
@@ -3563,6 +3533,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               color: undefined,
               badges: ''
             });
+            noteChatLineSent();
             return;
           }
 
@@ -3608,6 +3579,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             color: undefined,
             badges: ''
           } : undefined, replyParentMsgId, senderAccount);
+          noteChatLineSent();
         }
 
         // Stats and emote tallies are keyed by the Twitch user id, so they only
@@ -5513,7 +5485,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Chat Paused indicator - positioned above input */}
         {activeView === 'chat' && isPaused && (
           <div className="absolute bottom-[60px] left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
-            <button onClick={handleResume} className="flex items-center gap-2 px-4 py-2 glass-button text-white text-sm font-medium rounded-full shadow-lg">
+            <button onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 glass-button text-white text-sm font-medium rounded-full shadow-lg">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
               <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -5534,6 +5506,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               <EmotePickerPanel
                 open={showEmotePicker}
                 onClose={() => setShowEmotePicker(false)}
+                ignoreRef={emoteButtonRef}
                 emotes={emotes}
                 isTwitch={isTwitch}
                 isKick={provider === 'kick'}
@@ -5791,6 +5764,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   {showEmoteButton && (
                   <Tooltip content={showEmotePicker ? 'Close' : isTwitch ? 'Emotes, GIFs and commands' : 'Emotes and commands'} side="top">
                   <button
+                    ref={emoteButtonRef}
                     onClick={() => {
                       // Twitch only. A non-Twitch pane legitimately has an empty
                       // `twitch` slot, so without this gate every picker open on
@@ -6042,10 +6016,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   }`}
                 >
                   {/* While a slow-mode wait runs, the seconds left stand in for
-                      the arrow, in the same 36px button. */}
+                      the arrow, in the same 36px button. fitSeconds keeps it to
+                      three characters, which the button always fits. */}
                   {slowRemaining > 0 && !isWatchStreakMode ? (
-                    <span className="text-[13px] font-semibold tabular-nums leading-none text-textPrimary" aria-label={`Send again in ${slowRemaining} seconds`}>
-                      {slowRemaining}
+                    <span className="sn-send-count text-[13px] font-semibold tabular-nums leading-none text-textPrimary" aria-label={`Send again in ${slowRemaining} seconds`}>
+                      {fitSeconds(slowRemaining)}
                     </span>
                   ) : composerCheer?.icon_url && !isWatchStreakMode ? (
                     // The message cheers: Send spends, so it wears the gem.

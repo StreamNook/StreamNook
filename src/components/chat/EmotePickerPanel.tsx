@@ -66,8 +66,11 @@ import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
 import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
 import { useFitAbove } from '../../hooks/useFitAbove';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
+import { fitAmount } from '../../utils/fitNumber';
+import { fitHeaderDensity } from './fitHeaderDensity';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
 /** While searching, the tabs filter the results: `all` is every source. */
@@ -475,6 +478,8 @@ const LazyEmoteBlock = memo(
 export interface EmotePickerPanelProps {
   open: boolean;
   onClose: () => void;
+  /** The button that opens it: pressing it is its own toggle, not an outside press. */
+  ignoreRef?: RefObject<HTMLElement | null>;
   emotes: EmoteSet | null;
   isTwitch: boolean;
   isKick: boolean;
@@ -515,6 +520,7 @@ const HOST_PANEL_FILL =
 export function EmotePickerPanel({
   open,
   onClose,
+  ignoreRef,
   emotes,
   isTwitch,
   isKick,
@@ -554,6 +560,10 @@ export function EmotePickerPanel({
   const [searchQuery, setSearchQuery] = useState('');
   // Typing searches every source at once; the tabs then filter the results.
   const [searchScope, setSearchScope] = useState<SearchScope>('all');
+  // The source tabs drop their counts (globals.css `.sn-emote-tabs`) when the
+  // panel is too narrow for them; the tooltips keep the exact numbers.
+  const [tabRowEl, setTabRowEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => (tabRowEl ? fitHeaderDensity(tabRowEl, 1, 0) : undefined), [tabRowEl]);
   // Kept with the query it answers. The last answer stays on screen until the
   // next one lands, so narrowing a search never flickers.
   const [searchResult, setSearchResult] = useState<(EmoteMatchResult & { query: string }) | null>(null);
@@ -563,6 +573,8 @@ export function EmotePickerPanel({
   // positions the menu itself (the pop-out window) sizes it itself.
   const panelRef = useRef<HTMLDivElement>(null);
   useFitAbove(panelRef, open && !className, PANEL_MAX_PX);
+  // A press anywhere else closes it, the expanded Commands dialog included as inside.
+  const markInside = useOutsidePress(open, [panelRef, ignoreRef], onClose);
   // Emotes animate only while the list is at rest, like the chat's own
   // "Animate emotes" setting allows: during a scroll every cell going past
   // draws its first frame, so a fling never decodes hundreds of animations.
@@ -1135,6 +1147,7 @@ export function EmotePickerPanel({
         if (def === 'closed') setFullyClosed(true);
       }}
       ref={panelRef}
+      onPointerDownCapture={markInside}
       className={className || DEFAULT_PANEL_CLASS}
       style={{
         backgroundColor: className ? HOST_PANEL_FILL : undefined,
@@ -1192,32 +1205,32 @@ export function EmotePickerPanel({
           )}
         </div>
         {section === 'emotes' && (
-        <div className="flex gap-1 mt-2">
+        <div ref={setTabRowEl} className="sn-emote-tabs flex gap-1 mt-2">
           {searching && (
             <Tooltip content={`Everything (${tabCount('all')})`} side="top">
               <button onClick={() => setSearchScope('all')} className={tabClass(activeTab === 'all')} style={{ borderRadius: '8px' }}>
                 <span className="text-[11px] font-semibold leading-4">All</span>
-                <span className="text-[10px] opacity-70">{tabCount('all')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('all'))}</span>
               </button>
             </Tooltip>
           )}
           <Tooltip content={`Favorites (${tabCount('favorites')})`} side="top">
             <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={{ borderRadius: '8px' }}>
               <span className="text-yellow-400">★</span>
-              <span className="text-[10px] opacity-70">{tabCount('favorites')}</span>
+              <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('favorites'))}</span>
             </button>
           </Tooltip>
           <Tooltip content="Emoji" side="top">
             <button onClick={() => pickTab('emoji')} className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
               <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
-              {searching && <span className="text-[10px] opacity-70">{tabCount('emoji')}</span>}
+              {searching && <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('emoji'))}</span>}
             </button>
           </Tooltip>
           {isTwitch && (
             <Tooltip content={`Twitch (${tabCount('twitch')})`} side="top">
               <button onClick={() => pickTab('twitch')} className={tabClass(activeTab === 'twitch')} style={tabStyle(activeTab === 'twitch', 'twitch')}>
                 <EmoteProviderLogo provider="twitch" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('twitch')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('twitch'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1225,7 +1238,7 @@ export function EmotePickerPanel({
             <Tooltip content={`BetterTTV (${tabCount('bttv')})`} side="top">
               <button onClick={() => pickTab('bttv')} className={tabClass(activeTab === 'bttv')} style={tabStyle(activeTab === 'bttv', 'bttv')}>
                 <EmoteProviderLogo provider="bttv" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('bttv')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('bttv'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1233,7 +1246,7 @@ export function EmotePickerPanel({
             <Tooltip content={`Kick (${tabCount('kick')})`} side="top">
               <button onClick={() => pickTab('kick')} className={tabClass(activeTab === 'kick')} style={tabStyle(activeTab === 'kick', 'kick')}>
                 <EmoteProviderLogo provider="kick" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('kick')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('kick'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1248,7 +1261,7 @@ export function EmotePickerPanel({
             >
               <button onClick={() => pickTab('youtube')} className={tabClass(activeTab === 'youtube')} style={tabStyle(activeTab === 'youtube', 'youtube')}>
                 <EmoteProviderLogo provider="youtube" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('youtube')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('youtube'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1259,7 +1272,7 @@ export function EmotePickerPanel({
             <Tooltip content={`7TV (${tabCount('7tv')})`} side="top">
               <button onClick={() => pickTab('7tv')} className={tabClass(activeTab === '7tv')} style={tabStyle(activeTab === '7tv', '7tv')}>
                 <EmoteProviderLogo provider="7tv" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('7tv')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('7tv'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1267,7 +1280,7 @@ export function EmotePickerPanel({
             <Tooltip content={`FrankerFaceZ (${tabCount('ffz')})`} side="top">
               <button onClick={() => pickTab('ffz')} className={tabClass(activeTab === 'ffz')} style={tabStyle(activeTab === 'ffz', 'ffz')}>
                 <EmoteProviderLogo provider="ffz" className="w-4 h-4" />
-                <span className="text-[10px] opacity-70">{tabCount('ffz')}</span>
+                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('ffz'))}</span>
               </button>
             </Tooltip>
           )}

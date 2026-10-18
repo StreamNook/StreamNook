@@ -118,6 +118,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const needsKickSignIn = provider === 'kick' && !kickConnected;
   const [text, setText] = useState('');
   const [emotesOpen, setEmotesOpen] = useState(false);
+  const emoteButtonRef = useRef<HTMLButtonElement>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
@@ -371,6 +372,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
             typing area keeps full width instead of being squeezed by chrome. */}
         <div className="glass-input flex-1 min-w-0 flex items-end gap-1 pl-1 pr-2">
           <button
+            ref={emoteButtonRef}
             onClick={() => {
               cycleEmoteSmiley();
               setPointsOpen(false);
@@ -608,6 +610,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         <EmotePickerPanel
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
+          ignoreRef={emoteButtonRef}
           emotes={emotes}
           isTwitch={isTwitch}
           isKick={provider === 'kick'}

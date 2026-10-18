@@ -13,11 +13,18 @@
 //! - emotes trickle one at a time with a real gap, so background caching never
 //!   competes with the live video; while an emote picker is open (the one moment
 //!   someone is waiting on emotes) they burst five at a time;
-//! - cosmetics and badges are few and small: five at a time, no gap.
+//! - cosmetics and badges are few and small: five at a time, no gap;
+//! - StreamNook's own art is a few large files from cdn.streamnook.app, three at
+//!   a time, each fetched with resume (`cache_streamnook_art`). The page shows
+//!   the disk copy once it lands, so art the webview could not load (a network
+//!   that drops long transfers to that host) still arrives.
 
-use crate::services::universal_cache_service::{cache_file, cached_file_paths, CacheType};
+use crate::services::universal_cache_service::{
+    cache_file, cache_streamnook_art, cached_file_paths, CacheType,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use crate::rt::AppHandle;
@@ -32,6 +39,11 @@ const POLITE_GAP: Duration = Duration::from_millis(250);
 const BURST_CONCURRENT: usize = 5;
 const BURST_GAP: Duration = Duration::from_millis(15);
 const SMALL_ASSET_CONCURRENT: usize = 5;
+const STREAMNOOK_ART_CONCURRENT: usize = 3;
+
+/// One warning per session when StreamNook art cannot be downloaded, so a
+/// member's log says why their badges show placeholders.
+static ART_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,6 +51,8 @@ pub enum AssetKind {
     Emote,
     Cosmetic,
     Badge,
+    /// StreamNook badges, relics and frames; the request id is the art's URL.
+    Streamnook,
 }
 
 impl AssetKind {
@@ -47,6 +61,7 @@ impl AssetKind {
             AssetKind::Emote => CacheType::Emote,
             AssetKind::Cosmetic => CacheType::Cosmetic,
             AssetKind::Badge => CacheType::Badge,
+            AssetKind::Streamnook => CacheType::StreamNookArt,
         }
     }
 }
@@ -115,6 +130,7 @@ fn pacing(kind: AssetKind, burst: bool) -> (usize, Duration) {
     match kind {
         AssetKind::Emote if burst => (BURST_CONCURRENT, BURST_GAP),
         AssetKind::Emote => (POLITE_CONCURRENT, POLITE_GAP),
+        AssetKind::Streamnook => (STREAMNOOK_ART_CONCURRENT, Duration::ZERO),
         _ => (SMALL_ASSET_CONCURRENT, Duration::ZERO),
     }
 }
@@ -197,8 +213,16 @@ async fn download(app: &AppHandle, kind: AssetKind, item: &AssetRequest) -> Opti
     if !enabled {
         return None;
     }
-    match cache_file(kind.cache_type(), item.id.clone(), item.url.clone(), expiry_days).await {
+    let result = match kind {
+        AssetKind::Streamnook => cache_streamnook_art(item.url.clone()).await,
+        _ => cache_file(kind.cache_type(), item.id.clone(), item.url.clone(), expiry_days).await,
+    };
+    match result {
         Ok(path) => Some(path),
+        Err(e) if kind == AssetKind::Streamnook && !ART_FAILURE_LOGGED.swap(true, Ordering::Relaxed) => {
+            log::warn!("[AssetCache] StreamNook art could not be downloaded ({}): {e:#}", item.url);
+            None
+        }
         Err(e) => {
             log::debug!("[AssetCache] could not cache {:?} {}: {e}", kind, item.id);
             None
@@ -219,11 +243,24 @@ fn split_cached(kind: AssetKind, items: Vec<AssetRequest>) -> (HashMap<String, S
     (hits, misses)
 }
 
+/// StreamNook art is keyed by its URL and only ever fetched from our CDN.
+fn streamnook_art_requests(items: Vec<AssetRequest>) -> Vec<AssetRequest> {
+    items
+        .into_iter()
+        .filter(|i| crate::services::universal_cache_service::is_streamnook_art_url(&i.url))
+        .map(|i| AssetRequest { id: i.url.clone(), url: i.url })
+        .collect()
+}
+
 /// Queue files for the disk cache. Ones already there are announced at once.
 pub fn enqueue(app: &AppHandle, kind: AssetKind, items: Vec<AssetRequest>, priority: bool) {
     if items.is_empty() || !cache_settings(app).0 {
         return;
     }
+    let items = match kind {
+        AssetKind::Streamnook => streamnook_art_requests(items),
+        _ => items,
+    };
     let (hits, misses) = split_cached(kind, items);
     announce(app, kind, hits);
     let added = with_state(|s| admit(s.lanes.entry(kind).or_default(), misses, priority));
@@ -287,5 +324,22 @@ mod tests {
         assert_eq!(pacing(AssetKind::Emote, false), (POLITE_CONCURRENT, POLITE_GAP));
         assert_eq!(pacing(AssetKind::Emote, true), (BURST_CONCURRENT, BURST_GAP));
         assert_eq!(pacing(AssetKind::Badge, false).0, SMALL_ASSET_CONCURRENT);
+        assert_eq!(pacing(AssetKind::Streamnook, true).0, STREAMNOOK_ART_CONCURRENT);
+    }
+
+    #[test]
+    fn streamnook_art_is_keyed_by_url_and_only_from_our_cdn() {
+        let kept = streamnook_art_requests(vec![
+            AssetRequest { id: "kindred".into(), url: "https://cdn.streamnook.app/badges/kindred.webp?v=2".into() },
+            AssetRequest { id: "x".into(), url: "https://example.com/badges/kindred.webp".into() },
+        ]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "https://cdn.streamnook.app/badges/kindred.webp?v=2");
+    }
+
+    #[test]
+    fn streamnook_is_the_wire_name() {
+        let kind: AssetKind = serde_json::from_str("\"streamnook\"").unwrap();
+        assert_eq!(kind, AssetKind::Streamnook);
     }
 }

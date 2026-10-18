@@ -27,6 +27,7 @@ import {
 import type { CosmeticCatalogEntry } from '../services/supabaseService';
 import { StreamNookTierCard } from './StreamNookBadge';
 import { resolveCosmeticAsset } from './cosmeticAssets';
+import { CosmeticArt } from './CosmeticArt';
 import { listAtmospheres, getAtmosphereUnlock } from '../services/atmospheres';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import streamNookLogo from '../assets/streamnook-logo-128.webp';
@@ -2102,9 +2103,9 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                             <div className={`w-18 h-18 flex items-center justify-center bg-transparent group-hover:scale-110 transition-transform duration-300 relative ${
                               owned ? 'drop-shadow-[0_0_15px_rgba(212,168,75,0.4)]' : ''
                             }`}>
-                              <img
-                                src={asset}
-                                alt={cosmetic.name}
+                              <CosmeticArt
+                                cosmetic={cosmetic}
+                                chatSize
                                 className="w-16 h-16 object-contain"
                                 loading="lazy"
                               />
@@ -2505,12 +2506,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                 <div className="flex justify-center mb-6">
                   <div className="w-32 h-32 flex items-center justify-center bg-transparent rounded-xl">
                     {asset ? (
-                      <img
-                        src={asset}
-                        alt={cosmetic.name}
-                        className="w-28 h-28 object-contain"
-                        draggable={false}
-                      />
+                      <CosmeticArt cosmetic={cosmetic} className="w-28 h-28 object-contain" />
                     ) : (
                       <div className="w-28 h-28 rounded bg-white/[0.04]" />
                     )}

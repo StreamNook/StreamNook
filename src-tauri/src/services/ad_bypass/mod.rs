@@ -151,6 +151,25 @@ pub async fn resolve_master(
     Some(resolved)
 }
 
+/// The ad-free resolution for a stream that plays somewhere other than this
+/// phone (a Cast device). Same entitlement rule, race and splice as
+/// [`resolve_master`], with none of its effects: `ENABLED`, `ACTIVE` and the
+/// pivot all describe the stream this phone's own player is serving, and a TV
+/// stream must not arm or disarm them.
+pub(crate) async fn resolve_detached(
+    channel: &str,
+    core: Option<&ResolvedLive>,
+    settings: &VideoPlayerSettings,
+) -> Option<ResolvedLive> {
+    if !settings.ad_bypass_enabled || core.map(|r| r.status.entitled).unwrap_or(false) {
+        return None;
+    }
+    let (configured, user_supplied) = configured_bases(settings);
+    resolve_through_relay(channel, "best", core, &configured, &[], !user_supplied)
+        .await
+        .map(|(resolved, _)| resolved)
+}
+
 /// The relay bases to prefer, and whether they came from the user rather than
 /// the bundled pool (which decides whether falling back to the pool is allowed).
 fn configured_bases(settings: &VideoPlayerSettings) -> (Vec<String>, bool) {

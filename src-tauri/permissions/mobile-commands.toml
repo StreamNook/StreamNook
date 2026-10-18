@@ -22,4 +22,11 @@ allow = [
   "update_chat_identity_gql",
   "flush_persistent_stores",
   "export_logs",
+  "cast_get_state",
+  "cast_open_picker",
+  "cast_control",
+  "cast_open_mirroring",
+  "tv_get_state",
+  "tv_set_enabled",
+  "tv_control",
 ]

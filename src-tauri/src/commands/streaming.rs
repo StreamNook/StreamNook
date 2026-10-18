@@ -118,8 +118,9 @@ pub struct StreamStartResult {
     #[serde(default)]
     pub available: Vec<String>,
     /// How the player should ingest `url`: absent (the default) and "hls" both
-    /// mean an HLS playlist, "flv" means an FLV stream needing the mpegts path.
-    /// Absent for every Twitch path, so existing consumers are unaffected.
+    /// mean an HLS playlist, "flv" means an FLV stream needing the mpegts path,
+    /// "cast" (Android) means a Cast device plays it and `url` is a placeholder.
+    /// Absent for every other Twitch path, so existing consumers are unaffected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// VOD starts only: status, length, timeline anchor, where to begin, and
@@ -523,6 +524,21 @@ pub async fn start_stream(
     quality: String,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, StartError> {
+    let result = start_stream_inner(url, quality, state).await;
+    // TV screen mode plays whatever the phone would: every start, restart and
+    // quality change passes through here.
+    #[cfg(target_os = "android")]
+    if let Ok(started) = &result {
+        crate::services::tv_screen::on_local_stream(Some(&started.url));
+    }
+    result
+}
+
+async fn start_stream_inner(
+    url: String,
+    quality: String,
+    state: State<'_, AppState>,
+) -> Result<StreamStartResult, StartError> {
     debug!("[Streaming] start_stream called for URL: {}", url);
 
     // Clear the prior solo session up front; only a live resolve below
@@ -534,6 +550,10 @@ pub async fn start_stream(
     // and session resume all keep working with no new command surface.
     if let WatchTarget::Provider { provider, channel } = watch_urls::classify(&url) {
         crate::services::live_bookmark::starting(None);
+        #[cfg(target_os = "android")]
+        if crate::services::cast_session::takes_stream(provider) {
+            return Ok(cast_placeholder(provider, &channel, &quality));
+        }
         return start_provider_stream(provider, &channel, &quality).await;
     }
 
@@ -587,6 +607,11 @@ pub async fn start_stream(
     // A restart or quality change of the same channel keeps the live
     // bookmark's session; any other channel ends it.
     crate::services::live_bookmark::starting(Some(&channel));
+
+    #[cfg(target_os = "android")]
+    if crate::services::cast_session::takes_stream("twitch") {
+        return Ok(cast_placeholder("twitch", &channel, &quality));
+    }
     // retry_streams = delay between attempts, stream_timeout = total budget, so a
     // channel that just went live connects once its playlist appears.
     let core = tr::resolve_live_resilient(
@@ -667,6 +692,25 @@ pub async fn start_stream(
         vod: None,
         kind: None,
     })
+}
+
+/// A live stream that a Cast device is playing. Nothing is resolved or relayed
+/// on the phone: the watch session hands the channel to `cast_session`, which
+/// looks it up for the TV, and the page shows the casting card in place of the
+/// video. `kind: "cast"` is what tells it so.
+#[cfg(target_os = "android")]
+fn cast_placeholder(provider: &str, channel: &str, quality: &str) -> StreamStartResult {
+    StreamStartResult {
+        url: format!("cast://{}/{}", provider, channel.to_lowercase()),
+        quality: quality.to_string(),
+        mode: None,
+        entitled: false,
+        proxy_region: None,
+        available: Vec::new(),
+        clip_source: None,
+        vod: None,
+        kind: Some("cast".to_string()),
+    }
 }
 
 /// How long a VOD open waits for the viewer's Twitch-side position.
@@ -920,6 +964,8 @@ pub async fn stop_stream() -> Result<(), String> {
     // Every close of a live stream comes through here, the tray close too
     // (it stops the stream but not the watch session).
     crate::services::live_bookmark::end(crate::services::live_bookmark::EndKind::Async);
+    #[cfg(target_os = "android")]
+    crate::services::tv_screen::on_local_stream(None);
     // Tear down the YouTube DASH relay for this stream too. Unconditional: it is
     // a no-op for an id it does not know, which is every non-YouTube stream.
     // Without it a stopped stream's session stayed registered, held its init

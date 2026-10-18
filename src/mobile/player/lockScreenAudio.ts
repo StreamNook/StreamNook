@@ -215,6 +215,14 @@ export function releaseLockScreenAudio(): void {
   detach = null;
   attached = null;
   current = null;
+  // The player that dropped the stream to audio-only is going away, so nothing
+  // would ever ask for the picture back: whatever plays the stream next (TV
+  // screen mode's player, a remounted player) would get audio and no video.
+  // Restore it on the way out. Exiting a stream is unaffected: the stream is
+  // already cleared by then, and applyTransientQuality does nothing without one.
+  if (downshifted) {
+    void useAppStore.getState().applyTransientQuality(restoreQuality || 'best');
+  }
   // Reset the downshift state with everything else. Leaving it set would make
   // the NEXT stream's first lock a no-op, because the guard would still think
   // we were already on the audio rendition.

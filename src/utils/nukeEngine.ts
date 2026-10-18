@@ -10,10 +10,10 @@
 // /undo reverses the most recent nuke per channel by unbanning the affected
 // user ids. Deletes are noted but cannot be reversed by Twitch.
 
-import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { useChatConnectionStore, injectSystemMessage } from '../stores/chatConnectionStore';
 import { Logger } from './logger';
+import { moderateChatter } from '../services/moderation';
 import type { BackendChatMessage } from '../services/twitchChat';
 
 export type NukeAction =
@@ -165,20 +165,14 @@ async function applyActionToUser(
   try {
     if (action.kind === 'delete') {
       for (const msgId of affected.message_ids) {
-        await invoke('delete_chat_message', { broadcasterId, messageId: msgId });
+        await moderateChatter({ broadcasterId, action: { kind: 'delete', messageId: msgId } });
       }
-    } else if (action.kind === 'ban') {
-      await invoke('ban_user', {
-        broadcasterId,
-        targetUserId: affected.user_id,
-        duration: null,
-        reason: nukeReason(),
-      });
     } else {
-      await invoke('ban_user', {
+      await moderateChatter({
         broadcasterId,
         targetUserId: affected.user_id,
-        duration: action.seconds,
+        targetName: affected.username,
+        action: action.kind === 'ban' ? { kind: 'ban' } : { kind: 'timeout', seconds: action.seconds },
         reason: nukeReason(),
       });
     }
@@ -385,7 +379,12 @@ export async function executeUndo(channel: string): Promise<void> {
   let unbanned = 0;
   for (const a of record.affected) {
     try {
-      await invoke('unban_user', { broadcasterId: record.broadcasterId, targetUserId: a.user_id });
+      await moderateChatter({
+        broadcasterId: record.broadcasterId,
+        targetUserId: a.user_id,
+        targetName: a.username,
+        action: { kind: 'unban' },
+      });
       unbanned++;
     } catch (err) {
       Logger.error(`[undo] failed to unban ${a.username}:`, err);

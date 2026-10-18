@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -20,6 +20,8 @@ import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
 import { collabLabel } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
+import { CastSheet } from '../cast/CastSheet';
+import { isCastable } from '../cast/castState';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
@@ -136,6 +138,7 @@ export const MobilePlayer: React.FC<{
   const [muted, setMuted] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [togetherOpen, setTogetherOpen] = useState(false);
+  const [castOpen, setCastOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -494,6 +497,17 @@ export const MobilePlayer: React.FC<{
             >
               {muted ? <SpeakerSlash size={21} /> : <SpeakerHigh size={21} />}
             </button>
+            {/* Cast and mirroring, together: the two ways onto a TV. */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCastOpen(true);
+              }}
+              className="sn-touch flex items-center justify-center text-white"
+              aria-label="Watch on a TV"
+            >
+              <Screencast size={21} />
+            </button>
             {currentStream && (
               <button
                 onClick={(e) => {
@@ -591,6 +605,7 @@ export const MobilePlayer: React.FC<{
 
       <QualitySheet open={qualityOpen} onClose={() => setQualityOpen(false)} />
       <TogetherSheet collab={collab} open={togetherOpen} onClose={() => setTogetherOpen(false)} />
+      <CastSheet open={castOpen} onClose={() => setCastOpen(false)} castable={isCastable(currentStream)} />
     </div>
   );
 };

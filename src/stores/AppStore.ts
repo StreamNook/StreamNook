@@ -1669,9 +1669,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // sticky one has none and stays until it is dismissed or removed by id.
     const duration = options?.sticky ? 0 : type === 'live' ? 8000 : 5000;
 
-    // For live toasts, let ToastItem handle the timer (so we can pause on hover)
-    // For other toasts, use the simple auto-dismiss
-    if (type === 'live' || options?.sticky) {
+    // A live toast, or one carrying an action (Undo), leaves its timer to the
+    // surface that draws it, so hovering holds it: an Undo must never vanish
+    // under the pointer. Other toasts use the simple auto-dismiss.
+    if (type === 'live' || options?.sticky || action) {
       set(state => ({
         toasts: [...state.toasts, { id, message, type, action, duration, createdAt }]
       }));

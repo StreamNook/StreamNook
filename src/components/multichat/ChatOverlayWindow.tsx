@@ -124,7 +124,9 @@ export default function ChatOverlayWindow() {
       themeId === OLED_THEME_ID
         ? getOledTheme(settings.oled_accent)
         : getThemeByIdWithCustom(themeId, settings.custom_themes || []) || getThemeById(DEFAULT_THEME_ID);
-    if (theme) applyTheme(theme);
+    // The one see-through window: its slab mixes the theme background at the
+    // overlay's own slider, so the theme's alpha stays as the user set it.
+    if (theme) applyTheme(theme, { floor: null });
     applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);

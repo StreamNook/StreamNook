@@ -18,6 +18,7 @@ import { useLocalChatViewStore, type LocalView } from '../stores/localChatViewSt
 import { COMMAND_DEFINITIONS, findCommandDefinition, type CommandDefinition } from './chatCommands';
 import { isUserModeratorOf } from './nukeEngine';
 import { Logger } from './logger';
+import { moderateChatter } from '../services/moderation';
 import { IS_MOBILE } from './platform';
 
 export interface CommandContext {
@@ -406,6 +407,16 @@ const handlers: Record<string, Handler> = {
     const channel = cleanLogin(ctx.args[0]) || ctx.broadcasterLogin;
     if (!channel) return toast('/rules: open a channel first', 'error');
     await lines(ctx, 'slash_chat_rules', { channel });
+  },
+
+  async mods(ctx) {
+    if (!ctx.broadcasterLogin) return toast('/mods: open a channel first', 'error');
+    await lines(ctx, 'slash_role_list', { channel: ctx.broadcasterLogin, role: 'mods' });
+  },
+
+  async vips(ctx) {
+    if (!ctx.broadcasterLogin) return toast('/vips: open a channel first', 'error');
+    await lines(ctx, 'slash_role_list', { channel: ctx.broadcasterLogin, role: 'vips' });
   },
 
   async followage(ctx) {
@@ -841,7 +852,13 @@ const handlers: Record<string, Handler> = {
     const user = await lookupUser(login);
     if (!user) return toast(`There is no Twitch user named ${login}`, 'error');
     const reason = ctx.args.slice(1).join(' ').trim();
-    await invoke('ban_user', { broadcasterId: ctx.broadcasterId, targetUserId: user.id, duration: 1, reason: reason || null });
+    await moderateChatter({
+      broadcasterId: ctx.broadcasterId,
+      targetUserId: user.id,
+      targetName: user.display_name,
+      action: { kind: 'timeout', seconds: 1 },
+      reason: reason || null,
+    });
     toast(`Purged ${user.display_name}'s messages`, 'success');
   },
 

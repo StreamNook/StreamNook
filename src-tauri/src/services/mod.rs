@@ -22,6 +22,9 @@ pub mod ad_detect;
 pub mod app_paths;
 pub mod auth_proxy;
 pub mod cache_service;
+pub mod cast_pick;
+#[cfg(target_os = "android")]
+pub mod cast_session;
 pub mod changelog;
 pub mod channel_avatars;
 pub mod ll_diagnostics;
@@ -115,6 +118,7 @@ pub mod ui_hang_watchdog;
 pub mod window_aspect;
 pub mod media_glow;
 pub mod mod_log_storage_service;
+pub mod moderation;
 // Desktop-only: MultiNook multi-stream tiling is not part of the phone app.
 #[cfg(desktop)]
 pub mod multi_nook_server;
@@ -145,6 +149,8 @@ pub mod bits;
 pub mod twitch_resolver;
 pub mod twitch_limits;
 pub mod token_vault;
+#[cfg(target_os = "android")]
+pub mod tv_screen;
 pub mod twitch_chat_history;
 pub mod twitch_service;
 pub mod twitch_signin;
@@ -184,3 +190,6 @@ pub mod installer_update;
 // A notification when someone mentions you in a Twitch chat (desktop).
 #[cfg(desktop)]
 pub mod mention_notify;
+// Channel points and prediction notifications, drawn per channel (desktop).
+#[cfg(desktop)]
+pub mod points_notify;

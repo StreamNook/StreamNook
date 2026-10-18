@@ -5,7 +5,7 @@
 use crate::models::settings::AppState;
 use crate::rt::AppHandle;
 use crate::services::slash_commands as sc;
-use crate::services::twitch_service::TwitchService;
+use crate::services::twitch_service::{ChannelRole, TwitchService};
 use tauri::{Emitter, State};
 
 fn login_arg(raw: &str, what: &str) -> Result<String, String> {
@@ -61,6 +61,17 @@ pub async fn slash_name_history(user: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn slash_chat_rules(channel: String) -> Result<Vec<String>, String> {
     sc::chat_rules(&login_arg(&channel, "channel")?).await
+}
+
+/// `/mods` and `/vips`: the channel's moderators or VIPs.
+#[tauri::command]
+pub async fn slash_role_list(state: State<'_, AppState>, channel: String, role: String) -> Result<Vec<String>, String> {
+    let role = match role.as_str() {
+        "mods" => ChannelRole::Moderators,
+        "vips" => ChannelRole::Vips,
+        other => return Err(format!("\"{other}\" is not a role list")),
+    };
+    sc::role_list(&state.twitch_auth, &login_arg(&channel, "channel")?, role).await
 }
 
 /// `/sharedchat`: the channel's Shared Chat session, if any.

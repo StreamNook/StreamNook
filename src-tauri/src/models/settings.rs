@@ -377,7 +377,7 @@ pub struct ChatDesignSettings {
     #[serde(default = "default_true")]
     pub drag_moderation_enabled: bool, // deprecated: superseded by mod_action_style
     #[serde(default = "default_mod_action_style")]
-    pub mod_action_style: String, // buttons | drag | both
+    pub mod_action_style: String, // buttons | drag | both | none (hover buttons, drag to tiles)
     /// Where the grab cursor shows while drag-to-moderate is on: "row" (the
     /// whole message, so the gesture announces itself) or "edge" (only the
     /// accent strip at the left edge). A press anywhere lifts the chatter
@@ -390,6 +390,41 @@ pub struct ChatDesignSettings {
     pub pinned_collapsed_style: String, // bar | hidden
     #[serde(default = "default_mod_pin_style")]
     pub mod_pin_style: String, // inline | drag | both
+    /// The slider on a message's left edge: drag right through the timeout
+    /// steps to Ban, release to apply. Moderators only.
+    #[serde(default = "default_true")]
+    pub mod_slider: bool,
+    /// The slider's first step deletes the message.
+    #[serde(default = "default_true")]
+    pub mod_slider_delete: bool,
+    /// The slider's timeouts in seconds (drawn shortest first whatever order
+    /// they are saved in).
+    #[serde(default = "default_mod_slider_timeouts")]
+    pub mod_slider_timeouts: Vec<u32>,
+    /// The slider ends in Ban.
+    #[serde(default = "default_true")]
+    pub mod_slider_ban: bool,
+    /// How much of the message width the slider's steps spread over:
+    /// "short" (half), "medium" (four fifths), "long" (all of it).
+    #[serde(default = "default_mod_slider_length")]
+    pub mod_slider_length: String,
+    /// Line buttons: small action buttons at the start of every line a
+    /// moderator can act on, one click each. They take the left edge, so the
+    /// slider grip is not drawn while they are on. Moderators only.
+    #[serde(default)]
+    pub mod_line_buttons: bool,
+    /// The line buttons start with Delete.
+    #[serde(default = "default_true")]
+    pub mod_line_delete: bool,
+    /// The line buttons' timeouts in seconds (drawn shortest first).
+    #[serde(default = "default_mod_line_timeouts")]
+    pub mod_line_timeouts: Vec<u32>,
+    /// The line buttons end with Ban.
+    #[serde(default = "default_true")]
+    pub mod_line_ban: bool,
+    /// Seconds a drop on the drag-to-moderate Timeout tile times out for.
+    #[serde(default = "default_mod_bucket_timeout")]
+    pub mod_bucket_timeout: u32,
     /// "hsl_loop" (default) walks a chatter's color toward the readable side
     /// of the theme; "off" renders it as Twitch sent it.
     #[serde(default = "default_name_color_adjustment")]
@@ -571,6 +606,18 @@ fn default_mod_drag_layout() -> String {
 fn default_mod_drag_cursor() -> String {
     "row".to_string()
 }
+fn default_mod_slider_length() -> String {
+    "medium".to_string()
+}
+fn default_mod_bucket_timeout() -> u32 {
+    600
+}
+fn default_mod_slider_timeouts() -> Vec<u32> {
+    crate::services::moderation::DEFAULT_SLIDER_TIMEOUTS.to_vec()
+}
+fn default_mod_line_timeouts() -> Vec<u32> {
+    crate::services::moderation::DEFAULT_LINE_TIMEOUTS.to_vec()
+}
 fn default_pinned_collapsed_style() -> String {
     "bar".to_string()
 }
@@ -656,6 +703,16 @@ impl Default for ChatDesignSettings {
             mod_drag_layout: "column".to_string(),
             pinned_collapsed_style: "bar".to_string(),
             mod_pin_style: "both".to_string(),
+            mod_slider: true,
+            mod_slider_delete: true,
+            mod_slider_timeouts: default_mod_slider_timeouts(),
+            mod_slider_ban: true,
+            mod_slider_length: default_mod_slider_length(),
+            mod_line_buttons: false,
+            mod_line_delete: true,
+            mod_line_timeouts: default_mod_line_timeouts(),
+            mod_line_ban: true,
+            mod_bucket_timeout: default_mod_bucket_timeout(),
         }
     }
 }
@@ -667,7 +724,9 @@ impl ChatDesignSettings {
     ///
     /// Phones keep Twitch's 14px text and 8px spacing on a narrow screen, and
     /// keep mod buttons: the phone chat has no drag layer, so drag-only would
-    /// leave a moderator there with no actions at all.
+    /// leave a moderator there with no actions at all. Desktop starts with the
+    /// hover buttons on beside the slider (the default message edge), and
+    /// drag to tiles off: the slider holds the edge, so tiles would not show.
     pub fn first_run() -> Self {
         let desktop = cfg!(not(mobile));
         Self {
@@ -675,7 +734,7 @@ impl ChatDesignSettings {
             message_spacing: if desktop { 11 } else { 8 },
             message_entrance: "slide".to_string(),
             deleted_message_style: "italic".to_string(),
-            mod_action_style: if desktop { "drag" } else { "both" }.to_string(),
+            mod_action_style: if desktop { "buttons" } else { "both" }.to_string(),
             mod_drag_layout: if desktop { "bar" } else { "column" }.to_string(),
             ..Self::default()
         }
@@ -726,6 +785,18 @@ pub struct LiveNotificationSettings {
     /// while StreamNook is not the window in use (services/mention_notify.rs).
     #[serde(default = "default_true")]
     pub show_mention_notifications: bool,
+    /// A Rewards button, and a right-click item for these settings, on the
+    /// Windows channel points notification (services/points_notify.rs).
+    #[serde(default)]
+    pub points_rewards_button: bool,
+    /// A bar toward the cheapest reward you cannot afford yet, on the Windows
+    /// channel points notification.
+    #[serde(default)]
+    pub points_next_reward: bool,
+    /// A notification when a prediction opens on a channel you are watching,
+    /// while StreamNook is not the window in use.
+    #[serde(default)]
+    pub show_prediction_notifications: bool,
     // Notification method toggles (Dynamic Island vs Toast)
     #[serde(default = "default_true")]
     pub use_dynamic_island: bool,
@@ -802,6 +873,9 @@ impl Default for LiveNotificationSettings {
             show_gift_sub_notifications: true,
             show_twitch_reward_notifications: true,
             show_mention_notifications: true,
+            points_rewards_button: false,
+            points_next_reward: false,
+            show_prediction_notifications: false,
             use_dynamic_island: true,
             use_toast: true,
             use_native_notifications: false,
@@ -2032,7 +2106,8 @@ mod backup_persistence_tests {
     }
 
     /// The old on/off drag switch, off, meant buttons only. A file from before
-    /// mod_action_style loads that field as "both"; it must not become drag.
+    /// mod_action_style loads that field as "both"; the first-run look must
+    /// not overwrite what that switch meant.
     #[test]
     fn buttons_only_from_the_old_switch_is_not_moved_to_drag() {
         let mut old = Settings::default();
@@ -2052,7 +2127,7 @@ mod backup_persistence_tests {
         assert_eq!(fresh.deleted_message_style, "italic");
         assert_eq!(fresh.font_size, if cfg!(mobile) { 14 } else { 16 });
         assert_eq!(fresh.message_spacing, if cfg!(mobile) { 8 } else { 11 });
-        assert_eq!(fresh.mod_action_style, if cfg!(mobile) { "both" } else { "drag" });
+        assert_eq!(fresh.mod_action_style, if cfg!(mobile) { "both" } else { "buttons" });
         assert!(!fresh.show_dividers);
 
         // A file without the block at all.

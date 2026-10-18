@@ -80,6 +80,18 @@ import { COMMAND_DEFINITIONS, rankCommandMatches } from './chatCommands';
 const send = vi.fn();
 const run = (line: string) => handleSlashCommand(line, '42', 'chan', send);
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd).map((c) => c[1]);
+// Bans and timeouts go through Rust `moderate_chatter`; read them back as
+// (channel, chatter, seconds or null for a ban, reason).
+const bans = () =>
+  calls('moderate_chatter')
+    .map((c) => c?.request as { broadcasterId?: string; targetUserId?: string; action: { kind: string; seconds?: number }; reason?: string | null })
+    .filter((r) => r.action.kind === 'ban' || r.action.kind === 'timeout')
+    .map((r) => ({
+      broadcasterId: r.broadcasterId,
+      targetUserId: r.targetUserId,
+      duration: r.action.kind === 'timeout' ? r.action.seconds : null,
+      reason: r.reason ?? null,
+    }));
 const sentTexts = () => [
   ...send.mock.calls.map((c) => String(c[0])),
   ...sendChannelMessage.mock.calls.map((c) => String(c[1])),
@@ -90,6 +102,7 @@ beforeEach(() => {
   invoke.mockReset();
   invoke.mockImplementation(async (cmd: string) => {
     if (cmd === 'get_user_by_login') return { id: '7', login: 'bob', display_name: 'Bob' };
+    if (cmd === 'moderate_chatter') return { appliedSeconds: null, message: 'done', undoable: true };
     if (cmd === 'run_chat_burst') return { message: 'Spam started: 2 messages at 1000 ms apart. /spam stop ends it', status: null };
     if (cmd === 'chat_send_paced') return { is_sent: true, drop_reason: null };
     if (cmd.startsWith('slash_')) return 'ok';
@@ -207,7 +220,7 @@ describe('arguments', () => {
   it('/ban and /b accept an @name', async () => {
     await run('/b @bob spam');
     expect(calls('get_user_by_login')).toEqual([{ login: 'bob' }]);
-    expect(calls('ban_user')).toEqual([{ broadcasterId: '42', targetUserId: '7', duration: null, reason: 'spam' }]);
+    expect(bans()).toEqual([{ broadcasterId: '42', targetUserId: '7', duration: null, reason: 'spam' }]);
   });
 
   it('/timeout and /untimeout accept an @name', async () => {
@@ -220,7 +233,7 @@ describe('arguments', () => {
     await run('/timeout bob 10m');
     await run('/timeout bob 1h30m too loud');
     await run('/timeout bob 90');
-    expect(calls('ban_user').map((c) => [c?.duration, c?.reason])).toEqual([
+    expect(bans().map((c) => [c?.duration, c?.reason])).toEqual([
       [600, null],
       [5400, 'too loud'],
       [90, null],
@@ -229,7 +242,7 @@ describe('arguments', () => {
 
   it('/timeout without a length keeps the whole reason', async () => {
     await run('/timeout bob calm down');
-    expect(calls('ban_user')).toEqual([expect.objectContaining({ duration: 600, reason: 'calm down' })]);
+    expect(bans()).toEqual([expect.objectContaining({ duration: 600, reason: 'calm down' })]);
   });
 
   it('lengths take weeks and days too', () => {
@@ -255,7 +268,7 @@ describe('custom commands and built-in names', () => {
       { id: 'u1', trigger: 'p', expansion: 'PogChamp {1}', enabled: true, require_slash: true },
     ];
     await run('/p nice');
-    expect(calls('ban_user')).toEqual([]);
+    expect(bans()).toEqual([]);
     expect(send).toHaveBeenCalledWith('PogChamp nice');
   });
 
@@ -290,7 +303,7 @@ describe('custom commands and built-in names', () => {
     ];
     await run('/ban bob');
     expect(send).not.toHaveBeenCalled();
-    expect(calls('ban_user')).toHaveLength(1);
+    expect(bans()).toHaveLength(1);
   });
 });
 

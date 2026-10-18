@@ -101,6 +101,7 @@ import {
 import { getAtmosphere, listAtmospheres, type Atmosphere } from '../../services/atmospheres';
 import { isSubscriber } from '../../services/subscriberService';
 import { resolveCosmeticAsset } from '../../components/cosmeticAssets';
+import { CosmeticArt } from '../../components/CosmeticArt';
 import { Logger } from '../../utils/logger';
 
 export const CosmeticsScreen: React.FC = () => {
@@ -487,7 +488,7 @@ export const CosmeticsScreen: React.FC = () => {
                   }`}
                 >
                   {asset ? (
-                    <img src={asset} alt="" className="w-9 h-9 object-contain" draggable={false} />
+                    <CosmeticArt cosmetic={badge} className="w-9 h-9 object-contain" />
                   ) : (
                     <div className="w-9 h-9 rounded bg-surface" />
                   )}

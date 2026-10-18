@@ -16,6 +16,7 @@ import {
   subscribeAtmospheresVersion,
 } from '../services/supabaseService';
 import { resolveCosmeticAsset, DEFAULT_COSMETIC_SLUG } from './cosmeticAssets';
+import { getStreamnookArtVersion, subscribeStreamnookArt } from '../services/streamnookArt';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -381,6 +382,8 @@ export const StreamNookTierCard = memo(function StreamNookTierCard({
  */
 const useActiveCosmeticAsset = (userId: string | null | undefined): string | null => {
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
+  // Re-resolve when Rust's disk copy of a CDN badge lands.
+  useSyncExternalStore(subscribeStreamnookArt, getStreamnookArtVersion, getStreamnookArtVersion);
   if (!userId) return null;
   const slug = getActiveCosmeticSlug(userId);
   if (!slug) return null;
@@ -488,7 +491,10 @@ export const StreamNookBadge = memo(function StreamNookBadge({
   const cosmetic = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug) : undefined;
   const cosmeticName = cosmetic?.name ?? null;
 
-  const src = cosmeticAsset ?? streamNookLogo;
+  // Art that cannot load (the CDN is unreachable from this network) wears the
+  // default mark instead of a broken image, until Rust's copy lands.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = cosmeticAsset && cosmeticAsset !== failedSrc ? cosmeticAsset : streamNookLogo;
   // Some badge names already say StreamNook ("StreamNook Member"); prefixing
   // those read "StreamNook StreamNook Member".
   const label = !cosmeticName
@@ -510,6 +516,9 @@ export const StreamNookBadge = memo(function StreamNookBadge({
       loading="lazy"
       className={className}
       draggable={false}
+      onError={() => {
+        if (src !== streamNookLogo) setFailedSrc(src);
+      }}
     />
   );
   return (
