@@ -6835,21 +6835,6 @@ pub(crate) fn helix_chat_color(typed: &str) -> String {
         .unwrap_or_else(|| typed.to_string())
 }
 
-/// One role list (`mods` or `vips`) from a GQL answer: the users, or why there
-/// is none to show. A list that is present but empty is a real "none"; a
-/// missing list is Twitch's refusal (its `errors` message) or an unknown
-/// channel, never an empty list.
-fn role_list(answer: &serde_json::Value, field: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
-    let user = answer.pointer("/data/user").filter(|u| !u.is_null());
-    if let Some(edges) = user.and_then(|u| u.pointer(&format!("/{field}/edges"))).and_then(|e| e.as_array()) {
-        return Ok(edges.iter().filter_map(|e| e.get("node").cloned()).collect());
-    }
-    if let Some(message) = answer.pointer("/errors/0/message").and_then(|m| m.as_str()) {
-        return Err(message.to_string());
-    }
-    Err(if user.is_some() { format!("no {field} list in the answer") } else { "channel not found".to_string() })
-}
-
 /// What a viewer reads when a role list could not be loaded.
 fn role_error_text(what: &str, error: &str, signed_in: bool) -> String {
     if !signed_in && error.eq_ignore_ascii_case("unauthenticated") {
@@ -7600,39 +7585,7 @@ mod chat_color_tests {
 
 #[cfg(test)]
 mod role_list_answer_tests {
-    use super::{role_error_text, role_list};
-    use serde_json::json;
-
-    #[test]
-    fn a_listed_role_comes_back_as_its_users() {
-        let answer = json!({"data": {"user": {"id": "1", "mods": {"edges": [
-            {"node": {"id": "2", "login": "nightbot"}},
-            {"node": {"id": "3", "login": "streamelements"}}
-        ]}}}});
-        let mods = role_list(&answer, "mods").unwrap();
-        assert_eq!(mods.iter().map(|m| m["login"].as_str().unwrap()).collect::<Vec<_>>(), ["nightbot", "streamelements"]);
-    }
-
-    #[test]
-    fn an_empty_list_is_a_real_none() {
-        let answer = json!({"data": {"user": {"id": "1", "vips": {"edges": []}}}});
-        assert_eq!(role_list(&answer, "vips").unwrap().len(), 0);
-    }
-
-    #[test]
-    fn a_refused_list_is_an_error_never_an_empty_list() {
-        // What Twitch answers an anonymous Mods query today.
-        let answer = json!({
-            "errors": [{"message": "unauthenticated", "path": ["user", "mods"], "extensions": {"code": "Unauthenticated"}}],
-            "data": {"user": {"id": "71092938", "mods": null}}
-        });
-        assert_eq!(role_list(&answer, "mods").unwrap_err(), "unauthenticated");
-    }
-
-    #[test]
-    fn an_unknown_channel_says_so() {
-        assert_eq!(role_list(&json!({"data": {"user": null}}), "mods").unwrap_err(), "channel not found");
-    }
+    use super::role_error_text;
 
     #[test]
     fn the_viewer_reads_why_the_list_is_missing() {
