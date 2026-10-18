@@ -145,7 +145,7 @@ pub struct OutcomeView {
     pub color: String,
     /// Share of the points, 0 to 100. An even split while nobody has predicted.
     pub percent: i64,
-    /// What one point returns if this side wins: "1:2.78", "1:—" with no points on it.
+    /// What one point returns if this side wins: "1:2.78"; empty while nobody is on it.
     pub ratio: String,
     pub points_label: String,
     pub people_label: String,
@@ -190,7 +190,7 @@ fn grouped(n: i64) -> String {
 
 fn ratio(pool: i64, side: i64) -> String {
     if side <= 0 {
-        return "1:—".into();
+        return String::new();
     }
     let r = pool as f64 / side as f64;
     let s = format!("{r:.2}");
@@ -686,7 +686,7 @@ mod tests {
         let kept = kept_with(e);
         let v = view_of(&kept["c1"], None, NOW);
         assert_eq!((v.outcomes[0].percent, v.outcomes[1].percent), (50, 50));
-        assert_eq!(v.outcomes[0].ratio, "1:—");
+        assert_eq!(v.outcomes[0].ratio, "");
         assert!(v.totals_line.ends_with(" points"));
     }
 
