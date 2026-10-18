@@ -254,7 +254,7 @@ fn view_of(p: &Prediction, points: Option<&ChannelPoints>, now_ms: i64) -> Predi
     PredictionView {
         channel_id: p.channel_id.clone(),
         prediction_id: p.id.clone(),
-        title: p.title.clone(),
+        title: crate::services::poll_view::one_line(&p.title),
         phase,
         deadline_ms: if open { p.deadline_ms() } else { None },
         badge: match phase {

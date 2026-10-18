@@ -870,6 +870,15 @@ pub async fn predict(
     crate::services::predictions::predict(channel_id.trim(), &outcome_id, amount).await
 }
 
+/// The top of a chat column: which of the poll, prediction and drop cards show, the one
+/// that is open, and the most height they may take (`services/chat_top_stack.rs`).
+#[tauri::command]
+pub fn chat_top_stack(
+    request: crate::services::chat_top_stack::StackRequest,
+) -> crate::services::chat_top_stack::StackLayout {
+    crate::services::chat_top_stack::layout(&request)
+}
+
 /// The poll card for `channel_id` now, read from Twitch when Rust has none,
 /// and followed until the poll ends (`poll-state` pushes).
 #[tauri::command]

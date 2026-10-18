@@ -2,8 +2,9 @@ import Foundation
 
 // Polls and predictions as Rust decides them: every word, number and verdict arrives finished
 // (`prediction-state` / `poll-state` pushes, `get_channel_prediction`, `prediction_bet`,
-// `predict`, `watch_channel_poll_view`). The shells only draw them, tick a countdown to
-// `deadline_ms`, and remember which card the viewer folded.
+// `predict`, `watch_channel_poll_view`), and so does how they stack with the drop at the top of
+// chat (`chat_top_stack`). The shells only draw them, tick a countdown to `deadline_ms`, and
+// remember which card the viewer opened or folded.
 
 // MARK: Predictions
 
@@ -197,7 +198,7 @@ public struct PollPush: Decodable, Sendable, Equatable {
     }
 }
 
-// MARK: Drawing helpers (no decisions: only the clock and the folds)
+// MARK: Drawing helpers (no decisions: only the clock and the settings read)
 
 /// The countdown a card ticks to its deadline.
 public enum LiveVoteClock {
@@ -240,52 +241,121 @@ public struct LiveVoteSettings: Sendable, Equatable {
     }
 }
 
-public enum LiveVoteKind: String, Sendable, Equatable {
-    case poll, prediction
+// MARK: The top of chat (`chat_top_stack`, services/chat_top_stack.rs)
+
+/// A card the top of chat can hold.
+public enum TopCard: String, Codable, Sendable, Equatable, CaseIterable {
+    case prediction, poll, drop
 }
 
-/// One card on screen: which kind, its identity, and whether it shows as the one-line strip.
-public struct LiveVoteSlot: Sendable, Equatable, Identifiable {
-    public var kind: LiveVoteKind
-    /// `poll:<id>` or `prediction:<id>`: a new poll or prediction is a new card.
-    public var key: String
-    public var folded: Bool
+/// What the viewer did to the stack: the card they last opened and the ones they folded. Rust
+/// reads both to decide which card is open; the shells only remember them.
+public struct StackViewer: Sendable, Equatable {
+    public private(set) var opened: TopCard?
+    public private(set) var folded: Set<TopCard> = []
 
-    public var id: String { key }
-}
+    public init(opened: TopCard? = nil, folded: Set<TopCard> = []) {
+        self.opened = opened
+        self.folded = folded
+    }
 
-/// What the viewer folded or opened, per card. A card the viewer touched keeps their choice
-/// through every update; one they never touched follows the default.
-public struct LiveVoteFolds: Sendable, Equatable {
-    private var chosen: [String: Bool] = [:]
+    /// A tap on a card's head. Opening a card folds the others shown, since one card is open at a
+    /// time; folding one folds every card shown, so none opens by itself in its place.
+    public mutating func tap(_ card: TopCard, wasOpen: Bool, shown: [TopCard]) {
+        if wasOpen {
+            opened = nil
+            folded.formUnion(shown)
+            folded.insert(card)
+        } else {
+            opened = card
+            folded.formUnion(shown.filter { $0 != card })
+            folded.remove(card)
+        }
+    }
 
-    public init() {}
-
-    public func folded(_ key: String, default fallback: Bool) -> Bool { chosen[key] ?? fallback }
-
-    public mutating func set(_ key: String, folded: Bool) { chosen[key] = folded }
-
-    /// Drops the choices of cards that are gone.
-    public mutating func keep(only keys: Set<String>) {
-        chosen = chosen.filter { keys.contains($0.key) }
+    /// A new poll, prediction or drop is a new card: what the viewer did to the old one goes.
+    public mutating func forget(_ card: TopCard) {
+        folded.remove(card)
+        if opened == card { opened = nil }
     }
 }
 
-/// Which cards show, in which order, and which of them fold. With both up, the first by the
-/// order setting is open and the second folds to a strip; "Polls start collapsed" opens a new
-/// poll folded. Either way, a card the viewer folded or opened stays as they left it.
-public enum LiveVoteStack {
-    public static func slots(poll: PollView?, prediction: PredictionView?, settings: LiveVoteSettings,
-                             folds: LiveVoteFolds) -> [LiveVoteSlot] {
-        var kinds: [(LiveVoteKind, String)] = []
-        if settings.showPredictions, let prediction { kinds.append((.prediction, "prediction:\(prediction.predictionID)")) }
-        if settings.showPolls, let poll {
-            let entry = (LiveVoteKind.poll, "poll:\(poll.pollID)")
-            if settings.pollFirst { kinds.insert(entry, at: 0) } else { kinds.append(entry) }
-        }
-        return kinds.enumerated().map { index, entry in
-            let fallback = index > 0 || (entry.0 == .poll && settings.pollsStartCollapsed)
-            return LiveVoteSlot(kind: entry.0, key: entry.1, folded: folds.folded(entry.1, default: fallback))
-        }
+/// What `chat_top_stack` is asked: the cards present, the order setting and what the viewer did.
+public struct StackRequest: Encodable, Sendable, Equatable {
+    public var cards: [TopCard]
+    /// `prediction-first` or `poll-first`.
+    public var order: String
+    public var pollsStartCollapsed: Bool
+    public var opened: TopCard?
+    public var folded: [TopCard]
+    /// The chat column's height in points; 0 while it is not measured yet.
+    public var chatHeight: Double
+
+    enum CodingKeys: String, CodingKey {
+        case cards, order, opened, folded
+        case pollsStartCollapsed = "polls_start_collapsed"
+        case chatHeight = "chat_height"
+    }
+
+    public init(cards: [TopCard], settings: LiveVoteSettings, viewer: StackViewer, chatHeight: Double) {
+        self.cards = cards
+        order = settings.pollFirst ? "poll-first" : "prediction-first"
+        pollsStartCollapsed = settings.pollsStartCollapsed
+        opened = viewer.opened
+        // A fixed order, so the same state always asks the same question.
+        folded = TopCard.allCases.filter(viewer.folded.contains)
+        self.chatHeight = chatHeight
+    }
+
+    /// The command's arguments: `{"request": {...}}`.
+    public var argsJSON: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let body = (try? encoder.encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        return #"{"request":\#(body)}"#
+    }
+}
+
+/// One card of the stack, top to bottom: open with its body, or its one-line strip.
+public struct StackSlot: Decodable, Sendable, Equatable, Hashable, Identifiable {
+    public var kind: String
+    public var open: Bool
+
+    public init(kind: String, open: Bool) {
+        self.kind = kind
+        self.open = open
+    }
+
+    /// Nil for a kind this shell does not draw.
+    public var card: TopCard? { TopCard(rawValue: kind) }
+    public var id: String { kind }
+}
+
+/// Rust's layout of the top of chat.
+public struct StackLayout: Decodable, Sendable, Equatable, Hashable {
+    public var slots: [StackSlot]
+    /// The most height the whole stack may take, in points; 0 when the chat height is unknown.
+    public var maxHeight: Double
+
+    enum CodingKeys: String, CodingKey {
+        case slots
+        case maxHeight = "max_height"
+    }
+
+    public init(slots: [StackSlot], maxHeight: Double) {
+        self.slots = slots
+        self.maxHeight = maxHeight
+    }
+
+    /// The same cards with only `card` open (none for nil): what a tap shows at once, before
+    /// Rust's answer to the same question lands.
+    public func showing(open card: TopCard?) -> StackLayout {
+        StackLayout(slots: slots.map { StackSlot(kind: $0.kind, open: $0.card == card && card != nil) }, maxHeight: maxHeight)
+    }
+
+    /// Every card as a strip, uncapped: drawn only when the core cannot answer, so a card never
+    /// goes missing.
+    public static func strips(_ cards: [TopCard]) -> StackLayout {
+        StackLayout(slots: cards.map { StackSlot(kind: $0.rawValue, open: false) }, maxHeight: 0)
     }
 }

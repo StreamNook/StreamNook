@@ -60,6 +60,11 @@ pub struct PollPush {
     pub view: Option<PollView>,
 }
 
+/// Text as one line: line breaks and runs of spaces become single spaces.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn grouped(n: i64) -> String {
     let digits = n.max(0).to_string();
     let mut out = String::new();
@@ -133,7 +138,7 @@ pub fn view_of(poll: &Value, now_ms: i64) -> Option<PollView> {
     Some(PollView {
         channel_id,
         poll_id,
-        title: poll["title"].as_str().unwrap_or("").to_string(),
+        title: poll["title"].as_str().map(one_line).unwrap_or_default(),
         phase,
         deadline_ms: open.then_some(now_ms + remaining),
         badge: match phase {
@@ -246,6 +251,13 @@ mod tests {
         let mut theirs = poll("COMPLETED", 0, Some("b"));
         theirs["end_reason"] = json!("terminated");
         assert_eq!(view_of(&theirs, NOW).unwrap().result_line.as_deref(), Some("Malenia won · 58%"));
+    }
+
+    #[test]
+    fn the_question_reads_as_one_clean_line() {
+        let mut p = poll("ACTIVE", 10_000, None);
+        p["title"] = json!("  Which boss\n next?   ");
+        assert_eq!(view_of(&p, NOW).unwrap().title, "Which boss next?");
     }
 
     #[test]

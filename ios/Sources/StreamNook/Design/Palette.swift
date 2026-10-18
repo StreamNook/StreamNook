@@ -79,6 +79,9 @@ struct Palette: Equatable, Sendable {
     var accent: RGBA
     var accentHover: RGBA
     var accentMuted: RGBA
+    /// The accent floored to at least 3:1 on the card track (Rust's `accentOnSurface`): share
+    /// bars, accent words and marks that sit on a card.
+    var accentOnSurface: RGBA
     var border: RGBA
     var borderLight: RGBA
     var borderSubtle: RGBA
@@ -109,6 +112,7 @@ struct Palette: Equatable, Sendable {
         accent: RGBA(hex: 0x97B1B9),
         accentHover: RGBA(hex: 0xADC4CC),
         accentMuted: RGBA(hex: 0x97B1B9, alpha: 0.5),
+        accentOnSurface: RGBA(hex: 0x97B1B9),
         border: RGBA(hex: 0x97B1B9, alpha: 0.3),
         borderLight: RGBA(hex: 0x97B1B9, alpha: 0.2),
         borderSubtle: RGBA(hex: 0x97B1B9, alpha: 0.1),
@@ -142,6 +146,7 @@ extension Palette {
         func read(_ key: String, _ fallback: RGBA) -> RGBA { (tokens[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
         func hl(_ key: String, _ fallback: RGBA) -> RGBA { (highlight[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
         let page = read("background", base.background).over(RGBA(0, 0, 0))
+        let accent = read("accent", base.accent)
         self.init(
             background: page,
             backgroundSecondary: read("backgroundSecondary", base.backgroundSecondary),
@@ -152,9 +157,11 @@ extension Palette {
             textPrimary: read("textPrimary", base.textPrimary),
             textSecondary: read("textSecondary", base.textSecondary),
             textMuted: read("textMuted", base.textMuted),
-            accent: read("accent", base.accent),
+            accent: accent,
             accentHover: read("accentHover", base.accentHover),
             accentMuted: read("accentMuted", base.accentMuted),
+            // A core that predates the floor sends none: the accent itself.
+            accentOnSurface: read("accentOnSurface", accent),
             border: read("border", base.border),
             borderLight: read("borderLight", base.borderLight),
             borderSubtle: read("borderSubtle", base.borderSubtle),

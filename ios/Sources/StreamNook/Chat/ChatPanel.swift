@@ -12,8 +12,8 @@ struct ChatRoomsPanel: View {
     var replayShown: Binding<Bool>?
     /// The VOD's playhead, for the line beside the switch.
     var replayAt: String?
-    /// The stream's own card over the chat (the drop being earned), above the pinned banner.
-    var streamBanner: AnyView?
+    /// The drop being earned on the watched stream, a card of the stack at the top of chat.
+    var drop: WatchDropModel?
     var onProfile: (ProfileTarget) -> Void = { _ in }
 
     var body: some View {
@@ -43,7 +43,7 @@ struct ChatRoomsPanel: View {
                 ChatTabStrip(rooms: rooms)
             }
             if let session = rooms.activeSession {
-                ChatPanel(session: session, overlay: overlay, rooms: rooms, streamBanner: streamBanner, onProfile: onProfile)
+                ChatPanel(session: session, overlay: overlay, rooms: rooms, drop: drop, onProfile: onProfile)
                     .id(ObjectIdentifier(session))
             } else {
                 Color.clear
@@ -85,9 +85,9 @@ struct ChatPanel: View {
     var overlay = false
     /// The open rooms this one belongs to (the watch page); nil on the chat stage.
     var rooms: ChatRooms?
-    /// The stream's own card, above the pins. It stays mounted in every mode (it decides itself
-    /// whether to show), so its reading never stops.
-    var streamBanner: AnyView?
+    /// The watched stream's drop, which joins the poll and prediction in the stack at the top
+    /// (it shows only while its model says so: the stream's own room, below the video).
+    var drop: WatchDropModel?
     /// Opens a chatter's profile (the profile sheet belongs to the profile screens).
     var onProfile: (ProfileTarget) -> Void = { _ in }
     /// The pins and live votes take their own room above the list instead of floating over its
@@ -122,9 +122,12 @@ struct ChatPanel: View {
                         Color.black
                     }
                 }
+                // The stack's height cap and its short-column rule are Rust's, from this height.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    votes?.setChatHeight(height)
+                }
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
-                        if let streamBanner { streamBanner }
                         if let rooms, !overlay, !rooms.activePins.isEmpty {
                             PinnedBanner(pins: rooms.activePins,
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
@@ -136,9 +139,10 @@ struct ChatPanel: View {
                                     if !rooms.pinsOpen { pinsBox = height }
                                 }
                         }
-                        // The live poll and prediction, under the pins; never over landscape video.
+                        // The live poll, prediction and drop as one stack, under the pins; never
+                        // over landscape video.
                         if let votes {
-                            LiveVotesStack(model: votes)
+                            LiveVotesStack(model: votes, drop: drop)
                                 .padding(.horizontal, 10)
                                 .padding(.top, rooms?.activePins.isEmpty ?? true ? topGap : 0)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { votesBox = $0 }
@@ -163,6 +167,10 @@ struct ChatPanel: View {
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { onFloor?($0) }
             }
+        }
+        // The drop reaches the stack as one of its cards (the model asks Rust where it goes).
+        .onChange(of: overlay ? nil : drop?.shown?.dropID, initial: true) { _, id in
+            votes?.setDrop(id)
         }
         .onAppear {
             session.start()

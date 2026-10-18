@@ -23,6 +23,10 @@ pub struct WatchDrop {
     pub image: String,
     /// "12m to watch"; empty once the minutes are in (the Claim button says it).
     pub trailing: String,
+    /// The drop's state in a few words for its one-line strip, where no Claim button shows:
+    /// "12m to watch", or "Ready" once the minutes are in.
+    #[serde(default)]
+    pub status: String,
     /// "Campaign name · 2 of 5" (the tier part only with more than one tier).
     pub line: String,
     /// 0 to 100.
@@ -100,6 +104,7 @@ pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &st
         instance_id: drop.progress.as_ref().and_then(|p| p.drop_instance_id.clone()),
         // A finished drop is said once, by its Claim button.
         trailing: if complete { String::new() } else { drop_words::to_watch(left) },
+        status: if complete { "Ready".to_string() } else { drop_words::to_watch(left) },
         spoken: if complete {
             format!("{name}, ready to claim")
         } else {
