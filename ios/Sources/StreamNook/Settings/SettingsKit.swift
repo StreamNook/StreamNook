@@ -165,10 +165,9 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
 }
 
 /// A row's top: the title line with its text under it on the left, the control on the right
-/// centered on the title line. The text is measured at exactly the width it is drawn at; an
-/// HStack measured it narrower and kept a blank line under the description of a toggle row.
-/// Takes three views: the title, the text under it (a stack, possibly empty), and the control
-/// (a stack, possibly empty).
+/// centered on the title line (or on the title and text together, for a button). The text is
+/// measured at exactly the width it is drawn at. Takes three views: the title, the text under it
+/// (a stack, possibly empty), and the control (a stack, possibly empty).
 struct RowTop: Layout {
     var centersControl = false
     var spacing: CGFloat = 16
@@ -262,10 +261,16 @@ struct NestedSettings<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) { content }
-            .padding(.leading, 16)
-            .overlay(alignment: .leading) { Rectangle().fill(SN.borderSubtle).frame(width: 1) }
-            .padding(.top, 16)
+        // Nothing nested (a switch row with no dependents, or dependents that are hidden) draws
+        // nothing: an empty block still added its 16 point gap, a blank line under the row.
+        Group(subviews: content) { rows in
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 14) { ForEach(rows) { $0 } }
+                    .padding(.leading, 16)
+                    .overlay(alignment: .leading) { Rectangle().fill(SN.borderSubtle).frame(width: 1) }
+                    .padding(.top, 16)
+            }
+        }
     }
 }
 
