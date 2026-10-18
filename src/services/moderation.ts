@@ -17,6 +17,8 @@ export type ModAction =
   | { kind: 'timeout'; seconds: number }
   | { kind: 'ban' }
   | { kind: 'unban'; timeout?: boolean }
+  /** Twitch only; the request's `reason` is what they see, so one is required. */
+  | { kind: 'warn' }
   | { kind: 'delete'; messageId: string };
 
 export interface ModRequest {

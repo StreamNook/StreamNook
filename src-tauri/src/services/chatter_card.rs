@@ -96,14 +96,9 @@ pub struct ChatterCardTools {
     pub moderate: Option<Moderate>,
 }
 
-/// "1s", "10m", "1h", "1d", "1w", or "90s" when no whole unit fits.
+/// "1s", "10m", "1h", "1d": the dock's own words for a length.
 pub fn short_length(seconds: u32) -> String {
-    for (size, unit) in [(604_800, "w"), (86_400, "d"), (3_600, "h"), (60, "m")] {
-        if seconds >= size && seconds % size == 0 {
-            return format!("{}{unit}", seconds / size);
-        }
-    }
-    format!("{seconds}s")
+    crate::services::moderation::duration_label(seconds)
 }
 
 fn spoken_length(seconds: u32) -> String {
@@ -326,7 +321,7 @@ mod tests {
         assert_eq!(short_length(3_600), "1h");
         assert_eq!(short_length(86_400), "1d");
         assert_eq!(short_length(1_209_600), "2w");
-        assert_eq!(short_length(90), "90s");
+        assert_eq!(short_length(90), "1m 30s");
     }
 
     #[test]

@@ -70,6 +70,9 @@ pub enum ModAction {
         #[serde(rename = "messageId")]
         message_id: String,
     },
+    /// A Twitch warning the chatter must acknowledge before they can chat
+    /// again. The request's `reason` is what they see, so one is required.
+    Warn,
 }
 
 /// Who to act on, where, and how. Ids are the platform's own: a Twitch user
@@ -346,6 +349,11 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
             },
             undoable: false,
         },
+        ModAction::Warn => ModOutcome {
+            applied_seconds: None,
+            message: format!("Warned {}", name),
+            undoable: false,
+        },
     }
 }
 
@@ -463,6 +471,16 @@ pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
         (ModAction::Delete { message_id }, Platform::YouTube) => {
             crate::services::providers::youtube::delete_message(&youtube_slug(&req)?, message_id).await?
         }
+        (ModAction::Warn, Platform::Twitch) => {
+            let reason = reason.as_deref().ok_or_else(|| anyhow!("A warning needs a reason they will see"))?;
+            TwitchService::warn_chat_user(
+                need(&req.broadcaster_id, "channel")?,
+                need(&req.target_user_id, "chatter")?,
+                reason,
+            )
+            .await?
+        }
+        (ModAction::Warn, _) => return Err(anyhow!("Warnings are a Twitch feature")),
     }
 
     Ok(outcome_for(platform, &req.action, &name_of(&req)))
@@ -471,6 +489,30 @@ pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warning_is_worded_and_cannot_be_undone() {
+        let action: ModAction = serde_json::from_value(serde_json::json!({ "kind": "warn" })).unwrap();
+        let out = outcome_for(Platform::Twitch, &action, "gus");
+        assert_eq!(out.message, "Warned gus");
+        assert!(!out.undoable);
+    }
+
+    #[tokio::test]
+    async fn a_warning_without_a_reason_or_off_twitch_is_refused_before_any_call() {
+        let req = |provider: &str, reason: Option<&str>| ModRequest {
+            provider: Some(provider.into()),
+            broadcaster_id: Some("1".into()),
+            channel: None,
+            target_user_id: Some("2".into()),
+            target_name: None,
+            action: ModAction::Warn,
+            reason: reason.map(str::to_string),
+            use_saved_reason: false,
+        };
+        assert!(moderate(req("twitch", Some("  "))).await.unwrap_err().to_string().contains("needs a reason"));
+        assert!(moderate(req("kick", Some("spam"))).await.unwrap_err().to_string().contains("Twitch feature"));
+    }
 
     fn labels(steps: &[ModStep]) -> Vec<&str> {
         steps.iter().map(|s| s.label.as_str()).collect()
