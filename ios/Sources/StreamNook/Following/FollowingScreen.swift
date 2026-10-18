@@ -34,7 +34,7 @@ struct FollowingScreen: View {
                 SignedOutLanding(model: model)
             }
         }
-        .background(SN.background)
+        .snShellBackground()
         .navigationTitle("Following")
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {

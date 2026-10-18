@@ -8,7 +8,7 @@ struct AppRoot: View {
 
     var body: some View {
         ZStack {
-            SN.background.ignoresSafeArea()
+            ShellBackground()
             switch model.phase {
             case .booting: BootView()
             case .setup: SetupWizard(model: model)

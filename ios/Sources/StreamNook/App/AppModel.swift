@@ -159,7 +159,8 @@ final class AppModel {
             let json = try await core.invoke("get_active_theme", args: [:])
             guard let theme = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                   let tokens = theme["palette"] as? [String: Any] else { return }
-            look.apply(palette: Palette(tokens: tokens), themeID: theme["id"] as? String ?? "winters-glass")
+            look.apply(palette: Palette(tokens: tokens), themeID: theme["id"] as? String ?? "winters-glass",
+                       light: (theme["light"] as? [String: Any]).flatMap(ThemeLight.init(json:)))
         } catch {
             log.error("get_active_theme failed: \(String(describing: error), privacy: .public)")
         }

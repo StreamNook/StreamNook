@@ -18,6 +18,7 @@ struct WalletButton: View {
             button(wallet)
                 .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
                     WalletSheet(wallet: wallet, session: session)
+                        .snSheetLight()
                 }
         }
     }

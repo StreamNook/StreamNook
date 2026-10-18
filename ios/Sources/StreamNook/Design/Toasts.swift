@@ -107,7 +107,7 @@ private struct ToastCard: View {
             }
         }
         .padding(16)
-        .snGlass(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .snGlass(RoundedRectangle(cornerRadius: 18, style: .continuous), light: .panel)
         .floatShadow()
         .accessibilityElement(children: .contain)
     }

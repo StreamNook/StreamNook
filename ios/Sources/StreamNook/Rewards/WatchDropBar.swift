@@ -99,7 +99,7 @@ struct WatchDropBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous), light: .popover)
         .contentShape(Rectangle())
         .onTapGesture { jump(to: drop.campaignID) }
         .accessibilityElement(children: .combine)

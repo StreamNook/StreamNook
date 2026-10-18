@@ -34,6 +34,7 @@ struct DropsSegment: View {
         }
         .sheet(item: $rewards.campaignSheet) { card in
             CampaignSheet(model: model, card: card) { rewards.campaignSheet = nil }
+                .snSheetLight()
         }
         .task(id: rewards.query) {
             guard rewards.drops?.connected == true else { return }

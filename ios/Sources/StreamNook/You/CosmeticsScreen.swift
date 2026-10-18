@@ -49,6 +49,7 @@ struct CosmeticsScreen: View {
         .scrollIndicators(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) { pinned }
         .background(SN.background)
+        .environment(\.themeLightOff, true)
         .navigationTitle("Edit profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -498,7 +499,7 @@ private struct BioEditor: View {
                     .scrollContentBackground(.hidden)
                     .padding(10)
                     .frame(minHeight: 140)
-                    .snPanel()
+                    .snPanel(light: nil)
                 Text("\(text.count)/\(limit)")
                     .font(.sn(12).monospacedDigit())
                     .foregroundStyle(text.count > limit ? SN.error : SN.textMuted)
