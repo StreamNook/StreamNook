@@ -620,7 +620,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              // Its own hide-keyboard button replaces commands while typing.
+              // Its own hide-keyboard button takes the menu's slot while typing.
               data-keyboard-hide="own"
               onFocus={() => setTyping(true)}
               onBlur={() => setTyping(false)}
@@ -670,19 +670,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
               text), so only a Twitch room shows it. */}
-          {typing ? (
-            <button
-              // Held on the press, so the field keeps the keyboard until this
-              // tap lands; otherwise it would blur first and this button would
-              // give its place back before the tap.
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => inputRef.current?.blur()}
-              className="shrink-0 w-9 h-9 flex items-center justify-center text-textSecondary active:opacity-70"
-              aria-label="Hide keyboard"
-            >
-              <KeyboardHideIcon size={19} />
-            </button>
-          ) : isTwitch && channel && (
+          {isTwitch && channel && (
             <button
               onClick={() => {
                 setEmotesOpen(false);
@@ -824,7 +812,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
         </div>
 
         {/* One slot, two jobs: Send while there is a message, otherwise the chat
-            menu. Avoids parking a permanently disabled Send on screen. */}
+            menu. Avoids parking a permanently disabled Send on screen. While the
+            keyboard is up with nothing typed, the menu's place is the way to put
+            the keyboard away (scrolling the chat never does), and it is the menu
+            again once the keyboard goes. */}
         {canSend ? (
           <button
             onClick={() => void send()}
@@ -860,15 +851,31 @@ const MobileChatInputImpl: React.FC<Props> = ({
           </button>
         ) : (
           <button
+            // Held on the press while typing, so the field keeps the keyboard
+            // until the tap lands; otherwise it would blur first and the button
+            // would turn back into the menu under the finger.
+            onPointerDown={(e) => {
+              if (typing) e.preventDefault();
+            }}
             onClick={() => {
+              if (typing) {
+                inputRef.current?.blur();
+                return;
+              }
               setEmotesOpen(false);
               setPointsOpen(false);
               setMenuOpen(true);
             }}
-            className="chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
-            aria-label="Chat options"
+            className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
+            aria-label={typing ? 'Hide keyboard' : 'Chat options'}
           >
-            <DotsThreeVertical size={20} weight="bold" />
+            {/* Both marks in one place, crossfading, so nothing moves. */}
+            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}>
+              <DotsThreeVertical size={20} weight="bold" />
+            </span>
+            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-100' : 'opacity-0'}`}>
+              <KeyboardHideIcon size={20} />
+            </span>
           </button>
         )}
 

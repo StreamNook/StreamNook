@@ -258,19 +258,7 @@ private struct ComposerBar: View {
                         model.menuOpen = true
                     }
                 }
-                if focused {
-                    // Scrolling the chat never closes the keyboard; this does. While typing it
-                    // takes the commands button's place (a "/" still opens commands).
-                    Button {
-                        focused = false
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .font(ComposerSymbol.font)
-                            .foregroundStyle(SN.textSecondary)
-                            .frame(width: 32, height: 36)
-                    }
-                    .accessibilityLabel("Hide keyboard")
-                } else if !session.isKick {
+                if !session.isKick {
                     Button {
                         model.commandsOpen = true
                     } label: {
@@ -289,9 +277,13 @@ private struct ComposerBar: View {
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
 
+            // Send with a draft; with none, the chat menu, except while the keyboard is up: scrolling
+            // the chat never closes it, so this slot is the way down until it goes.
             Button {
                 if model.canSend {
                     Task { await model.send() }
+                } else if focused {
+                    focused = false
                 } else {
                     model.panel = .none
                     model.menuOpen = true
@@ -307,7 +299,8 @@ private struct ComposerBar: View {
                         // The message cheers: Send spends, so it wears the gem.
                         RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
                     } else {
-                        Image(systemName: model.canSend || model.sending ? "paperplane.fill" : "ellipsis")
+                        Image(systemName: model.canSend || model.sending ? "paperplane.fill"
+                            : focused ? "keyboard.chevron.compact.down" : "ellipsis")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
                             .contentTransition(.symbolEffect(.replace))
@@ -322,7 +315,7 @@ private struct ComposerBar: View {
             .accessibilityLabel(model.canSend
                 ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
                     : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
-                : "Chat options")
+                : focused ? "Hide keyboard" : "Chat options")
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
