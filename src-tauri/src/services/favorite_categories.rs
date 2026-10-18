@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use crate::models::settings::FavoriteCategory;
 use crate::services::twitch_service::TwitchService;
 
-/// Categories asked for in one GQL request.
-const BATCH: usize = 25;
+/// Categories asked for in one GQL request: one alias each.
+pub(crate) const BATCH: usize = crate::services::twitch_limits::GQL_MAX_ALIASES;
 
 /// One tile in the favorites row, in the shape the Categories grid draws.
 #[derive(Serialize, Clone, Debug, PartialEq)]
