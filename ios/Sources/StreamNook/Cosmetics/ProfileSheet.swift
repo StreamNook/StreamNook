@@ -21,11 +21,23 @@ final class ProfileSheetModel {
     /// target (a mention, the long-press Profile item) the id the core resolved.
     @ObservationIgnored private var watchedKey: String?
 
+    /// The signed-in viewer's Twitch id: your own sheet shows your picture without the medal.
+    let ownID: String?
+
     static let historyLimit = 50
 
-    init(target: ProfileTarget, core: CoreBridge) {
+    init(target: ProfileTarget, core: CoreBridge, ownID: String? = nil) {
         self.target = target
         self.core = core
+        self.ownID = ownID
+    }
+
+    /// Another person's StreamNook badge rides their picture; your own picture carries no marks.
+    var medal: SNMemberBadge? {
+        guard let badge = sheet?.streamnook else { return nil }
+        let id = sheet?.userID.isEmpty == false ? sheet?.userID : target.userID
+        if let ownID, !ownID.isEmpty, ownID == id { return nil }
+        return badge
     }
 
     func start() {
@@ -118,7 +130,7 @@ final class ProfileSheetModel {
 }
 
 /// The profile sheet a name tap opens, in the same shape as your own card: their Atmosphere
-/// glowing behind them, their picture with their StreamNook badge on it as a medal (it shows
+/// glowing behind them, their picture with their StreamNook badge on it as a medal (never on your own; it shows
 /// nowhere else here), their name in their paint, their sub in this room, every badge they have
 /// under its platform's mark, and what they said this session. No actions; the system sheet sized
 /// to its content, at most 80% of the screen.
@@ -134,7 +146,7 @@ struct ProfileSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CutoutAvatar(platformURL: sheet?.avatarURL, picture: sheet?.picture, size: Self.avatar,
-                         medal: sheet?.streamnook?.imageURL, medalLabel: sheet?.streamnook?.label ?? "")
+                         medal: model.medal?.imageURL, medalLabel: model.medal?.label ?? "")
                 .padding(.leading, 16)
                 .padding(.top, 24)
             VStack(alignment: .leading, spacing: 0) {
@@ -149,7 +161,7 @@ struct ProfileSheet: View {
                 ForEach(sheet?.groups ?? []) { group in
                     badgeGroup(group).padding(.top, 20)
                 }
-                if sheet?.hasNoBadges == true && sheet?.streamnook == nil {
+                if sheet?.hasNoBadges == true && model.medal == nil {
                     Text("No badges to show for this user.")
                         .font(.snRowDetail)
                         .foregroundStyle(SN.textMuted)
