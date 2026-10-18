@@ -3236,6 +3236,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const runModeration = async (
       verb: 'ban' | 'timeout' | 'unban',
       seconds: number | null,
+      typed: string | null = null,
     ) => {
       if (!isModerator) {
         notice(`You don't have moderator permissions in this channel.`);
@@ -3263,7 +3264,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               : seconds === null
                 ? { kind: 'ban' }
                 : { kind: 'timeout', seconds },
-          reason: verb === 'unban' ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          reason: verb === 'unban' || typed !== null ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          typed,
         });
         useAppStore.getState().addToast(outcome.message, 'success');
       } catch (err) {
@@ -3278,11 +3280,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       case 'ban':
         await runModeration('ban', null);
         return;
-      case 'timeout': {
-        const secs = Number(args[1]);
-        await runModeration('timeout', Number.isFinite(secs) && secs > 0 ? secs : 600);
+      case 'timeout':
+        // Rust reads the length and reason as every app does: a leading length,
+        // else Twitch's ten minutes with every word as the reason.
+        await runModeration('timeout', 600, args.slice(1).join(' '));
         return;
-      }
       // Clears their messages with the shortest timeout the platform has
       // (a minute on Kick).
       case 'purge':

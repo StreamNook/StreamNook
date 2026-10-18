@@ -169,8 +169,13 @@ struct StreamMenu: View {
 
     private var link: URL { stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")! }
 
+    @Environment(\.openChat) private var openChat
+
     var body: some View {
         MenuPick("Watch", symbol: Symbol.watch, action: open)
+        if let openChat {
+            MenuPick("Open chat", symbol: Symbol.chats) { openChat(stream) }
+        }
         if let openCategory, !stream.gameName.isEmpty {
             MenuPick("Open \(stream.gameName)", symbol: Symbol.category, action: openCategory)
         }
@@ -181,7 +186,7 @@ struct StreamMenu: View {
 
     /// The same items, named, for a drive step's stand-in sheet.
     static func items(_ stream: TwitchStream, category: Bool) -> [(label: String, symbol: String)] {
-        var items: [(label: String, symbol: String)] = [("Watch", Symbol.watch)]
+        var items: [(label: String, symbol: String)] = [("Watch", Symbol.watch), ("Open chat", Symbol.chats)]
         if category, !stream.gameName.isEmpty { items.append(("Open \(stream.gameName)", Symbol.category)) }
         items += [("Share channel", Symbol.share), ("Copy channel link", Symbol.copy)]
         return items

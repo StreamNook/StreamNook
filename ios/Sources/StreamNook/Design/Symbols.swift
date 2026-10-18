@@ -4,6 +4,7 @@ enum Symbol {
     // Tabs (Phosphor/Lucide on Android: Heart, Compass, Package, UserCircle).
     static let following = "heart"
     static let browse = "safari"
+    static let chats = "bubble.left.and.bubble.right"
     static let rewards = "shippingbox"
     static let you = "person.crop.circle"
 

@@ -36,6 +36,18 @@ import Testing
         #expect(ComposerRoute.of(" hi chat ") == .chat("hi chat"))
         #expect(ComposerRoute.of("/ban someone ") == .slash("/ban someone"))
     }
+
+    @Test func aCommandWhoseDispatchFailedNeverLeavesAsChat() {
+        // The dispatcher threw: /mods must stay in the draft, never reach chat as text.
+        #expect(SlashAfterDispatch.of(text: "/mods", handled: false, dispatchFailed: true) == .keepDraft)
+        #expect(SlashAfterDispatch.of(text: "/vips", handled: false, dispatchFailed: true) == .keepDraft)
+        // The core ran it: done, whatever it says to send.
+        #expect(SlashAfterDispatch.of(text: "/mods", handled: true, dispatchFailed: false) == .done)
+        // The core does not run it (Twitch runs /me): as typed.
+        #expect(SlashAfterDispatch.of(text: "/me waves", handled: false, dispatchFailed: false) == .sendTyped)
+        // Plain text whose custom-command check failed is still the viewer's chat line.
+        #expect(SlashAfterDispatch.of(text: "hi chat", handled: false, dispatchFailed: true) == .sendTyped)
+    }
 }
 
 @Suite struct ComposerDecodingTests {

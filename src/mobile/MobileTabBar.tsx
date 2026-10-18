@@ -6,14 +6,16 @@
 // letting it show through the glass.
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Compass, Heart, Package, UserCircle } from 'phosphor-react';
+import { ChatsCircle, Compass, Heart, Package, UserCircle } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from './navStore';
 import { usePicksStore } from './profile/picksStore';
+import { useChatTabsStore } from './chat/chatTabsStore';
 
 const TABS: { id: MobileTab; label: string; Icon: typeof Heart }[] = [
   { id: 'following', label: 'Following', Icon: Heart },
   { id: 'browse', label: 'Browse', Icon: Compass },
+  { id: 'chats', label: 'Chats', Icon: ChatsCircle },
   { id: 'rewards', label: 'Rewards', Icon: Package },
   { id: 'you', label: 'You', Icon: UserCircle },
 ];
@@ -98,14 +100,9 @@ const YouTabIcon: React.FC<{ selected: boolean }> = ({ selected }) => {
         boxShadow: selected ? `inset 0 0 0 ${RING}px var(--color-accent)` : undefined,
       }}
     >
-      {/* A black disc under the picture, as the You card draws it (Brandon:
-          black behind a clear picture, not gray): a picture with transparent
-          parts (many 7TV pictures) otherwise floats as loose marks over the
-          glass. */}
-      <span
-        className="block overflow-hidden rounded-full"
-        style={{ width: diameter, height: diameter, background: '#000' }}
-      >
+      {/* No backing (Brandon: a transparent picture stays transparent in the
+          tab bar). The You card and Edit profile keep their black disc. */}
+      <span className="block overflow-hidden rounded-full" style={{ width: diameter, height: diameter }}>
         <img src={shown.url} alt="" draggable={false} className="h-full w-full object-cover" />
       </span>
     </span>
@@ -116,16 +113,21 @@ export const MobileTabBar: React.FC<{
   /** The full-screen player covers the shell: keep the bar out of the
    *  compositor entirely rather than blurring a backdrop nobody can see. */
   hidden?: boolean;
-}> = ({ hidden = false }) => {
+  /** The fade of the page's own background under the bar. Off on the Chats
+   *  screen, whose composer sits right above the bar and would fade into it. */
+  floor?: boolean;
+}> = ({ hidden = false, floor = true }) => {
   const activeTab = useMobileNavStore((s) => s.activeTab);
   const setTab = useMobileNavStore((s) => s.setTab);
+  // Unread mentions across your chats, counted by Rust.
+  const mentions = useChatTabsStore((s) => s.mentionTotal);
 
   return (
     <>
       <div
         aria-hidden
         className="sn-tabbar-floor z-[29]"
-        style={{ visibility: hidden ? 'hidden' : undefined }}
+        style={{ visibility: hidden || !floor ? 'hidden' : undefined }}
       />
       <nav
         // The dock glaze: clear glass with a light blur and a thin black film,
@@ -159,13 +161,14 @@ export const MobileTabBar: React.FC<{
                   active ? 'text-textPrimary' : 'text-textSecondary'
                 }`}
                 aria-current={active ? 'page' : undefined}
+                aria-label={id === 'chats' && mentions > 0 ? `${label}, ${mentions} unread mentions` : label}
               >
-                {/* Icon over label (Brandon: labels, like the iPhone and
-                    Material 3's navigation bar). The selected pill holds both,
-                    leaves the same strip of glass above and below it, and
-                    glides between tabs on one shared layoutId, the way the
-                    desktop strip's highlight does. */}
-                <span className="relative flex flex-col items-center justify-center gap-0.5 w-[74px] h-[54px]">
+                {/* Icons only (Brandon: with five tabs, "Following" spilled out
+                    of the selection's fill). The name stays the button's
+                    accessible label. The selected pill is sized to the icon,
+                    one per tab at even spacing, and glides between tabs on one
+                    shared layoutId, the way the desktop strip's highlight does. */}
+                <span className="relative flex items-center justify-center w-[56px] h-[44px]">
                   {active && (
                     <motion.span
                       layoutId="mobileTabHighlight"
@@ -179,11 +182,14 @@ export const MobileTabBar: React.FC<{
                     ) : (
                       <Icon size={24} weight={active ? 'fill' : 'regular'} />
                     )}
-                  </span>
-                  <span
-                    className={`relative z-10 text-[12px] leading-[14px] ${active ? 'font-semibold' : 'font-medium'}`}
-                  >
-                    {label}
+                    {id === 'chats' && mentions > 0 && (
+                      <span
+                        aria-hidden
+                        className="absolute -top-1 left-[15px] min-w-[16px] h-4 px-1 rounded-full bg-error text-white text-[10.5px] font-semibold leading-4 text-center tabular-nums"
+                      >
+                        {mentions > 99 ? '99+' : mentions}
+                      </span>
+                    )}
                   </span>
                 </span>
               </button>

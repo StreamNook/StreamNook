@@ -17,6 +17,7 @@ import { AccountsCard } from '../profile/AccountsCard';
 const START_TABS: Segment<MobileTab>[] = [
   { value: 'following', label: 'Following' },
   { value: 'browse', label: 'Browse' },
+  { value: 'chats', label: 'Chats' },
   { value: 'rewards', label: 'Rewards' },
   { value: 'you', label: 'You' },
 ];

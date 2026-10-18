@@ -1,19 +1,21 @@
 import SNKit
 import SwiftUI
 
-/// The open rooms over the chat, shown from two rooms up so single-room chat keeps every point
-/// of height. A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill.
+/// The open rooms over the chat, shown from two rooms up under the player so single-room chat
+/// keeps every point of height, and always on the Chats tab, where its controls follow the rooms. A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill.
 /// The capsule hugs its rooms. When they outgrow the bar the row compresses in place and never
 /// scrolls, clips or wraps: rooms behind the one on screen fold to their faces one at a time, the
 /// longest name first, until the row fits; with every other room folded, the name on screen
 /// truncates. It reads only the tabs, never the rows, so arriving messages never rebuild it.
 struct ChatTabStrip: View {
     let rooms: ChatRooms
+    /// Controls after the rooms, outside their glass (the Chats tab's play and add buttons).
+    var trailing: AnyView?
 
     static let height: CGFloat = 45
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 6) {
             ViewThatFits(in: .horizontal) {
                 ForEach(0..<max(1, rooms.tabs.count), id: \.self) { folds in
                     row(folding: folds)
@@ -22,6 +24,7 @@ struct ChatTabStrip: View {
             .padding(4)
             .snGlass(Capsule())
             Spacer(minLength: 0)
+            if let trailing { trailing }
         }
         .padding(.horizontal, 10)
         .frame(height: Self.height)
@@ -131,6 +134,16 @@ private struct TabPill: View {
             Button(action: select) {
                 HStack(spacing: 6) {
                     TabFace(url: tab.avatar, label: tab.label)
+                        // Live rooms wear the sidebar's dot; the stream's tab says it with its mark.
+                        .overlay(alignment: .bottomTrailing) {
+                            if tab.live == true && !tab.pinnedToStream {
+                                Circle().fill(SN.live)
+                                    .frame(width: 8, height: 8)
+                                    .overlay(Circle().stroke(SN.background, lineWidth: 1.5))
+                                    .offset(x: 2, y: 2)
+                                    .accessibilityLabel("Live")
+                            }
+                        }
                     if tab.pinnedToStream {
                         Image(systemName: "dot.radiowaves.left.and.right")
                             .font(.system(size: 11, weight: .medium))
@@ -150,6 +163,16 @@ private struct TabPill: View {
                                 .truncationMode(.tail)
                         }
                         .layoutPriority(-1)
+                    }
+                    // Mentions of you here, until you read them.
+                    if tab.mentions > 0 && !active {
+                        Text(tab.mentions > 99 ? "99+" : "\(tab.mentions)")
+                            .font(.sn(10.5, 600))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(Capsule().fill(SN.error))
                     }
                 }
                 .padding(.trailing, folded ? 0 : 4)
