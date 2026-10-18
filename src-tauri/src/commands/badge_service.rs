@@ -508,10 +508,14 @@ pub(crate) async fn heal_enrichment(
         return false;
     };
     let key = format!("metadata:{}-v{}", badge.badge_set_id, badge.badge_version);
+    // The same enrichment, not just any: a lost write could also be an update
+    // (the relay adding a window to a drop it first sent without one), leaving
+    // the older copy in place.
     let kept = || {
         matches!(
             crate::services::universal_cache_service::peek_cached_entry(&key),
             Ok(Some(entry)) if entry.metadata.source == crate::commands::badge_metadata::ENRICHMENT_SOURCE
+                && entry.data.get("enrichment") == Some(enrichment)
         )
     };
     if kept() {
