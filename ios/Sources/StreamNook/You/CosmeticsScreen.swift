@@ -495,6 +495,7 @@ private struct BioEditor: View {
         NavigationStack {
             VStack(alignment: .trailing, spacing: 8) {
                 TextEditor(text: $text)
+                    .keyboardHideButton()
                     .font(.sn(15))
                     .scrollContentBackground(.hidden)
                     .padding(10)

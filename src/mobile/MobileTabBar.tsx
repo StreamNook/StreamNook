@@ -10,6 +10,7 @@ import { ChatsCircle, Compass, Heart, Package, UserCircle } from 'phosphor-react
 import { useAppStore } from '../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from './navStore';
 import { usePicksStore } from './profile/picksStore';
+import { KeyboardDismiss } from './ui/KeyboardDismiss';
 import { useChatTabsStore } from './chat/chatTabsStore';
 
 const TABS: { id: MobileTab; label: string; Icon: typeof Heart }[] = [
@@ -197,6 +198,8 @@ export const MobileTabBar: React.FC<{
           })}
         </div>
       </nav>
+      {/* The keyboard's way down on every screen (it never closes on scroll). */}
+      <KeyboardDismiss />
     </>
   );
 };

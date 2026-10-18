@@ -92,7 +92,7 @@ struct ChatPicker: View {
                 .padding(.top, 16)
                 .padding(.bottom, bottomPadding)
             }
-            .scrollDismissesKeyboard(.immediately)
+            .scrollDismissesKeyboard(.never)
             // Rows fade out at both edges instead of being cut.
             .mask {
                 VStack(spacing: 0) {

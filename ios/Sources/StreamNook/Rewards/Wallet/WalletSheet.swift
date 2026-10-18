@@ -108,7 +108,7 @@ private struct RewardsList: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
-        .scrollDismissesKeyboard(.immediately)
+        .scrollDismissesKeyboard(.never)
         .toolbar(.hidden, for: .navigationBar)
     }
 
@@ -333,6 +333,7 @@ private struct RewardDetail: View {
                     VStack(alignment: .trailing, spacing: 4) {
                         TextField("", text: $text, prompt: Text(view.placeholder ?? "Type your message...").foregroundStyle(SN.textMuted),
                                   axis: .vertical)
+                            .keyboardHideButton()
                             .font(.sn(14))
                             .lineLimit(3...5)
                             .focused($focused)

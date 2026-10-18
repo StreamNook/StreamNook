@@ -112,23 +112,6 @@ export const BrowseScreen: React.FC = () => {
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const searchSeq = useRef(0);
   const searchInput = useRef<HTMLInputElement | null>(null);
-  const resultsArea = useRef<HTMLDivElement | null>(null);
-
-  // The finger, not the scroll event: every scroll of the results starts with
-  // a touch on them, while a scroll event also fires when new results land
-  // shorter than the old ones and the scroller clamps, which would close the
-  // keyboard mid-word. Capture phase on the wrapper, because the scroller and
-  // its touch handling belong to PullToRefresh.
-  useEffect(() => {
-    const area = resultsArea.current;
-    if (!area) return;
-    const dismiss = () => {
-      const input = searchInput.current;
-      if (input && document.activeElement === input) input.blur();
-    };
-    area.addEventListener('touchstart', dismiss, { capture: true, passive: true });
-    return () => area.removeEventListener('touchstart', dismiss, { capture: true });
-  }, []);
 
   useEffect(() => {
     if (recommendedStreams.length === 0) {
@@ -330,7 +313,7 @@ export const BrowseScreen: React.FC = () => {
       </div>
       {/* Touching or scrolling the results puts the keyboard away, so it
           never sits over the list you are reading. */}
-      <div ref={resultsArea} className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col">
         {platform === 'kick' ? (
           <KickBrowseBody
             mode={mode}

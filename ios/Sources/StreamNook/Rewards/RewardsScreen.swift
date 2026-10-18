@@ -39,7 +39,7 @@ struct RewardsScreen: View {
         }
         .scrollIndicators(.hidden)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
-        .scrollDismissesKeyboard(.immediately)
+        .scrollDismissesKeyboard(.never)
         .snShellBackground()
         .navigationTitle("Rewards")
         .toolbarTitleDisplayMode(.inlineLarge)

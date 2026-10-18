@@ -307,6 +307,7 @@ private struct StreamInfoFormView: View {
         Form {
             Section {
                 TextField("What are you streaming?", text: $draft.title, axis: .vertical)
+                    .keyboardHideButton()
             } header: {
                 HStack { Text("Title"); Spacer(); Text(check?.titleCount ?? "").monospacedDigit() }
             } footer: {
@@ -474,7 +475,7 @@ private struct PollFormView: View {
             }
             if !prediction {
                 Section("Extra votes with channel points") {
-                    TextField("Off", text: $pointsPerVote).keyboardType(.numberPad)
+                    TextField("Off", text: $pointsPerVote).keyboardType(.numberPad).keyboardHideButton()
                 }
             }
         }
@@ -654,7 +655,7 @@ private struct AnnounceFormView: View {
     var body: some View {
         Form {
             Section {
-                TextField("Your announcement", text: $text, axis: .vertical).lineLimit(3...6)
+                TextField("Your announcement", text: $text, axis: .vertical).lineLimit(3...6).keyboardHideButton()
             }
             if let colors = model.view?.chat?.announceColors {
                 Section("Color") {

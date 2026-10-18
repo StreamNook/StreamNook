@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { CircleSlash } from 'lucide-react';
+import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
@@ -198,6 +199,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Whether the field has the keyboard: while it does, the commands button is
+  // the way to put the keyboard away (scrolling the chat never does).
+  const [typing, setTyping] = useState(false);
   // The composer rows of Settings > Chat that this field honors.
   const spellcheck = chatInput?.spellcheck_enabled ?? true;
   const hidePlaceholder = chatInput?.hide_placeholder ?? false;
@@ -616,6 +620,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
+              // Its own hide-keyboard button replaces commands while typing.
+              data-keyboard-hide="own"
+              onFocus={() => setTyping(true)}
+              onBlur={() => setTyping(false)}
               onKeyDown={(e) => {
                 // An IME's Enter confirms the composed word; it never sends.
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -662,7 +670,19 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
               text), so only a Twitch room shows it. */}
-          {isTwitch && channel && (
+          {typing ? (
+            <button
+              // Held on the press, so the field keeps the keyboard until this
+              // tap lands; otherwise it would blur first and this button would
+              // give its place back before the tap.
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => inputRef.current?.blur()}
+              className="shrink-0 w-9 h-9 flex items-center justify-center text-textSecondary active:opacity-70"
+              aria-label="Hide keyboard"
+            >
+              <KeyboardHideIcon size={19} />
+            </button>
+          ) : isTwitch && channel && (
             <button
               onClick={() => {
                 setEmotesOpen(false);

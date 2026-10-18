@@ -66,6 +66,7 @@ struct CreateClipSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             caption("Title")
             TextField("", text: $title, prompt: Text("Clip").foregroundStyle(SN.textMuted), axis: .vertical)
+                .keyboardHideButton()
                 .lineLimit(1...3)
                 .font(.snBody)
                 .foregroundStyle(SN.textPrimary)

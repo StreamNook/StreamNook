@@ -68,6 +68,7 @@ struct BitsPane: View {
                     }
                     TextField("", text: $text)
                         .keyboardType(.numberPad)
+                        .keyboardHideButton()
                         .font(.sn(13.5, 600))
                         .monospacedDigit()
                         .frame(width: 58)
