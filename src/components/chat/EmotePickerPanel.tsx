@@ -962,7 +962,11 @@ export function EmotePickerPanel({
         </div>
         )}
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
+      {/* On the phone the grid fades out against the Emotes/GIFs bar. */}
+      <div
+        ref={scrollRef}
+        className={`flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin ${IS_MOBILE ? 'sn-fade-bottom' : ''}`}
+      >
         {selectedProvider === 'gifs' ? (
           !gifStatus?.can_use ? (
             // Three distinct answers, so an empty pane is never ambiguous:
