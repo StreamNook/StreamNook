@@ -771,3 +771,45 @@ async fn collect_live(settings: &serde_json::Value) -> Vec<OutItem> {
 
     out
 }
+
+// ---------------------------------------------------------------------------
+// Mention notifications while the app runs
+// ---------------------------------------------------------------------------
+
+/// The Kotlin side that turns a mention into a notification
+/// (`app.streamnook.MentionNotifyPlugin`).
+struct MentionNotifier<R: tauri::Runtime>(tauri::plugin::PluginHandle<R>);
+
+/// Posts every mention `services::mention_inbox` decided to announce (its
+/// `mention-notify` event: the setting, streamer mode, the per-chat cooldown,
+/// replay age and an off-screen chat are already checked there).
+///
+/// Listened for here rather than in the page because wry pauses the WebView
+/// whenever the app leaves the screen, which is exactly when a mention needs
+/// to reach the shade. The Rust event bus still runs then, and so does the
+/// activity's main looper that the plugin call lands on.
+pub fn mention_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri::{Listener, Manager};
+    tauri::plugin::Builder::new("mention-notify")
+        .setup(|app, api| {
+            let handle = api.register_android_plugin("app.streamnook", "MentionNotifyPlugin")?;
+            app.manage(MentionNotifier(handle));
+            let app_handle = app.clone();
+            app.listen(crate::services::mention_inbox::NOTIFY_EVENT, move |event| {
+                let Ok(entry) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+                    return;
+                };
+                let app = app_handle.clone();
+                // `run_mobile_plugin` blocks until Kotlin answers; never on
+                // the chat lane that emitted the event.
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = app.state::<MentionNotifier<R>>();
+                    if let Err(e) = state.0.run_mobile_plugin::<serde_json::Value>("post", entry) {
+                        log::warn!("[MentionNotify] post failed: {e}");
+                    }
+                });
+            });
+            Ok(())
+        })
+        .build()
+}

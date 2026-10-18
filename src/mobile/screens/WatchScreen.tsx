@@ -50,6 +50,8 @@ import {
   useViewingStreamChat,
 } from '../chat/ChatTabStrip';
 import { useChatTabsStore } from '../chat/chatTabsStore';
+import { useMentionsStore } from '../mentions/mentionInbox';
+import { MentionContextCard } from '../mentions/MentionContextCard';
 import { DropProgressBar } from '../watch/DropProgressBar';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -182,6 +184,10 @@ export const WatchScreen: React.FC = () => {
   // numeric user_id; a Kick id would name an unrelated Twitch channel.
   const streamScoped = viewingStreamChat && isTwitchStream(currentStream);
   const chatChannelId = useActiveChatChannelId();
+  // An opened mention older than its chat's history, pinned over that chat.
+  const mentionCard = useMentionsStore((s) => s.contextCard);
+  const activeChatRoom = useChatTabsStore((s) => s.activeChannel);
+  const showMentionCard = !!mentionCard && mentionCard.room === activeChatRoom;
   const backgroundMode = useAppStore((s) => s.settings.video_player?.background_mode) ?? 'pip';
   // The landscape chat overlay shares its knobs with the desktop overlay:
   // opacity, width and side are one preference however big the screen is.
@@ -1233,7 +1239,8 @@ export const WatchScreen: React.FC = () => {
                 // the stream's own banners (pins, drops, hype train) stay out
                 // of it; they are all still one rotation away. hidden keeps
                 // the drop bar mounted and polling.
-                !chatOverlay && ((streamScoped && (currentHypeTrain || dropActive)) || pinned.length > 0)
+                !chatOverlay &&
+                ((streamScoped && (currentHypeTrain || dropActive)) || pinned.length > 0 || showMentionCard)
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -1275,6 +1282,8 @@ export const WatchScreen: React.FC = () => {
                 expanded={pinsOpen}
                 onToggle={() => setPinsOpen((v) => !v)}
               />
+              {/* Last in DOM, so first on screen: the mention you just opened. */}
+              {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}
             </div>
 
           {/* Poll + prediction cards, exactly the desktop components: they

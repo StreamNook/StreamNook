@@ -1,7 +1,9 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, At, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { useMobileNavStore } from '../navStore';
+import { useMentionsStore } from '../mentions/mentionInbox';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -73,6 +75,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   const row =
     'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70 disabled:opacity-45';
   const iconBox = 'flex w-6 h-6 shrink-0 items-center justify-center';
+  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
 
   // The desktop client's follow logic, ported rather than reimplemented: this
   // hook lives in hooks/ precisely so several surfaces can share it, and it
@@ -212,6 +215,24 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             <ChatsCircle size={ICON} className="text-textSecondary" />
           </span>
           <span className="flex-1 text-left">Add a chat</span>
+        </button>
+
+        {/* Every chat's mentions of you, over the player; the stream keeps
+            playing behind it. The dot is the unread mark. */}
+        <button
+          onClick={() => {
+            onClose();
+            useMobileNavStore.getState().setMentionsOpen(true);
+          }}
+          className={row}
+        >
+          <span className={iconBox}>
+            <At size={ICON} className="text-textSecondary" />
+          </span>
+          <span className="flex-1 text-left">Mentions</span>
+          {mentionsUnread > 0 && (
+            <span className="w-2 h-2 mr-1 rounded-full bg-accent shrink-0" aria-label="Unread mentions" />
+          )}
         </button>
 
         <button

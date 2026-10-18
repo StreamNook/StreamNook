@@ -985,6 +985,9 @@ pub fn run() {
     // services::cast_session.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(cast_plugin::init());
+    // Android mention notifications, posted from Rust while the page sleeps.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_notify::mention_plugin());
     // Linux: tells every page, before its first paint, who draws the window
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]

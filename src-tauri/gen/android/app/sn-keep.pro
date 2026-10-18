@@ -9,6 +9,7 @@
 # Tauri mobile plugins are instantiated reflectively by PluginManager.
 -keep class app.streamnook.TwitchLoginPlugin { *; }
 -keep class app.streamnook.CastPlugin { *; }
+-keep class app.streamnook.MentionNotifyPlugin { *; }
 -keep class app.streamnook.CastLoadArgs { *; }
 -keep class app.streamnook.CastControlArgs { *; }
 -keep class app.streamnook.TvShowArgs { *; }

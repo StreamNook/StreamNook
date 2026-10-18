@@ -87,6 +87,10 @@ class MainActivity : TauriActivity() {
   // no WebView to hand it to for some time afterwards.
   @Volatile private var pendingChannel: String? = null
 
+  // Message id from a tapped mention notification (MentionNotifier), waiting
+  // for the shell the same way, for the same cold-start reason.
+  @Volatile private var pendingMention: String? = null
+
   // Fired by the PiP window's mute action. Private to the app; the receiver is
   // registered in code and explicitly NOT exported.
   private val muteReceiver = object : BroadcastReceiver() {
@@ -644,6 +648,15 @@ class MainActivity : TauriActivity() {
       pendingChannel = null
       return channel ?: ""
     }
+
+    /** Message id from a tapped mention notification, or "". Reading clears
+     *  it, like consumePendingChannel. */
+    @JavascriptInterface
+    fun consumePendingMention(): String {
+      val id = pendingMention
+      pendingMention = null
+      return id ?: ""
+    }
   }
 
   /**
@@ -656,6 +669,18 @@ class MainActivity : TauriActivity() {
    */
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    // A mention opens that mention (its chat and the message), not a stream.
+    val mention = intent.getStringExtra(MentionNotifier.EXTRA_MENTION)
+    if (!mention.isNullOrEmpty()) {
+      pendingMention = mention
+      runOnUiThread {
+        webView?.evaluateJavascript(
+          "window.__SN_OPEN_MENTION__ && window.__SN_OPEN_MENTION__(${JSONObject.quote(mention)})",
+          null,
+        )
+      }
+      return
+    }
     val channel = intent.getStringExtra(NotifyWorker.EXTRA_CHANNEL) ?: return
     if (channel.isEmpty()) return
     pendingChannel = channel
@@ -700,6 +725,9 @@ class MainActivity : TauriActivity() {
     // it mounts; there is no WebView to talk to at this point.
     intent?.getStringExtra(NotifyWorker.EXTRA_CHANNEL)?.takeIf { it.isNotEmpty() }?.let {
       pendingChannel = it
+    }
+    intent?.getStringExtra(MentionNotifier.EXTRA_MENTION)?.takeIf { it.isNotEmpty() }?.let {
+      pendingMention = it
     }
 
     // Push token, fetched once per launch so `push_register` always has the

@@ -379,3 +379,36 @@ body:has(.sn-mobile) .glass-input:focus {
     color-mix(in srgb, var(--color-background) 92%, transparent) 100%
   );
 }
+
+/* A chat row a jump landed on (a reply's parent, a mention opened from the
+   inbox or a notification): a soft accent wash with the accent bar, which
+   rises quickly, holds while the eye finds it, and fades out. A pseudo-element
+   so only its opacity animates; the row's own colors (a mention already wears
+   one) stay as they are underneath. Set by flashChatMessage. */
+.sn-mobile .chat-message-row[data-sn-flash] {
+  position: relative;
+}
+.sn-mobile .chat-message-row[data-sn-flash]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--color-accent);
+  opacity: 0;
+  animation: sn-jump-flash 2s ease-out forwards;
+}
+@keyframes sn-jump-flash {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

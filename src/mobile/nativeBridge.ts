@@ -24,6 +24,7 @@ interface SNBridge {
   cancelBackgroundChecks?(): void;
   runNotifyCheckNow?(): void;
   consumePendingChannel?(): string;
+  consumePendingMention?(): string;
   mediaSessionStart?(title: string, artist: string, artUrl: string, playing: boolean): void;
   mediaSessionStop?(): void;
   displayShortEdge?(): number;
@@ -375,5 +376,19 @@ export function mediaSessionStop(): void {
     bridge()?.mediaSessionStop?.();
   } catch {
     /* bridge absent */
+  }
+}
+
+/**
+ * Message id from a tapped mention notification, or null. Same contract as
+ * consumePendingChannel: reading clears it, drained on mount for the cold
+ * case, while a warm tap arrives through `window.__SN_OPEN_MENTION__`.
+ */
+export function consumePendingMention(): string | null {
+  try {
+    const id = bridge()?.consumePendingMention?.();
+    return id && id.length > 0 ? id : null;
+  } catch {
+    return null;
   }
 }

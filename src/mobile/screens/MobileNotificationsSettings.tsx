@@ -34,6 +34,10 @@ import {
 import type { LiveNotificationSettings } from '../../types';
 import { Logger } from '../../utils/logger';
 import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+import { useSettingReset } from '../../components/settings/settingReset';
+import { ResetArrow } from '../../components/settings/_primitives';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { roomName, roomProvider, setRoomMuted } from '../mentions/mentionInbox';
 
 const TOGGLES: {
   key: keyof LiveNotificationSettings;
@@ -99,6 +103,132 @@ const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     {children}
   </div>
 );
+
+/** The mention rules, as Rust reads them (services/mention_inbox.rs and the
+ *  chat rules). Each row writes its one field. */
+const MENTION_RULES: { key: 'match_bare_login' | 'match_display_name' | 'highlight_words'; label: string }[] = [
+  { key: 'match_bare_login', label: 'Name without @' },
+  { key: 'match_display_name', label: 'Display name' },
+  { key: 'highlight_words', label: 'Highlight words' },
+];
+
+/** A row's title with its reset arrow, the arrow shown only off default. */
+const RowTitle: React.FC<{ title: string; reset?: () => void; className?: string }> = ({
+  title,
+  reset,
+  className = 'text-[14px] text-textPrimary',
+}) => (
+  <div className={`flex items-center gap-1.5 ${className}`}>
+    <span>{title}</span>
+    {reset && <ResetArrow onReset={reset} />}
+  </div>
+);
+
+/**
+ * Mentions and replies: whether one notifies you, what counts as one, and
+ * the chats where they stay quiet. "Notify me" is the live_notifications key
+ * every app shares; the rest is the `mentions` group. Rust decides every
+ * notification and every inbox entry from these.
+ */
+const MentionsSection: React.FC<{ masterOn: boolean; osBlocked: boolean }> = ({ masterOn, osBlocked }) => {
+  const notifyPref = useAppStore((s) => s.settings.live_notifications?.show_mention_notifications);
+  const mentions = useAppStore((s) => s.settings.mentions);
+  const resetFor = useSettingReset();
+  const notifyOn = notifyPref !== false;
+  const muted = mentions?.muted_channels ?? [];
+  const mixed = new Set(muted.map(roomProvider)).size > 1;
+
+  const write = (changes: Record<string, unknown>) =>
+    setSettingsFields(changes).catch((err) => {
+      Logger.warn('[MobileNotificationsSettings] save failed:', err);
+      useAppStore.getState().addToast('Could not save that change.', 'error');
+    });
+
+  return (
+    <div data-settings-section="Mentions and replies">
+      <SectionLabel>Mentions and replies</SectionLabel>
+      <div className="glass-panel divide-y divide-borderSubtle">
+        <div className="p-3.5" data-setting-row="Notify me">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <RowTitle title="Notify me" reset={resetFor('live_notifications.show_mention_notifications')} />
+              <div className="text-[12px] text-textMuted leading-snug mt-0.5">
+                When someone mentions or replies to you
+              </div>
+              {osBlocked && (
+                <button
+                  onClick={() => openChannelSettings(NOTIFY_CHANNEL.mentions)}
+                  className="text-[12px] text-warning mt-1 flex items-center gap-1"
+                >
+                  Silenced in Android settings
+                  <ArrowSquareOut size={12} />
+                </button>
+              )}
+            </div>
+            <Toggle
+              on={notifyOn && masterOn && !osBlocked}
+              disabled={!masterOn || osBlocked}
+              onChange={() =>
+                void write(fieldsIn('live_notifications', { show_mention_notifications: !notifyOn }))
+              }
+            />
+          </div>
+        </div>
+
+        {/* What counts, its own row: these also decide what the Mentions
+            list keeps, so they stay live with the notification off. Same
+            layout as desktop and iPhone. */}
+        <div className="p-3.5" data-setting-row="Counts as a mention">
+          <RowTitle title="Counts as a mention" />
+          <div className="text-[12px] text-textMuted leading-snug mt-0.5">
+            Your @name always counts. These count too, in Mentions and for notifications.
+          </div>
+          <div className="mt-2.5 ml-1 pl-3 border-l border-borderSubtle flex flex-col">
+            {MENTION_RULES.map(({ key, label }) => {
+              const on = mentions?.[key] !== false;
+              return (
+                <div key={key} className="flex items-center gap-3 py-1.5" data-setting-row={label}>
+                  <RowTitle
+                    title={label}
+                    reset={resetFor(`mentions.${key}`)}
+                    className="flex-1 min-w-0 text-[13.5px] text-textSecondary"
+                  />
+                  <Toggle on={on} onChange={() => void write(fieldsIn('mentions', { [key]: !on }))} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="p-3.5" data-setting-row="Muted chats">
+          <RowTitle title="Muted chats" reset={resetFor('mentions.muted_channels')} />
+          <div className="text-[12px] text-textMuted leading-snug mt-0.5">
+            {muted.length > 0
+              ? 'Mentions here never notify you or reach the Mentions list.'
+              : 'None. Mute a chat from its row in Mentions.'}
+          </div>
+          {muted.length > 0 && (
+            <div className="mt-2 flex flex-col">
+              {muted.map((room) => (
+                <div key={room} className="flex items-center gap-2 min-h-[40px]">
+                  {mixed && <ProviderMark provider={roomProvider(room)} size={14} />}
+                  <span className="flex-1 min-w-0 truncate text-[14px] text-textPrimary">{roomName(room)}</span>
+                  <button
+                    onClick={() => void setRoomMuted(room, false)}
+                    className="sn-touch -mr-2 px-2 text-[13px] font-medium text-textSecondary active:text-textPrimary"
+                    aria-label={`Unmute ${roomName(room)}`}
+                  >
+                    Unmute
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const MobileNotificationsSettings: React.FC = () => {
   const settings = useAppStore((s) => s.settings);
@@ -312,6 +442,8 @@ const MobileNotificationsSettings: React.FC = () => {
             </div>
           </div>
 
+          <MentionsSection masterOn osBlocked={blocked.includes(NOTIFY_CHANNEL.mentions)} />
+
           <div>
             <SectionLabel>Background checking</SectionLabel>
             <div className="glass-panel divide-y divide-borderSubtle">
@@ -388,6 +520,10 @@ const MobileNotificationsSettings: React.FC = () => {
           </div>
         </>
       )}
+
+      {/* What counts as a mention also fills the Mentions list, so it stays
+          reachable with every notification switched off. */}
+      {!masterOn && <MentionsSection masterOn={false} osBlocked={false} />}
 
       <button
         onClick={() =>

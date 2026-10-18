@@ -33,6 +33,8 @@ interface MobileNavState {
   browseCategory: TwitchCategory | null;
   /** The cosmetics (equip) screen. */
   cosmeticsOpen: boolean;
+  /** The mentions inbox, over everything else (it opens from the chat too). */
+  mentionsOpen: boolean;
   /** Watch presentation: full screen, or the draggable in-app mini player
    *  (the tab shell stays live behind it). System PiP is separate: that hands
    *  the whole activity to the OS window. */
@@ -54,8 +56,9 @@ interface MobileNavState {
   clearSettingsTarget: () => void;
   openBrowseCategory: (category: TwitchCategory | null) => void;
   setCosmeticsOpen: (open: boolean) => void;
+  setMentionsOpen: (open: boolean) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet -> mentions -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -71,6 +74,7 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   settingsReturn: null,
   browseCategory: null,
   cosmeticsOpen: false,
+  mentionsOpen: false,
   playerMode: 'full',
   focusDropCampaignId: null,
 
@@ -105,14 +109,19 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   clearSettingsTarget: () => set({ settingsTarget: null }),
   openBrowseCategory: (category) => set({ browseCategory: category }),
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
+  setMentionsOpen: (open) => set({ mentionsOpen: open }),
   setPlayerMode: (mode) => set({ playerMode: mode }),
 
   handleBack: () => {
-    const { sheetStack, activeTab, settingsView, browseCategory, cosmeticsOpen, playerMode } =
+    const { sheetStack, activeTab, settingsView, browseCategory, cosmeticsOpen, mentionsOpen, playerMode } =
       get();
     if (sheetStack.length > 0) {
       const top = sheetStack[sheetStack.length - 1];
       window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
+      return true;
+    }
+    if (mentionsOpen) {
+      set({ mentionsOpen: false });
       return true;
     }
     if (settingsView) {
