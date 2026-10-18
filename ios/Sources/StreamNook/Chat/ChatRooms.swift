@@ -53,6 +53,9 @@ final class ChatRooms {
     @ObservationIgnored private(set) var modToolsOff: Set<String> = []
     /// The Twitch follows that are live now, for the "Add a chat" sheet (the home snapshot's).
     @ObservationIgnored var followedLive: @MainActor () -> [TwitchStream] = { [] }
+    /// A live Twitch channel's group (streaming together or sharing its chat), by channel id: the
+    /// home snapshot's maps the stream cards read.
+    @ObservationIgnored var groupFor: @MainActor (String) -> ChannelGroup? = { _ in nil }
 
     @ObservationIgnored private let routes = ChatRoutes()
     @ObservationIgnored private var reader: Task<Void, Never>?

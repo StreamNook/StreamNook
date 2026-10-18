@@ -101,6 +101,7 @@ final class AppModel {
         chat.kick = kick
         let home = home
         chat.followedLive = { home.lists.followingLive }
+        chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
     }
 
     var signedIn: Bool { signIn.signedIn }
