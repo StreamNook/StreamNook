@@ -1,12 +1,13 @@
 // Who you are, at the top of the You tab: your Atmosphere glowing behind you,
-// your picture on its own (no marks: your accounts and badges show in the rows
-// below), your name in your 7TV paint (or your Twitch color), the badges you
-// wear and what you have on, a line of chat as everyone sees it, and the way
-// into Edit profile. The header shows; Edit profile changes.
+// your picture on its own (no marks: your accounts show in the rows below),
+// your name in your 7TV paint (or your Twitch color), the badges you wear and
+// what you have on, and the way into Edit profile, whose chat row previews
+// your picks live. The header shows; Edit profile changes.
 //
 // Rust builds the identity (`own_identity_header`, services/profile_view.rs):
-// Twitch's displayed badges minus the channel-only sets, the selected 7TV
-// badge, your StreamNook badge, your 7TV picture, the Atmosphere you wear. It
+// your StreamNook badge first, then Twitch's displayed badges minus the
+// channel-only sets, the selected 7TV badge, your 7TV picture, the Atmosphere
+// you wear. It
 // saves the answer for the next cold launch, so the saved copy paints the
 // first frame and the fresh read follows. Your picks (the chosen theme, paint
 // and name color) come from the same two picker answers Edit profile edits,
@@ -16,12 +17,12 @@ import React from 'react';
 import { ChevronRight, User } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { usePicksStore, useOwnPicks } from './picksStore';
-import { AtmosphereGlow, CutoutAvatar, PaintedName, ProfilePreviewRow, WornBadge } from './IdentityParts';
-import { chatAtmosphereId, glowAtmosphere, identityNameSize, nameColorOr, wornPreviewBadges } from './identity';
+import { AtmosphereGlow, CutoutAvatar, PaintedName, WornBadge } from './IdentityParts';
+import { badgeArt, glowAtmosphere, identityNameSize, nameColorOr } from './identity';
 
 const RADIUS = 22;
 /** How far down the card the Atmosphere's glow reaches: the picture, the name
- *  and the worn line, fading out above the preview row. */
+ *  and the worn line, fading out above Edit profile. */
 export const GLOW = 210;
 const AVATAR = 80;
 
@@ -76,25 +77,14 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
         {(badges.length > 0 || wearing) && (
           <div className="mt-1.5 flex items-center gap-1.5 min-w-0">
             {badges.map((b, i) => (
-              <WornBadge key={`${b.id}-${i}`} url={b.url} fallbacks={b.fallbacks} label={b.title || b.name} />
+              <WornBadge key={`${b.id}-${i}`} url={badgeArt(b.url)} fallbacks={b.fallbacks} label={b.title || b.name} />
             ))}
             {badges.length > 0 && wearing && <span className="w-px h-3.5 mx-[3px] bg-borderLight shrink-0" />}
             {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
           </div>
         )}
       </div>
-      {(sn || ext) && (
-        <div className="relative px-3 pt-4">
-          <ProfilePreviewRow
-            name={displayName}
-            paint={paint}
-            colorHex={ext?.chat_color}
-            badges={wornPreviewBadges(sn, ext)}
-            atmosphereId={chatAtmosphereId(sn)}
-          />
-        </div>
-      )}
-      <div className="relative mt-3 border-t border-borderSubtle" />
+      <div className="relative mt-4 border-t border-borderSubtle" />
       <button
         onClick={onEdit}
         className="relative w-full flex items-center gap-2.5 px-4 h-[50px] text-left active:bg-surface-active"

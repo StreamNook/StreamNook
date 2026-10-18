@@ -575,14 +575,8 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         })
         .unwrap_or_default();
     let other = if loadout.is_empty() { badges.as_ref().map(third_party_badges).unwrap_or_default() } else { loadout };
-    let mut seen = HashSet::new();
-    let worn: Vec<ProfileBadge> = twitch_worn
-        .into_iter()
-        .chain(seventv_worn)
-        .chain(other)
-        .filter(|b| !b.url.is_empty() && seen.insert(b.id.clone()))
-        .take(HEADER_BADGE_CAP)
-        .collect();
+    let streamnook = registry::member_badge(user_id, false);
+    let worn = own_worn_badges(streamnook.as_ref(), twitch_worn.into_iter().chain(seventv_worn).chain(other).collect());
     let (paint_def, paint) = worn_paint(user_id, inventory.as_ref());
     let header = OwnIdentity {
         user_id: user_id.to_string(),
@@ -594,7 +588,7 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         picture: pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true)),
         banner_url,
         badges: worn,
-        streamnook: registry::member_badge(user_id, false),
+        streamnook,
         atmosphere,
         cologne,
     };
@@ -602,6 +596,26 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         let _ = std::fs::write(path, body);
     }
     header
+}
+
+/// The header's badge row: your StreamNook badge first (it is the one that is
+/// yours here), then what Twitch, 7TV and the other apps show, deduped and
+/// capped. A StreamNook badge the other apps also list is not drawn twice.
+fn own_worn_badges(streamnook: Option<&SnBadge>, rest: Vec<ProfileBadge>) -> Vec<ProfileBadge> {
+    let own = streamnook.map(|b| ProfileBadge {
+        id: b.slug.clone().unwrap_or_else(|| registry::DEFAULT_SLUG.to_string()),
+        url: b.image_url.clone(),
+        title: b.label.clone(),
+        name: Some(b.label.clone()),
+        provider: Some("streamnook".to_string()),
+        ..Default::default()
+    });
+    let mut seen = HashSet::new();
+    own.into_iter()
+        .chain(rest.into_iter().filter(|b| b.provider.as_deref() != Some("streamnook")))
+        .filter(|b| !b.url.is_empty() && seen.insert(b.id.clone()))
+        .take(HEADER_BADGE_CAP)
+        .collect()
 }
 
 // ---- The Cosmetics screen --------------------------------------------------------
@@ -1025,5 +1039,31 @@ mod tests {
     fn the_login_line_shows_only_beyond_letter_case() {
         assert_eq!(shown_login("xqc", "xQc"), None);
         assert_eq!(shown_login("kr_user", "한국어").as_deref(), Some("kr_user"));
+    }
+
+    #[test]
+    fn the_header_row_leads_with_your_streamnook_badge_once() {
+        let shown = |id: &str, provider: Option<&str>| ProfileBadge {
+            id: id.into(),
+            url: format!("https://x/{id}.webp"),
+            provider: provider.map(String::from),
+            ..Default::default()
+        };
+        let sn = SnBadge {
+            slug: Some("streamnook-singularity".into()),
+            image_url: "https://cdn.streamnook.app/badges/streamnook-singularity.webp?v=2".into(),
+            label: "StreamNook Singularity".into(),
+        };
+        let rest = vec![shown("premium", None), shown("7tv-sub", Some("7tv")), shown("sn-loadout", Some("streamnook"))];
+        let row = own_worn_badges(Some(&sn), rest.clone());
+        let ids: Vec<&str> = row.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["streamnook-singularity", "premium", "7tv-sub"]);
+        assert_eq!(row[0].url, sn.image_url);
+        assert_eq!(row[0].provider.as_deref(), Some("streamnook"));
+        // Not a member: the row is what the platforms show.
+        assert_eq!(own_worn_badges(None, rest).len(), 2);
+        // The cap holds with the StreamNook badge counted.
+        let many: Vec<ProfileBadge> = (0..20).map(|i| shown(&format!("b{i}"), None)).collect();
+        assert_eq!(own_worn_badges(Some(&sn), many).len(), HEADER_BADGE_CAP);
     }
 }
