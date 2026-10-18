@@ -27,8 +27,11 @@ import { useBlendedHypeTrains } from './useBlendedHypeTrains';
 import { Logger } from '../../utils/logger';
 import { Tooltip } from '../ui/Tooltip';
 import { isImeComposing } from '../../utils/imeComposing';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { CheerBar } from '../chat/CheerBar';
 import { useCheerPromptStore } from '../../stores/cheerPromptStore';
+import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
+import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
 
 interface BlendedChannel {
   channel: string;
@@ -287,6 +290,8 @@ export function BlendedChatPane({
   // ----- composer -----------------------------------------------------------
   const [text, setText] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const markInsidePicker = useOutsidePress(pickerOpen, [pickerRef], () => setPickerOpen(false));
   // From the shared event-driven store. Previously two 5s polls per blended pane,
   // both reading in-memory bools that change only on connect/disconnect.
   const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
@@ -298,6 +303,11 @@ export function BlendedChatPane({
     null,
   );
   const inputRef = useRef<HTMLInputElement>(null);
+  // A row's Copy puts its text in this composer, as in single-channel chat.
+  const handleMessageCopy = useCallback((content: string) => {
+    setText(content + ' ');
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
   // Track DESELECTED sources (by sourceKey); everything else is on. New channels
   // are then on by default and closed channels drop out with no reconciliation.
   const [deselected, setDeselected] = useState<Set<string>>(() => new Set());
@@ -388,14 +398,12 @@ export function BlendedChatPane({
     [idToChannelRef],
   );
 
-  // Click a badge on a message -> open its detail in the badges overlay, which lives
-  // in the main app (opening main if Go Live closed it).
+  // Click a badge on a message -> its Twitch badge page in main, with the
+  // version id the page keys its lookups on. Kick / YouTube / TikTok badges
+  // have no such page and open the small card in this window instead.
   const handleBadgeClick = useCallback(
-    (badgeKey: string, badgeInfo: { url?: string; image_url_4x?: string }) => {
-      const [setId] = badgeKey.split('/');
-      void import('../../utils/openBadgesInMain').then(({ openBadgeDetailInMain }) =>
-        openBadgeDetailInMain(badgeInfo, setId),
-      );
+    (badgeKey: string, badgeInfo: TwitchRowBadgeInfo) => {
+      openBadgeInfo(twitchRowBadgeRef(badgeKey, badgeInfo));
     },
     [],
   );
@@ -562,6 +570,7 @@ export function BlendedChatPane({
           onPauseIntent={onPauseIntent}
           onUsernameClick={handleUsernameClick}
           onReplyClick={handleReplyClick}
+          onMessageCopy={handleMessageCopy}
           onEmoteRightClick={noop}
           onUsernameRightClick={handleUsernameRightClick}
           onBadgeClick={handleBadgeClick}
@@ -623,7 +632,7 @@ export function BlendedChatPane({
         )}
         <div className="relative flex items-center gap-2">
           {/* Target picker: themed, grouped-by-provider, multi-select. */}
-          <div className="relative shrink-0">
+          <div ref={pickerRef} onPointerDownCapture={markInsidePicker} className="relative shrink-0">
             <Tooltip content="Choose which chats to send to">
               <button
                 type="button"
@@ -648,8 +657,6 @@ export function BlendedChatPane({
 
             {pickerOpen && (
               <>
-                {/* click-away backdrop */}
-                <div className="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
                 <div
                   className="glass-panel absolute bottom-full z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-borderLight py-1 shadow-2xl scrollbar-thin"
                   // Opaque themed surface: a live backdrop-blur flickers over chat.

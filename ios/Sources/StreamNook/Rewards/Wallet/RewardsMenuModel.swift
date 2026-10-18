@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import SNKit
 
 /// The wallet sheet's rewards: Rust's judged list for the channel (its last list paints at
@@ -87,7 +88,13 @@ final class RewardsMenuModel {
     }
 
     private func take(_ next: ChannelRewardsSnapshot) {
-        snapshot = next
+        // Rust drops a reward that turned off or sold out while the list is up:
+        // it eases out (and one coming back eases in) instead of the rows jumping.
+        if snapshot == nil {
+            snapshot = next
+        } else {
+            withAnimation(SNMotion.run(SNMotion.settle)) { snapshot = next }
+        }
         loading = false
         scheduleCooldownEnd()
     }

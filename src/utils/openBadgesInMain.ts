@@ -39,6 +39,43 @@ async function emitToMain(eventName: string, payload?: unknown): Promise<void> {
   }
 }
 
+/** A Twitch account to show in the main window's profile view. */
+export interface TwitchProfileTarget {
+  id: string;
+  login: string;
+  displayName: string;
+  avatarUrl?: string;
+}
+
+/** Open a Twitch account's profile view in main (an emote creator chip). The
+ *  chat overlay window has no profile view of its own either, so it routes
+ *  to main like the popouts do. */
+export function openTwitchProfileInMain(target: TwitchProfileTarget): void {
+  const elsewhere = isPopoutWindow() || window.location.hash.startsWith('#/chat-overlay');
+  Logger.debug(`[openBadgesInMain] openTwitchProfile popout=${elsewhere} login=${target.login}`);
+  if (elsewhere) {
+    void emitToMain('open-twitch-profile', target);
+    return;
+  }
+  showTwitchProfile(target);
+}
+
+/** The profile view takes a stream-shaped user; an account needs no stream. */
+export function showTwitchProfile(target: TwitchProfileTarget): void {
+  useAppStore.getState().setProfileModalUser({
+    id: target.id,
+    user_id: target.id,
+    user_name: target.displayName,
+    user_login: target.login,
+    title: `${target.displayName}'s Profile`,
+    viewer_count: 0,
+    game_name: '',
+    thumbnail_url: target.avatarUrl ?? '',
+    started_at: '',
+    profile_image_url: target.avatarUrl ?? '',
+  });
+}
+
 export function openBadgesWithBadgeInMain(badgeId: string): void {
   const popout = isPopoutWindow();
   Logger.debug(`[openBadgesInMain] openBadgesWithBadge popout=${popout} badgeId=${badgeId}`);
@@ -59,14 +96,15 @@ export function openBadgesWithPaintInMain(paintId: string): void {
   useAppStore.getState().openBadgesWithPaint(paintId);
 }
 
-export function openBadgesOnStreamNookInMain(): void {
+/** `slug` opens that StreamNook badge's own card on the tab. */
+export function openBadgesOnStreamNookInMain(slug?: string): void {
   const popout = isPopoutWindow();
-  Logger.debug(`[openBadgesInMain] openBadgesOnStreamNook popout=${popout}`);
+  Logger.debug(`[openBadgesInMain] openBadgesOnStreamNook popout=${popout} slug=${slug ?? ''}`);
   if (popout) {
-    void emitToMain('open-badges-on-streamnook');
+    void emitToMain('open-badges-on-streamnook', slug ? { slug } : undefined);
     return;
   }
-  useAppStore.getState().openBadgesOnStreamNook();
+  useAppStore.getState().openBadgesOnStreamNook(slug);
 }
 
 // Generic deep-link: open the overlay on a given tab and (optionally) filter to

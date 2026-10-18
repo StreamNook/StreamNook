@@ -32,7 +32,7 @@ import { clearUserCache as clear7TVCache } from '../../services/seventvService';
 import { applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
 import { setActiveCosmetic, setProfileTheme, setChatAtmosphere } from '../../services/supabaseService';
 import { getAtmosphere } from '../../services/atmospheres';
-import { resolveCosmeticAsset } from '../../components/cosmeticAssets';
+import { CosmeticArt } from '../../components/CosmeticArt';
 import { Logger } from '../../utils/logger';
 import type {
   ChatIdentityBadge,
@@ -83,21 +83,26 @@ const Header: React.FC<React.ComponentProps<typeof SectionHeader>> = (props) => 
 );
 
 /** A badge tile: the art at 36 px on a tile, the worn one ringed and checked.
- *  The name is the section header's detail and the tile's label. */
+ *  The name is the section header's detail and the tile's label. A StreamNook
+ *  badge passes `cosmetic`, whose art comes from Rust's disk copy and never
+ *  draws a broken image. */
 const BadgeTile: React.FC<{
   url?: string | null;
   fallbacks?: string[];
+  cosmetic?: React.ComponentProps<typeof CosmeticArt>['cosmetic'];
   worn: boolean;
   label: string;
   onClick: () => void;
-}> = ({ url, fallbacks, worn, label, onClick }) => (
+}> = ({ url, fallbacks, cosmetic, worn, label, onClick }) => (
   <button
     onClick={onClick}
     aria-label={label}
     aria-pressed={worn}
     className="relative w-full aspect-square rounded-xl bg-tertiary border border-borderSubtle flex items-center justify-center active:scale-90 transition-transform"
   >
-    {url ? (
+    {cosmetic ? (
+      <CosmeticArt cosmetic={cosmetic} className="w-9 h-9 object-contain" />
+    ) : url ? (
       <FallbackImage src={url} fallbackUrls={fallbacks} alt="" draggable={false} className="w-9 h-9 object-contain" />
     ) : (
       <span className="w-9 h-9 rounded-md bg-surface" />
@@ -518,7 +523,7 @@ export const CosmeticsScreen: React.FC = () => {
                 {(badge) => (
                   <BadgeTile
                     key={badge.slug}
-                    url={resolveCosmeticAsset({ slug: badge.slug, asset_path: badge.image_url ?? null })}
+                    cosmetic={{ slug: badge.slug, asset_path: badge.image_url ?? null }}
                     worn={badge.worn}
                     label={badge.name}
                     onClick={() => void equipBadge(badge)}

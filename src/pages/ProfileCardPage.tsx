@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { ProviderId } from '../types/providers';
 import UserProfileCard from '../components/UserProfileCard';
+import BadgeSpotlightHost from '../components/BadgeSpotlightHost';
 import { useAppStore } from '../stores/AppStore';
 import { listenForSettingsUpdates } from '../utils/settingsBroadcast';
 import { Logger } from '../utils/logger';
@@ -98,6 +99,7 @@ const ProfileCardPage = () => {
         broadcasterId={channelId}
         provider={provider}
       />
+      <BadgeSpotlightHost />
     </div>
   );
 };

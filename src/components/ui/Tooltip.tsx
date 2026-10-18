@@ -6,6 +6,7 @@ import { IS_MOBILE } from "../../utils/platform";
 export interface TooltipChildProps {
   onMouseEnter?: (e: React.MouseEvent) => void;
   onMouseLeave?: (e: React.MouseEvent) => void;
+  onMouseMove?: (e: React.MouseEvent) => void;
   onFocus?: (e: React.FocusEvent) => void;
   onBlur?: (e: React.FocusEvent) => void;
   "aria-label"?: string;
@@ -22,6 +23,10 @@ export interface TooltipProps {
   // replaces the default chrome entirely (rounded-md, bg-black/80, border…).
   // Used by callers that need a non-rectangular container, e.g. pill-shaped.
   containerClassName?: string;
+  /** Open only once the pointer actually moves over the child. Chromium sends
+   *  mouseenter (but no mousemove) when content scrolls under a still cursor,
+   *  so in a moving chat this keeps cards from popping under a parked mouse. */
+  requirePointerMove?: boolean;
 }
 
 export const Tooltip: React.FC<TooltipProps> = ({
@@ -31,6 +36,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   children,
   disabled = false,
   containerClassName,
+  requirePointerMove = false,
 }) => {
   // Actions are stable for the store's lifetime, so these selectors never
   // re-render. (Reading them via useTooltipStore.getState() at render level
@@ -42,6 +48,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   const hideTooltip = useTooltipStore((s) => s.hideTooltip);
   const scheduleShow = useTooltipStore((s) => s.scheduleShow);
   const cancelShow = useTooltipStore((s) => s.cancelShow);
+  const isArmed = useTooltipStore((s) => s.isArmed);
   const tooltipId = useId();
 
   useEffect(() => {
@@ -64,20 +71,30 @@ export const Tooltip: React.FC<TooltipProps> = ({
     return children;
   }
 
-  const handleMouseEnter = (e: React.MouseEvent) => {
-    // Call original handler if exists
-    if (children.props.onMouseEnter) {
-      children.props.onMouseEnter(e);
-    }
-
-    // Store reference to element synchronously because e.currentTarget becomes null after event bubbling
-    const targetElement = e.currentTarget as HTMLElement;
-
+  const arm = (targetElement: HTMLElement) => {
     scheduleShow(tooltipId, delay, () => {
       const rect = targetElement.getBoundingClientRect();
       showTooltip(tooltipId, content, rect, side, containerClassName);
       // It's okay, if we hover over something else, the store overrides it.
     });
+  };
+
+  const handleMouseEnter = (e: React.MouseEvent) => {
+    // Call original handler if exists
+    if (children.props.onMouseEnter) {
+      children.props.onMouseEnter(e);
+    }
+    if (requirePointerMove) return;
+
+    // Store reference to element synchronously because e.currentTarget becomes null after event bubbling
+    arm(e.currentTarget as HTMLElement);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (children.props.onMouseMove) {
+      children.props.onMouseMove(e);
+    }
+    if (!isArmed(tooltipId)) arm(e.currentTarget as HTMLElement);
   };
 
   const handleMouseLeave = (e: React.MouseEvent) => {
@@ -108,6 +125,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   return React.cloneElement(children, {
     onMouseEnter: handleMouseEnter,
     onMouseLeave: handleMouseLeave,
+    ...(requirePointerMove && { onMouseMove: handleMouseMove }),
     onFocus: handleFocus,
     onBlur: handleBlur,
     // Add aria-label if children don't have one and content is string

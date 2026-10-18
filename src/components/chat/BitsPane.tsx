@@ -112,7 +112,7 @@ export function BitsPane({ state, onInsert }: Props) {
                       settle();
                     }
                   }}
-                  className="w-[3.6em] bg-transparent text-[12.5px] font-semibold tabular-nums text-textPrimary outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  className="w-[6.2ch] bg-transparent text-[12.5px] font-semibold tabular-nums text-textPrimary outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
                 <span className="text-[11px] text-textSecondary">bits</span>
               </label>

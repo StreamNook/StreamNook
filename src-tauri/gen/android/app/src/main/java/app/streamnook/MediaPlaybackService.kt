@@ -64,6 +64,8 @@ class MediaPlaybackService : Service() {
     const val ACTION_STOP = "app.streamnook.media.STOP"
     /** A transport command from the notification, forwarded to the web layer. */
     const val ACTION_CMD = "app.streamnook.media.CMD"
+    /** The card itself was cleared: every owner is done with it. */
+    const val ACTION_DISMISS = "app.streamnook.media.DISMISS"
 
     /** The Stop control on the card, as a PlaybackState custom action. */
     const val CUSTOM_STOP = "app.streamnook.media.STOP_LISTENING"
@@ -94,7 +96,20 @@ class MediaPlaybackService : Service() {
      * onStartCommand checks it after startForeground and stands down.
      */
     @Volatile
-    var wanted: Boolean = false
+    var webWanted: Boolean = false
+
+    /**
+     * Whether a Cast session wants the card (CastRemote). The TV plays the
+     * stream, but the process still has to stay unfrozen: Rust decides what the
+     * TV plays next (a raid, a switch) and the card is the remote. Same
+     * set-before-start, clear-before-stop discipline as [webWanted].
+     */
+    @Volatile
+    var castWanted: Boolean = false
+
+    /** Anyone still wants the service. A stop from one owner leaves the other's card up. */
+    val wanted: Boolean
+      get() = webWanted || castWanted
   }
 
   private var session: MediaSession? = null
@@ -112,8 +127,8 @@ class MediaPlaybackService : Service() {
     createChannel()
     session = MediaSession(this, "StreamNook").apply {
       setCallback(object : MediaSession.Callback() {
-        override fun onPlay() { commandSink?.invoke("play") }
-        override fun onPause() { commandSink?.invoke("pause") }
+        override fun onPlay() { dispatch("play") }
+        override fun onPause() { dispatch("pause") }
         override fun onStop() { routeStop() }
         override fun onCustomAction(action: String, extras: Bundle?) {
           if (action == CUSTOM_STOP) routeStop()
@@ -128,11 +143,20 @@ class MediaPlaybackService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> {
+        // One owner let go. The other may still hold the card (the page
+        // stopping its player because the TV took the stream over, say).
+        if (!wanted) standDown()
+        return START_NOT_STICKY
+      }
+      ACTION_DISMISS -> {
+        webWanted = false
+        castWanted = false
         standDown()
         return START_NOT_STICKY
       }
       ACTION_CMD -> {
         val cmd = intent.getStringExtra(EXTRA_CMD) ?: return START_NOT_STICKY
+        if (castWanted && CastRemote.command(cmd)) return START_NOT_STICKY
         val sink = commandSink
         if (sink != null) {
           // Forward and return. The web layer will call back with ACTION_UPDATE
@@ -184,8 +208,15 @@ class MediaPlaybackService : Service() {
    * if it is still there to do so; otherwise stand down ourselves.
    */
   private fun routeStop() {
+    if (castWanted && CastRemote.command("stop")) return
     val sink = commandSink
     if (sink != null) sink.invoke("stop") else standDown()
+  }
+
+  /** Play/pause from the card or a headset: to the TV while casting, else to the page. */
+  private fun dispatch(cmd: String) {
+    if (castWanted && CastRemote.command(cmd)) return
+    commandSink?.invoke(cmd)
   }
 
   /**
@@ -197,14 +228,16 @@ class MediaPlaybackService : Service() {
    */
   override fun onTaskRemoved(rootIntent: Intent?) {
     commandSink?.invoke("stop")
-    wanted = false
+    webWanted = false
+    castWanted = false
     standDown()
     super.onTaskRemoved(rootIntent)
   }
 
   override fun onDestroy() {
     isRunning = false
-    wanted = false
+    webWanted = false
+    castWanted = false
     session?.isActive = false
     session?.release()
     session = null
@@ -316,7 +349,7 @@ class MediaPlaybackService : Service() {
     val deleteIntent = PendingIntent.getService(
       this,
       "delete".hashCode(),
-      Intent(this, MediaPlaybackService::class.java).apply { action = ACTION_STOP },
+      Intent(this, MediaPlaybackService::class.java).apply { action = ACTION_DISMISS },
       PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 

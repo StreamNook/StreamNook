@@ -26,7 +26,7 @@ use std::time::Duration;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkPreview {
     pub url: String,
-    /// "youtube" | "image" | "generic" | "tweet" | "discord" | "steam" | "spotify"
+    /// "youtube" | "image" | "generic" | "tweet" | "discord" | "steam" | "spotify" | "reddit"
     pub kind: String,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -95,7 +95,9 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 /// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
 /// invite, a YouTube channel or video, an X profile or post, an Instagram
 /// profile, a Steam app, Spotify, a Twitch clip or VOD) rather than the generic
-/// OpenGraph scrape. Mirrors the matcher order in `build_preview`.
+/// OpenGraph scrape. Mirrors the matcher order in `build_preview`, except Reddit:
+/// a profile link there is a subreddit or user, whose card says no more than
+/// the pill does.
 pub(crate) fn has_dedicated_card(url: &str) -> bool {
     let canonical = canonicalize_x(url);
     let url = canonical.as_str();
@@ -153,22 +155,22 @@ async fn build_preview(url: &str) -> Result<LinkPreview, String> {
     if is_tenor_page(url) {
         return tenor_preview(url).await;
     }
+    // A media viewer link names its image in a query parameter, so the path
+    // never ends in an image extension. Preview the image it names; the card
+    // still opens the link that was posted.
+    if let Some(inner) = unwrap_media_viewer(url) {
+        if is_image_url(&inner) {
+            return Ok(image_preview(url, &inner));
+        }
+        let mut preview = fetch_generic(&inner).await?;
+        preview.url = url.to_string();
+        return Ok(preview);
+    }
+    if let Some(link) = reddit_link(url) {
+        return reddit_preview(url, link).await;
+    }
     if is_image_url(url) {
-        return Ok(LinkPreview {
-            url: url.to_string(),
-            kind: "image".to_string(),
-            title: None,
-            description: None,
-            image: Some(url.to_string()),
-            site_name: None,
-            author: None,
-            author_avatar: None,
-            video_id: None,
-            view_count: None,
-            duration: None,
-            online_count: None,
-            member_count: None,
-        });
+        return Ok(image_preview(url, url));
     }
 
     let mut preview = fetch_generic(url).await?;
@@ -1313,6 +1315,303 @@ fn strip_html(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// --- Reddit ----------------------------------------------------------------
+//
+// reddit.com answers an app's request for any page, `.json` or old.reddit with
+// a script challenge and no preview tags, so the generic scrape only ever saw a
+// page titled "Reddit". Two public, sign-in-free endpoints still answer:
+//   - oEmbed (`/oembed?url=`): title, author and the post's real subreddit for
+//     any `/r/<sub>/comments/<id>` link. It finds the post by id alone, so a
+//     link that names no subreddit is asked for as `/r/all/comments/<id>`.
+//   - the post's Atom feed (`/comments/<id>/.rss`): its first entry carries the
+//     preview image Reddit chose, which Reddit itself blurs for NSFW and
+//     spoiler posts. Anonymous feed reads are limited to a few a minute, so the
+//     image is best effort and the card never depends on it.
+
+const REDDIT_UA: &str = concat!("StreamNook/", env!("CARGO_PKG_VERSION"), " (chat link preview)");
+
+/// What a Reddit link points at, read from the URL alone.
+#[derive(Debug, Clone, PartialEq)]
+enum RedditLink {
+    /// `/r/<sub>/comments/<id>/<slug>` and its comment permalinks. `redd.it/<id>`,
+    /// `/comments/<id>` and `/gallery/<id>` name no subreddit.
+    Post {
+        id: String,
+        subreddit: Option<String>,
+        slug: Option<String>,
+    },
+    /// A link that only redirects to a post: `/r/<sub>/s/<token>` share links
+    /// and `v.redd.it` videos.
+    Redirect { subreddit: Option<String>, video: bool },
+    Subreddit(String),
+    User(String),
+}
+
+fn valid_subreddit(s: &str) -> bool {
+    (2..=21).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+fn valid_post_id(s: &str) -> bool {
+    (2..=12).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+fn valid_reddit_user(s: &str) -> bool {
+    (3..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn reddit_link(url: &str) -> Option<RedditLink> {
+    let parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let segs: Vec<&str> = parsed.path_segments()?.filter(|s| !s.is_empty()).collect();
+    let post = |id: &str, subreddit: Option<&str>, slug: Option<&&str>| RedditLink::Post {
+        id: id.to_ascii_lowercase(),
+        subreddit: subreddit.map(String::from),
+        slug: slug.map(|s| s.to_string()),
+    };
+
+    if host == "redd.it" {
+        return match segs.as_slice() {
+            [id] if valid_post_id(id) => Some(post(id, None, None)),
+            _ => None,
+        };
+    }
+    if host == "v.redd.it" {
+        return (!segs.is_empty()).then_some(RedditLink::Redirect { subreddit: None, video: true });
+    }
+    if !(host == "reddit.com" || host.ends_with(".reddit.com")) {
+        return None;
+    }
+    match segs.as_slice() {
+        ["r", sub, "comments", id, rest @ ..] if valid_subreddit(sub) && valid_post_id(id) => {
+            Some(post(id, Some(*sub), rest.first()))
+        }
+        ["r", sub, "s", _token, ..] if valid_subreddit(sub) => Some(RedditLink::Redirect {
+            subreddit: Some(sub.to_string()),
+            video: false,
+        }),
+        ["r", sub, ..] if valid_subreddit(sub) => Some(RedditLink::Subreddit(sub.to_string())),
+        ["comments", id, rest @ ..] if valid_post_id(id) => Some(post(id, None, rest.first())),
+        ["gallery", id] if valid_post_id(id) => Some(post(id, None, None)),
+        // Where v.redd.it lands first; it may redirect on to the post.
+        ["video", _] => Some(RedditLink::Redirect { subreddit: None, video: true }),
+        ["user" | "u", name, ..] if valid_reddit_user(name) => Some(RedditLink::User(name.to_string())),
+        _ => None,
+    }
+}
+
+/// A post's URL slug read as words, for when oEmbed does not answer.
+fn reddit_slug_title(slug: &str) -> Option<String> {
+    let words = slug.replace('_', " ");
+    let words = words.trim();
+    (words.chars().any(|c| c.is_alphanumeric())).then(|| words.to_string())
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct RedditPost {
+    title: Option<String>,
+    author: Option<String>,
+    subreddit: Option<String>,
+}
+
+static REDDIT_EMBED_SUB_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"reddit\.com/r/([A-Za-z0-9_]{2,21})/comments/").expect("reddit embed subreddit regex")
+});
+
+fn parse_reddit_oembed(json: &serde_json::Value) -> RedditPost {
+    let text = |key: &str| {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    RedditPost {
+        title: text("title").map(|t| truncate(&t, 300)),
+        // "[deleted]" is not a name.
+        author: text("author_name").filter(|a| !a.starts_with('[')),
+        // The embed's first link is the post under its real subreddit, also
+        // when it was asked for as /r/all.
+        subreddit: json
+            .get("html")
+            .and_then(|v| v.as_str())
+            .and_then(|html| REDDIT_EMBED_SUB_RE.captures(html))
+            .map(|c| c[1].to_string()),
+    }
+}
+
+async fn reddit_oembed(post_url: &str) -> Option<RedditPost> {
+    let resp = CLIENT
+        .get("https://www.reddit.com/oembed")
+        .query(&[("url", post_url)])
+        .header(reqwest::header::USER_AGENT, REDDIT_UA)
+        .timeout(Duration::from_secs(6))
+        .send()
+        .await
+        .map_err(|e| debug!("[LinkPreview] reddit oembed error: {}", e))
+        .ok()?;
+    if !resp.status().is_success() {
+        debug!("[LinkPreview] reddit oembed status {}", resp.status());
+        return None;
+    }
+    let json = resp.json::<serde_json::Value>().await.ok()?;
+    Some(parse_reddit_oembed(&json))
+}
+
+static FEED_THUMBNAIL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<media:thumbnail\s+url="([^"]+)""#).expect("feed thumbnail regex"));
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// The post's preview image from its Atom feed: the first entry is the post,
+/// every later one a comment. Only Reddit-hosted images, and only previews
+/// wide enough to fill the card (list thumbnails are 140 px).
+fn parse_reddit_feed_image(xml: &str) -> Option<String> {
+    let start = xml.find("<entry")?;
+    let end = xml[start..].find("</entry>").map_or(xml.len(), |i| start + i);
+    let raw = FEED_THUMBNAIL_RE.captures(&xml[start..end])?.get(1)?.as_str();
+    let image = xml_unescape(raw);
+    let parsed = url::Url::parse(&image).ok()?;
+    if parsed.scheme() != "https" {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if !(host == "redd.it" || host.ends_with(".redd.it") || host.ends_with(".redditmedia.com")) {
+        return None;
+    }
+    let width = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "width")
+        .and_then(|(_, v)| v.parse::<u32>().ok());
+    if width.is_some_and(|w| w < 320) {
+        return None;
+    }
+    Some(image)
+}
+
+async fn reddit_feed_image(id: &str) -> Option<String> {
+    let resp = CLIENT
+        .get(format!("https://www.reddit.com/comments/{}/.rss", id))
+        .header(reqwest::header::USER_AGENT, REDDIT_UA)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        debug!("[LinkPreview] reddit feed status {}", resp.status());
+        return None;
+    }
+    // A popular post's feed lists hundreds of comments; the post comes first.
+    let buf = read_body_until(resp, 256 * 1024, b"</entry>").await.ok()?;
+    parse_reddit_feed_image(&String::from_utf8_lossy(&buf))
+}
+
+/// Follow a share or video link one hop at a time until it names a post. Only
+/// reddit.com and redd.it are ever requested: a hop anywhere else ends it.
+async fn follow_reddit_redirects(url: &str) -> Option<RedditLink> {
+    let client = crate::services::http::client_no_redirect();
+    let mut current = url::Url::parse(url).ok()?;
+    for _ in 0..3 {
+        let resp = client
+            .get(current.clone())
+            .header(reqwest::header::USER_AGENT, REDDIT_UA)
+            .timeout(Duration::from_secs(6))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_redirection() {
+            return None;
+        }
+        let location = resp.headers().get(reqwest::header::LOCATION)?.to_str().ok()?;
+        current = current.join(location).ok()?;
+        match reddit_link(current.as_str())? {
+            post @ RedditLink::Post { .. } => return Some(post),
+            RedditLink::Redirect { .. } => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The Reddit card. Rust writes every label; the page only draws them.
+fn reddit_card(
+    url: &str,
+    title: Option<String>,
+    subreddit: Option<String>,
+    author: Option<String>,
+    image: Option<String>,
+) -> LinkPreview {
+    LinkPreview {
+        url: url.to_string(),
+        kind: "reddit".to_string(),
+        title,
+        description: None,
+        image,
+        site_name: Some(subreddit.map_or_else(|| "Reddit".to_string(), |s| format!("r/{}", s))),
+        author: author.map(|a| format!("u/{}", a)),
+        author_avatar: None,
+        video_id: None,
+        view_count: None,
+        duration: None,
+        online_count: None,
+        member_count: None,
+    }
+}
+
+/// A share or video link whose redirect did not resolve: only what the link
+/// itself says, a subreddit or that it is a video. The page draws a title-less
+/// Reddit card as a compact chip.
+fn unresolved_reddit_card(url: &str, subreddit: Option<String>, video: bool) -> Result<LinkPreview, String> {
+    if video {
+        let mut card = reddit_card(url, None, None, None, None);
+        card.site_name = Some("Reddit video".to_string());
+        return Ok(card);
+    }
+    match subreddit {
+        Some(sub) => Ok(reddit_card(url, None, Some(sub), None, None)),
+        None => Err("reddit link did not resolve".to_string()),
+    }
+}
+
+async fn reddit_preview(url: &str, link: RedditLink) -> Result<LinkPreview, String> {
+    let link = match link {
+        RedditLink::Redirect { subreddit, video } => match follow_reddit_redirects(url).await {
+            Some(post) => post,
+            None => return unresolved_reddit_card(url, subreddit, video),
+        },
+        other => other,
+    };
+    match link {
+        RedditLink::Post { id, subreddit, slug } => {
+            let asked_as = subreddit.as_deref().unwrap_or("all");
+            let post_url = format!("https://www.reddit.com/r/{}/comments/{}/", asked_as, id);
+            let (post, image) = tokio::join!(reddit_oembed(&post_url), reddit_feed_image(&id));
+            let post = post.unwrap_or_default();
+            let title = post.title.or_else(|| slug.as_deref().and_then(reddit_slug_title));
+            let subreddit = post
+                .subreddit
+                .or(subreddit)
+                .filter(|s| !s.eq_ignore_ascii_case("all"));
+            if title.is_none() && subreddit.is_none() && image.is_none() {
+                return Err("no reddit post metadata".to_string());
+            }
+            Ok(reddit_card(url, title, subreddit, post.author, image))
+        }
+        RedditLink::Subreddit(name) => Ok(reddit_card(url, Some(format!("r/{}", name)), None, None, None)),
+        RedditLink::User(name) => Ok(reddit_card(url, Some(format!("u/{}", name)), None, None, None)),
+        RedditLink::Redirect { .. } => Err("reddit link did not resolve".to_string()),
+    }
+}
+
 // --- Imgur -----------------------------------------------------------------
 
 fn is_imgur_page(url: &str) -> bool {
@@ -1334,6 +1633,58 @@ fn is_image_url(url: &str) -> bool {
         .any(|ext| path.ends_with(ext))
 }
 
+/// The card for a link that is (or wraps) a picture: `url` is what was posted,
+/// `image` is what the card draws.
+fn image_preview(url: &str, image: &str) -> LinkPreview {
+    LinkPreview {
+        url: url.to_string(),
+        kind: "image".to_string(),
+        title: None,
+        description: None,
+        image: Some(image.to_string()),
+        site_name: None,
+        author: None,
+        author_avatar: None,
+        video_id: None,
+        view_count: None,
+        duration: None,
+        online_count: None,
+        member_count: None,
+    }
+}
+
+/// The image behind a media viewer link, e.g. Reddit's
+/// `reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fx.jpg`, which is what
+/// Reddit's "open image" hands out. The page itself is a bot check with no
+/// preview tags, so the picture only shows if we read it out of `url`.
+///
+/// Only Reddit's own image hosts are unwrapped. The chat trusted reddit.com,
+/// not whatever host a crafted `url=` names, and loading that host's image
+/// would show the viewer's IP to it.
+fn unwrap_media_viewer(url: &str) -> Option<String> {
+    let outer = url::Url::parse(url).ok()?;
+    let host = outer.host_str()?.to_ascii_lowercase();
+    if !(host == "reddit.com" || host.ends_with(".reddit.com")) {
+        return None;
+    }
+    if outer.path().trim_end_matches('/') != "/media" {
+        return None;
+    }
+    let inner = outer
+        .query_pairs()
+        .find(|(key, _)| key == "url")
+        .map(|(_, value)| value.into_owned())?;
+    let parsed = url::Url::parse(&inner).ok()?;
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return None;
+    }
+    let inner_host = parsed.host_str()?.to_ascii_lowercase();
+    if !(inner_host == "redd.it" || inner_host.ends_with(".redd.it")) {
+        return None;
+    }
+    Some(inner)
+}
+
 // --- Generic OpenGraph scrape ----------------------------------------------
 
 /// Stream a response body and stop the moment we've seen `</head>` (or hit the
@@ -1341,19 +1692,29 @@ fn is_image_url(url: &str) -> bool {
 /// `<head>`, so this is all we need — it turns a multi-MB download + full-DOM
 /// parse into reading the first few KB of most pages. Shared by the generic
 /// scraper and the Tenor extractor.
-async fn read_capped_body(mut resp: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
+async fn read_capped_body(resp: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
+    read_body_until(resp, cap, b"</head").await
+}
+
+/// Stream a body until `marker` (ASCII, any case) has arrived or `cap` bytes
+/// have been read, whichever comes first.
+async fn read_body_until(
+    mut resp: reqwest::Response,
+    cap: usize,
+    marker: &[u8],
+) -> Result<Vec<u8>, String> {
     let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
     loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 let prev = buf.len();
                 buf.extend_from_slice(&chunk);
-                // Scan the newly appended bytes (with a 5-byte overlap so a tag
-                // split across chunks is still caught) for the closing </head>.
-                let from = prev.saturating_sub(5);
+                // Scan the newly appended bytes (overlapping the previous chunk
+                // so a marker split across chunks is still caught).
+                let from = prev.saturating_sub(marker.len() - 1);
                 if buf[from..]
-                    .windows(6)
-                    .any(|w| w.eq_ignore_ascii_case(b"</head"))
+                    .windows(marker.len())
+                    .any(|w| w.eq_ignore_ascii_case(marker))
                 {
                     break;
                 }
@@ -1408,21 +1769,7 @@ async fn fetch_generic_with_cookie(
     // The link's content-type can reveal it's actually an image (no extension
     // in the URL, e.g. a CDN redirect). Treat it as an image card.
     if content_type.starts_with("image/") {
-        return Ok(LinkPreview {
-            url: url.to_string(),
-            kind: "image".to_string(),
-            title: None,
-            description: None,
-            image: Some(url.to_string()),
-            site_name: None,
-            author: None,
-            author_avatar: None,
-            video_id: None,
-            view_count: None,
-            duration: None,
-            online_count: None,
-            member_count: None,
-        });
+        return Ok(image_preview(url, url));
     }
 
     // Anything that isn't HTML has no OG tags to read.
@@ -1556,4 +1903,248 @@ fn truncate(s: &str, max_chars: usize) -> String {
     let mut out: String = trimmed.chars().take(max_chars).collect();
     out.push('\u{2026}'); // ellipsis
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The link that showed as plain text: Reddit's viewer around an i.redd.it jpg.
+    const REDDIT_VIEWER: &str =
+        "https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Ftdy7wdh3gvod1.jpg";
+
+    #[test]
+    fn image_extensions_match_in_any_case_with_or_without_a_query() {
+        assert!(is_image_url("https://i.redd.it/tdy7wdh3gvod1.jpg"));
+        assert!(is_image_url("https://i.imgur.com/CzXTtJV.jpeg"));
+        assert!(is_image_url("https://files.catbox.moe/abc.JPG"));
+        assert!(is_image_url("https://i.nuuls.com/AbC.Jpeg"));
+        assert!(is_image_url("https://preview.redd.it/abc.jpg?width=640&auto=webp&s=1"));
+        assert!(is_image_url("https://cdn.discordapp.com/attachments/1/2/a.jpg?ex=1&is=2&hm=3&"));
+        assert!(is_image_url("https://i.imgur.com/a.png#top"));
+        assert!(!is_image_url("https://www.reddit.com/r/pics/comments/abc/title/"));
+        assert!(!is_image_url("https://example.com/jpg"));
+    }
+
+    #[test]
+    fn an_extension_inside_the_query_is_not_an_image_link_on_its_own() {
+        // Why the viewer link fell through: its path is `/media`.
+        assert!(!is_image_url(REDDIT_VIEWER));
+    }
+
+    #[test]
+    fn reddit_viewer_links_unwrap_to_the_image() {
+        assert_eq!(
+            unwrap_media_viewer(REDDIT_VIEWER).as_deref(),
+            Some("https://i.redd.it/tdy7wdh3gvod1.jpg"),
+        );
+        // Any reddit.com host, an unencoded parameter, a trailing slash.
+        assert_eq!(
+            unwrap_media_viewer("https://old.reddit.com/media/?url=https://i.redd.it/x.JPG").as_deref(),
+            Some("https://i.redd.it/x.JPG"),
+        );
+        assert_eq!(
+            unwrap_media_viewer("https://reddit.com/media?foo=1&url=https%3A%2F%2Fi.redd.it%2Fy.png").as_deref(),
+            Some("https://i.redd.it/y.png"),
+        );
+        // preview.redd.it keeps its own query, which was encoded inside ours.
+        let preview = unwrap_media_viewer(
+            "https://www.reddit.com/media?url=https%3A%2F%2Fpreview.redd.it%2Fabc.jpeg%3Fwidth%3D640%26auto%3Dwebp%26s%3Ddeadbeef",
+        )
+        .expect("preview.redd.it unwraps");
+        assert_eq!(preview, "https://preview.redd.it/abc.jpeg?width=640&auto=webp&s=deadbeef");
+        assert!(is_image_url(&preview));
+    }
+
+    #[test]
+    fn viewer_links_never_unwrap_to_a_host_reddit_does_not_run() {
+        for url in [
+            "https://www.reddit.com/media?url=https%3A%2F%2Fgrabber.example%2Fx.jpg",
+            "https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it.grabber.example%2Fx.jpg",
+            "https://www.reddit.com/media?url=https%3A%2F%2Fnotredd.it%2Fx.jpg",
+            "https://www.reddit.com/media?url=javascript%3Aalert(1)",
+            "https://www.reddit.com/media?url=",
+            "https://www.reddit.com/media",
+            "https://www.reddit.com/r/pics/?url=https%3A%2F%2Fi.redd.it%2Fx.jpg",
+            "https://reddit.com.grabber.example/media?url=https%3A%2F%2Fi.redd.it%2Fx.jpg",
+            "https://notreddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fx.jpg",
+        ] {
+            assert_eq!(unwrap_media_viewer(url), None, "{url}");
+        }
+    }
+
+    fn post(id: &str, subreddit: Option<&str>, slug: Option<&str>) -> Option<RedditLink> {
+        Some(RedditLink::Post {
+            id: id.to_string(),
+            subreddit: subreddit.map(String::from),
+            slug: slug.map(String::from),
+        })
+    }
+
+    #[test]
+    fn reddit_post_links_parse_from_every_host_and_shape() {
+        let slug = Some("the_undertaker_immediately_after_being");
+        let full = "https://www.reddit.com/r/pics/comments/1x8gy05/the_undertaker_immediately_after_being/";
+        assert_eq!(reddit_link(full), post("1x8gy05", Some("pics"), slug));
+        assert_eq!(
+            reddit_link("https://old.reddit.com/r/pics/comments/1x8gy05/the_undertaker_immediately_after_being/?utm_source=share&utm_medium=web3x"),
+            post("1x8gy05", Some("pics"), slug),
+        );
+        assert_eq!(reddit_link("https://reddit.com/r/IAmA/comments/z1c9z"), post("z1c9z", Some("IAmA"), None));
+        assert_eq!(
+            reddit_link("https://www.reddit.com/r/IAmA/comments/z1c9z/i_am_barack_obama/c60o0iw/"),
+            post("z1c9z", Some("IAmA"), Some("i_am_barack_obama")),
+        );
+        // Links that name no subreddit.
+        assert_eq!(reddit_link("https://redd.it/92dd8"), post("92dd8", None, None));
+        assert_eq!(reddit_link("https://www.reddit.com/comments/92dd8"), post("92dd8", None, None));
+        assert_eq!(reddit_link("https://www.reddit.com/gallery/92dd8"), post("92dd8", None, None));
+    }
+
+    #[test]
+    fn reddit_share_video_subreddit_and_user_links_parse() {
+        assert_eq!(
+            reddit_link("https://www.reddit.com/r/pics/s/1aBcDeFgHi"),
+            Some(RedditLink::Redirect { subreddit: Some("pics".into()), video: false }),
+        );
+        assert_eq!(
+            reddit_link("https://v.redd.it/abc123xyz"),
+            Some(RedditLink::Redirect { subreddit: None, video: true }),
+        );
+        assert_eq!(reddit_link("https://www.reddit.com/r/xqcow/"), Some(RedditLink::Subreddit("xqcow".into())));
+        assert_eq!(reddit_link("https://www.reddit.com/r/pics/top/?t=week"), Some(RedditLink::Subreddit("pics".into())));
+        // A malformed post id still says which subreddit it is under.
+        assert_eq!(reddit_link("https://www.reddit.com/r/pics/comments/!!/"), Some(RedditLink::Subreddit("pics".into())));
+        assert_eq!(reddit_link("https://www.reddit.com/user/spez/"), Some(RedditLink::User("spez".into())));
+        assert_eq!(reddit_link("https://reddit.com/u/some-one_1"), Some(RedditLink::User("some-one_1".into())));
+    }
+
+    #[test]
+    fn non_reddit_and_non_page_links_are_left_alone() {
+        for url in [
+            "https://i.redd.it/tdy7wdh3gvod1.jpg",
+            "https://preview.redd.it/abc.jpeg?width=640&s=1",
+            "https://www.reddit.com/",
+            REDDIT_VIEWER,
+            "https://www.reddit.com/r/a/",
+            "https://redd.it/",
+            "https://notreddit.com/r/pics/",
+            "https://reddit.com.grabber.example/r/pics/comments/92dd8/",
+            "ftp://reddit.com/r/pics/",
+        ] {
+            assert_eq!(reddit_link(url), None, "{url}");
+        }
+        // Profile links in a channel's About stay pills (see has_dedicated_card).
+        assert!(!has_dedicated_card("https://www.reddit.com/r/pics/comments/1x8gy05/x/"));
+    }
+
+    #[test]
+    fn a_slug_reads_as_words() {
+        assert_eq!(
+            reddit_slug_title("the_undertaker_immediately_after_being").as_deref(),
+            Some("the undertaker immediately after being"),
+        );
+        assert_eq!(reddit_slug_title("_"), None);
+        assert_eq!(reddit_slug_title(""), None);
+    }
+
+    #[test]
+    fn oembed_gives_title_author_and_the_real_subreddit() {
+        // Trimmed from the live answer for /r/all/comments/92dd8/.
+        let json = serde_json::json!({
+            "author_name": "qgyh2",
+            "html": "<blockquote class=\"reddit-embed-bq\" style=\"height:240px\" >\n<a href=\"https://www.reddit.com/r/pics/comments/92dd8/test_post_please_ignore/\">test post please ignore</a><br> by\n<a href=\"https://www.reddit.com/user/qgyh2/\">u/qgyh2</a> in\n<a href=\"https://www.reddit.com/r/pics/\">pics</a>\n</blockquote>",
+            "provider_name": "reddit",
+            "title": "test post please ignore",
+            "type": "rich",
+        });
+        assert_eq!(
+            parse_reddit_oembed(&json),
+            RedditPost {
+                title: Some("test post please ignore".into()),
+                author: Some("qgyh2".into()),
+                subreddit: Some("pics".into()),
+            },
+        );
+        let deleted = serde_json::json!({ "author_name": "[deleted]", "title": "  " });
+        assert_eq!(parse_reddit_oembed(&deleted), RedditPost::default());
+    }
+
+    /// The head of a real post feed: the post entry, then a comment entry.
+    const FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/"><category term="pics" label="r/pics"/><logo>https://b.thumbs.redditmedia.com/1zT3.png</logo><title>The Undertaker immediately after being accidentally lit on fire in 2010. : pics</title><entry><author><name>/u/Objectionne</name></author><category term="pics" label="r/pics"/><content type="html">&lt;a href=&quot;https://i.redd.it/2nwb8pw6h2wh1.png&quot;&gt;[link]&lt;/a&gt;</content><id>t3_1x8gy05</id><media:thumbnail url="https://preview.redd.it/2nwb8pw6h2wh1.png?width=640&amp;crop=smart&amp;auto=webp&amp;s=30d4357560e133a60a9234d8e7055fdbd0831233" /><title>The Undertaker immediately after being accidentally lit on fire in 2010.</title></entry><entry><author><name>/u/someone</name></author><media:thumbnail url="https://preview.redd.it/comment.jpg?width=640&amp;s=2" /></entry>"#;
+
+    #[test]
+    fn the_feed_gives_the_posts_own_preview_image() {
+        assert_eq!(
+            parse_reddit_feed_image(FEED).as_deref(),
+            Some("https://preview.redd.it/2nwb8pw6h2wh1.png?width=640&crop=smart&auto=webp&s=30d4357560e133a60a9234d8e7055fdbd0831233"),
+        );
+    }
+
+    #[test]
+    fn the_feed_image_is_skipped_when_small_foreign_or_on_a_comment() {
+        let swap = |from: &str, to: &str| FEED.replacen(from, to, 1);
+        // A 140 px list thumbnail would stretch across the card.
+        assert_eq!(parse_reddit_feed_image(&swap("width=640&amp;crop", "width=140&amp;height=105&amp;crop")), None);
+        // Never an image from a host Reddit does not run.
+        assert_eq!(parse_reddit_feed_image(&swap("https://preview.redd.it/2nwb", "https://grabber.example/2nwb")), None);
+        // A text post: its entry has no thumbnail, and a comment's does not count.
+        let text_post = swap(r#"<media:thumbnail url="https://preview.redd.it/2nwb"#, r#"<media:other url="https://preview.redd.it/2nwb"#);
+        assert_eq!(parse_reddit_feed_image(&text_post), None);
+        assert_eq!(parse_reddit_feed_image("<feed></feed>"), None);
+    }
+
+    #[test]
+    fn reddit_cards_carry_rust_written_labels() {
+        let card = reddit_card(
+            "https://redd.it/92dd8",
+            Some("test post please ignore".into()),
+            Some("pics".into()),
+            Some("qgyh2".into()),
+            None,
+        );
+        assert_eq!(card.kind, "reddit");
+        assert_eq!(card.site_name.as_deref(), Some("r/pics"));
+        assert_eq!(card.author.as_deref(), Some("u/qgyh2"));
+        let bare = reddit_card("https://www.reddit.com/user/spez", Some("u/spez".into()), None, None, None);
+        assert_eq!(bare.site_name.as_deref(), Some("Reddit"));
+    }
+
+    #[test]
+    fn unresolved_share_and_video_links_say_only_what_the_link_says() {
+        let share = unresolved_reddit_card("https://www.reddit.com/r/pics/s/x", Some("pics".into()), false).unwrap();
+        assert_eq!((share.title, share.site_name.as_deref()), (None, Some("r/pics")));
+        let video = unresolved_reddit_card("https://v.redd.it/x", None, true).unwrap();
+        assert_eq!((video.title, video.site_name.as_deref()), (None, Some("Reddit video")));
+        assert!(unresolved_reddit_card("https://v.redd.it/x", None, false).is_err());
+    }
+
+    #[tokio::test]
+    async fn subreddit_and_user_links_build_a_card_without_fetching() {
+        let sub = build_preview("https://www.reddit.com/r/xqcow/").await.expect("a card");
+        assert_eq!((sub.kind.as_str(), sub.title.as_deref()), ("reddit", Some("r/xqcow")));
+        let user = build_preview("https://www.reddit.com/user/spez").await.expect("a card");
+        assert_eq!((user.kind.as_str(), user.title.as_deref()), ("reddit", Some("u/spez")));
+    }
+
+    /// Live: `cargo test --no-default-features --lib reddit_post_live -- --ignored`.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn reddit_post_live() {
+        let card = build_preview("https://redd.it/1x8gy05").await.expect("a card");
+        println!("{card:#?}");
+        assert_eq!(card.kind, "reddit");
+        assert_eq!(card.site_name.as_deref(), Some("r/pics"));
+        assert!(card.title.as_deref().is_some_and(|t| t.starts_with("The Undertaker")), "{card:?}");
+        assert_eq!(card.author.as_deref(), Some("u/Objectionne"));
+    }
+
+    #[tokio::test]
+    async fn the_reported_link_previews_as_its_image_without_fetching() {
+        let preview = build_preview(REDDIT_VIEWER).await.expect("an image card");
+        assert_eq!(preview.kind, "image");
+        assert_eq!(preview.image.as_deref(), Some("https://i.redd.it/tdy7wdh3gvod1.jpg"));
+        // The card still opens what was posted.
+        assert_eq!(preview.url, REDDIT_VIEWER);
+    }
 }

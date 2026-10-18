@@ -256,7 +256,7 @@ const Row = ({
   }, [channel.channel_id, avatar]);
   return (
     <div className="group flex items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-white/5 font-mono text-[11px] text-textSecondary">
+      <span className="flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded bg-white/5 px-1 font-mono text-[11px] text-textSecondary">
         {index + 1}
       </span>
       {avatar ? (

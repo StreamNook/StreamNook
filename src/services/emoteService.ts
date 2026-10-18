@@ -18,6 +18,8 @@ export interface Emote {
   owner_id?: string;
   /** Owner/author display name for emote attribution */
   owner_name?: string;
+  /** The emote's own name when the set shows it under an alias (7TV). */
+  original_name?: string;
   /** Emote width in pixels (for aspect ratio sorting) */
   width?: number;
   /** FFZ modifier bitmask (Hidden=1, FlipX=2, ...); present only on FFZ modifiers */

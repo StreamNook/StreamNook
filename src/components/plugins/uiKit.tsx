@@ -48,7 +48,7 @@ export const ChipList = ({
               key={item}
               className="group flex items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2"
             >
-              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-white/5 font-mono text-[11px] text-textSecondary">
+              <span className="flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded bg-white/5 px-1 font-mono text-[11px] text-textSecondary">
                 {i + 1}
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px] text-textPrimary">{item}</span>

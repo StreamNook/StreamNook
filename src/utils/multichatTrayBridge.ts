@@ -165,11 +165,26 @@ if (!isPopout && typeof window !== 'undefined') {
         useAppStore.getState().openBadgesWithPaint(paintId);
       });
 
-      await listen('open-badges-on-streamnook', async () => {
+      // An emote creator chip clicked in a popout or the chat overlay.
+      await listen<{ id?: unknown; login?: unknown; displayName?: unknown; avatarUrl?: unknown }>('open-twitch-profile', async (event) => {
+        const p = event.payload ?? {};
+        const str = (v: unknown) => (typeof v === 'string' ? v : '');
+        const id = str(p.id);
+        const login = str(p.login);
+        // Shape-checked: it came over the event bus, not from this window.
+        if (!/^\d{1,20}$/.test(id) || !/^\w{1,25}$/.test(login)) return;
+        Logger.debug('[TrayBridge] open-twitch-profile received');
+        await showAndFocusMain();
+        const { showTwitchProfile } = await import('./openBadgesInMain');
+        showTwitchProfile({ id, login, displayName: str(p.displayName) || login, avatarUrl: str(p.avatarUrl) || undefined });
+      });
+
+      await listen<{ slug?: string } | null>('open-badges-on-streamnook', async (event) => {
         Logger.debug('[TrayBridge] open-badges-on-streamnook received');
         await showAndFocusMain();
         const { useAppStore } = await import('../stores/AppStore');
-        useAppStore.getState().openBadgesOnStreamNook();
+        const slug = typeof event.payload?.slug === 'string' ? event.payload.slug : undefined;
+        useAppStore.getState().openBadgesOnStreamNook(slug);
       });
 
       // A badge clicked on a chat message in a popout (Twitch/BTTV/etc.). The badges

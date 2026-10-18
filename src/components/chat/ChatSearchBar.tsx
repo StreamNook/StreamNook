@@ -245,7 +245,7 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
                   : 'border-transparent hover:bg-white/[0.03]'
               } ${h.flags & F_DELETED ? 'opacity-50' : ''}`}
             >
-              <span className="w-[52px] flex-shrink-0 font-mono text-[10px] tabular-nums text-white/35">
+              <span className="min-w-[52px] flex-shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-white/35">
                 {formatTime(h.ts_ms)}
               </span>
               {channelKey === null && (
