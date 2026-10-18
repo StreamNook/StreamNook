@@ -91,6 +91,28 @@ import Testing
         #expect(core.calls.suffix(3) == ["get_chatter_mod_history", "acknowledge_chat_warning", "resolve_automod_message"])
     }
 
+    @Test func cardToolsDecodeAndButtonsRunThroughTheDoor() async throws {
+        let core = FakeCore()
+        try core.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "test",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        let tools = try await core.cardTools(provider: "twitch", channel: "zackrawrr", channelID: "1", userID: "42")
+        let moderate = try #require(tools.moderate)
+        #expect(moderate.buttons.map(\.label) == ["1s", "10m", "1h", "1d", "Ban"])
+        #expect(moderate.buttons.last?.danger == true)
+        #expect(moderate.custom.map(\.label) == ["Spoilers 30m", "Warn"])
+        #expect(moderate.custom[1].asksReason)
+        #expect(moderate.history.entries.count == 4)
+        #expect(tools.swatches.count == 10)
+
+        let outcome = try await core.moderate(moderate.buttons[1], broadcasterID: "1", targetUserID: "42", targetName: "gus")
+        #expect(outcome.message == "Timed out gus for 600s")
+        #expect(outcome.undoable)
+        // The action passes through untouched: an integer stays an integer.
+        #expect(moderate.buttons[1].action.foundation as? [String: AnyHashable] == ["kind": "timeout", "seconds": 600])
+        try await core.setNote(userID: "42", note: "warned twice")
+        try await core.setNameColor(userID: "42", login: "gus", color: "#FF7A90")
+    }
+
     @Test func historyStatusesOtherThanAvailableCarryANote() throws {
         let raw = #"{"status":"no_access","entries":[],"note":"Only moderators of this channel can see its history."}"#
         let history = try JSONDecoder().decode(ModHistory.self, from: Data(raw.utf8))

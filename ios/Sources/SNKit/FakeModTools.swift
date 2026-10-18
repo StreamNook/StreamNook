@@ -19,13 +19,57 @@ public enum FakeModTools {
         ] as [[String: Any]],
     ]
 
+    static func button(_ id: String, _ label: String, _ kind: String, _ action: [String: Any], danger: Bool = false,
+                       reason: Any = NSNull(), asksReason: Bool = false, spoken: String) -> [String: Any] {
+        ["id": id, "label": label, "kind": kind, "action": action, "reason": reason, "asks_reason": asksReason,
+         "danger": danger, "spoken": spoken]
+    }
+
+    /// The card a moderator sees for any chatter: the four default lengths and Ban, two of their
+    /// own buttons, the history above, no note and no color yet.
+    public static let cardTools: [String: Any] = [
+        "note": NSNull(), "nickname": NSNull(), "color": NSNull(),
+        "swatches": ["#7FD3FF", "#5AA9FF", "#C49BFF", "#FF7AD9", "#FF7A90", "#FF9F43", "#FFD166", "#7BE08E", "#4FD1C5", "#E6E6E6"],
+        "moderate": [
+            "buttons": [
+                button("t1", "1s", "timeout", ["kind": "timeout", "seconds": 1], spoken: "Purge their messages"),
+                button("t600", "10m", "timeout", ["kind": "timeout", "seconds": 600], spoken: "Time out for 10 minutes"),
+                button("t3600", "1h", "timeout", ["kind": "timeout", "seconds": 3600], spoken: "Time out for 1 hour"),
+                button("t86400", "1d", "timeout", ["kind": "timeout", "seconds": 86400], spoken: "Time out for 1 day"),
+                button("ban", "Ban", "ban", ["kind": "ban"], danger: true, spoken: "Ban"),
+            ],
+            "custom": [
+                button("c0", "Spoilers 30m", "timeout", ["kind": "timeout", "seconds": 1800], reason: "spoilers",
+                       spoken: "Time out for 30 minutes"),
+                button("c1", "Warn", "warn", ["kind": "warn"], asksReason: true, spoken: "Warn"),
+            ],
+            "history": history,
+        ] as [String: Any],
+    ]
+
     static func answer(_ cmd: String, _ args: [String: Any]) throws -> String {
+        let value: Any
         switch cmd {
-        case "get_chatter_mod_history":
-            let data = try JSONSerialization.data(withJSONObject: history, options: [.sortedKeys])
-            return String(decoding: data, as: UTF8.self)
+        case "get_chatter_mod_history": value = history
+        case "get_chatter_card_tools": value = cardTools
+        case "moderate_chatter":
+            // Words the real door would say; nothing is sent anywhere.
+            let request = args["request"] as? [String: Any] ?? [:]
+            let action = request["action"] as? [String: Any] ?? [:]
+            let name = request["targetName"] as? String ?? "them"
+            switch action["kind"] as? String {
+            case "timeout":
+                let seconds = action["seconds"] as? Int ?? 600
+                value = ["applied_seconds": seconds, "message": "Timed out \(name) for \(seconds)s", "undoable": true] as [String: Any]
+            case "ban": value = ["applied_seconds": NSNull(), "message": "Banned \(name)", "undoable": true] as [String: Any]
+            case "unban": value = ["applied_seconds": NSNull(), "message": "Unbanned \(name)", "undoable": false] as [String: Any]
+            case "warn": value = ["applied_seconds": NSNull(), "message": "Warned \(name)", "undoable": false] as [String: Any]
+            default: throw CoreFailure.command(json: #""unknown mod action""#)
+            }
         default:
             return "null"
         }
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self)
     }
 }

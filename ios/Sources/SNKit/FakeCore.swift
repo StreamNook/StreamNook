@@ -118,7 +118,8 @@ public final class FakeCore: CoreBridge {
                                   "cumulative_months": 0, "badge_url": NSNull()] as [String: Any])
         case "asset_cache_set_burst":
             return "null"
-        case "get_chatter_mod_history", "acknowledge_chat_warning", "resolve_automod_message":
+        case "get_chatter_mod_history", "acknowledge_chat_warning", "resolve_automod_message", "get_chatter_card_tools",
+             "moderate_chatter", "set_user_note", "set_chat_user_override":
             // Moderation never reaches Twitch from the fake: canned answers only.
             return try FakeModTools.answer(cmd, args)
         case "send_chat_message":

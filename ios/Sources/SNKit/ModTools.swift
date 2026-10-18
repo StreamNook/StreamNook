@@ -158,7 +158,152 @@ public struct ModHistory: Codable, Sendable, Equatable {
     public var isAvailable: Bool { status == "available" }
 }
 
+/// A button on the user card (Rust `chatter_card::CardButton`): a timeout length, Ban, Unban or
+/// one of the viewer's own, carrying the exact action the core's mod door takes.
+public struct CardButton: Decodable, Sendable, Equatable, Identifiable {
+    public var id: String
+    /// "10m", "Ban", "Spoilers".
+    public var label: String
+    /// "timeout" | "ban" | "unban" | "warn"
+    public var kind: String
+    /// What `moderate_chatter` takes as `action`, passed through untouched.
+    public var action: JSONValue
+    public var reason: String?
+    /// A warning with no saved reason: the viewer types one first.
+    public var asksReason: Bool
+    public var danger: Bool
+    public var spoken: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, kind, action, reason, asksReason = "asks_reason", danger, spoken
+    }
+}
+
+/// The card's Moderate block: buttons, the viewer's own buttons and the chatter's history.
+public struct CardModerate: Decodable, Sendable, Equatable {
+    public var buttons: [CardButton]
+    public var custom: [CardButton]
+    public var history: ModHistory
+}
+
+/// What a user card shows the viewer beyond the profile (Rust `chatter_card::ChatterCardTools`).
+public struct ChatterCardTools: Decodable, Sendable, Equatable {
+    public var note: String?
+    public var nickname: String?
+    /// The viewer's own color for the chatter, when set.
+    public var color: String?
+    public var swatches: [String]
+    /// Present in a channel where the viewer may moderate this chatter.
+    public var moderate: CardModerate?
+
+    public init(note: String? = nil, nickname: String? = nil, color: String? = nil, swatches: [String] = [],
+                moderate: CardModerate? = nil) {
+        self.note = note
+        self.nickname = nickname
+        self.color = color
+        self.swatches = swatches
+        self.moderate = moderate
+    }
+}
+
+/// The core's answer to a mod action (Rust `moderation::ModOutcome`).
+public struct ModOutcome: Decodable, Sendable, Equatable {
+    public var appliedSeconds: Int?
+    /// Ready for a toast.
+    public var message: String
+    /// A ban or timeout, which Unban reverses.
+    public var undoable: Bool
+
+    enum CodingKeys: String, CodingKey { case appliedSeconds = "applied_seconds", message, undoable }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        appliedSeconds = try c.decodeIfPresent(Int.self, forKey: .appliedSeconds)
+        message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
+        undoable = try c.decodeIfPresent(Bool.self, forKey: .undoable) ?? false
+    }
+}
+
+/// Any JSON value, kept as decoded so it can be sent back unchanged.
+public enum JSONValue: Codable, Sendable, Equatable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let b): try c.encode(b)
+        case .number(let n): try c.encode(n)
+        case .string(let s): try c.encode(s)
+        case .array(let a): try c.encode(a)
+        case .object(let o): try c.encode(o)
+        }
+    }
+
+    /// As a Foundation value for `JSONSerialization` (whole numbers stay integers).
+    public var foundation: Any {
+        switch self {
+        case .null: return NSNull()
+        case .bool(let b): return b
+        case .number(let n): return n.rounded() == n && abs(n) < 9e15 ? Int(n) as Any : n
+        case .string(let s): return s
+        case .array(let a): return a.map(\.foundation)
+        case .object(let o): return o.mapValues(\.foundation)
+        }
+    }
+}
+
 extension CoreBridge {
+    /// The user card's tools for a chatter in a room.
+    public func cardTools(provider: String, channel: String?, channelID: String?, userID: String) async throws -> ChatterCardTools {
+        try await invoke("get_chatter_card_tools", args: [
+            "provider": provider, "channel": channel, "channelId": channelID, "userId": userID,
+        ], as: ChatterCardTools.self)
+    }
+
+    /// Runs a card button through the core's one mod door.
+    public func moderate(_ button: CardButton, broadcasterID: String, targetUserID: String, targetName: String,
+                         reason: String? = nil) async throws -> ModOutcome {
+        var request: [String: Any] = [
+            "provider": "twitch",
+            "broadcasterId": broadcasterID,
+            "targetUserId": targetUserID,
+            "targetName": targetName,
+            "action": button.action.foundation,
+        ]
+        if let reason = (reason ?? button.reason)?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty {
+            request["reason"] = reason
+        }
+        return try await invoke("moderate_chatter", args: ["request": request], as: ModOutcome.self)
+    }
+
+    /// Saves the viewer's private note on a chatter; an empty note removes it.
+    public func setNote(userID: String, note: String) async throws {
+        _ = try await invoke("set_user_note", args: ["userId": userID, "note": note])
+    }
+
+    /// Sets (or with nil clears) the viewer's own name color for a chatter.
+    public func setNameColor(userID: String, login: String, color: String?) async throws {
+        _ = try await invoke("set_chat_user_override", args: [
+            "userId": userID, "username": login, "field": "color", "value": color,
+        ])
+    }
+
     /// A chatter's moderation history in the channel whose user id is `channelID`.
     public func modHistory(channelID: String, userID: String) async throws -> ModHistory {
         try await invoke("get_chatter_mod_history", args: ["channelId": channelID, "userId": userID], as: ModHistory.self)
