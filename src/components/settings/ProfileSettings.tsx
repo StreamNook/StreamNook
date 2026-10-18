@@ -56,6 +56,7 @@ import { resolveEntitlement } from '../../services/cosmetics/ownership';
 import { MAJOR_COLOGNE_THEME_ID, MAJOR_COLOGNE_ACCOLADE_ID, parseCologneTheme, buildCologneTheme, isCologneTheme } from '../../services/cologneEvent';
 import { getTier, getTierAccent, StreamNookBadge } from '../StreamNookBadge';
 import { resolveCosmeticAsset } from '../cosmeticAssets';
+import { CosmeticArt } from '../CosmeticArt';
 import {
   captureProfileCard,
   copyImageToClipboard,
@@ -1419,7 +1420,7 @@ const ProfileSettings = () => {
           <div className="flex items-center gap-1.5 mb-4">
             <Tooltip content="Open StreamNook badges" side="top">
               <button
-                onClick={openBadgesOnStreamNookInMain}
+                onClick={() => openBadgesOnStreamNookInMain()}
                 className="cursor-pointer hover:scale-110 transition-transform"
                 aria-label="Open StreamNook badges"
               >
@@ -1459,6 +1460,7 @@ const ProfileSettings = () => {
                 >
                   <div
                     onClick={() => { if (!isActive) void setActiveCosmetic(currentUser.user_id, cosmetic.slug); }}
+                    aria-label={cosmetic.name}
                     className={`
                       relative p-2 rounded-lg transition-all
                       ${isActive
@@ -1466,12 +1468,7 @@ const ProfileSettings = () => {
                         : 'border border-transparent cursor-pointer hover:bg-glass hover:border-borderLight'}
                     `}
                   >
-                    <img
-                      src={asset}
-                      alt={cosmetic.name}
-                      className="w-8 h-8 object-contain"
-                      draggable={false}
-                    />
+                    <CosmeticArt cosmetic={cosmetic} chatSize className="w-8 h-8 object-contain" />
                     {isActive && <CheckChip tone="accent" />}
                   </div>
                 </Tooltip>
@@ -1501,13 +1498,13 @@ const ProfileSettings = () => {
                 >
                   <div
                     aria-disabled
+                    aria-label={cosmetic.name}
                     className="relative cursor-default rounded-lg border border-dashed border-white/[0.08] p-2"
                   >
-                    <img
-                      src={asset}
-                      alt={cosmetic.name}
+                    <CosmeticArt
+                      cosmetic={cosmetic}
+                      chatSize
                       className="h-8 w-8 object-contain opacity-40 saturate-[0.35]"
-                      draggable={false}
                     />
                     <LockChip />
                   </div>
@@ -1520,7 +1517,7 @@ const ProfileSettings = () => {
               <span>Enjoy collecting badges or flexing status?</span>
               <button
                 type="button"
-                onClick={openBadgesOnStreamNookInMain}
+                onClick={() => openBadgesOnStreamNookInMain()}
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium text-textPrimary bg-white/[0.06] hover:bg-white/[0.10] transition-colors cursor-pointer"
               >
                 <Heart size={10} className="text-rose-400/80" aria-hidden />

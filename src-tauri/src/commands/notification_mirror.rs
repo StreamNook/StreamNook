@@ -84,6 +84,10 @@ pub enum NoticeAction {
     Badges,
     /// Show what is new in this version.
     Changelog { version: Option<String> },
+    /// Open this channel (a Twitch login) with its rewards showing.
+    Rewards { channel: String },
+    /// Open Settings on this tab.
+    Settings { tab: String },
 }
 
 /// Who a reply typed into the notification goes to.
@@ -224,7 +228,7 @@ struct Main {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Route {
+pub(crate) enum Route {
     /// The viewer can already see it in the main window, or nowhere can.
     Nowhere,
     /// The operating system's own notification.
@@ -281,9 +285,10 @@ pub async fn mirror_notification(app: AppHandle, notice: MirroredNotice) -> Opti
     shown
 }
 
-/// Route a notification Rust raised itself (a chat mention): the same places,
-/// with only its data to act on.
-pub async fn deliver(app: AppHandle, mut notice: MirroredNotice) -> Option<String> {
+/// Where a notification raised now would go. A caller with work to do before
+/// it can say anything (drawing a picture) asks first, and skips the work
+/// when the answer is nowhere.
+pub(crate) fn current_route(app: &AppHandle) -> Route {
     let windows = app.webview_windows();
     let main = windows
         .get("main")
@@ -298,14 +303,31 @@ pub async fn deliver(app: AppHandle, mut notice: MirroredNotice) -> Option<Strin
             focused: w.is_focused().unwrap_or(false),
         })
         .collect();
+    route(main, system_notifications_on(app), candidates)
+}
+
+/// Route a notification Rust raised itself (a chat mention): the same places,
+/// with only its data to act on.
+pub async fn deliver(app: AppHandle, notice: MirroredNotice) -> Option<String> {
+    deliver_with(app, notice, None).await
+}
+
+/// `deliver`, with what more a system notification can carry. A quiet one
+/// (an Action Center update that never pops up) has no MultiChat card.
+pub async fn deliver_with(
+    app: AppHandle,
+    mut notice: MirroredNotice,
+    rich: Option<crate::services::system_notify::RichToast>,
+) -> Option<String> {
     clamp(&mut notice.title, MAX_TITLE);
     clamp(&mut notice.body, MAX_BODY);
-    match route(main, system_notifications_on(&app), candidates) {
+    match current_route(&app) {
         Route::Nowhere => None,
         Route::System => {
-            crate::services::system_notify::show(app, notice).await;
+            crate::services::system_notify::show_with(app, notice, rich).await;
             Some("system".into())
         }
+        Route::MultiChat(_) if rich.as_ref().is_some_and(|r| r.quiet) => None,
         Route::MultiChat(target) => {
             if let Err(e) = app.emit_to(target.as_str(), SHOW_EVENT, &notice) {
                 log::debug!("[NotificationMirror] emit to {target} failed: {e}");

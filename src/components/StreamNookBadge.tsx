@@ -3,6 +3,9 @@ import { useEffect, useState, useRef, useSyncExternalStore, memo } from 'react';
 // (not main.tsx) keeps the axis out of every window's boot path.
 import '@fontsource-variable/fraunces/wght-italic.css';
 import { Tooltip } from './ui/Tooltip';
+import { BadgeHoverCard } from './chat/BadgeHoverCard';
+import { openBadgeInfo } from '../stores/badgeSpotlightStore';
+import { streamNookBadgeRef } from '../utils/badgeSpotlight';
 import streamNookLogo from '../assets/streamnook-logo-128.webp';
 import {
   getActiveCosmeticSlug,
@@ -13,6 +16,7 @@ import {
   subscribeAtmospheresVersion,
 } from '../services/supabaseService';
 import { resolveCosmeticAsset, DEFAULT_COSMETIC_SLUG } from './cosmeticAssets';
+import { getStreamnookArtVersion, subscribeStreamnookArt } from '../services/streamnookArt';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -30,6 +34,10 @@ interface StreamNookBadgeProps {
   /** Size classes, so the badge matches the other badges beside it (chat
    *  passes `sn-chat-badge`). Defaults to a fixed 24px. */
   className?: string;
+  /** A button that opens the badge spotlight card (chat rows). */
+  interactive?: boolean;
+  /** Open the hover card only after real pointer movement (chat rows). */
+  requirePointerMove?: boolean;
 }
 
 // Rank tiers based on signup order. The cutoffs and labels are intentionally
@@ -374,6 +382,8 @@ export const StreamNookTierCard = memo(function StreamNookTierCard({
  */
 const useActiveCosmeticAsset = (userId: string | null | undefined): string | null => {
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
+  // Re-resolve when Rust's disk copy of a CDN badge lands.
+  useSyncExternalStore(subscribeStreamnookArt, getStreamnookArtVersion, getStreamnookArtVersion);
   if (!userId) return null;
   const slug = getActiveCosmeticSlug(userId);
   if (!slug) return null;
@@ -464,20 +474,27 @@ export const MEMBER_REVEAL_CARD_CLASS = CARD_CLASS;
 
 /**
  * The StreamNook badge: the member's equipped badge art (or the default mark).
- * A plain badge like every other provider's, named on hover. Who the member is
- * lives on their name: hovering it decodes their number (MemberReveal), and
- * clicking it opens their profile.
+ * A plain badge like every other provider's: hovering shows the same big-art
+ * card as the rest, and in chat a click opens it in the Badges overlay. Who the
+ * member is lives on their name: hovering it decodes their number
+ * (MemberReveal), and clicking it opens their profile.
  */
 export const StreamNookBadge = memo(function StreamNookBadge({
   userId,
   side = 'top',
   className = 'w-6 h-6 inline-block object-contain',
+  interactive = false,
+  requirePointerMove = false,
 }: StreamNookBadgeProps) {
   const cosmeticAsset = useActiveCosmeticAsset(userId);
   const cosmeticSlug = getActiveCosmeticSlug(userId);
-  const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
+  const cosmetic = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug) : undefined;
+  const cosmeticName = cosmetic?.name ?? null;
 
-  const src = cosmeticAsset ?? streamNookLogo;
+  // Art that cannot load (the CDN is unreachable from this network) wears the
+  // default mark instead of a broken image, until Rust's copy lands.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = cosmeticAsset && cosmeticAsset !== failedSrc ? cosmeticAsset : streamNookLogo;
   // Some badge names already say StreamNook ("StreamNook Member"); prefixing
   // those read "StreamNook StreamNook Member".
   const label = !cosmeticName
@@ -486,15 +503,43 @@ export const StreamNookBadge = memo(function StreamNookBadge({
       ? cosmeticName
       : `StreamNook ${cosmeticName}`;
 
+  // The card shows the full-size art; the row keeps its 24px chat copy.
+  const fullArt =
+    (cosmeticSlug ? resolveCosmeticAsset({ slug: cosmeticSlug, asset_path: cosmetic?.asset_path }) : null) ??
+    streamNookLogo;
+  const ref = streamNookBadgeRef(userId ?? '', label, fullArt, cosmeticSlug ?? undefined);
+
+  const img = (
+    <img
+      src={src}
+      alt={label}
+      loading="lazy"
+      className={className}
+      draggable={false}
+      onError={() => {
+        if (src !== streamNookLogo) setFailedSrc(src);
+      }}
+    />
+  );
   return (
-    <Tooltip content={label} side={side} delay={120}>
-      <img
-        src={src}
-        alt={label}
-        loading="lazy"
-        className={className}
-        draggable={false}
-      />
+    <Tooltip
+      content={<BadgeHoverCard badge={ref} clickable={interactive} />}
+      side={side}
+      requirePointerMove={requirePointerMove}
+    >
+      {interactive ? (
+        <button
+          type="button"
+          aria-label={label}
+          // Same box as the other chat badge buttons (ChatBadgeIcons).
+          className="inline-flex items-center cursor-pointer rounded-[3px] hover:scale-110 transition-transform focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
+          onClick={() => openBadgeInfo(ref)}
+        >
+          {img}
+        </button>
+      ) : (
+        img
+      )}
     </Tooltip>
   );
 });

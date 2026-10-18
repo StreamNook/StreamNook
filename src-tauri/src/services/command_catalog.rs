@@ -54,8 +54,8 @@ const fn cmd(
 }
 
 pub static BUILTINS: &[Builtin] = &[
-    cmd("mods", &[], "Everyone", "/mods", "Display a list of all chat moderators", "", &[], 0),
-    cmd("vips", &[], "Everyone", "/vips", "Display a list of VIPs for this channel", "", &[], 0),
+    cmd("mods", &[], "Everyone", "/mods", "Display a list of all chat moderators", "", &[], LOCAL),
+    cmd("vips", &[], "Everyone", "/vips", "Display a list of VIPs for this channel", "", &[], LOCAL),
     cmd("color", &[], "Everyone", "/color <colorname|hex>", "Change the color of your username", "Twitch accepts the named colors from its own list, and Turbo or Prime users can use any hex value.", &["/color SpringGreen", "/color #ff69b4"], 0),
     cmd("block", &[], "Everyone", "/block <username>", "Block all messages from a specific user", "This is a Twitch block, so it applies on twitch.tv too. Use /ignore for a StreamNook-only hide.", &["/block someuser"], 0),
     cmd("unblock", &[], "Everyone", "/unblock <username>", "Remove user from block list", "", &[], 0),

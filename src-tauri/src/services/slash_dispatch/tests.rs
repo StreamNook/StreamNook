@@ -1140,3 +1140,31 @@ fn the_outcome_serializes_in_the_documented_shape() {
     assert_eq!(v["pin_after_send"], json!(true));
     assert_eq!(v["reply_to"], json!("m"));
 }
+
+#[tokio::test]
+async fn moderation_toasts_use_the_shared_words() {
+    let fake = Fake::new();
+    let o = run(&fake, "/timeout bob 10m").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["Timed out bob for 10m"]);
+    let o = run(&fake, "/untimeout bob").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["Removed the timeout on bob"]);
+    let o = run(&fake, "/unban bob").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["Unbanned bob"]);
+    // Past Twitch's 14 days the timeout is what Twitch will really apply.
+    run(&fake, "/timeout bob 30d").await;
+    assert_eq!(fake.calls("ban_user").last().unwrap()["duration"], json!(1_209_600));
+}
+
+#[tokio::test]
+async fn mods_and_vips_read_the_signed_in_role_list() {
+    let fake = Fake::new();
+    fake.answer(|cmd, a| match cmd {
+        "slash_role_list" => Ok(json!([format!("role {}", a["role"].as_str().unwrap_or_default())])),
+        _ => default_answer(cmd, a),
+    });
+    let o = run(&fake, "/mods").await;
+    assert_eq!(fake.calls("slash_role_list"), vec![json!({ "channel": "chan", "role": "mods" })]);
+    assert!(serde_json::to_string(&o).unwrap().contains("role mods"));
+    run(&fake, "/vips").await;
+    assert_eq!(fake.calls("slash_role_list")[1]["role"], json!("vips"));
+}

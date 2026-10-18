@@ -5,6 +5,7 @@ import { LayoutGrid, MessagesSquare, Undo2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { Logger } from '../../utils/logger';
+import { fitCount } from '../../utils/fitNumber';
 import { Tooltip } from '../ui/Tooltip';
 
 /**
@@ -253,7 +254,8 @@ export const MultiChatButton = () => {
                 <MessagesSquare size={17} />
                 {count > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full glass-button !bg-accent/30 text-[9px] font-extrabold text-white !shadow-[0_2px_10px_rgba(var(--color-accent-rgb),0.35),inset_0_1px_rgba(255,255,255,0.2)] z-50">
-                        {count}
+                        {/* "9+" is the most a 16 px dot holds. */}
+                        {fitCount(count, 9)}
                     </span>
                 )}
             </button>

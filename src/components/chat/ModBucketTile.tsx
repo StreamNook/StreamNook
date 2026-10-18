@@ -4,8 +4,8 @@
 // Lifted out of ModerationDragLayer unchanged. The mobile fan originally drew
 // its own plain circles and looked visibly worse than the desktop client for no
 // reason other than that the tile was a local component nobody could import.
+import type { ComponentType } from 'react';
 import { motion } from 'framer-motion';
-import type { LucideIcon } from 'lucide-react';
 import { formatDuration } from '../../utils/timeoutRamp';
 
 export type BucketKind = 'neutral' | 'danger';
@@ -13,7 +13,8 @@ export type BucketKind = 'neutral' | 'danger';
 export interface Bucket {
   id: string;
   label: string;
-  icon: LucideIcon;
+  /** A Phosphor glyph (desktop tiles) or a lucide icon (the mobile fan). */
+  icon: ComponentType<{ size?: number | string; strokeWidth?: number | string }>;
   kind: BucketKind;
   /** Tailwind classes applied when this bucket is the active drop target. */
   activeTint: string;
@@ -62,8 +63,8 @@ export function BucketTile({
   return (
     <motion.div
       data-bucket-id={bucket.id}
-      // Scale only (no y-shift) so the tile's center stays put: the magnetic
-      // nearest-tile selection keys off these centers and must not drift.
+      // Scale only (no y-shift) so the tile stays where the cursor found it:
+      // the drag layer picks a tile by its on-screen box.
       animate={{ scale: active ? 1.18 : 1 }}
       transition={{ type: 'spring', stiffness: 500, damping: 17 }}
       className={`relative flex ${big ? 'h-20 w-20' : 'h-16 w-16'} flex-col items-center justify-center gap-1 rounded-2xl border shadow-[0_8px_22px_rgba(0,0,0,0.5)] transition-colors ${tint}`}

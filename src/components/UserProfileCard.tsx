@@ -44,6 +44,7 @@ import {
   subscribeCosmeticsVersion,
 } from '../services/supabaseService';
 import { resolveCosmeticAsset, DEFAULT_COSMETIC_SLUG } from './cosmeticAssets';
+import { CosmeticArt } from './CosmeticArt';
 import { SLOT_FOR_TYPE, type CosmeticType } from '../services/cosmetics/types';
 import { useMemberProfile, type MemberProfilePreview } from './profile/memberProfile';
 import { MemberProfileBackdrop } from './profile/MemberProfileBackdrop';
@@ -64,6 +65,9 @@ import { historyKey } from '../utils/chatterIdentity';
 import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { isImeComposing } from '../utils/imeComposing';
+import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
+import { thirdPartyBadgeRef } from '../utils/badgeSpotlight';
+import { moderateChatter, moderateWithToast } from '../services/moderation';
 
 // messageHistory arrives from two sources:
 //   1. The frontend's in-session userMessageHistory Map (full ParsedMessage shape
@@ -1497,7 +1501,10 @@ const UserProfileCard = ({
         ? `${b.image1x} 1x, ${b.image2x} 2x, ${b.image4x} 4x`
         : undefined,
       title: b.title,
-      provider: b.provider
+      provider: b.provider,
+      // For the badge spotlight card.
+      description: b.description,
+      link: b.link,
     }));
 
     // BTTV Pro loyalty badge (resolved over the BTTV socket, not the cached
@@ -1510,6 +1517,8 @@ const UserProfileCard = ({
           srcSet: undefined,
           title: 'BTTV Pro',
           provider: 'BTTV',
+          description: undefined,
+          link: undefined,
         })
       : thirdPartyBadges;
 
@@ -1807,14 +1816,17 @@ const UserProfileCard = ({
                         src={b.src}
                         alt={b.title}
                         className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
-                        onClick={() => openBadgesWithTargetInMain(
-                          // Case-insensitive for the same reason the groups are:
-                          // contributor badges come from Rust as 'bttv', while the
-                          // Pro badge is tagged 'BTTV' to match its loadout key.
-                          providerGroupKey(b.provider) === 'bttv'
-                            ? { tab: 'bttv', query: b.title }
-                            : { tab: 'chat-clients', query: b.title },
-                        )}
+                        // The badge's spotlight card, in this window. Rust
+                        // normalises the provider case ('bttv' contributor
+                        // badges, 'BTTV' Pro) and the loadout id space.
+                        onClick={() => openBadgeSpotlight(thirdPartyBadgeRef({
+                          id: b.id,
+                          title: b.title,
+                          provider: b.provider,
+                          description: b.description,
+                          image4x: b.src,
+                          link: b.link,
+                        }))}
                         onError={e => { e.currentTarget.style.display = 'none'; }}
                       />
                     </Tooltip>
@@ -1848,14 +1860,13 @@ const UserProfileCard = ({
                       {streamNookUserNumber !== null && (
                         <StreamNookBadge userId={cardMemberId} className="w-5 h-5 inline-block object-contain" />
                       )}
-                      {inactiveOwnedSlugs.map(({ slug, cosmetic, asset }) => (
+                      {inactiveOwnedSlugs.map(({ slug, cosmetic }) => (
                         <Tooltip key={`sn-${slug}`} content={cosmetic.name} side="top">
-                          <img
-                            src={asset}
-                            alt={cosmetic.name}
+                          <CosmeticArt
+                            cosmetic={cosmetic}
+                            chatSize
                             className="w-5 h-5 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
-                            draggable={false}
-                            onClick={openBadgesOnStreamNookInMain}
+                            onClick={() => openBadgesOnStreamNookInMain()}
                           />
                         </Tooltip>
                       ))}
@@ -2606,34 +2617,19 @@ const UserProfileCard = ({
                     <Tooltip key={action.label} content={action.title} side="top">
                       <button
                         onClick={async () => {
-                          try {
-                            const { invoke } = await import('@tauri-apps/api/core');
-                            const args = { channel: propChannelName, targetChannelId: userId };
-                            if (action.kind === 'unban') {
-                              await invoke('youtube_unban_user', args);
-                            } else {
-                              await invoke('youtube_ban_user', {
-                                ...args,
-                                durationSeconds: action.kind === 'timeout' ? 300 : null,
-                              });
-                            }
-                            useAppStore
-                              .getState()
-                              .addToast(
-                                action.kind === 'unban'
-                                  ? `${displayName || login} can chat again`
-                                  : action.kind === 'timeout'
-                                    ? `Timed out ${displayName || login}`
-                                    : `Hid ${displayName || login} from chat`,
-                                'success',
-                              );
-                            onClose();
-                          } catch (err) {
-                            Logger.error('[UserProfileCard] YouTube mod action failed:', err);
-                            useAppStore
-                              .getState()
-                              .addToast(`Couldn't ${action.label.toLowerCase()} ${displayName || login}`, 'error');
-                          }
+                          const done = await moderateWithToast({
+                            provider: 'youtube',
+                            channel: propChannelName,
+                            targetUserId: userId,
+                            targetName: displayName || login,
+                            action:
+                              action.kind === 'timeout'
+                                ? { kind: 'timeout', seconds: 300 }
+                                : action.kind === 'ban'
+                                  ? { kind: 'ban' }
+                                  : { kind: 'unban' },
+                          });
+                          if (done) onClose();
                         }}
                         className={`w-full py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white rounded flex items-center justify-center transition-colors border ${
                           action.kind === 'ban'
@@ -2669,39 +2665,19 @@ const UserProfileCard = ({
                     <Tooltip key={action.label} content={action.title} side="top">
                       <button
                         onClick={async () => {
-                          try {
-                            const { invoke } = await import('@tauri-apps/api/core');
-                            const ids = {
-                              broadcasterUserId: Number(broadcasterId),
-                              targetUserId: Number(userId),
-                            };
-                            if (!Number.isFinite(ids.broadcasterUserId) || !Number.isFinite(ids.targetUserId)) {
-                              useAppStore.getState().addToast('Kick did not give us an id for that user', 'error');
-                              return;
-                            }
-                            if (action.minutes === undefined) {
-                              await invoke('kick_unban_user', ids);
-                              useAppStore.getState().addToast(`Lifted the ban on ${login}`, 'success');
-                            } else {
-                              await invoke('kick_ban_user', {
-                                ...ids,
-                                durationMinutes: action.minutes,
-                                reason: null,
-                              });
-                              useAppStore
-                                .getState()
-                                .addToast(
-                                  action.minutes === null
-                                    ? `Banned ${login}`
-                                    : `Timed out ${login} for ${action.label}`,
-                                  'success',
-                                );
-                            }
-                            onClose();
-                          } catch (err) {
-                            Logger.error('[UserProfileCard] Kick mod action failed:', err);
-                            useAppStore.getState().addToast(`Couldn't ${action.label.toLowerCase()} ${login}`, 'error');
-                          }
+                          const done = await moderateWithToast({
+                            provider: 'kick',
+                            broadcasterId,
+                            targetUserId: userId,
+                            targetName: login,
+                            action:
+                              action.minutes === undefined
+                                ? { kind: 'unban' }
+                                : action.minutes === null
+                                  ? { kind: 'ban' }
+                                  : { kind: 'timeout', seconds: action.minutes * 60 },
+                          });
+                          if (done) onClose();
                         }}
                         className={`w-full py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white rounded flex items-center justify-center transition-colors border ${
                           action.danger
@@ -2737,13 +2713,20 @@ const UserProfileCard = ({
                     <button
                       onClick={async () => {
                         if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 1 Purge`); onClose(); return; }
+                        // A 1-second timeout is how Twitch clears someone's
+                        // messages, so the words say purge rather than timeout.
                         try {
-                          const { invoke } = await import('@tauri-apps/api/core');
-                          await invoke('ban_user', { broadcasterId, targetUserId: userId, duration: 1, reason: 'Purge' });
+                          await moderateChatter({
+                            broadcasterId,
+                            targetUserId: userId,
+                            targetName: login,
+                            action: { kind: 'timeout', seconds: 1 },
+                            reason: 'Purge',
+                          });
                           useAppStore.getState().addToast(`Purged messages for ${login}`, 'success');
                         } catch (err) {
                           Logger.error('[UserProfileCard] Failed to purge:', err);
-                          useAppStore.getState().addToast('Failed to purge user', 'error');
+                          useAppStore.getState().addToast(String(err), 'error');
                         }
                       }}
                       className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/20 border hover:border-warning/30 rounded flex items-center justify-center transition-colors"
@@ -2755,14 +2738,12 @@ const UserProfileCard = ({
                     <button
                       onClick={async () => {
                         if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 600 ${defaultBanReason}`); onClose(); return; }
-                        try {
-                          const { invoke } = await import('@tauri-apps/api/core');
-                          await invoke('ban_user', { broadcasterId, targetUserId: userId, duration: 600, reason: null });
-                          useAppStore.getState().addToast(`Timed out ${login} for 10m`, 'success');
-                        } catch (err) {
-                          Logger.error('[UserProfileCard] Failed to timeout:', err);
-                          useAppStore.getState().addToast('Failed to timeout user', 'error');
-                        }
+                        await moderateWithToast({
+                          broadcasterId,
+                          targetUserId: userId,
+                          targetName: login,
+                          action: { kind: 'timeout', seconds: 600 },
+                        });
                       }}
                       className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/20 border hover:border-yellow-500/30 rounded flex items-center justify-center transition-colors"
                     >
@@ -2773,14 +2754,12 @@ const UserProfileCard = ({
                     <button
                       onClick={async () => {
                         if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 86400 ${defaultBanReason}`); onClose(); return; }
-                        try {
-                          const { invoke } = await import('@tauri-apps/api/core');
-                          await invoke('ban_user', { broadcasterId, targetUserId: userId, duration: 86400, reason: null });
-                          useAppStore.getState().addToast(`Timed out ${login} for 24h`, 'success');
-                        } catch (err) {
-                          Logger.error('[UserProfileCard] Failed to timeout:', err);
-                          useAppStore.getState().addToast('Failed to timeout user', 'error');
-                        }
+                        await moderateWithToast({
+                          broadcasterId,
+                          targetUserId: userId,
+                          targetName: login,
+                          action: { kind: 'timeout', seconds: 86400 },
+                        });
                       }}
                       className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/25 border hover:border-warning/35 rounded flex items-center justify-center transition-colors"
                     >
@@ -2792,15 +2771,13 @@ const UserProfileCard = ({
                       onClick={async () => {
                         if (onPreFillCommand) { onPreFillCommand(`/ban ${login} ${defaultBanReason}`); onClose(); return; }
                         if (window.confirm(`Are you sure you want to permanently ban ${login}?`)) {
-                          try {
-                            const { invoke } = await import('@tauri-apps/api/core');
-                            await invoke('ban_user', { broadcasterId, targetUserId: userId, duration: null, reason: null });
-                            useAppStore.getState().addToast(`Banned ${login}`, 'success');
-                            onClose();
-                          } catch (err) {
-                            Logger.error('[UserProfileCard] Failed to ban:', err);
-                            useAppStore.getState().addToast('Failed to ban user', 'error');
-                          }
+                          const done = await moderateWithToast({
+                            broadcasterId,
+                            targetUserId: userId,
+                            targetName: login,
+                            action: { kind: 'ban' },
+                          });
+                          if (done) onClose();
                         }
                       }}
                       className="py-1.5 text-xs font-semibold text-red-200 bg-red-900/50 hover:bg-red-600 border border-red-500/30 rounded flex items-center justify-center transition-colors shadow-lg"
@@ -2837,14 +2814,12 @@ const UserProfileCard = ({
                   <button
                     onClick={async () => {
                       if (window.confirm(`Unban ${login}?`)) {
-                        try {
-                          const { invoke } = await import('@tauri-apps/api/core');
-                          await invoke('unban_user', { broadcasterId, targetUserId: userId });
-                          useAppStore.getState().addToast(`Unbanned ${login}`, 'success');
-                        } catch (err) {
-                          Logger.error('[UserProfileCard] Failed to unban:', err);
-                          useAppStore.getState().addToast('Failed to unban user', 'error');
-                        }
+                        await moderateWithToast({
+                          broadcasterId,
+                          targetUserId: userId,
+                          targetName: login,
+                          action: { kind: 'unban' },
+                        });
                       }
                     }}
                     className="text-[10px] font-medium text-textSecondary hover:text-white hover:underline cursor-pointer"

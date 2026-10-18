@@ -26,8 +26,8 @@ export interface CommandDefinition {
 
 export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   // Everyone
-  { name: 'mods', usage: '/mods', description: 'Display a list of all chat moderators', category: 'Everyone' },
-  { name: 'vips', usage: '/vips', description: 'Display a list of VIPs for this channel', category: 'Everyone' },
+  { name: 'mods', usage: '/mods', description: 'Display a list of all chat moderators', category: 'Everyone' , local: true },
+  { name: 'vips', usage: '/vips', description: 'Display a list of VIPs for this channel', category: 'Everyone' , local: true },
   { name: 'color', usage: '/color <colorname|hex>', description: 'Change the color of your username', category: 'Everyone' , examples: ['/color SpringGreen', '/color #ff69b4'], details: 'Twitch accepts the named colors from its own list, and Turbo or Prime users can use any hex value.' },
   { name: 'block', usage: '/block <username>', description: 'Block all messages from a specific user', category: 'Everyone' , examples: ['/block someuser'], details: 'This is a Twitch block, so it applies on twitch.tv too. Use /ignore for a StreamNook-only hide.' },
   { name: 'unblock', usage: '/unblock <username>', description: 'Remove user from block list', category: 'Everyone' },

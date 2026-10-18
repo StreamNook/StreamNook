@@ -57,6 +57,10 @@ import {
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchGlyph, TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { Logger } from '../../utils/logger';
+import { formatShortCount } from '../../utils/streamStats';
+import { fitHeaderDensity } from '../chat/fitHeaderDensity';
+import { memberNumberName } from '../../utils/memberNumberNames';
+import { isPalindrome, outOfReachAccolades } from '../../utils/accoladeReach';
 import {
   getUserStats,
   getAccolades,
@@ -174,6 +178,10 @@ const StatTile = ({
   const display = value !== undefined ? value : animated.toLocaleString();
   const accentRgb = useContext(ProfileAccentContext);
   const compact = useContext(ProfileCompactContext);
+  // A count too wide for its tile switches to its short form ("123.5M")
+  // instead of being cut with an ellipsis (globals.css `.sn-stat-value`).
+  const [valueEl, setValueEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => (valueEl ? fitHeaderDensity(valueEl, 1, 0) : undefined), [valueEl]);
   const inner = (
     // glass-tile = display depth (top-lit material + layering), NOT a button.
     <div
@@ -188,7 +196,17 @@ const StatTile = ({
           {label}
         </span>
       </div>
-      <div className={`truncate font-bold tabular-nums text-textPrimary ${compact ? 'text-base' : 'text-2xl'}`}>{display}</div>
+      {value !== undefined ? (
+        <div className={`truncate font-bold tabular-nums text-textPrimary ${compact ? 'text-base' : 'text-2xl'}`}>{display}</div>
+      ) : (
+        <div
+          ref={setValueEl}
+          className={`sn-stat-value truncate font-bold tabular-nums text-textPrimary ${compact ? 'text-base' : 'text-2xl'}`}
+        >
+          <span className="sn-stat-full">{display}</span>
+          <span className="sn-stat-short">{formatShortCount(animated)}</span>
+        </div>
+      )}
       {caption && <div className={`leading-snug text-textSecondary ${compact ? 'mt-0.5 text-[10px]' : 'mt-1 text-[11px]'}`}>{caption}</div>}
     </div>
   );
@@ -492,11 +510,9 @@ const ProfileOverview = ({
   const drops = dropsClaimed ?? 0;
   const years = age?.years ?? 0;
   const memberNo = streamNookUserNumber;
-  const isPalindrome = (n: number | null): boolean => {
-    if (n === null || n < 10) return false;
-    const s = String(n);
-    return s === s.split('').reverse().join('');
-  };
+  const memberName = memberNumberName(memberNo);
+  // Accolades this member can never earn now stay off the wall unless held.
+  const outOfReach = outOfReachAccolades(memberNo);
 
   const baseAccolades: Accolade[] = [
     { id: 'chatterbox', label: 'Chatterbox', icon: MessageCircle, grad: 'linear-gradient(140deg, #6aa9ff, #3b6fd4)', earned: messages >= 1000, hint: `Messages sent: ${messages.toLocaleString()} / 1,000` },
@@ -517,13 +533,16 @@ const ProfileOverview = ({
     { id: 'ancient', label: 'Ancient One', icon: Hourglass, grad: 'linear-gradient(140deg, #a855f7, #7e22ce)', earned: years >= 10, hint: `Years on Twitch: ${years} / 10` },
     { id: 'og', label: 'OG', icon: Crown, grad: 'linear-gradient(140deg, #fbbf24, #d97706)', earned: streamNookUserNumber !== null && streamNookUserNumber <= 100, hint: 'Be one of the first 100 StreamNook members' },
   ].map((a) => ({ ...a, earned: a.earned || earnedAccolades.has(a.id) }));
-  const allBaseEarned = baseAccolades.every((a) => a.earned);
+  // Counts only the base accolades this member can still earn, so OG's
+  // first-100 cut never puts Completionist out of reach.
+  const allBaseEarned = baseAccolades.every((a) => a.earned || outOfReach.has(a.id));
 
   const secretAccolades: Accolade[] = [
     { id: 'completionist', label: 'Completionist', icon: Star, grad: 'linear-gradient(140deg, #f472b6, #db2777)', secret: true, earned: allBaseEarned, hint: "When there's nothing else left to earn, this one shows up." },
     { id: 'triple', label: 'Triple Threat', icon: Layers, grad: 'linear-gradient(140deg, #34d399, #0f766e)', secret: true, earned: messages >= 1000 && hours >= 100 && drops >= 25, hint: 'Talk, watch, and collect until all three run deep.' },
     { id: 'palindrome', label: 'Palindrome', icon: Repeat, grad: 'linear-gradient(140deg, #c084fc, #7e22ce)', secret: true, earned: isPalindrome(memberNo), hint: 'A number that reads the same coming and going.' },
-    { id: 'nice', label: 'Nice', icon: Smile, grad: 'linear-gradient(140deg, #facc15, #ca8a04)', secret: true, earned: memberNo !== null && [69, 420, 666, 777, 1337].includes(memberNo), hint: 'Land on a number the internet never lets you forget.' },
+    // One accolade for every meme number; the label is that number's own name.
+    { id: 'nice', label: memberName ?? 'Nice', icon: Smile, grad: 'linear-gradient(140deg, #facc15, #ca8a04)', secret: true, earned: memberName !== null, hint: 'Land on a number the internet never lets you forget.' },
     { id: RESTLESS_ACCOLADE_ID, label: 'Restless', icon: BellRing, grad: 'linear-gradient(140deg, #818cf8, #4338ca)', secret: true, earned: earnedAccolades.has(RESTLESS_ACCOLADE_ID), hint: "The test notification really wishes you'd stop." },
     { id: GRAND_FINALE_ACCOLADE_ID, label: 'Grand Finale', icon: Sparkles, grad: 'linear-gradient(140deg, #fcd34d, #dc3d55)', secret: true, earned: earnedAccolades.has(GRAND_FINALE_ACCOLADE_ID), hint: 'Stay a while under the anniversary sky.' },
     // The offline room's moments (utils/offlineAccolades.ts grants them).
@@ -600,7 +619,11 @@ const ProfileOverview = ({
         : 'Open StreamNook around the Fourth of July, 2026 (July 3 to 5)',
     },
   ];
-  const allAccolades: Accolade[] = [...baseAccolades, ...secretAccolades, ...seasonalAccolades, ...eventAccolades];
+  // An accolade nobody can earn any more (a member number that does not
+  // qualify, an event that is over) is only listed for those who hold it.
+  const allAccolades: Accolade[] = [...baseAccolades, ...secretAccolades, ...seasonalAccolades, ...eventAccolades].filter(
+    (a) => a.earned || !outOfReach.has(a.id),
+  );
   // On someone else's PUBLIC profile, hide locked SECRET accolades entirely: a
   // viewer shouldn't see placeholders for hidden achievements the member hasn't
   // earned, and must never be able to read a how-to off them. Your own profile
