@@ -249,25 +249,14 @@ body:has(.sn-mobile) .glass-input:focus {
    is a chat that repaints on every message, so the blur was recomputed on
    every frame for the whole watch. A firmer tint carries the legibility the
    blur was providing: at 90% the chat's words still showed through the card,
-   so it is 97%, and solid at Glassiness 0. */
+   so it is 97%, and solid at Glassiness 0. The tint is only as solid as the
+   page background it mixes, which a custom theme can make see-through; on a
+   phone applyTheme flattens that background over black (phoneFloors), so this
+   stays solid on every theme and keeps the theme's own popover light. */
 .sn-mobile .sn-popover--static {
   --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-}
-
-/* The tint is only as solid as the theme's background color, and that color
-   can carry alpha (on the phone the You card's rows read straight through the
-   picture note at a 97% tint). So the tint is painted over an opaque base: the
-   theme's color is what shows, and the black under it only fills what that
-   color leaves see-through. Chained to beat the themes' own popover light. */
-.sn-mobile .sn-popover.sn-popover--static {
-  background:
-    linear-gradient(
-      color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent),
-      color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent)
-    ),
-    #000;
 }
 
 /* One menu for the phone: the platform menu, the badge sort and any other
