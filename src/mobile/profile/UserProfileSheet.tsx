@@ -99,22 +99,36 @@ const BadgeGridPlaceholder: React.FC = () => (
   </div>
 );
 
+/** Two rows of the sheet's eight-across grid; a group this size or smaller
+ *  shows whole. */
+const COLLAPSED_BADGES = 16;
+
+/** One group: its first two rows, then "Show all N" opening the rest in place
+ *  with "Show fewer" at the end. Rust serves every badge; the cap is only how
+ *  many draw. A tapped badge's panel (`children`) opens under its own group,
+ *  so the rows it came from stay in view. */
 const BadgeGrid: React.FC<{
   title: string;
   /** Only the badges whose art has not failed; the caller drops a group once
    *  this is empty, so a heading never sits alone over nothing. */
   badges: ProfileBadge[];
+  open: boolean;
+  onToggle: () => void;
   onPick: (b: ProfileBadge) => void;
   onImageFailed: (b: ProfileBadge) => void;
-}> = ({ title, badges, onPick, onImageFailed }) => {
+  children?: React.ReactNode;
+}> = ({ title, badges, open, onToggle, onPick, onImageFailed, children }) => {
   if (!badges.length) return null;
-  // A platform's group sits under its real mark; "Chat clients" keeps its words.
+  // A platform's group sits under its real mark; "Relics" and "Chat clients"
+  // keep their words.
   const brand = brandFor(title);
+  const capped = badges.length > COLLAPSED_BADGES;
+  const shown = capped && !open ? badges.slice(0, COLLAPSED_BADGES) : badges;
   return (
     <div className="mt-5">
       <SectionHeader title={brand ? 'Badges' : title} brand={brand} detail={String(badges.length)} className="mb-2" />
       <div className="flex flex-wrap gap-2">
-        {badges.map((b, i) => (
+        {shown.map((b, i) => (
           <button
             key={`${b.id}-${i}`}
             onClick={() => onPick(b)}
@@ -130,6 +144,40 @@ const BadgeGrid: React.FC<{
             />
           </button>
         ))}
+      </div>
+      {capped && (
+        // Rewards' control: quiet accent words 8 px under the rows, on a 44 px
+        // target that reaches into the gap below without taking layout room.
+        <button
+          type="button"
+          onClick={onToggle}
+          className="relative block w-full -mb-[22px] pt-2 pb-[22px] text-left text-[12px] leading-[14px] font-medium text-accent"
+        >
+          {open ? 'Show fewer' : `Show all ${badges.length}`}
+        </button>
+      )}
+      {children}
+    </div>
+  );
+};
+
+/** Tapping a badge names it here rather than in a tooltip, which does nothing
+ *  under a thumb. */
+const PickedPanel: React.FC<{ badge: ProfileBadge }> = ({ badge }) => {
+  const brand = brandFor(badge.provider);
+  return (
+    <div className="mt-3 glass-panel p-3 flex items-start gap-2.5">
+      <FallbackImage src={badge.url} fallbackUrls={badge.fallbacks} alt="" className="w-7 h-7 object-contain shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[14px] font-semibold text-textPrimary truncate">{badge.title || badge.name}</span>
+          {brand ? (
+            <BrandMark brand={brand} size={brand === 'seventv' ? 9 : 12} />
+          ) : (
+            badge.provider && <span className="text-[12.5px] text-textMuted shrink-0">{badge.provider}</span>
+          )}
+        </div>
+        {badge.description && <div className="text-[12.5px] text-textSecondary mt-0.5">{badge.description}</div>}
       </div>
     </div>
   );
@@ -174,7 +222,20 @@ const ProfileBody: React.FC<{
 }> = ({ user, open, channelId, channelName, onClose }) => {
   // Rust's answer: its cached copy first (a reopen paints at once), then fresh.
   const [sheet, setSheet] = useState<ProfileSheetView | null>(null);
-  const [picked, setPicked] = useState<ProfileBadge | null>(null);
+  // The badge whose name shows, and the group it was tapped in.
+  const [picked, setPicked] = useState<{ badge: ProfileBadge; group: string } | null>(null);
+  // Groups opened past their first two rows.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // The body stays mounted through the slide-out, so a reopen of the same
+  // person starts every group collapsed again here (adjust-state-in-render).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setExpanded(new Set());
+      setPicked(null);
+    }
+  }
   // null until the store has answered, so "nothing yet" is never painted
   // over a list that is still on its way.
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
@@ -289,15 +350,38 @@ const ProfileBody: React.FC<{
   const adjustNameColor = useNameColorAdjust();
   const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
   // A member's StreamNook group can carry art the app ships
-  // (`streamnook-house:<slug>`), drawn from the bundle.
+  // (`streamnook-house:<slug>`), drawn from the bundle; failed art drops out.
+  const drawable = (list: ProfileBadge[]) =>
+    list.map((b) => ({ ...b, url: badgeArt(b.url) })).filter((b) => !failedImages.has(badgeImageKey(b)));
   const groups = (sheet?.groups ?? [])
-    .map((group) => ({
-      ...group,
-      badges: group.badges
-        .map((b) => ({ ...b, url: badgeArt(b.url) }))
-        .filter((b) => !failedImages.has(badgeImageKey(b))),
-    }))
+    .map((group) => ({ ...group, badges: drawable(group.badges) }))
     .filter((group) => group.badges.length > 0);
+  const relics = drawable(sheet?.member_profile?.relics ?? []);
+  // Closing a group drops a picked badge it no longer shows.
+  const toggleGroup = (title: string, badges: ProfileBadge[]) => {
+    const next = new Set(expanded);
+    if (next.delete(title)) {
+      if (picked?.group === title && !badges.slice(0, COLLAPSED_BADGES).some((b) => b.id === picked.badge.id)) {
+        setPicked(null);
+      }
+    } else {
+      next.add(title);
+    }
+    setExpanded(next);
+  };
+  const grid = (title: string, badges: ProfileBadge[]) => (
+    <BadgeGrid
+      key={title}
+      title={title}
+      badges={badges}
+      open={expanded.has(title)}
+      onToggle={() => toggleGroup(title, badges)}
+      onPick={(badge) => setPicked({ badge, group: title })}
+      onImageFailed={markImageFailed}
+    >
+      {picked?.group === title && <PickedPanel badge={picked.badge} />}
+    </BadgeGrid>
+  );
   // Your own picture carries no marks, here as on your card.
   const ownId = useAppStore((s) => s.currentUser?.user_id);
   const medal = !!sheet?.streamnook && !(ownId && ownId === (sheet?.user_id || user.userId));
@@ -308,7 +392,6 @@ const ProfileBody: React.FC<{
     (!sheet && user.username.toLowerCase() !== user.displayName.toLowerCase() ? user.username : null);
   // What they have on, in words: the Atmosphere, then the paint.
   const wearing = [sheet?.atmosphere?.name, paint?.name ? `${paint.name} paint` : null].filter(Boolean).join(' · ');
-  const pickedBrand = brandFor(picked?.provider);
 
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
@@ -356,52 +439,24 @@ const ProfileBody: React.FC<{
           </div>
         )}
 
-        {/* Tapping a badge names it here rather than in a tooltip, which does
-            nothing under a thumb. */}
-        {picked && (
-          <div className="mt-3 glass-panel p-3 flex items-start gap-2.5">
-            <FallbackImage
-              src={picked.url}
-              fallbackUrls={picked.fallbacks}
-              alt=""
-              className="w-7 h-7 object-contain shrink-0"
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[14px] font-semibold text-textPrimary truncate">
-                  {picked.title || picked.name}
-                </span>
-                {pickedBrand ? (
-                  <BrandMark brand={pickedBrand} size={pickedBrand === 'seventv' ? 9 : 12} />
-                ) : (
-                  picked.provider && <span className="text-[12.5px] text-textMuted shrink-0">{picked.provider}</span>
-                )}
-              </div>
-              {picked.description && (
-                <div className="text-[12.5px] text-textSecondary mt-0.5">{picked.description}</div>
-              )}
-            </div>
-          </div>
+        {/* A member's StreamNook block comes first: their relics, then the
+            overview, top emotes and accolades. */}
+        {sheet?.member_profile && (
+          <>
+            {grid('Relics', relics)}
+            <MemberSections profile={sheet.member_profile} />
+          </>
         )}
 
+        {/* Then every badge they have, by platform, two rows each until opened. */}
         {!sheet && <BadgeGridPlaceholder />}
-        {groups.map((group) => (
-          <BadgeGrid
-            key={group.title}
-            title={group.title}
-            badges={group.badges}
-            onPick={setPicked}
-            onImageFailed={markImageFailed}
-          />
-        ))}
+        {groups.map((group) => grid(group.title, group.badges))}
 
         {/* A member always has a StreamNook badge (it is the medal on their
             picture, and their StreamNook group), so the line is for others. */}
         {sheet && groups.length === 0 && !sheet.streamnook && (
           <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
-
-        {sheet?.member_profile && <MemberSections profile={sheet.member_profile} />}
 
         {/* Chat order (oldest first, newest at the bottom), the way the eye
             already reads the room. Plain text: the point is what was said,
