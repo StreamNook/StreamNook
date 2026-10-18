@@ -64,6 +64,9 @@ struct ChatsScreen: View {
         model.settingsStore.bool("chats_keep_screen_on", true) && !rooms.tabs.isEmpty && model.signedIn
     }
 
+    /// The strip's own parts: the same 40 pt glass as the rooms capsule, quieter than the room it
+    /// serves (secondary text, no red; the room's face already says live). Each keeps a 44 pt touch
+    /// area around its 40 pt shape, so the row shares one top and bottom line.
     @ViewBuilder
     private var controls: some View {
         HStack(spacing: 6) {
@@ -71,21 +74,21 @@ struct ChatsScreen: View {
                 Button {
                     model.startWatching(Self.stream(tab))
                 } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(SN.live).frame(width: 6, height: 6)
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill").font(.system(size: 11, weight: .semibold))
+                            .offset(x: 0.5)
                         if let viewers = tab.viewerCount {
                             Text(viewers.formatted(.number.notation(.compactName)))
-                                .font(.sn(12, 600))
+                                .font(.sn(12, 500))
                                 .monospacedDigit()
                         }
-                        Image(systemName: "play.fill").font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundStyle(SN.textPrimary)
-                    .padding(.leading, 10)
-                    .padding(.trailing, 12)
-                    .frame(height: 32)
-                    .background(Capsule().fill(SN.live.opacity(0.15)))
-                    .contentShape(Capsule())
+                    .foregroundStyle(SN.textSecondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 40)
+                    .snGlass(Capsule())
+                    .frame(height: 44)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Watch \(tab.label)")
@@ -96,9 +99,10 @@ struct ChatsScreen: View {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(SN.textSecondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 40, height: 40)
                     .snGlass(Circle())
-                    .contentShape(Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Add a chat")
