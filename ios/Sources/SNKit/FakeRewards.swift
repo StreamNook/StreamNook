@@ -202,7 +202,7 @@ public final class FakeRewards: Sendable {
             "connected": true, "query": query, "in_progress": progress, "available": available,
             "earned": earned,
             "no_match": !query.isEmpty && progress.isEmpty && available.isEmpty && earned.isEmpty
-                ? "Nothing matches \"\(query)\"." : "",
+                ? "Nothing matches “\(query)”." : "",
             "in_progress_empty": query.isEmpty
                 ? "No drop campaigns in progress. Watch a drops-enabled stream to start earning."
                 : "No drops in progress match that search.",

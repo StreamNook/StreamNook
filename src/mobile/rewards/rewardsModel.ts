@@ -59,7 +59,7 @@ export interface RewardsDrops {
   available: DropsGroup[];
   earned: { id: string; name: string; image: string; game: string | null }[];
   in_progress_empty: string;
-  /** `Nothing matches "rust".` when a search left every list empty (no
+  /** `Nothing matches “rust”.` when a search left every list empty (no
    *  sections are drawn then); empty otherwise. */
   no_match: string;
 }
