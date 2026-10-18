@@ -65,6 +65,12 @@ extension View {
 private struct FittedSheet: ViewModifier {
     let maxFraction: CGFloat
     @State private var height: CGFloat?
+    /// The content has scrolled under the handle.
+    @State private var scrolled = false
+
+    /// How far content fades out under the handle once it scrolls there, so nothing runs into the
+    /// grabber with a hard edge. At rest there is no fade: a sheet's own top padding clears it.
+    static let edgeFade: CGFloat = 24
 
     func body(content: Content) -> some View {
         let cap = Screen.height * maxFraction
@@ -74,6 +80,17 @@ private struct FittedSheet: ViewModifier {
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, now in
+            scrolled = now
+        }
+        .mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.edgeFade)
+                Color.black
+            }
+            .animation(.easeOut(duration: 0.15), value: scrolled)
+        }
         .presentationDetents([.height(min((height ?? cap) + 16, cap))])
         .presentationDragIndicator(.visible)
     }

@@ -143,11 +143,12 @@ struct ChatSettingsPanel: View {
                 }
             }
             ToggleRow(title: "Readable colors", path: "chat_design.name_color_adjustment",
-                      detail: "Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them.",
+                      detail: "Nudges a chatter's color lighter or darker until it stands out from your theme.",
+                      help: "Lighter on a dark theme, darker on a light one. The hue stays theirs. Off shows colors exactly as they set them.",
                       write: { ["chat_design.name_color_adjustment": $0 ? "hsl_loop" : "off"] },
                       isOn: { $0.string("chat_design.name_color_adjustment", "hsl_loop") != "off" })
             ToggleRow(title: "Badges", path: "chat_design.show_badges", fallback: true,
-                      detail: "The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ.",
+                      detail: "The platform's own badges next to names: moderator, subscriber, VIP and the rest.",
                       help: "A channel that uploads its own moderator and VIP badges to FrankerFaceZ shows them in its chat instead of the standard ones. Who is a moderator or VIP still comes from Twitch. Turn it off to see the standard badges everywhere.") {
                 NestedToggle(title: "Custom mod & VIP badges", path: "chat_design.ffz_custom_role_badges", fallback: true, logo: "ffz")
             }
@@ -272,8 +273,8 @@ struct ChatSettingsPanel: View {
             ToggleRow(title: "Spellcheck", path: "chat_input.spellcheck_enabled", fallback: true,
                       detail: "Underlines misspelled words as you type and offers corrections when you tap one. Emotes, chatters, commands and links are left alone.")
             ToggleRow(title: "Chat modes", path: "chat_input.show_room_modes", fallback: true,
-                      detail: "Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type.",
-                      help: "Tap the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
+                      detail: "Shows when a channel limits who can chat, like emote-only or slow mode.",
+                      help: "The message box names the mode and keeps a small icon for it while you type. Tap the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.")
             ToggleRow(title: "Hide placeholder", path: "chat_input.hide_placeholder",
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
@@ -430,9 +431,9 @@ struct SettingTextField: View {
         })
         Group {
             if multiline {
-                TextField(placeholder, text: shown, axis: .vertical).lineLimit(3...6)
+                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted), axis: .vertical).lineLimit(3...6)
             } else {
-                TextField(placeholder, text: shown).lineLimit(1)
+                TextField("", text: shown, prompt: Text(placeholder).foregroundStyle(SN.textMuted)).lineLimit(1)
             }
         }
         .font(monospaced ? .system(size: 13, design: .monospaced) : .sn(13))

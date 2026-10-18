@@ -1355,21 +1355,19 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                     .map(|a| a.iter().filter_map(|m| m["login"].as_str()).filter(|l| !l.is_empty()).map(str::to_string).collect())
                     .unwrap_or_default()
             };
-            if c.command == "mods" {
-                let mods = names("moderators");
-                o.say(if mods.is_empty() {
-                    "There are no moderators of this channel.".to_string()
-                } else {
-                    format!("The moderators of this channel are: {}", mods.join(", "))
-                });
-            } else {
-                let vips = names("vips");
-                o.say(if vips.is_empty() {
-                    "There are no VIPs of this channel.".to_string()
-                } else {
-                    format!("The VIPs of this channel are: {}", vips.join(", "))
-                });
+            // A list Twitch would not give is said as such, never as "none".
+            let (key, error_key) = if c.command == "mods" { ("moderators", "moderators_error") } else { ("vips", "vips_error") };
+            if let Some(e) = chatters[error_key].as_str() {
+                o.err(e);
+                return Ok(Flow::Done);
             }
+            let list = names(key);
+            o.say(match (c.command == "mods", list.is_empty()) {
+                (true, true) => "There are no moderators of this channel.".to_string(),
+                (true, false) => format!("The moderators of this channel are: {}", list.join(", ")),
+                (false, true) => "There are no VIPs of this channel.".to_string(),
+                (false, false) => format!("The VIPs of this channel are: {}", list.join(", ")),
+            });
         }
         "monitor" | "unmonitor" | "restrict" | "unrestrict" => {
             if c.args.is_empty() {

@@ -374,8 +374,8 @@ struct CachePanel: View {
     var body: some View {
         SettingsBlock(title: "Cache", detail: "Keeps emotes, badges, and channel details on disk so chat loads without fetching them again. Come here to check how much is stored or start fresh.") {
             ToggleRow(title: "Disk cache", path: "cache.enabled", fallback: true,
-                      detail: "Loads emotes and badges from disk: a copy is stored on this iPhone after the first download so later channel loads are near instant. Off means every launch fetches them again.",
-                      help: "Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.")
+                      detail: "Keeps emotes and badges on this iPhone so channels load near instantly.",
+                      help: "A copy is stored after the first download; off fetches them again on every launch. Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.")
             SliderRow(title: { "Refresh after: \(Int($0)) days" }, path: "cache.expiry_days", range: 1...30, step: 1, fallback: 7,
                       detail: "Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own.",
                       help: "1 to 30 days, 7 by default. A shorter window keeps you current at the cost of more downloads; a longer one saves bandwidth.",
