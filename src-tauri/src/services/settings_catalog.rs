@@ -28,7 +28,19 @@ pub struct CatalogRow {
     /// hit can say where it lives ("Size" under "GIFs" is not the emote "Size").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<String>,
+    /// Not drawn on the iPhone, where it does nothing yet: search and the
+    /// changed review skip it there. Its saved value is kept, and Android and
+    /// desktop still show it.
+    #[serde(default, skip_serializing)]
+    pub hidden_on_ios: bool,
 }
+
+/// Whether a row is drawn on this platform's settings pages.
+fn shown(row: &CatalogRow, ios: bool) -> bool {
+    !(ios && row.hidden_on_ios)
+}
+
+const IOS: bool = cfg!(target_os = "ios");
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -140,10 +152,15 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
 
 /// The rows that answer `query`, best first (at most `limit`).
 pub fn search(query: &str, limit: usize) -> Vec<CatalogRow> {
+    search_on(query, limit, IOS)
+}
+
+fn search_on(query: &str, limit: usize, ios: bool) -> Vec<CatalogRow> {
     let query = normalize(query);
     let mut hits: Vec<(u32, usize, &CatalogRow)> = rows()
         .iter()
         .enumerate()
+        .filter(|(_, row)| shown(row, ios))
         .filter_map(|(i, row)| {
             let s = score(row, &query);
             (s > 0).then_some((s, i, row))
@@ -162,10 +179,14 @@ fn row_changed(row: &CatalogRow, changed: &[String]) -> bool {
 
 /// The rows whose settings differ from a fresh install, in page order.
 pub fn changed_rows(changed: &[String]) -> Vec<CatalogRow> {
+    changed_rows_on(changed, IOS)
+}
+
+fn changed_rows_on(changed: &[String], ios: bool) -> Vec<CatalogRow> {
     let mut rows: Vec<(usize, usize, CatalogRow)> = rows()
         .iter()
         .enumerate()
-        .filter(|(_, row)| row_changed(row, changed))
+        .filter(|(_, row)| shown(row, ios) && row_changed(row, changed))
         .map(|(i, row)| (PAGE_ORDER.iter().position(|p| *p == row.page).unwrap_or(PAGE_ORDER.len()), i, row.clone()))
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -226,5 +247,19 @@ mod tests {
         assert!(t.contains(&"Text size"));
         assert!(t.contains(&"Platforms"));
         assert!(!t.contains(&"Spacing"));
+    }
+
+    #[test]
+    fn rows_hidden_on_the_iphone_stay_for_other_platforms() {
+        assert!(titles(&search_on("scrollbar marks", 5, false)).contains(&"Scrollbar marks"));
+        assert!(!titles(&search_on("scrollbar marks", 5, true)).contains(&"Scrollbar marks"));
+        let changed = ["chat_blend.platforms.kick".to_string(), "chat_design.font_size".to_string()];
+        assert!(titles(&changed_rows_on(&changed, false)).contains(&"Platforms"));
+        let ios = changed_rows_on(&changed, true);
+        assert!(!titles(&ios).contains(&"Platforms"));
+        assert!(titles(&ios).contains(&"Text size"));
+        // The flag never reaches a client.
+        let row = rows().iter().find(|r| r.hidden_on_ios).unwrap();
+        assert!(serde_json::to_value(row).unwrap().get("hidden_on_ios").is_none());
     }
 }

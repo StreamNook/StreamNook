@@ -2,14 +2,20 @@ import CoreText
 import SwiftUI
 import UIKit
 
-/// The interface font. Satoshi is StreamNook's default and ships in the app; "system" is SF Pro.
-/// Font ids the app does not carry yet draw in Satoshi.
+/// The interface font: the face the Font setting names. Satoshi is StreamNook's default; the
+/// desktop's other faces ship too, cut to Latin and the 300 to 700 weights the app draws (all
+/// SIL Open Font License, see Fonts/OFL.txt); "system" is SF Pro. An unknown id draws in Satoshi.
 @MainActor
 enum Typeface {
-    /// Satoshi's variable font, by its PostScript name.
-    private static let satoshi = "SatoshiVariable-Bold"
+    /// Each bundled face: the Font setting's id and its file in Fonts/.
+    private static let files = [
+        "satoshi": "Satoshi-Variable", "twitch": "Inter-Variable", "geist": "Geist-Variable", "manrope": "Manrope-Variable",
+        "outfit": "Outfit-Variable", "space-grotesk": "SpaceGrotesk-Variable", "serif": "Fraunces-Variable",
+    ]
     /// The `wght` axis tag, as CoreText names variation axes.
     private static let weightAxis = 0x7767_6874
+    /// Each registered face's PostScript and family names, read from its file.
+    private static var faces: [String: (name: String, family: String)] = [:]
     private static var cache: [String: Font] = [:]
     private static var registered = false
 
@@ -17,38 +23,47 @@ enum Typeface {
     static func register() {
         guard !registered else { return }
         registered = true
-        guard let url = Bundle.module.url(forResource: "Satoshi-Variable", withExtension: "ttf", subdirectory: "Fonts") else {
-            log.error("Satoshi is missing from the bundle")
-            return
+        for (id, file) in files {
+            guard let url = Bundle.module.url(forResource: file, withExtension: "ttf", subdirectory: "Fonts") else {
+                log.error("\(file, privacy: .public) is missing from the bundle")
+                continue
+            }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+            guard let descriptor = (CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor])?.first,
+                  let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String,
+                  let family = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String else { continue }
+            faces[id] = (name, family)
         }
-        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
     }
 
-    /// The interface font at `size` points and a CSS weight (400 regular to 700 bold).
-    static func font(_ size: CGFloat, _ weight: Int) -> Font {
-        let family = Look.shared.fontID == "system" ? "system" : "satoshi"
-        let key = "\(family)|\(size)|\(weight)"
+    /// The interface font at `size` points and a CSS weight (400 regular to 700 bold), in the
+    /// chosen face or in `face` when given (a font tile drawn in its own face).
+    static func font(_ size: CGFloat, _ weight: Int, face: String? = nil) -> Font {
+        let id = resolved(face ?? Look.shared.fontID)
+        let key = "\(id)|\(size)|\(weight)"
         if let known = cache[key] { return known }
-        let made: Font
-        if family == "system" {
-            made = .system(size: size, weight: Self.systemWeight(weight))
-        } else {
-            made = Font(Self.satoshiFont(size, weight))
-        }
+        let made: Font = id == "system" ? .system(size: size, weight: Self.systemWeight(weight)) : Font(faceFont(id, size, weight))
         cache[key] = made
         return made
     }
 
     static func uiFont(_ size: CGFloat, _ weight: Int) -> UIFont {
-        Look.shared.fontID == "system" ? .systemFont(ofSize: size, weight: uiWeight(weight)) : satoshiFont(size, weight)
+        let id = resolved(Look.shared.fontID)
+        return id == "system" ? .systemFont(ofSize: size, weight: uiWeight(weight)) : faceFont(id, size, weight)
     }
 
-    private static func satoshiFont(_ size: CGFloat, _ weight: Int) -> UIFont {
-        let base = UIFontDescriptor(fontAttributes: [.name: satoshi])
+    private static func resolved(_ id: String?) -> String {
+        guard let id else { return "satoshi" }
+        return id == "system" || faces[id] != nil ? id : "satoshi"
+    }
+
+    private static func faceFont(_ id: String, _ size: CGFloat, _ weight: Int) -> UIFont {
+        guard let face = faces[id] else { return .systemFont(ofSize: size, weight: uiWeight(weight)) }
+        let base = UIFontDescriptor(fontAttributes: [.name: face.name])
         let variation = UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String)
         let descriptor = base.addingAttributes([variation: [weightAxis: max(300, weight)]])
         let font = UIFont(descriptor: descriptor, size: size)
-        return font.fontName.hasPrefix("SatoshiVariable") ? font : .systemFont(ofSize: size, weight: uiWeight(weight))
+        return font.familyName == face.family ? font : .systemFont(ofSize: size, weight: uiWeight(weight))
     }
 
     private static func systemWeight(_ css: Int) -> Font.Weight {

@@ -245,33 +245,7 @@ struct LinkSettings: View {
     @Environment(SettingsStore.self) private var store
 
     var body: some View {
-        let previews = store.bool("chat_design.link_previews", true)
-        let style = !previews ? "off" : store.bool("chat_design.link_preview_keep_link") ? "with_link" : "clean"
-        SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
-            WideRow(title: "Style",
-                    detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
-                    help: "In Clean, press and hold the card to see where it goes. StreamNook fetches the page from your iPhone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
-                    paths: ["chat_design.link_previews", "chat_design.link_preview_keep_link"]) {
-                SettingSegments(choices: [Choice("Off", "off"), Choice("Card + Link", "with_link"), Choice("Clean", "clean")],
-                                selected: style, accessibility: "Link style") { value in
-                    Task {
-                        switch value {
-                        case "off": await store.set("chat_design.link_previews", false)
-                        case "with_link": await store.set(["chat_design.link_previews": true, "chat_design.link_preview_keep_link": true])
-                        default: await store.set(["chat_design.link_previews": true, "chat_design.link_preview_keep_link": false])
-                        }
-                    }
-                }
-                .padding(.top, 12)
-            } nested: {
-                if previews {
-                    NestedSettings {
-                        NestedLine(title: "Trusted sites", stacked: true) {
-                            TrustedSites()
-                        }
-                    }
-                }
-            }
+        SettingsBlock(title: "Links", detail: "How links in chat look.") {
             ToggleRow(title: "Short links", path: "chat_design.shorten_links", fallback: true,
                       detail: "Shows each link as a compact label, the site plus a short path, instead of the full raw URL.",
                       help: "The full link still opens on tap and shows when you press and hold.")
@@ -282,60 +256,6 @@ struct LinkSettings: View {
         }
     }
 }
-
-private struct TrustedSites: View {
-    @Environment(SettingsStore.self) private var store
-    private let path = "chat_design.link_preview_trusted_domains"
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AddField(label: "Site to trust", placeholder: "example.com", keyboard: .URL) { text in
-                await store.add(path, text)
-            }
-            let hosts = store.strings(path)
-            if hosts.isEmpty {
-                Text("No custom sites trusted yet. Popular sites (YouTube, Twitch, Discord, Steam, Spotify, imgur, Tenor, and more) already expand by default.")
-                    .font(.sn(12)).foregroundStyle(SN.textMuted)
-            } else {
-                FlowLayout(spacing: 6) {
-                    ForEach(hosts, id: \.self) { host in
-                        RemovableChip(text: host, removeLabel: "Stop trusting \(host)") {
-                            Task { _ = try? await store.edit(path, .removeValue(host)) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: Dictionary
-
-struct DictionaryEditor: View {
-    @Environment(SettingsStore.self) private var store
-    private let path = "chat_input.spellcheck_custom_words"
-
-    var body: some View {
-        NestedLine(title: "Dictionary", stacked: true) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Words you've taught the spell checker. Added automatically when you pick \"Add to dictionary\" on a word in chat.")
-                    .font(.sn(12)).foregroundStyle(SN.textSecondary)
-                AddField(label: nil, placeholder: "Add a word", buttonSymbol: "plus") { text in
-                    await store.add(path, text)
-                }
-                FlowLayout(spacing: 6) {
-                    ForEach(store.strings(path), id: \.self) { word in
-                        RemovableChip(text: word, removeLabel: "Remove \(word)") {
-                            Task { _ = try? await store.edit(path, .removeValue(word)) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: Hidden Messages
 
 struct HiddenMessagesSettings: View {
     @Environment(SettingsStore.self) private var store
@@ -528,7 +448,6 @@ struct PhraseCard: View {
                     Task { _ = try? await store.edit(listPath, .remove(id: id)) }
                 }
             }
-            if !ignore { soundLine }
             if let error {
                 Text(error).font(.sn(12)).foregroundStyle(SN.error)
             }
@@ -554,99 +473,9 @@ struct PhraseCard: View {
         .accessibilityLabel(label)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
-
-    @ViewBuilder private var soundLine: some View {
-        let sound = phrase["sound_id"] as? String ?? ""
-        HStack(spacing: 8) {
-            Text("Sound").font(.sn(12)).foregroundStyle(SN.textSecondary)
-            Menu {
-                Picker("Highlight sound", selection: Binding(get: { sound }, set: { value in
-                    Task { _ = try? await store.edit(listPath, .update(id: id, ["sound_id": value.isEmpty ? nil : value])) }
-                })) {
-                    ForEach(SoundCatalog.choices(store, none: "None")) { Text($0.label).tag($0.value) }
-                }
-            } label: {
-                let label = SoundCatalog.choices(store, none: "None").first { $0.value == sound }?.label ?? "None"
-                HStack(spacing: 4) {
-                    Text(label).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10)).foregroundStyle(SN.textMuted)
-                }
-                .frame(minHeight: 32)
-            }
-            .accessibilityLabel("Highlight sound")
-            if !sound.isEmpty {
-                Spacer()
-                Stepper(value: Binding(get: { (phrase["cooldown_seconds"] as? Int) ?? 3 }, set: { value in
-                    Task { _ = try? await store.edit(listPath, .update(id: id, ["cooldown_seconds": value])) }
-                }), in: 0...60) {
-                    Text("Cooldown \((phrase["cooldown_seconds"] as? Int) ?? 3)s").font(.sn(12)).foregroundStyle(SN.textSecondary)
-                }
-                .fixedSize()
-            }
-        }
-    }
 }
 
-// MARK: Custom Sounds
-
-struct CustomSoundsSettings: View {
-    @Environment(SettingsStore.self) private var store
-    @Environment(AppModel.self) private var model
-    @State private var importing = false
-    private let path = "chat_highlights.custom_sounds"
-
-    var body: some View {
-        SettingsBlock(title: "Custom Sounds", detail: "Your own audio files, up to 2 MB each. Once added, they appear in every sound picker next to the built-in tones: highlights, mentions and notifications. StreamNook keeps its own copy, so moving the original never breaks it.", bare: true) {
-            ForEach(store.list(path).indices, id: \.self) { index in
-                let sound = store.list(path)[index]
-                if let id = sound["id"] as? String {
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            EntryTextField(listPath: path, id: id, field: "name", value: sound["name"] as? String ?? "",
-                                           placeholder: "Sound name", label: "Sound name")
-                            Text((sound["path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? "")
-                                .font(.sn(11)).foregroundStyle(SN.textMuted).lineLimit(1).truncationMode(.middle)
-                        }
-                        IconButton(symbol: "play.fill", label: "Play sound", size: 13) { SoundPlayer.play(sound["path"] as? String) }
-                        EntryDelete(label: "Remove sound") {
-                            Task {
-                                _ = try? await model.core.invoke("delete_custom_sound", args: ["id": id])
-                                await store.refresh()
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .snPanel()
-                }
-            }
-            SettingButton(title: "Add sound file", symbol: "folder") { importing = true }
-        }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio]) { result in
-            guard case .success(let url) = result else { return }
-            Task { await add(url) }
-        }
-    }
-
-    /// The picked file is outside the app's sandbox: copy it in first, then let the core import it.
-    private func add(_ url: URL) async {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let copy = FileManager.default.temporaryDirectory.appending(path: url.lastPathComponent)
-        try? FileManager.default.removeItem(at: copy)
-        do {
-            try FileManager.default.copyItem(at: url, to: copy)
-            _ = try await model.core.invoke("add_custom_sound", args: ["path": copy.path])
-        } catch let failure as CoreFailure {
-            model.toasts.show(failure.description)
-        } catch {
-            model.toasts.show("Could not add that sound.")
-        }
-        try? FileManager.default.removeItem(at: copy)
-        await store.refresh()
-    }
-}
-
-// MARK: Highlight Phrases
+// MARK: Highlights
 
 struct HighlightPhrasesSettings: View {
     @Environment(SettingsStore.self) private var store

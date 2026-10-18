@@ -67,21 +67,6 @@ struct PlayerPanel: View {
             ToggleRow(title: "Low latency", path: "video_player.experimental_low_latency", fallback: true,
                       detail: "Rides as close to live as the Twitch site on channels that support it. On by default.",
                       help: "Off falls back to the wider whole-segment path. If a stream stutters or refuses to play, turn this off first.")
-            SliderRow(title: { "Buffer: \(Int($0))s" }, path: "video_player.max_buffer_length", range: 3...300, step: 1,
-                      fallback: 120,
-                      detail: "How much video the player keeps loaded ahead of playback; more is steadier on a shaky connection but adds delay.",
-                      accessibility: "Buffer")
-        }
-
-        SettingsBlock(title: "Song Identification", detail: "The /song command and the player's music button listen to a few seconds of the stream and name the track.") {
-            SliderRow(title: { "Listen time: \(Int($0))s" }, path: "video_player.song_id.capture_seconds", range: 3...20, step: 1,
-                      fallback: 10,
-                      detail: "How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear.",
-                      accessibility: "Listen time")
-            SliderRow(title: { "Retries: \(Int($0))" }, path: "video_player.song_id.retries", range: 0...3, step: 1, fallback: 1,
-                      detail: "If the first listen matches nothing, StreamNook listens again this many times.",
-                      help: "Each retry listens to a fresh window, so an ad break or quiet moment gets another shot.",
-                      accessibility: "Retries")
         }
     }
 

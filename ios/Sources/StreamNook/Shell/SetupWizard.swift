@@ -1,22 +1,19 @@
 import SNKit
 import SwiftUI
-import UserNotifications
 
-/// The first-run wizard: welcome, accounts, drops, notifications, done. A full-screen layer on the
-/// theme background under a faint accent wash; pages swipe sideways past 70 points and move with
-/// a short rise. Finishing saves `setup_complete` through the core; closing early only keeps it
-/// away for this session.
+/// The first-run wizard: welcome, accounts, drops, done (no notification step until the iPhone
+/// sends alerts). A full-screen layer on the theme background under a faint accent wash; pages
+/// swipe sideways past 70 points and move with a short rise. Finishing saves `setup_complete`
+/// through the core; closing early only keeps it away for this session.
 struct SetupWizard: View {
     let model: AppModel
     @State private var page = Page.welcome
     @State private var forward = true
     @State private var drag: CGFloat = 0
     @State private var lastTurn = Date.distantPast
-    @State private var notifications = UNAuthorizationStatus.notDetermined
     @Environment(\.snStill) private var still
 
-    enum Page: Int, CaseIterable { case welcome, accounts, drops, notifications, done }
-
+    enum Page: Int, CaseIterable { case welcome, accounts, drops, done }
 
     private var signedIn: Bool { model.signedIn }
 
@@ -52,7 +49,6 @@ struct SetupWizard: View {
             footer
         }
         .background { Wash() }
-        .task { notifications = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
         .onChange(of: model.nav.setupPage, initial: true) { _, asked in
             if let asked { go(to: asked) }
         }
@@ -95,31 +91,6 @@ struct SetupWizard: View {
                     .buttonStyle(.snSecondary)
                     .frame(maxWidth: 320)
                     .disabled(true)
-            }
-        case .notifications:
-            PageBody(title: "Stay in the loop",
-                     text: "Get a notification when a followed streamer goes live, a whisper lands, or a drop is claimed. You can fine-tune each type in Settings.") {
-                Image(systemName: "bell.badge.fill").font(.system(size: 48)).foregroundStyle(SN.accent)
-            } extra: {
-                // Once answered this is a fact, said as a mark and words rather than a button that
-                // no longer does anything.
-                switch notifications {
-                case .authorized, .provisional, .ephemeral:
-                    HStack(spacing: 8) {
-                        Image(systemName: Symbol.checkCircle).font(.system(size: 16)).foregroundStyle(SN.success)
-                        Text("Notifications are on").font(.sn(15, 500)).foregroundStyle(SN.textSecondary)
-                    }
-                    .frame(height: SNButtonStyle.height)
-                    .accessibilityElement(children: .combine)
-                case .denied:
-                    Text("Notifications are turned off for StreamNook. You can turn them back on in Settings whenever you like.")
-                        .font(.snRowDetail).foregroundStyle(SN.textMuted).multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
-                default:
-                    Button("Enable notifications") { Task { await askNotifications() } }
-                        .buttonStyle(.snSecondary)
-                        .frame(maxWidth: 320)
-                }
             }
         case .done:
             PageBody(title: "You're all set", text: "StreamNook is ready. Pick a stream and dive in.") {
@@ -243,11 +214,6 @@ struct SetupWizard: View {
             }
     }
 
-    private func askNotifications() async {
-        let center = UNUserNotificationCenter.current()
-        _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
-        notifications = await center.notificationSettings().authorizationStatus
-    }
 }
 
 /// A wizard page: the picture, the title, the line, and anything the page adds under them.

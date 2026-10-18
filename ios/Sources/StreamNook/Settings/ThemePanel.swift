@@ -227,12 +227,10 @@ private struct FontCard: View {
     @Environment(AppModel.self) private var model
 
     static let fonts = [("Satoshi", "satoshi"), ("Twitch", "twitch"), ("Geist", "geist"), ("Manrope", "manrope"), ("Outfit", "outfit"),
-                        ("Space Grotesk", "space-grotesk"), ("Serif", "serif"), ("System", "system"), ("Custom", "custom")]
-    static let suggestions = ["Poppins", "Bebas Neue", "Rubik", "Lato", "Nunito", "Playfair Display", "JetBrains Mono", "Quicksand"]
+                        ("Space Grotesk", "space-grotesk"), ("Serif", "serif"), ("System", "system")]
 
     var body: some View {
         let picked = store.string("font", "satoshi").isEmpty ? "satoshi" : store.string("font", "satoshi")
-        let custom = store.string("font_custom")
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "textformat").font(.system(size: 16)).foregroundStyle(SN.textSecondary)
@@ -248,8 +246,8 @@ private struct FontCard: View {
                         }
                     } label: {
                         HStack {
-                            Text(id == "custom" && !custom.isEmpty ? custom : name)
-                                .font(id == "system" ? .system(size: 15) : .sn(15, 400))
+                            Text(name)
+                                .font(Typeface.font(15, 400, face: id))
                                 .foregroundStyle(SN.textPrimary).lineLimit(1)
                             Spacer(minLength: 4)
                             if on { Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.accent) }
@@ -263,19 +261,6 @@ private struct FontCard: View {
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
-            }
-            if picked == "custom" {
-                Text("Font name").font(.sn(12)).foregroundStyle(SN.textSecondary)
-                SettingTextField(path: "font_custom", placeholder: "e.g. Poppins", limit: 64)
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 4) {
-                    ForEach(Self.suggestions, id: \.self) { name in
-                        Button(name) { Task { await store.set("font_custom", name) } }
-                            .font(.sn(13)).foregroundStyle(name == custom ? SN.accent : SN.textSecondary)
-                            .buttonStyle(.plain).frame(minHeight: 32)
-                    }
-                }
-                Text("Any free font from fonts.google.com works, just type its exact name.")
-                    .font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
