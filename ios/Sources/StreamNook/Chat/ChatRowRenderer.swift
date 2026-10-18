@@ -120,6 +120,27 @@ enum ChatRowRenderer {
         case .dot(let color):
             ctx.setFillColor(color.cgColor)
             ctx.fillEllipse(in: r)
+        case .card(let radius):
+            // A panel in the page, as the app's own panels: the floor (opaque at Glassiness 0),
+            // the theme's wash, light along the top edge and a dark contour.
+            let path = UIBezierPath(roundedRect: r, cornerRadius: radius).cgPath
+            ctx.saveGState()
+            ctx.addPath(path)
+            ctx.clip()
+            ctx.setFillColor(ChatTheme.floor.cgColor)
+            ctx.fill(r)
+            ctx.setFillColor(ChatTheme.wash.cgColor)
+            ctx.fill(r)
+            if let light = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: [UIColor.white.withAlphaComponent(0.07).cgColor, UIColor.white.withAlphaComponent(0).cgColor] as CFArray,
+                                      locations: [0, 1]) {
+                ctx.drawLinearGradient(light, start: CGPoint(x: r.midX, y: r.minY), end: CGPoint(x: r.midX, y: r.minY + 14), options: [])
+            }
+            ctx.restoreGState()
+            ctx.setStrokeColor(UIColor.black.withAlphaComponent(0.4).cgColor)
+            ctx.setLineWidth(0.5)
+            ctx.addPath(UIBezierPath(roundedRect: r.insetBy(dx: 0.25, dy: 0.25), cornerRadius: radius).cgPath)
+            ctx.strokePath()
         case .symbol(let name, let color):
             if name.hasPrefix("text:") {
                 let label = String(name.dropFirst(5))

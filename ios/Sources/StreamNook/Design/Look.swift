@@ -22,6 +22,7 @@ final class Look {
     /// Takes the look out of a settings read.
     func apply(_ settings: SettingsLook) {
         glassiness = Double(settings.glassiness) / 100
+        ChatTheme.use(glassiness: glassiness)
         glassBlur = settings.glassBlur ?? true
         motion = settings.motion
         fontID = settings.font
@@ -46,7 +47,10 @@ final class Look {
     /// Shows a state without writing settings: the Glassiness slider while it is dragged, and
     /// drive steps.
     func preview(glassiness: Double? = nil, motion: MotionMode? = nil) {
-        if let glassiness { self.glassiness = glassiness }
+        if let glassiness {
+            self.glassiness = glassiness
+            ChatTheme.use(glassiness: glassiness)
+        }
         if let motion { self.motion = motion }
     }
 }

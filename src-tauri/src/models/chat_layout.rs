@@ -466,6 +466,27 @@ pub struct RowView {
     /// name (`chat_customization.user_overrides`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
+    /// Link preview cards under the body, in link order (`chat_design.link_previews`).
+    /// One still being read arrives as a `ROW_PREVIEW` frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<RowPreview>,
+}
+
+/// One link's card on a row.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct RowPreview {
+    pub url: String,
+    /// The card, or None while it is still being read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<crate::commands::link_preview::LinkPreview>,
+    /// While pending: this link's shape almost always has a card, so the shell
+    /// holds its room now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reserve: bool,
+    /// Keep the link in the text beside its card (`chat_design.link_preview_keep_link`);
+    /// otherwise the card stands for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_link: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

@@ -7408,6 +7408,23 @@ mod chat_fixture_tests {
         let channel = inputs["channel"].as_str().unwrap().to_string();
         let set: EmoteSet = serde_json::from_value(inputs["emotes"].clone()).expect("emote set");
         rebuild_parse_lookup(&channel, &set);
+        // The invite's card as Discord's public invite read answers it.
+        crate::services::link_preview_cache::remember_for_test(
+            "https://discord.gg/discord-developers",
+            crate::commands::link_preview::LinkPreview {
+                url: "https://discord.gg/discord-developers".into(),
+                kind: "discord".into(),
+                title: Some("Discord Developers".into()),
+                image: Some(
+                    "https://cdn.discordapp.com/icons/613425648685547541/a_1d18823294be0ccfbcdec090c8ffcc0d.gif?size=128".into(),
+                ),
+                site_name: Some("Discord".into()),
+                author: Some("discord.gg/discord-developers".into()),
+                online_count: Some(70761),
+                member_count: Some(308559),
+                ..Default::default()
+            },
+        );
         crate::services::chat_row_view::note_twitch_badges(
             None,
             inputs["twitch_badges"].as_array().unwrap().iter().map(|b| {
@@ -7484,6 +7501,12 @@ mod chat_fixture_tests {
 
         // A mention of the viewer is stamped by the rule engine.
         assert_eq!(row(&parsed, "fx-0007")["metadata"]["is_mentioned"], json!(true));
+
+        // A Discord invite carries its server card, read before the row was sent.
+        let invite = &row(&parsed, "fx-discord")["metadata"]["view"]["previews"][0];
+        assert_eq!(invite["url"], json!("https://discord.gg/discord-developers"));
+        assert_eq!(invite["preview"]["kind"], json!("discord"));
+        assert_eq!(invite["preview"]["member_count"], json!(308559));
 
         // Paints, Twitch badge art and the 7TV badge for a chatter the cache knows.
         let owl = row(&parsed, "fx-0001");

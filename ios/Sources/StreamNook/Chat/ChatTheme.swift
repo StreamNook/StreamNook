@@ -18,6 +18,22 @@ enum ChatTheme {
     }
 
     private static var now: Colors { current.withLock { $0 } }
+    private static let glass = Mutex(1.0)
+
+    /// Takes Glassiness (0 to 1) for panels drawn inside rows; a change redoes laid-out rows.
+    static func use(glassiness: Double) {
+        let moved = glass.withLock { old in
+            defer { old = glassiness }
+            return old != glassiness
+        }
+        if moved { NotificationCenter.default.post(name: changed, object: nil) }
+    }
+
+    static var glassiness: Double { glass.withLock { $0 } }
+    /// The opaque floor under a panel, showing more as glassiness falls.
+    static var floor: UIColor { now.backgroundTertiary.withAlphaComponent(CGFloat(1 - glassiness)) }
+    /// The theme's faint wash over that floor.
+    static var wash: UIColor { now.backgroundSecondary }
     static var textPrimary: UIColor { now.textPrimary }
     static var textSecondary: UIColor { now.textSecondary }
     static var textMuted: UIColor { now.textMuted }
@@ -52,6 +68,7 @@ enum ChatTheme {
     private final class Colors: @unchecked Sendable {
         let textPrimary, textSecondary, textMuted, borderSubtle, surface, accent: UIColor
         let info, warning, error, success, background: UIColor
+        let backgroundSecondary, backgroundTertiary: UIColor
 
         init(_ p: Palette) {
             textPrimary = p.textPrimary.uiColor
@@ -65,6 +82,8 @@ enum ChatTheme {
             error = p.error.uiColor
             success = p.success.uiColor
             background = p.background.uiColor
+            backgroundSecondary = p.backgroundSecondary.uiColor
+            backgroundTertiary = p.backgroundTertiary.uiColor
         }
     }
 }

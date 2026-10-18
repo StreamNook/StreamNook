@@ -2,9 +2,9 @@
 //
 // The Rust `fetch_link_preview` command does the actual network fetch + metadata
 // parse (so it sidesteps CORS and the webview never touches arbitrary pasted
-// URLs). This module decides WHICH urls are allowed to auto-expand (a trusted-
-// domain allowlist) and caches results per webview so repeated links and
-// scroll-back re-renders don't refetch.
+// URLs) and keeps the answers (one fetch per URL, bounded), so repeated links
+// and scroll-back re-renders don't refetch. This module decides WHICH urls are
+// allowed to auto-expand (a trusted-domain allowlist) on the web-rendered rows.
 
 import { Logger } from '../utils/logger';
 
@@ -44,11 +44,13 @@ export interface LinkPreview {
   member_count: number | null;
 }
 
-// Registrable domains we auto-expand. A host matches if it equals one of these
+// Registrable domains we auto-expand (the same list as TRUSTED_BASE_DOMAINS in
+// src-tauri/src/services/link_preview_cache.rs, which phone rows use; a parity
+// test holds them together). A host matches if it equals one of these
 // or is a subdomain of it (so www.youtube.com, m.twitch.tv, i.imgur.com all
 // resolve). Everything else stays a plain clickable link — no passive fetch,
 // which keeps IP-grabber / shock-image links from auto-loading.
-const TRUSTED_BASE_DOMAINS: readonly string[] = [
+export const TRUSTED_BASE_DOMAINS: readonly string[] = [
   'youtube.com',
   'youtu.be',
   'twitch.tv',
@@ -189,18 +191,17 @@ export function prettyUrlLabel(raw: string, maxLen = 40): string {
   }
 }
 
-// --- In-flight dedupe (no cache) -------------------------------------------
+// --- In-flight dedupe -------------------------------------------------------
 //
-// Chat links are ephemeral, so nothing is stored. The only coordination kept is
-// an in-flight map that coalesces truly-concurrent requests for the same URL
-// (e.g. the same link visible in two rows at once) into a single fetch. It self-
-// empties the instant a request settles — it holds no resolved data.
+// Rust keeps the answers. This page only coalesces truly-concurrent calls for
+// the same URL (the same link visible in two rows at once) into one invoke; the
+// map self-empties the instant a call settles and holds no resolved data.
 const inflight = new Map<string, Promise<LinkPreview | null>>();
 
 /**
  * Resolve a preview, coalescing concurrent requests for the same URL. Returns
  * null when there's no usable preview (the UI then just leaves the link as-is).
- * Never throws, never caches.
+ * Never throws.
  */
 export function fetchLinkPreview(url: string): Promise<LinkPreview | null> {
   const existing = inflight.get(url);

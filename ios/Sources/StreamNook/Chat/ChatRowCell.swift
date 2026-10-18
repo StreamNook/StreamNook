@@ -87,11 +87,17 @@ final class ChatRowCell: UIView {
                 image.frame = group.bounds
                 // FFZ GrowX and BetterTTV wide stretch the target to their box.
                 if i == 0, attachment.effects & (Modifier.growX | Modifier.wide) != 0 { image.contentsGravity = .resize }
+                if attachment.kind == .preview { image.contentsGravity = .resizeAspectFill }
                 group.addSublayer(image)
                 imageLayers.append(image)
                 load(url, into: image, attachment: attachment, isBase: i == 0)
             }
             applyEffects(attachment.effects, to: group)
+            if attachment.kind == .preview {
+                group.cornerRadius = attachment.radius
+                group.cornerCurve = .continuous
+                group.masksToBounds = true
+            }
             if attachment.kind == .avatar {
                 // A face: round, ringed in the row's channel color.
                 group.cornerRadius = attachment.rect.height / 2
