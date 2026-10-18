@@ -68,9 +68,9 @@ function useReadingAwake(on: boolean, idleSecs: number): void {
   }, [hold]);
 }
 
-/** `active`: the tab is in front. It stays mounted behind the others (see
+/** `shown`: the tab is in front. It stays mounted behind the others (see
  *  MobileApp), and while hidden it holds nothing awake and draws no rows. */
-export const ChatsScreen: React.FC<{ active?: boolean }> = ({ active = true }) => {
+export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
   const connection = useChatTabsStore((s) => s.connection);
@@ -83,12 +83,12 @@ export const ChatsScreen: React.FC<{ active?: boolean }> = ({ active = true }) =
 
   // The first look joins the saved chats; a parked set comes back too.
   useEffect(() => {
-    if (active && connection !== 'connected') connect();
-  }, [active, connection, connect]);
+    if (shown && connection !== 'connected') connect();
+  }, [shown, connection, connect]);
 
-  useReadingAwake(active && keepOn && tabs.length > 0, idleSecs);
+  useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 
-  const pinned = useRoomPins(active && tabs.length > 0);
+  const pinned = useRoomPins(shown && tabs.length > 0);
   const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
@@ -161,7 +161,7 @@ export const ChatsScreen: React.FC<{ active?: boolean }> = ({ active = true }) =
                 />
               </div>
             )}
-            <MobileChatPane strip={false} paused={!active} />
+            <MobileChatPane strip={false} paused={!shown} />
           </div>
         </>
       )}

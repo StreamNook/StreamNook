@@ -197,7 +197,7 @@ const MobileApp: React.FC = () => {
                 className="absolute inset-0 flex flex-col"
                 style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
               >
-                <ChatsScreen active={chatsShown} />
+                <ChatsScreen shown={chatsShown} />
               </div>
             )}
           </div>
