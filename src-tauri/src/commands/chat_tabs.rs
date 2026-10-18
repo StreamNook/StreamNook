@@ -187,6 +187,23 @@ pub async fn rebuild_chat(
     }))
 }
 
+/// The "add a chat" picker: your live follows, then your offline follows, from
+/// the Following snapshot (no request). `platforms` keeps the ones the shell
+/// can chat on; `open` names the chats open now (the phones leave it out and
+/// their tabs are read here; MultiChat passes its own).
+#[tauri::command]
+pub async fn chat_picker(
+    platforms: Option<Vec<String>>,
+    open: Option<Vec<String>>,
+) -> crate::services::chat_picker::ChatPicker {
+    let snap = crate::services::home_snapshot::snapshot().await;
+    let open: std::collections::HashSet<String> = match open {
+        Some(keys) => keys.into_iter().map(|k| k.trim().to_lowercase()).collect(),
+        None => chat_tabs::view().tabs.into_iter().map(|t| t.tab.channel).collect(),
+    };
+    crate::services::chat_picker::build(&snap.following, &snap.last_broadcasts, platforms.as_deref(), &open)
+}
+
 /// One channel the "Add a chat" sheet lists.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ChatRoomRow {

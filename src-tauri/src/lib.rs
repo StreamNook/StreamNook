@@ -2444,8 +2444,8 @@ pub fn run() {
             commands::chat_tabs::chat_tabs_visible,
             #[cfg(mobile)]
             commands::chat_tabs::chat_room_from_link,
-            #[cfg(mobile)]
             commands::chat_tabs::search_chat_rooms,
+            commands::chat_tabs::chat_picker,
             #[cfg(mobile)]
             commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
