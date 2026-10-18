@@ -23,7 +23,8 @@ import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
 import { AtmosphereGlow, BrandMark, CutoutAvatar, PaintedName, SectionHeader } from './IdentityParts';
-import { brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
+import { badgeArt, brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
+import { MemberSections } from './MemberSections';
 
 /** How far down the sheet their Atmosphere's glow reaches: the picture and
  *  the name, fading out above what follows. */
@@ -287,10 +288,14 @@ const ProfileBody: React.FC<{
   const paint = sheet?.paint_def ?? null;
   const adjustNameColor = useNameColorAdjust();
   const shownColor = sheet?.name_color ?? adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
+  // A member's StreamNook group can carry art the app ships
+  // (`streamnook-house:<slug>`), drawn from the bundle.
   const groups = (sheet?.groups ?? [])
     .map((group) => ({
       ...group,
-      badges: group.badges.filter((b) => !failedImages.has(badgeImageKey(b))),
+      badges: group.badges
+        .map((b) => ({ ...b, url: badgeArt(b.url) }))
+        .filter((b) => !failedImages.has(badgeImageKey(b))),
     }))
     .filter((group) => group.badges.length > 0);
   // Your own picture carries no marks, here as on your card.
@@ -384,11 +389,13 @@ const ProfileBody: React.FC<{
           />
         ))}
 
-        {/* A member's StreamNook badge is the medal on their picture, so it has
-            no group of its own here. */}
-        {sheet && groups.length === 0 && !medal && (
+        {/* A member always has a StreamNook badge (it is the medal on their
+            picture, and their StreamNook group), so the line is for others. */}
+        {sheet && groups.length === 0 && !sheet.streamnook && (
           <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
+
+        {sheet?.member_profile && <MemberSections profile={sheet.member_profile} />}
 
         {/* Chat order (oldest first, newest at the bottom), the way the eye
             already reads the room. Plain text: the point is what was said,
