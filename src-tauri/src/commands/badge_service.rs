@@ -1,5 +1,5 @@
 use crate::services::badge_service::{
-    BadgeService, SelectedTwitchBadge, ThirdPartyGalleryBadge, UserBadgesResponse,
+    BadgeDetail, BadgeService, SelectedTwitchBadge, ThirdPartyGalleryBadge, UserBadgesResponse,
 };
 use crate::services::twitch_service::TwitchService;
 use log::debug;
@@ -299,6 +299,36 @@ pub async fn get_all_third_party_badges(
     Ok(service
         .get_all_third_party_badges(viewer_user_id.as_deref())
         .await)
+}
+
+/// What the badge spotlight shows for a clicked third-party badge (FFZ,
+/// BetterTTV, Chatterino, Homies, Moltorino, Chatsen, Chatty, DankChat):
+/// provider name and site, and whatever the in-memory feeds know about the
+/// badge (title, art, description, holder count, whether the viewer holds
+/// it). Accepts any of the badge id spaces (`ffz-3`, `ffz:ffz-3`, `3`); a
+/// badge the feeds do not list still answers with the provider's details.
+#[tauri::command]
+pub async fn get_badge_detail(
+    provider: String,
+    id: String,
+    title: Option<String>,
+    viewer_user_id: Option<String>,
+) -> Result<BadgeDetail, String> {
+    let service_lock = get_service().await?;
+    {
+        let service_guard = service_lock.read().await;
+        if service_guard.is_none() {
+            drop(service_guard);
+            initialize_badge_service().await;
+        }
+    }
+    let service_guard = service_lock.read().await;
+    let service = service_guard
+        .as_ref()
+        .ok_or_else(|| "Badge service failed to initialize".to_string())?;
+    service
+        .get_badge_detail(&provider, &id, title.as_deref(), viewer_user_id.as_deref())
+        .await
 }
 
 /// Resolve a single user's BetterTTV Pro loyalty badge (the per-user badge a Pro

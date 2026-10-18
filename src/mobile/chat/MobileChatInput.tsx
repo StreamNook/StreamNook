@@ -186,6 +186,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const failure = failures[roomKey];
   const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
+  const emoteButtonRef = useRef<HTMLButtonElement>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
@@ -561,6 +562,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         >
           {!hideEmoteButton && (
             <button
+              ref={emoteButtonRef}
               onClick={() => {
                 cycleEmoteSmiley();
                 setPointsOpen(false);
@@ -841,6 +843,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         <EmotePickerPanel
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
+          ignoreRef={emoteButtonRef}
           emotes={emotes}
           isTwitch={isTwitch}
           isKick={provider === 'kick'}

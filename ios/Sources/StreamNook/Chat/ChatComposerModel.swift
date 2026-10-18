@@ -256,7 +256,8 @@ final class ChatComposerModel {
 
     /// A command goes to the core's dispatcher with the room it was typed in (a slash command, or
     /// plain text that may be one of your own). Whatever it does not run goes to chat as typed
-    /// (Twitch still runs /me).
+    /// (Twitch still runs /me). A command whose dispatch failed stays in the draft: it never
+    /// leaves as chat text.
     private func runSlash(_ text: String) async {
         guard let roomID = session.roomID else {
             show(SlashOutcome.noRoomToast)
@@ -265,21 +266,28 @@ final class ChatComposerModel {
         }
         sending = true
         var outcome = SlashOutcome(handled: false)
+        var dispatchError: Error?
         do {
             let json = try await session.core.invoke("run_slash_command", args: [
                 "channel": session.channel, "broadcasterId": roomID, "text": text, "depth": 0, "platform": "ios",
             ])
             if let decoded = try? JSONDecoder().decode(SlashOutcome.self, from: Data(json.utf8)) { outcome = decoded }
         } catch {
+            dispatchError = error
             chatLog.notice("slash dispatch failed: \(String(describing: error), privacy: .public)")
         }
         sending = false
+        let next = SlashAfterDispatch.of(text: text, handled: outcome.handled, dispatchFailed: dispatchError != nil)
+        if next == .keepDraft {
+            show("That command didn't run: \(dispatchError.map(Self.words) ?? "no answer")")
+            return
+        }
         // The core's order: toasts, then the page action, then notices (so a clear prints into
         // the emptied chat), then the text it hands back to send.
         if let last = outcome.toasts.last { show(last.text) }
         if let ui = outcome.ui { perform(ui, typed: text) }
         outcome.notices.forEach(notice)
-        guard outcome.handled else {
+        guard next == .done else {
             await sendChat(text, reply: session.replyTo, clearsReply: true)
             return
         }

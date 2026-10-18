@@ -4,6 +4,7 @@
 // connected to 7TV, the modal shows a Connect button that opens the 7TV login
 // and reloads once you're signed in.
 import { useCallback, useEffect, useState } from 'react';
+import { useEmoteCardStore } from '../stores/emoteCardStore';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
@@ -11,6 +12,12 @@ import EmoteDetail from './emotesets/EmoteDetail';
 import { getEditableChannels, invalidateEditableChannels, type EditableChannel } from '../services/seventvEditorService';
 
 export default function EmoteSpotlight() {
+  // Tell chat this window has the 7TV spotlight; windows without it open the
+  // plain emote card for 7TV emotes instead of doing nothing.
+  useEffect(() => {
+    useEmoteCardStore.getState().setSeventvSpotlight(true);
+    return () => useEmoteCardStore.getState().setSeventvSpotlight(false);
+  }, []);
   const spotlight = useAppStore((s) => s.emoteSpotlight);
   const setSpotlight = useAppStore((s) => s.setEmoteSpotlight);
   const addToast = useAppStore((s) => s.addToast);

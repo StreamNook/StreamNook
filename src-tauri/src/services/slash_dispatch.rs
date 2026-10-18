@@ -68,6 +68,7 @@ use serde_json::{json, Value};
 use crate::services::chat_history::SweepEntry;
 use crate::services::chat_send_limiter::Role;
 use crate::services::command_catalog::{Builtin, UserCommand, BUILTINS};
+use crate::services::moderation::{self, ModAction};
 use crate::services::nuke;
 use crate::services::reminder_service::{self, RemindParse};
 
@@ -725,6 +726,16 @@ async fn room_stream(b: &dyn Backend, channel: &str) -> Option<Value> {
     b.invoke("get_stream", json!({ "login": channel })).await.ok().filter(|v| !v.is_null())
 }
 
+/// The room's live stream for /uptime: `None` when Twitch answered that it is
+/// not live, the failure when the check itself failed.
+async fn uptime_stream(b: &dyn Backend, channel: &str) -> Result<Option<Value>, String> {
+    if channel.is_empty() || channel.contains(':') {
+        return Ok(None);
+    }
+    let stream = b.invoke("get_stream", json!({ "login": channel })).await?;
+    Ok(Some(stream).filter(|s| s["started_at"].as_str().is_some_and(|t| !t.is_empty())))
+}
+
 /// The placeholders for a template run in `channel` (the room it was typed
 /// in, never the stream playing elsewhere). The room is looked up only when
 /// the template names it.
@@ -803,15 +814,36 @@ struct User {
     avatar: Option<String>,
 }
 
-async fn lookup(b: &dyn Backend, login: &str) -> Option<User> {
-    let v = b.invoke("get_user_by_login", json!({ "login": login })).await.ok()?;
-    let id = v["id"].as_str()?.to_string();
-    Some(User {
+/// Someone's account, `None` when Twitch has no such account, or why the lookup
+/// failed (signed out, offline, a Helix refusal): never taken for "not found".
+async fn find_user(b: &dyn Backend, login: &str) -> Result<Option<User>, String> {
+    let v = match b.invoke("get_user_by_login", json!({ "login": login })).await {
+        Ok(v) => v,
+        Err(e) if e.contains("not found") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(id) = v["id"].as_str().map(str::to_string) else { return Ok(None) };
+    Ok(Some(User {
         id,
         login: v["login"].as_str().unwrap_or(login).to_string(),
         display_name: v["display_name"].as_str().unwrap_or(login).to_string(),
         avatar: v["profile_image_url"].as_str().map(str::to_string),
-    })
+    }))
+}
+
+/// The account, or the line that says why there is none: `missing` when Twitch
+/// has no such account, the failure when the lookup itself failed.
+async fn user_or_why(b: &dyn Backend, who: &str, missing: String) -> Result<User, String> {
+    match find_user(b, who).await {
+        Ok(Some(user)) => Ok(user),
+        Ok(None) => Err(missing),
+        Err(e) => Err(format!("Couldn't look up {who}: {e}")),
+    }
+}
+
+/// Someone's account when the lookup worked and found one.
+async fn lookup(b: &dyn Backend, login: &str) -> Option<User> {
+    find_user(b, login).await.ok().flatten()
 }
 
 fn is_broadcaster_of(ctx: &Ctx) -> bool {
@@ -1154,14 +1186,20 @@ async fn on_user(
     args: impl FnOnce(&User) -> Value,
     done: String,
 ) -> Result<(), String> {
-    match lookup(c.b(), username).await {
-        Some(user) => {
+    match user_or_why(c.b(), username, format!("User {username} not found")).await {
+        Ok(user) => {
             c.b().invoke(cmd, args(&user)).await?;
             o.ok(done);
         }
-        None => o.err(format!("User {username} not found")),
+        Err(why) => o.err(why),
     }
     Ok(())
+}
+
+/// A Twitch moderation action's toast, in the words `services::moderation`
+/// gives every surface.
+fn mod_words(action: &ModAction, name: &str) -> String {
+    moderation::outcome_for(moderation::Platform::Twitch, action, name).message
 }
 
 /// The commands of the original table.
@@ -1194,7 +1232,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
             let username = clean_login(c.arg(0));
             let reason = c.from(1);
-            let done = format!("Banned {username}");
+            let done = mod_words(&ModAction::Ban, &username);
             on_user(c, o, &username, "ban_user", |u| {
                 json!({ "broadcasterId": id, "targetUserId": u.id, "duration": null, "reason": opt(&reason) })
             }, done)
@@ -1205,13 +1243,12 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Usage);
             }
             let username = clean_login(c.arg(0));
-            let length = parse_delay(c.arg(1));
-            let reason = c.from(if length.is_none() { 1 } else { 2 });
-            let secs = match length {
-                None => 600,
-                Some(ms) => (ms / 1000).max(1),
-            };
-            let done = format!("Timed out {username} for {secs}s");
+            let (secs, reason) = moderation::typed_timeout(&c.from(1));
+            let reason = reason.unwrap_or_default();
+            // What Twitch will really apply (it stops at 14 days), said the way
+            // every other moderation surface says it ("Timed out bob for 10m").
+            let secs = moderation::applied_timeout(moderation::Platform::Twitch, secs);
+            let done = mod_words(&ModAction::Timeout { seconds: secs }, &username);
             on_user(c, o, &username, "ban_user", |u| {
                 json!({ "broadcasterId": id, "targetUserId": u.id, "duration": secs, "reason": opt(&reason) })
             }, done)
@@ -1222,7 +1259,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Usage);
             }
             let username = clean_login(c.arg(0));
-            let done = format!("Unbanned {username}");
+            let done = mod_words(&ModAction::Unban { timeout: c.command == "untimeout" }, &username);
             on_user(c, o, &username, "unban_user", |u| json!({ "broadcasterId": id, "targetUserId": u.id }), done).await?;
         }
         "clear" => {
@@ -1345,29 +1382,22 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             } else {
                 "Chat stayed connected because another chat window is still using it"
             }),
-            Err(e) => log::warn!("[Command Handler] Disconnect failed: {e}"),
+            Err(e) => {
+                log::warn!("[Command Handler] Disconnect failed: {e}");
+                o.err(format!("Couldn't disconnect from chat: {e}"));
+            }
         },
         "mods" | "vips" => {
-            let chatters = b.invoke("get_chatters_by_role", json!({ "channelLogin": login })).await?;
-            let names = |key: &str| -> Vec<String> {
-                chatters[key]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|m| m["login"].as_str()).filter(|l| !l.is_empty()).map(str::to_string).collect())
-                    .unwrap_or_default()
-            };
-            // A list Twitch would not give is said as such, never as "none".
-            let (key, error_key) = if c.command == "mods" { ("moderators", "moderators_error") } else { ("vips", "vips_error") };
-            if let Some(e) = chatters[error_key].as_str() {
-                o.err(e);
+            // Read signed in (the web session, then the rewards sign-in, then
+            // anonymous), every page of the list. A list Twitch would not give
+            // is said as such, with who of the group is in chat now, never as
+            // "none".
+            if login.is_empty() {
+                o.err(format!("/{}: open a channel first", c.command));
                 return Ok(Flow::Done);
             }
-            let list = names(key);
-            o.say(match (c.command == "mods", list.is_empty()) {
-                (true, true) => "There are no moderators of this channel.".to_string(),
-                (true, false) => format!("The moderators of this channel are: {}", list.join(", ")),
-                (false, true) => "There are no VIPs of this channel.".to_string(),
-                (false, false) => format!("The VIPs of this channel are: {}", list.join(", ")),
-            });
+            let lines = b.invoke("slash_role_list", json!({ "channel": login, "role": c.command })).await?;
+            o.say_all(as_lines(lines));
         }
         "monitor" | "unmonitor" | "restrict" | "unrestrict" => {
             if c.args.is_empty() {
@@ -1421,8 +1451,8 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                     o.err(format!("Refused to open {}: URL", parsed.scheme()));
                 }
                 Ok(parsed) => {
-                    if b.invoke("open_url", json!({ "url": parsed.as_str() })).await.is_err() {
-                        o.err(format!("Not a valid URL: {target}"));
+                    if let Err(e) = b.invoke("open_url", json!({ "url": parsed.as_str() })).await {
+                        o.err(format!("Couldn't open {target}: {e}"));
                     }
                 }
                 Err(_) => o.err(format!("Not a valid URL: {target}")),
@@ -1471,7 +1501,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 }),
                 Err(e) => {
                     log::warn!("[Command Handler] /chatters failed: {e}");
-                    o.say("Chatter count needs moderator access on this channel.");
+                    o.err(format!("Couldn't count the chatters: {e}"));
                 }
             }
         }
@@ -1515,9 +1545,11 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let window = if c.command == "overlay" { "overlay" } else { "multichat" };
             o.ui = Some(Ui::OpenChatWindow { window: window.to_string(), channel, channel_id });
         }
-        "uptime" => match room_stream(b, &login).await.filter(|s| s["started_at"].as_str().is_some_and(|t| !t.is_empty())) {
-            None => o.say("This channel is offline."),
-            Some(s) => {
+        // A failed check is said as such: "offline" only when Twitch answered that it is.
+        "uptime" => match uptime_stream(b, &login).await {
+            Err(e) => o.err(format!("Couldn't check whether this channel is live: {e}")),
+            Ok(None) => o.say("This channel is offline."),
+            Ok(Some(s)) => {
                 let uptime = format_uptime(s["started_at"].as_str(), b.now_ms());
                 let name = s["user_name"]
                     .as_str()
@@ -1533,9 +1565,9 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 return Ok(Flow::Done);
             }
             let username = strip_first_at(c.arg(0));
-            match lookup(b, &username).await {
-                Some(u) => o.ui = Some(Ui::OpenUserCard { user_id: u.id, login: u.login, display_name: u.display_name }),
-                None => o.err(format!("User {username} not found")),
+            match user_or_why(b, &username, format!("User {username} not found")).await {
+                Ok(u) => o.ui = Some(Ui::OpenUserCard { user_id: u.id, login: u.login, display_name: u.display_name }),
+                Err(why) => o.err(why),
             }
         }
         "refresh" => {
@@ -1612,7 +1644,18 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 o.err(format!("/{}: no active channel", c.command));
                 return Ok(Flow::Done);
             }
-            let active = b.invoke("get_active_poll", json!({ "broadcasterId": id })).await.unwrap_or(Value::Null);
+            // Twitch reads and ends polls only on the channel owner's own token.
+            if b.role(&login) != Role::Broadcaster {
+                o.err(format!("/{}: only the broadcaster can end a poll on Twitch", c.command));
+                return Ok(Flow::Done);
+            }
+            let active = match b.invoke("get_active_poll", json!({ "broadcasterId": id })).await {
+                Ok(active) => active,
+                Err(e) => {
+                    o.err(format!("Couldn't read the running poll: {e}"));
+                    return Ok(Flow::Done);
+                }
+            };
             let Some(poll_id) = active["id"].as_str().filter(|s| !s.is_empty()).map(str::to_string) else {
                 o.err("No poll is running right now");
                 return Ok(Flow::Done);
@@ -1831,12 +1874,15 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
                         .await,
                 ],
             };
-            if let Some(Err(e)) = results.into_iter().find(Result::is_err) {
+            let failure = results.into_iter().find_map(Result::err);
+            if let Some(e) = &failure {
                 log::warn!("[nuke] action failed for {}: {e}", a.username);
             }
+            failure
         }
     });
-    futures::future::join_all(calls).await;
+    // Each user's first failure, so the toast never reads as a clean sweep when it was not.
+    let failures: Vec<String> = futures::future::join_all(calls).await.into_iter().flatten().collect();
     let users = affected.len();
     let record = nuke::remember(&login, c.id(), &parsed, affected, now);
     if parsed.future_seconds > 0 {
@@ -1852,7 +1898,10 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
         nuke::set_closer(record, task);
     }
     o.say(nuke::ran_line(&parsed, matched, users));
-    o.ok(format!("/nuke: {matched} message(s), {users} user(s)"));
+    match failures.first() {
+        None => o.ok(format!("/nuke: {matched} message(s), {users} user(s)")),
+        Some(first) => o.err(format!("/nuke: {} of {users} user(s) failed: {first}", failures.len())),
+    }
 }
 
 /// The extended commands that work in any platform's chat.
@@ -2091,9 +2140,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "join", "/join <channel>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch channel named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let shown = if user.display_name.is_empty() { user.login.clone() } else { user.display_name.clone() };
             o.ui = Some(Ui::DockJoin { login: user.login, channel_id: user.id, display_name: shown.clone(), avatar_url: user.avatar });
@@ -2135,9 +2187,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "setcolor", "/setcolor <user> <color|off>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let off = is_off_word(&value);
             if !off && !is_color(&value) {
@@ -2168,9 +2223,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 ext_usage(o, "setname", "/setname <user> <nickname|off>");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let off = is_off_word(&nickname);
             b.invoke(
@@ -2209,7 +2267,13 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 o.err("Open a channel first");
                 return Ok(true);
             }
-            let counts = b.invoke("emote_counts", json!({ "channel": login, "channelId": opt(&id) })).await.unwrap_or(Value::Null);
+            let counts = match b.invoke("emote_counts", json!({ "channel": login, "channelId": opt(&id) })).await {
+                Ok(counts) => counts,
+                Err(e) => {
+                    o.err(format!("Couldn't read this channel's emotes: {e}"));
+                    return Ok(true);
+                }
+            };
             if !counts.is_object() {
                 o.say("Emotes for this channel have not loaded yet.");
                 return Ok(true);
@@ -2350,9 +2414,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 o.err("Commands can only nest three deep");
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch channel named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let there = Ctx {
                 b: c.ctx.b.clone(),
@@ -2442,9 +2509,12 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             if !need_channel(c, o) || !need_staff(c, o) {
                 return Ok(true);
             }
-            let Some(user) = lookup(b, &who).await else {
-                o.err(format!("There is no Twitch user named {who}"));
-                return Ok(true);
+            let user = match user_or_why(b, &who, format!("There is no Twitch user named {who}")).await {
+                Ok(user) => user,
+                Err(why) => {
+                    o.err(why);
+                    return Ok(true);
+                }
             };
             let reason = c.from(1).trim().to_string();
             b.invoke("ban_user", json!({ "broadcasterId": id, "targetUserId": user.id, "duration": 1, "reason": opt(&reason) }))
@@ -2702,9 +2772,12 @@ async fn favorite(c: &Call<'_>, o: &mut Outcome, add: bool) -> Result<(), String
         o.err(format!("/{}: name a channel or open one", c.typed));
         return Ok(());
     }
-    let Some(user) = lookup(b, &who).await else {
-        o.err(format!("There is no Twitch channel named {who}"));
-        return Ok(());
+    let user = match user_or_why(b, &who, format!("There is no Twitch channel named {who}")).await {
+        Ok(user) => user,
+        Err(why) => {
+            o.err(why);
+            return Ok(());
+        }
     };
     let settings = b.settings();
     let mut favorites: Vec<Value> = settings["favorite_streamers"].as_array().cloned().unwrap_or_default();

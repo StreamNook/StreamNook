@@ -2568,6 +2568,18 @@ const Home = () => {
         (selectedCategory.name && dropsGameNames.has(selectedCategory.name.toLowerCase()))
     ));
 
+    // The category page's own favorite: the same star the tiles set. A page
+    // opened by name alone (the badge overlay) has its id once the details load.
+    const categoryPageFavorite: TwitchCategory | null =
+        activeTab === 'category' && selectedCategory && (selectedCategory.id || categoryDetails?.id)
+            ? {
+                id: selectedCategory.id || categoryDetails?.id || '',
+                name: selectedCategory.name || categoryDetails?.name || '',
+                box_art_url: selectedCategory.box_art_url || categoryDetails?.boxArtUrl || '',
+            }
+            : null;
+    const isCategoryPageFavorite = !!categoryPageFavorite && favoriteCategoryIds.has(categoryPageFavorite.id);
+
     const renderClipCard = (clip: TwitchClip) => (
         <MediaCard
             key={clip.id}
@@ -3086,6 +3098,28 @@ const Home = () => {
                                 <h1 className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-textPrimary to-textSecondary truncate leading-tight">
                                     {categoryDetails?.displayName || selectedCategory.name}
                                 </h1>
+                                {/* Beside the title, ahead of the Followers chip, so
+                                    the chip arriving with the details never moves it. */}
+                                {categoryPageFavorite && (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => toggleFavoriteCategory(e, categoryPageFavorite, !isCategoryPageFavorite)}
+                                        aria-label={`Favorite ${categoryPageFavorite.name}`}
+                                        aria-pressed={isCategoryPageFavorite}
+                                        className={`glass-button flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 shrink-0 text-[11px] font-bold tracking-wide hover:text-textPrimary active:scale-95 ${isCategoryPageFavorite ? 'text-textPrimary' : 'text-textSecondary'}`}
+                                    >
+                                        {/* One word in both states, so the button never
+                                            changes width; the heart says which. */}
+                                        <Heart
+                                            size={12}
+                                            fill={isCategoryPageFavorite ? 'url(#glass-heart-fill)' : 'none'}
+                                            stroke={isCategoryPageFavorite ? 'url(#glass-heart-stroke)' : 'currentColor'}
+                                            strokeWidth={isCategoryPageFavorite ? 1.5 : 2}
+                                            className={isCategoryPageFavorite ? 'drop-shadow-[0_2px_6px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]' : ''}
+                                        />
+                                        <span>Favorite</span>
+                                    </button>
+                                )}
                                {categoryDetails?.followersCount != null && (
                                     <div className="glass-badge flex items-center gap-1.5 whitespace-nowrap !bg-white/5 backdrop-blur-md px-2.5 py-1 shrink-0">
                                         <Users size={12} className="text-accent" />

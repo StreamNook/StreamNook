@@ -95,10 +95,12 @@ export interface CommandBrowserProps {
   isBroadcaster: boolean;
 }
 
-// What a locked command needs, in the words of the tag and the detail line.
+// What a locked command needs, in the words of the tag and the detail line. The rule matches
+// the core's `command_catalog::lock_for`: Twitch takes the owner's commands only from the
+// channel owner, so a moderator sees them locked too.
 export function lockFor(cmd: CommandDefinition, isModerator: boolean, isBroadcaster: boolean): { tag: string; line: string } | null {
   if (cmd.category === 'Everyone' || cmd.category === 'Custom') return null;
-  if (cmd.category === 'Broadcaster' && !isBroadcaster && !isModerator) {
+  if (cmd.category === 'Broadcaster' && !isBroadcaster) {
     return { tag: 'Broadcaster', line: 'Needs the broadcaster in this channel' };
   }
   if (!isModerator && !isBroadcaster) return { tag: 'Mods', line: 'Needs moderator status in this channel' };

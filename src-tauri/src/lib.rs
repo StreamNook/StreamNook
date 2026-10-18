@@ -35,8 +35,9 @@ use commands::chat_query::{
     validate_chat_phrase,
 };
 use commands::moderation_tools::{
-    get_automod_queue, get_streamer_mode_state, get_user_note, get_user_pronouns,
-    resolve_automod_message, set_user_note, update_channel_info, upload_image,
+    get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
+    get_user_pronouns, moderate_chatter, resolve_automod_message, set_user_note,
+    update_channel_info, upload_image,
 };
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
@@ -342,6 +343,8 @@ fn close_main_window(app: crate::rt::AppHandle) {
 
 #[cfg(target_os = "android")]
 mod android_notify;
+#[cfg(target_os = "android")]
+mod cast_plugin;
 mod commands;
 #[cfg(target_os = "ios")]
 mod ios_ffi;
@@ -978,6 +981,10 @@ pub fn run() {
     // Android in-app Twitch login WebView overlay (native Kotlin plugin).
     #[cfg(target_os = "android")]
     let builder = builder.plugin(twitch_login_plugin::init());
+    // Android Google Cast: device session in Kotlin, cast decisions in
+    // services::cast_session.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(cast_plugin::init());
     // Linux: tells every page, before its first paint, who draws the window
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
@@ -1073,6 +1080,10 @@ pub fn run() {
             }
             #[cfg(mobile)]
             services::token_vault::warm_up();
+            // Before anything can start a stream: a Cast session the SDK
+            // resumes at launch must be known to start_stream from the first call.
+            #[cfg(target_os = "android")]
+            services::cast_session::init(app.handle().clone());
             // Mobile: the settings load at the top of run() executed BEFORE the
             // base above was resolvable, so it always fell back to
             // Settings::default() (setup_complete=false among everything else),
@@ -1665,6 +1676,20 @@ pub fn run() {
             android_notify::push_register,
             #[cfg(target_os = "android")]
             android_notify::push_unregister,
+            #[cfg(target_os = "android")]
+            cast_plugin::cast_get_state,
+            #[cfg(target_os = "android")]
+            cast_plugin::cast_open_picker,
+            #[cfg(target_os = "android")]
+            cast_plugin::cast_control,
+            #[cfg(target_os = "android")]
+            cast_plugin::cast_open_mirroring,
+            #[cfg(target_os = "android")]
+            cast_plugin::tv_get_state,
+            #[cfg(target_os = "android")]
+            cast_plugin::tv_set_enabled,
+            #[cfg(target_os = "android")]
+            cast_plugin::tv_control,
             #[cfg(mobile)]
             flush_persistent_stores,
             reveal_main_window,
@@ -1680,6 +1705,8 @@ pub fn run() {
             commands::notification_mirror::open_mirrored_notification,
             #[cfg(desktop)]
             commands::notification_mirror::test_system_notification,
+            #[cfg(desktop)]
+            services::points_notify::test_points_notification,
             #[cfg(desktop)]
             commands::notification_mirror::take_notice_action,
             #[cfg(desktop)]
@@ -1918,6 +1945,9 @@ pub fn run() {
             get_chat_history_stats,
             get_automod_queue,
             resolve_automod_message,
+            moderate_chatter,
+            get_mod_timeout_steps,
+            get_mod_slider_steps,
             get_streamer_mode_state,
             update_channel_info,
             get_user_pronouns,
@@ -2110,6 +2140,7 @@ pub fn run() {
             clear_channel_badge_cache_unified,
             get_global_badge_collection,
             get_all_third_party_badges,
+            get_badge_detail,
             get_bttv_pro_badge,
             get_discovered_bttv_pro_badges,
             ingest_badge_drops,
@@ -2313,6 +2344,7 @@ pub fn run() {
             fetch_channel_emotes,
             get_emote_by_name,
             match_emote_tokens,
+            emote_credit,
             personal_emote_overrides,
             emote_picker,
             clear_emote_cache,
@@ -2490,6 +2522,7 @@ pub fn run() {
             commands::slash_commands::slash_founders,
             commands::slash_commands::slash_name_history,
             commands::slash_commands::slash_chat_rules,
+            commands::slash_commands::slash_role_list,
             commands::slash_commands::slash_shared_chat,
             commands::slash_commands::slash_raid_candidates,
             commands::slash_commands::slash_raid_now,

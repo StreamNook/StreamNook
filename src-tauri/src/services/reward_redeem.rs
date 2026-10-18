@@ -226,6 +226,9 @@ pub async fn redeem(
         id,
         name,
     });
+    if let Ok(r) = &result {
+        channel_rewards::note_redeem_answer(&login, reward_id, r.success, r.error_code.as_deref());
+    }
     let done = match result {
         Ok(r) => outcome(kind, &reward, r, picked),
         Err(e) => failed(if e.trim().is_empty() { "Redemption failed".to_string() } else { e }),

@@ -160,6 +160,9 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // (chat links are ephemeral), so every card starts unresolved and fetches once.
   const [preview, setPreview] = useState<LinkPreview | null | undefined>(resolved);
   const [imageFailed, setImageFailed] = useState(false);
+  // The Reddit card holds the image's full box until it loads, so the card
+  // does not grow by the image's height when it arrives.
+  const [imageLoaded, setImageLoaded] = useState(false);
   // Trusted links fetch automatically; untrusted links wait for an explicit
   // click (the click-to-load chip below) so an arbitrary pasted link is never
   // fetched passively — that would reveal the user's IP to the linked host.
@@ -481,6 +484,55 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
           <div className="mt-2 text-xs text-textSecondary" style={clamp(3)}>
             {preview.description}
           </div>
+        )}
+      </div>,
+    );
+  }
+
+  // --- Reddit: r/sub · u/author, the post title, Reddit's preview image ------
+  // Rust writes every label (site_name is "Reddit" when no subreddit applies).
+  if (preview.kind === 'reddit') {
+    const showImage = !!preview.image && !imageFailed;
+    // A share or video link that did not resolve knows only where it goes:
+    // the same compact chip as the other link chips, not an empty card.
+    if (!preview.title && !showImage) {
+      return wrap(
+        <div
+          {...cardProps}
+          className="glass-panel no-live-blur mt-1 inline-flex max-w-md cursor-pointer items-center gap-1.5 px-2.5 py-1.5 align-middle transition-colors hover:bg-white/[0.03]"
+        >
+          <SocialLogo platform="reddit" size={13} />
+          <span className="truncate text-xs font-semibold text-textPrimary">{preview.site_name}</span>
+          {preview.author && <span className="min-w-0 truncate text-xs text-textSecondary/80">· {preview.author}</span>}
+        </div>,
+      );
+    }
+    return wrap(
+      <div
+        {...cardProps}
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
+      >
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-textSecondary">
+          <SocialLogo platform="reddit" size={13} />
+          {/* The subreddit keeps its width; the author gives way first. */}
+          <span className="max-w-full flex-shrink-0 truncate font-semibold">{preview.site_name}</span>
+          {preview.author && <span className="min-w-0 truncate text-textSecondary/80">· {preview.author}</span>}
+        </div>
+        {preview.title && (
+          <div className="mt-1 text-sm font-semibold leading-snug text-textPrimary" style={clamp(3)}>
+            {preview.title}
+          </div>
+        )}
+        {showImage && (
+          <img
+            src={preview.image as string}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className={`mt-2 w-full rounded-md bg-white/[0.04] object-cover ${imageLoaded ? 'max-h-72' : 'h-72'}`}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => setImageFailed(true)}
+          />
         )}
       </div>,
     );

@@ -54,8 +54,8 @@ const fn cmd(
 }
 
 pub static BUILTINS: &[Builtin] = &[
-    cmd("mods", &[], "Everyone", "/mods", "Display a list of all chat moderators", "", &[], 0),
-    cmd("vips", &[], "Everyone", "/vips", "Display a list of VIPs for this channel", "", &[], 0),
+    cmd("mods", &[], "Everyone", "/mods", "Display a list of all chat moderators", "", &[], LOCAL),
+    cmd("vips", &[], "Everyone", "/vips", "Display a list of VIPs for this channel", "", &[], LOCAL),
     cmd("color", &[], "Everyone", "/color <colorname|hex>", "Change the color of your username", "Twitch accepts the named colors from its own list, and Turbo or Prime users can use any hex value.", &["/color SpringGreen", "/color #ff69b4"], 0),
     cmd("block", &[], "Everyone", "/block <username>", "Block all messages from a specific user", "This is a Twitch block, so it applies on twitch.tv too. Use /ignore for a StreamNook-only hide.", &["/block someuser"], 0),
     cmd("unblock", &[], "Everyone", "/unblock <username>", "Remove user from block list", "", &[], 0),
@@ -254,11 +254,12 @@ pub fn category_label(category: &str) -> &'static str {
 }
 
 /// Everyone and custom commands never lock; Broadcaster commands need the
-/// broadcaster or a moderator; the rest need a moderator or the broadcaster.
+/// broadcaster (Twitch takes them only on the channel owner's own token, so a
+/// moderator is refused too); the rest need a moderator or the broadcaster.
 pub fn lock_for(category: &str, is_moderator: bool, is_broadcaster: bool) -> Option<&'static str> {
     match category {
         "Everyone" | "Custom" => None,
-        "Broadcaster" if !is_broadcaster && !is_moderator => Some("Needs the broadcaster in this channel"),
+        "Broadcaster" if !is_broadcaster => Some("Needs the broadcaster in this channel"),
         _ if !is_moderator && !is_broadcaster => Some("Needs moderator status in this channel"),
         _ => None,
     }
@@ -399,8 +400,13 @@ mod tests {
         let viewer = catalog(true, false, false, &[], "ban");
         let ban = viewer.iter().find(|r| r.name == "ban").unwrap();
         assert_eq!(ban.lock.as_deref(), Some("Needs moderator status in this channel"));
+        // A moderator runs the moderator commands, but Twitch refuses them the owner's.
         let moderator = catalog(true, true, false, &[], "editor");
-        assert_eq!(moderator.iter().find(|r| r.name == "editor").unwrap().lock, None);
+        assert_eq!(moderator.iter().find(|r| r.name == "editor").unwrap().lock.as_deref(), Some("Needs the broadcaster in this channel"));
+        let moderator_ban = catalog(true, true, false, &[], "ban");
+        assert_eq!(moderator_ban.iter().find(|r| r.name == "ban").unwrap().lock, None);
+        let owner = catalog(true, false, true, &[], "editor");
+        assert_eq!(owner.iter().find(|r| r.name == "editor").unwrap().lock, None);
         let raid = catalog(true, false, false, &[], "raidsend");
         assert_eq!(raid[0].lock.as_deref(), Some("Needs the broadcaster in this channel"));
         assert!(catalog(true, false, false, &[], "mods").iter().all(|r| r.lock.is_none() || r.category != "Everyone"));

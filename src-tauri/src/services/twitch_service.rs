@@ -4,6 +4,7 @@ use crate::models::{
     user::{ChannelInfo, UserInfo},
 };
 use crate::services::token_vault;
+use crate::services::twitch_auth_service::TwitchAuthService;
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{debug, error, warn};
@@ -47,6 +48,26 @@ const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 //   moderator:manage:shield_mode: /shield and /shieldoff (Helix
 //     PUT moderation/shield_mode refuses the token without it)
 const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users moderator:manage:shield_mode";
+/// Scopes every new sign-in asks for, that the token check never requires: a
+/// stored sign-in without one is kept (no reset of every account), and the
+/// command that needs it asks for a fresh sign-in when it is used.
+//   moderator:manage:warnings: /warn (Helix POST moderation/warnings)
+const OPTIONAL_SCOPES: &str = "moderator:manage:warnings";
+
+/// What a sign-in asks Twitch for: the required scopes, then the optional ones.
+fn requested_scopes() -> String {
+    format!("{SCOPES} {OPTIONAL_SCOPES}")
+}
+
+/// Whether a token's granted scopes leave out `scope`.
+fn lacks_scope(granted: &[String], scope: &str) -> bool {
+    !granted.iter().any(|g| g == scope)
+}
+
+/// What /warn says to a sign-in from before warnings were asked for.
+const WARN_SCOPE_MISSING: &str =
+    "Warnings need one more Twitch permission. Sign in to Twitch again from your accounts to grant it; nothing else changes.";
+
 const TOKEN_FILE_NAME: &str = ".twitch_token";
 
 /// Normalize a GQL Language enum spelling ("FR", "ZH_HK") to the Helix form
@@ -984,13 +1005,14 @@ impl TwitchService {
     }
 
     fn authorize_url(state: &str, force_verify: bool) -> Result<String> {
+        let scopes = requested_scopes();
         let url = reqwest::Url::parse_with_params(
             "https://id.twitch.tv/oauth2/authorize",
             &[
                 ("client_id", CLIENT_ID),
                 ("redirect_uri", REDIRECT_URI),
                 ("response_type", "code"),
-                ("scope", SCOPES),
+                ("scope", scopes.as_str()),
                 ("force_verify", if force_verify { "true" } else { "false" }),
                 ("state", state),
             ],
@@ -1035,7 +1057,8 @@ impl TwitchService {
     }
 
     async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
-        let params = [("client_id", CLIENT_ID), ("scopes", SCOPES)];
+        let scopes = requested_scopes();
+        let params = [("client_id", CLIENT_ID), ("scopes", scopes.as_str())];
 
         let response = client
             .post("https://id.twitch.tv/oauth2/device")
@@ -1075,9 +1098,10 @@ impl TwitchService {
 
             tokio::time::sleep(Duration::from_secs(poll_interval)).await;
 
+            let scopes = requested_scopes();
             let params = [
                 ("client_id", CLIENT_ID),
-                ("scopes", SCOPES),
+                ("scopes", scopes.as_str()),
                 ("device_code", device_code),
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ];
@@ -4843,12 +4867,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to update chat settings: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to update chat settings"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -4874,9 +4899,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to clear chat: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to clear chat"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5146,9 +5172,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to add moderator: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to add moderator"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5172,9 +5199,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to remove moderator: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to remove moderator"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5198,9 +5226,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to add VIP: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to add VIP"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5224,9 +5253,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to remove VIP: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to remove VIP"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5350,12 +5380,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to update suspicious user status: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to update suspicious user status"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5378,30 +5409,27 @@ impl TwitchService {
         Ok(body.pointer("/data/0/description").and_then(|v| v.as_str()).unwrap_or_default().to_string())
     }
 
-    /// Update User Chat Color
+    /// Update User Chat Color. `color` is what the viewer typed; it goes out in
+    /// the form Helix takes (`helix_chat_color`), as an encoded query value so
+    /// a hex value's "#" is not read as the URL's fragment.
     pub async fn update_user_chat_color(user_id: &str, color: &str) -> Result<()> {
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
-
-        let url = format!(
-            "https://api.twitch.tv/helix/chat/color?user_id={}&color={}",
-            user_id, color
-        );
+        let color = helix_chat_color(color);
 
         let response = client
-            .put(&url)
+            .put("https://api.twitch.tv/helix/chat/color")
+            .query(&[("user_id", user_id), ("color", color.as_str())])
             .header("Client-Id", CLIENT_ID)
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .send()
             .await?;
 
-        if !response.status().is_success() && response.status() != 204 {
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            error!(
-                "[TwitchService] Failed to update user chat color: {}",
-                error_text
-            );
-            return Err(anyhow::anyhow!("Failed to update user chat color"));
+            error!("[TwitchService] Failed to update user chat color ({status}): {error_text}");
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5663,9 +5691,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to block user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to block user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5690,9 +5719,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to unblock user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to unblock user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -5770,60 +5800,85 @@ impl TwitchService {
         }
     }
 
-    /// A channel's moderators and VIPs, from the GQL `Mods` and `VIPs` queries
-    /// twitch.tv's own `/mods` and `/vips` send (Helix lists them only for the
-    /// broadcaster's own token). Twitch answers `Mods` only with a signed-in
-    /// session ("unauthenticated" otherwise), so it carries the in-app twitch.tv
-    /// web session; `VIPs` still answers without one and goes anonymous.
-    ///
-    /// Each list comes back with `moderators_error` / `vips_error` set when it
-    /// could not be read, so a refusal is never shown as "no moderators".
-    pub async fn get_chatters_by_role(channel_login: &str) -> Result<serde_json::Value> {
-        use crate::services::twitch_web_gql;
-        let query = |operation: &str, hash: &str| {
-            serde_json::json!({
-                "operationName": operation,
-                "variables": { "login": channel_login },
-                "extensions": { "persistedQuery": { "version": 1, "sha256Hash": hash } }
-            })
-        };
-        let session = Self::web_session().await;
-        let (mods, vips) = tokio::join!(
-            async {
-                let answer = twitch_web_gql::post(
-                    session.as_deref(),
-                    query("Mods", "cb912a7e0789e0f8a4c85c25041a08324475831024d03d624172b59498caf085"),
-                    "Mods",
-                )
-                .await;
-                answer.and_then(|a| role_list(&a, "mods"))
-            },
-            async {
-                let answer = twitch_web_gql::post(
-                    None,
-                    query("VIPs", "612a574d07afe5db2f9e878e290225224a0b955e65b5d1235dcd4b68ff668218"),
-                    "VIPs",
-                )
-                .await;
-                answer.and_then(|a| role_list(&a, "vips"))
-            },
+    /// A channel's moderators and VIPs from Twitch's GQL, for any viewer (the
+    /// Helix lists answer only the broadcaster): `{ moderators, vips }`, each
+    /// member `{ id, login, displayName }`, plus `moderators_listed` and
+    /// `vips_listed`, false when Twitch would not list that group to anyone
+    /// the app could ask as, and `moderators_error` / `vips_error` set to what
+    /// the viewer reads instead, so a refusal is never shown as "no moderators".
+    pub async fn get_chatters_by_role(
+        channel_login: &str,
+        auth: Option<&TwitchAuthService>,
+    ) -> Result<serde_json::Value> {
+        let callers = role_list_callers(auth).await;
+        let signed_in = callers.iter().any(GqlCaller::is_signed_in);
+        let (moderators, vips) = tokio::join!(
+            Self::channel_role_members(channel_login, ChannelRole::Moderators, &callers),
+            Self::channel_role_members(channel_login, ChannelRole::Vips, &callers),
         );
-        let mods = mods.map_err(|e| role_error_text("moderators", &e, session.is_some()));
-        let vips = vips.map_err(|e| role_error_text("VIPs", &e, true));
+        let moderators = role_members_or_error(moderators, "moderators", "moderator list", signed_in);
+        let vips = role_members_or_error(vips, "VIPs", "VIP list", signed_in);
         Ok(serde_json::json!({
-            "moderators": mods.as_ref().cloned().unwrap_or_default(),
+            "moderators_listed": moderators.is_ok(),
+            "vips_listed": vips.is_ok(),
+            "moderators": moderators.as_ref().cloned().unwrap_or_default(),
             "vips": vips.as_ref().cloned().unwrap_or_default(),
-            "moderators_error": mods.err(),
+            "moderators_error": moderators.err(),
             "vips_error": vips.err(),
         }))
     }
 
-    /// The in-app twitch.tv web session, when the viewer is signed in.
-    async fn web_session() -> Option<String> {
-        use tauri::Manager;
-        let app = crate::services::providers::app_handle()?;
-        let auth = app.try_state::<AppState>().map(|s| s.twitch_auth.clone())?;
-        crate::services::twitch_web_gql::web_session_token(&auth).await.ok()
+    /// Everyone holding `role` in a channel, read as the first of `callers`
+    /// Twitch lists the group to. None when it lists it to none of them.
+    pub(crate) async fn channel_role_members(
+        channel_login: &str,
+        role: ChannelRole,
+        callers: &[GqlCaller],
+    ) -> Result<Option<Vec<serde_json::Value>>> {
+        let login = channel_login.to_lowercase();
+        let mut refused = false;
+        let mut failure = None;
+        for caller in callers {
+            match Self::role_members_as(&login, role, caller).await {
+                Ok(Some(members)) => return Ok(Some(members)),
+                Ok(None) => refused = true,
+                Err(e) => failure = Some(e),
+            }
+        }
+        match failure {
+            Some(e) if !refused => Err(e),
+            _ => Ok(None),
+        }
+    }
+
+    /// Every page of one role list, read as `caller`. None when Twitch would
+    /// not list the group to that caller.
+    async fn role_members_as(
+        login: &str,
+        role: ChannelRole,
+        caller: &GqlCaller,
+    ) -> Result<Option<Vec<serde_json::Value>>> {
+        const MAX_PAGES: usize = 10;
+        let mut members = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let body = gql_as(caller, &role_page_request(login, role, after.as_deref())).await?;
+            let Some((page, next)) = role_page(&body, role) else {
+                debug!(
+                    "[TwitchService] {} list for {login} refused as {}: {}",
+                    role.field(),
+                    caller.name(),
+                    body.get("errors").cloned().unwrap_or_default()
+                );
+                return Ok(None);
+            };
+            members.extend(page);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        Ok(Some(members))
     }
 
     /// The chatters list any viewer can see, grouped by role: Twitch's public
@@ -5941,8 +5996,9 @@ impl TwitchService {
     pub async fn get_channel_chatters(
         broadcaster_id: &str,
         channel_login: &str,
+        auth: Option<&TwitchAuthService>,
     ) -> Result<serde_json::Value> {
-        match Self::get_moderator_chatters(broadcaster_id, channel_login).await {
+        match Self::get_moderator_chatters(broadcaster_id, channel_login, auth).await {
             Ok(full) => Ok(full),
             // Not a moderator here, signed out, or a token without the roster
             // scope: everyone can still have the public list.
@@ -5958,11 +6014,12 @@ impl TwitchService {
     /// Uses Helix Get Chatters, which requires the caller to be a moderator or the
     /// broadcaster of the channel and to hold the `moderator:read:chatters` scope.
     /// That endpoint returns logins only, so we compose it with the GQL Mods/VIPs
-    /// lookup (`get_chatters_by_role`, which works for any authenticated user) to
-    /// bucket each chatter into broadcaster / moderators / vips / viewers.
+    /// lookup (`get_chatters_by_role`, read signed in) to bucket each chatter
+    /// into broadcaster / moderators / vips / viewers.
     async fn get_moderator_chatters(
         broadcaster_id: &str,
         channel_login: &str,
+        auth: Option<&TwitchAuthService>,
     ) -> Result<serde_json::Value> {
         use std::collections::HashSet;
 
@@ -6031,7 +6088,7 @@ impl TwitchService {
         //    logged rather than taken for "no moderators").
         let mut mod_logins: HashSet<String> = HashSet::new();
         let mut vip_logins: HashSet<String> = HashSet::new();
-        if let Ok(roles) = Self::get_chatters_by_role(channel_login).await {
+        if let Ok(roles) = Self::get_chatters_by_role(channel_login, auth).await {
             for key in ["moderators_error", "vips_error"] {
                 if let Some(e) = roles.get(key).and_then(|e| e.as_str()) {
                     warn!("[TwitchService] chatters roles for {channel_login}: {e}");
@@ -6130,12 +6187,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to send announcement: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to send chat announcement"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6161,9 +6219,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to send shoutout: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to send shoutout"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6191,9 +6250,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to start commercial: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to start commercial"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6537,9 +6597,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to start raid: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to start raid"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6563,9 +6624,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to cancel raid: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to cancel raid"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6598,15 +6660,33 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "[TwitchService] Failed to create stream marker: {}",
                 error_text
             );
-            return Err(anyhow::anyhow!("Failed to create stream marker"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
+    }
+
+    /// The scopes Twitch says `token` carries (`oauth2/validate`).
+    async fn token_scopes(token: &str) -> Result<Vec<String>> {
+        let response = crate::services::http::client()
+            .get("https://id.twitch.tv/oauth2/validate")
+            .header(AUTHORIZATION, format!("OAuth {token}"))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Twitch did not accept the sign-in (HTTP {})", response.status().as_u16()));
+        }
+        let data: serde_json::Value = response.json().await?;
+        Ok(data["scopes"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default())
     }
 
     /// Warn a chat user (Helix: POST /moderation/warnings)
@@ -6617,6 +6697,12 @@ impl TwitchService {
     ) -> Result<()> {
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
+        // The warnings scope is optional: a sign-in from before it was asked for
+        // lacks it, and is asked to sign in again rather than refused blind.
+        let granted = Self::token_scopes(&token).await?;
+        if lacks_scope(&granted, "moderator:manage:warnings") {
+            return Err(anyhow::anyhow!(WARN_SCOPE_MISSING));
+        }
         let user_info = Self::get_user_info().await?;
         let moderator_id = &user_info.id;
 
@@ -6642,9 +6728,10 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to warn user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to warn user"));
+            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
@@ -6724,20 +6811,28 @@ pub(crate) fn vod_refresh_from_node(
     }
 }
 
-/// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
-/// One role list (`mods` or `vips`) from a GQL answer: the users, or why there
-/// is none to show. A list that is present but empty is a real "none"; a
-/// missing list is Twitch's refusal (its `errors` message) or an unknown
-/// channel, never an empty list.
-fn role_list(answer: &serde_json::Value, field: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
-    let user = answer.pointer("/data/user").filter(|u| !u.is_null());
-    if let Some(edges) = user.and_then(|u| u.pointer(&format!("/{field}/edges"))).and_then(|e| e.as_array()) {
-        return Ok(edges.iter().filter_map(|e| e.get("node").cloned()).collect());
+/// Twitch's named chat colors, spelled the way Helix takes them.
+const CHAT_COLOR_NAMES: [&str; 15] = [
+    "blue", "blue_violet", "cadet_blue", "chocolate", "coral", "dodger_blue", "firebrick", "golden_rod", "green",
+    "hot_pink", "orange_red", "red", "sea_green", "spring_green", "yellow_green",
+];
+
+/// A typed chat color in the form Helix takes: a named color in its
+/// snake_case spelling ("SpringGreen", "spring green" and "springgreen" all
+/// read as `spring_green`), or a six-digit hex value with its "#". Anything
+/// else goes as typed, for Twitch to refuse with its own reason.
+pub(crate) fn helix_chat_color(typed: &str) -> String {
+    let typed = typed.trim();
+    let hex = typed.trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return format!("#{hex}");
     }
-    if let Some(message) = answer.pointer("/errors/0/message").and_then(|m| m.as_str()) {
-        return Err(message.to_string());
-    }
-    Err(if user.is_some() { format!("no {field} list in the answer") } else { "channel not found".to_string() })
+    let squashed: String = typed.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    CHAT_COLOR_NAMES
+        .iter()
+        .find(|name| name.replace('_', "") == squashed)
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| typed.to_string())
 }
 
 /// What a viewer reads when a role list could not be loaded.
@@ -6749,6 +6844,23 @@ fn role_error_text(what: &str, error: &str, signed_in: bool) -> String {
     }
 }
 
+/// One `channel_role_members` answer as the members, or what the viewer reads
+/// when Twitch would not list the group (`what` names it, `list` its list).
+fn role_members_or_error(
+    read: Result<Option<Vec<serde_json::Value>>>,
+    what: &str,
+    list: &str,
+    signed_in: bool,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
+    match read {
+        Ok(Some(members)) => Ok(members),
+        Ok(None) if signed_in => Err(format!("Twitch would not share this channel's {list}.")),
+        Ok(None) => Err(role_error_text(what, "unauthenticated", false)),
+        Err(e) => Err(role_error_text(what, &e.to_string(), signed_in)),
+    }
+}
+
+/// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PredictionEnd {
@@ -6883,7 +6995,7 @@ mod pin_tests {
 
 #[cfg(test)]
 mod scope_check_tests {
-    use super::{missing_scopes, SCOPES};
+    use super::{missing_scopes, requested_scopes, SCOPES};
 
     fn granted(scopes: &str) -> Vec<String> {
         scopes.split_whitespace().map(str::to_string).collect()
@@ -6905,6 +7017,25 @@ mod scope_check_tests {
             .filter(|s| s != "moderator:manage:shield_mode")
             .collect();
         assert_eq!(missing_scopes(SCOPES, &before), ["moderator:manage:shield_mode"]);
+    }
+
+    #[test]
+    fn warn_asks_for_the_scope_only_when_the_sign_in_lacks_it() {
+        use super::lacks_scope;
+        assert!(lacks_scope(&granted(SCOPES), "moderator:manage:warnings"));
+        assert!(!lacks_scope(&granted(&requested_scopes()), "moderator:manage:warnings"));
+    }
+
+    #[test]
+    fn an_optional_scope_is_asked_for_but_never_resets_a_sign_in() {
+        // Every new sign-in asks for it...
+        assert!(requested_scopes().split_whitespace().any(|s| s == "moderator:manage:warnings"));
+        assert!(!SCOPES.split_whitespace().any(|s| s == "moderator:manage:warnings"));
+        // ...but a stored token without it misses nothing the token check requires,
+        // and that check clears accounts (reset_all) only when something is missing.
+        assert!(missing_scopes(SCOPES, &granted(SCOPES)).is_empty());
+        let with_it: Vec<String> = granted(&requested_scopes());
+        assert!(missing_scopes(SCOPES, &with_it).is_empty());
     }
 
     #[test]
@@ -7427,40 +7558,34 @@ mod web_login_tests {
 }
 
 #[cfg(test)]
-mod role_list_tests {
-    use super::{role_error_text, role_list};
-    use serde_json::json;
+mod chat_color_tests {
+    use super::helix_chat_color;
 
     #[test]
-    fn a_listed_role_comes_back_as_its_users() {
-        let answer = json!({"data": {"user": {"id": "1", "mods": {"edges": [
-            {"node": {"id": "2", "login": "nightbot"}},
-            {"node": {"id": "3", "login": "streamelements"}}
-        ]}}}});
-        let mods = role_list(&answer, "mods").unwrap();
-        assert_eq!(mods.iter().map(|m| m["login"].as_str().unwrap()).collect::<Vec<_>>(), ["nightbot", "streamelements"]);
+    fn named_colors_take_twitchs_snake_case_spelling() {
+        assert_eq!(helix_chat_color("SpringGreen"), "spring_green");
+        assert_eq!(helix_chat_color("spring green"), "spring_green");
+        assert_eq!(helix_chat_color("springgreen"), "spring_green");
+        assert_eq!(helix_chat_color("Red"), "red");
+        assert_eq!(helix_chat_color("GoldenRod"), "golden_rod");
     }
 
     #[test]
-    fn an_empty_list_is_a_real_none() {
-        let answer = json!({"data": {"user": {"id": "1", "vips": {"edges": []}}}});
-        assert_eq!(role_list(&answer, "vips").unwrap().len(), 0);
+    fn hex_values_keep_their_hash_with_or_without_one() {
+        assert_eq!(helix_chat_color("#ff69b4"), "#ff69b4");
+        assert_eq!(helix_chat_color("ff69b4"), "#ff69b4");
     }
 
     #[test]
-    fn a_refused_list_is_an_error_never_an_empty_list() {
-        // What Twitch answers an anonymous Mods query today.
-        let answer = json!({
-            "errors": [{"message": "unauthenticated", "path": ["user", "mods"], "extensions": {"code": "Unauthenticated"}}],
-            "data": {"user": {"id": "71092938", "mods": null}}
-        });
-        assert_eq!(role_list(&answer, "mods").unwrap_err(), "unauthenticated");
+    fn anything_else_goes_as_typed_for_twitch_to_refuse() {
+        assert_eq!(helix_chat_color("rainbow"), "rainbow");
+        assert_eq!(helix_chat_color("#ff69"), "#ff69");
     }
+}
 
-    #[test]
-    fn an_unknown_channel_says_so() {
-        assert_eq!(role_list(&json!({"data": {"user": null}}), "mods").unwrap_err(), "channel not found");
-    }
+#[cfg(test)]
+mod role_list_answer_tests {
+    use super::role_error_text;
 
     #[test]
     fn the_viewer_reads_why_the_list_is_missing() {
@@ -7470,5 +7595,185 @@ mod role_list_tests {
             "Couldn't load this channel's moderators (Twitch: unauthenticated)."
         );
         assert!(!role_error_text("VIPs", "service error", true).contains("no VIPs"));
+    }
+}
+
+/// A role a channel hands out, as GQL's `User` lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelRole {
+    Moderators,
+    Vips,
+}
+
+impl ChannelRole {
+    /// The connection on GQL's `User`.
+    pub fn field(self) -> &'static str {
+        match self {
+            ChannelRole::Moderators => "mods",
+            ChannelRole::Vips => "vips",
+        }
+    }
+}
+
+/// Who a role-list read goes out as. Twitch lists a channel's moderators only
+/// to a signed-in viewer (an anonymous read answers `unauthenticated`), so the
+/// read tries the twitch.tv web session the app's sign-in created, then the
+/// rewards (Drops) sign-in, then no one.
+pub enum GqlCaller {
+    WebSession(String),
+    Rewards(String),
+    Anonymous,
+}
+
+impl GqlCaller {
+    fn name(&self) -> &'static str {
+        match self {
+            GqlCaller::WebSession(_) => "the web session",
+            GqlCaller::Rewards(_) => "the rewards sign-in",
+            GqlCaller::Anonymous => "an anonymous viewer",
+        }
+    }
+
+    pub fn is_signed_in(&self) -> bool {
+        !matches!(self, GqlCaller::Anonymous)
+    }
+}
+
+/// Every caller a role-list read can go out as, best first.
+pub async fn role_list_callers(auth: Option<&TwitchAuthService>) -> Vec<GqlCaller> {
+    let mut callers = Vec::new();
+    if let Some(auth) = auth {
+        if let Ok(token) = crate::services::twitch_web_gql::web_session_token(auth).await {
+            callers.push(GqlCaller::WebSession(token));
+        }
+    }
+    if let Ok(token) = crate::services::drops_auth_service::DropsAuthService::get_token().await {
+        callers.push(GqlCaller::Rewards(token));
+    }
+    callers.push(GqlCaller::Anonymous);
+    callers
+}
+
+/// POST one GQL operation as `caller`.
+async fn gql_as(caller: &GqlCaller, body: &serde_json::Value) -> Result<serde_json::Value> {
+    use crate::services::twitch_web_gql::post;
+    let json = match caller {
+        GqlCaller::WebSession(token) => post(Some(token), body.clone(), "RoleList").await,
+        GqlCaller::Anonymous => post(None, body.clone(), "RoleList").await,
+        GqlCaller::Rewards(token) => rewards_gql(token, body).await,
+    };
+    json.map_err(|e| anyhow::anyhow!(e))
+}
+
+/// A GQL read as the rewards sign-in, which belongs to the Android client id.
+async fn rewards_gql(token: &str, body: &serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+    let resp = crate::services::http::client()
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", env!("TWITCH_ANDROID_CLIENT_ID"))
+        .header(AUTHORIZATION, format!("OAuth {token}"))
+        .header("X-Device-Id", uuid::Uuid::new_v4().simple().to_string())
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("GQL request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("GQL answered {}", resp.status()));
+    }
+    resp.json().await.map_err(|e| format!("GQL response was not JSON: {e}"))
+}
+
+/// One page of a channel's moderators or VIPs, 100 at a time.
+pub fn role_page_request(login: &str, role: ChannelRole, after: Option<&str>) -> serde_json::Value {
+    let field = role.field();
+    serde_json::json!({
+        "operationName": "ChannelRoleList",
+        "query": format!(
+            "query ChannelRoleList($login: String!, $after: Cursor) {{ user(login: $login) {{ \
+             {field}(first: 100, after: $after) {{ edges {{ cursor node {{ id login displayName }} }} \
+             pageInfo {{ hasNextPage }} }} }} }}"
+        ),
+        "variables": { "login": login, "after": after },
+    })
+}
+
+/// The members on one `role_page_request` answer and the cursor of the next
+/// page. None when Twitch did not list the group (its answer to an anonymous
+/// read of `mods`: an `unauthenticated` error and a null field).
+pub fn role_page(body: &serde_json::Value, role: ChannelRole) -> Option<(Vec<serde_json::Value>, Option<String>)> {
+    let user = body.pointer("/data/user")?;
+    if user.is_null() {
+        // No channel by that name holds no roles; an error beside it is a refusal.
+        return body.get("errors").is_none().then(|| (Vec::new(), None));
+    }
+    let list = user.get(role.field()).filter(|l| !l.is_null())?;
+    let edges = list.get("edges").and_then(|e| e.as_array()).map(Vec::as_slice).unwrap_or_default();
+    let members = edges
+        .iter()
+        .filter_map(|e| e.get("node"))
+        .filter(|n| n.get("login").and_then(|l| l.as_str()).is_some_and(|l| !l.is_empty()))
+        .cloned()
+        .collect();
+    let more = list.pointer("/pageInfo/hasNextPage").and_then(|m| m.as_bool()).unwrap_or(false);
+    let next = edges
+        .last()
+        .and_then(|e| e.get("cursor"))
+        .and_then(|c| c.as_str())
+        .filter(|c| more && !c.is_empty())
+        .map(str::to_string);
+    Some((members, next))
+}
+
+#[cfg(test)]
+mod role_list_tests {
+    use super::{role_page, role_page_request, ChannelRole};
+    use serde_json::json;
+
+    #[test]
+    fn the_request_pages_the_field_it_names() {
+        let req = role_page_request("chan", ChannelRole::Moderators, Some("c1"));
+        assert_eq!(req["variables"], json!({ "login": "chan", "after": "c1" }));
+        let query = req["query"].as_str().unwrap();
+        assert!(query.contains("mods(first: 100, after: $after)"), "{query}");
+        assert!(role_page_request("chan", ChannelRole::Vips, None)["query"].as_str().unwrap().contains("vips(first: 100"));
+    }
+
+    #[test]
+    fn an_anonymous_mods_read_is_a_refusal_not_an_empty_list() {
+        // What Twitch answers an anonymous read of `mods`.
+        let refused = json!({
+            "errors": [{ "message": "unauthenticated", "path": ["user", "mods"], "extensions": { "code": "Unauthenticated" } }],
+            "data": { "user": { "mods": null } },
+        });
+        assert_eq!(role_page(&refused, ChannelRole::Moderators), None);
+        // Errors with no data at all are a refusal too.
+        assert_eq!(role_page(&json!({ "errors": [{ "message": "failed integrity check" }] }), ChannelRole::Vips), None);
+    }
+
+    #[test]
+    fn a_page_keeps_real_members_and_its_next_cursor() {
+        let body = json!({ "data": { "user": { "vips": {
+            "edges": [
+                { "cursor": "a", "node": { "id": "1", "login": "first", "displayName": "First" } },
+                { "cursor": "b", "node": null },
+                { "cursor": "c", "node": { "id": "3", "login": "third", "displayName": "Third" } },
+            ],
+            "pageInfo": { "hasNextPage": true },
+        } } } });
+        let (members, next) = role_page(&body, ChannelRole::Vips).unwrap();
+        let logins: Vec<_> = members.iter().map(|m| m["login"].as_str().unwrap()).collect();
+        assert_eq!(logins, ["first", "third"]);
+        assert_eq!(next.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn the_last_page_has_no_cursor() {
+        // Twitch sends empty cursors when everything fit on one page.
+        let body = json!({ "data": { "user": { "mods": {
+            "edges": [{ "cursor": "", "node": { "id": "1", "login": "only", "displayName": "Only" } }],
+            "pageInfo": { "hasNextPage": false },
+        } } } });
+        assert_eq!(role_page(&body, ChannelRole::Moderators).unwrap().1, None);
+        let no_channel = json!({ "data": { "user": null } });
+        assert_eq!(role_page(&no_channel, ChannelRole::Moderators), Some((Vec::new(), None)));
     }
 }
