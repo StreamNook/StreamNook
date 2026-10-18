@@ -47,10 +47,24 @@ interface Props {
   onShared: () => void;
 }
 
+/** What one room's fetch found, stamped with the room it describes. */
+interface Found {
+  room: string;
+  streak: WatchStreakMilestone | null;
+  resub: ResubNotification | null;
+}
+
 export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, onShared }) => {
   const addToast = useAppStore((s) => s.addToast);
-  const [streak, setStreak] = useState<WatchStreakMilestone | null>(null);
-  const [resub, setResub] = useState<ResubNotification | null>(null);
+  // Streaks are per room, and only Twitch rooms have them (a Kick room has no
+  // Twitch id). The answer is stamped with its room and compared on read, so
+  // switching rooms, landing in a Kick room or a failed fetch can never leave
+  // one room's Share chip above another room's chat.
+  const room = channel && channelId ? `${channel}:${channelId}` : null;
+  const [found, setFound] = useState<Found | null>(null);
+  const mine = room && found?.room === room ? found : null;
+  const streak = mine?.streak ?? null;
+  const resub = mine?.resub ?? null;
   // Dismissals are keyed by channel so leaving and returning does not resurrect
   // something you already waved away, while switching rooms starts clean.
   const [dismissed, setDismissed] = useState<{ channel: string; what: string }[]>([]);
@@ -61,28 +75,37 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
     !!channel && dismissed.some((d) => d.channel === channel && d.what === what);
 
   useEffect(() => {
-    if (!channelId || !channel) {
-      return;
-    }
+    if (!room || !channelId) return;
     let cancelled = false;
+    // Each half lands on its own, and a failure clears that half rather than
+    // leaving whatever was there.
+    const take = (patch: Partial<Pick<Found, 'streak' | 'resub'>>) => {
+      if (cancelled) return;
+      setFound((prev) => ({
+        ...(prev?.room === room ? prev : { room, streak: null, resub: null }),
+        ...patch,
+      }));
+    };
     (async () => {
       try {
         const m = await invoke<WatchStreakMilestone | null>('get_watch_streak', { channelId });
-        if (!cancelled) setStreak(m ?? null);
+        take({ streak: m ?? null });
       } catch (err) {
         Logger.debug('[Streaks] watch streak unavailable:', err);
+        take({ streak: null });
       }
       try {
         const r = await invoke<ResubNotification | null>('get_resub_notification', { channelId });
-        if (!cancelled) setResub(r ?? null);
+        take({ resub: r ?? null });
       } catch (err) {
         Logger.debug('[Streaks] resub unavailable:', err);
+        take({ resub: null });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [channel, channelId]);
+  }, [room, channelId]);
 
   const dismiss = useCallback(
     (what: string) => {
@@ -92,8 +115,14 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
     [channel],
   );
 
+  // A share consumes the token, so its strip goes; only for the room it was
+  // shared from, in case the viewer switched rooms while it was in flight.
+  const clear = (sharedRoom: string, what: 'streak' | 'resub') =>
+    setFound((prev) => (prev?.room === sharedRoom ? { ...prev, [what]: null } : prev));
+
   const shareWatchStreak = async () => {
-    if (!channelId || !streak || busy) return;
+    if (!room || !channelId || !streak || busy) return;
+    const sharedRoom = room;
     setBusy(true);
     try {
       const ok = await invoke<boolean>('share_watch_streak', {
@@ -102,7 +131,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
         message: message.trim() || null,
       });
       if (ok) {
-        setStreak(null);
+        clear(sharedRoom, 'streak');
         onShared();
       } else {
         addToast('Could not share that watch streak.', 'error');
@@ -116,7 +145,8 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
   };
 
   const shareResub = async () => {
-    if (!channel || !resub || busy) return;
+    if (!room || !channel || !resub || busy) return;
+    const sharedRoom = room;
     setBusy(true);
     try {
       const ok = await invoke<boolean>('use_resub_token', {
@@ -126,7 +156,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
         tokenId: resub.id,
       });
       if (ok) {
-        setResub(null);
+        clear(sharedRoom, 'resub');
         onShared();
       } else {
         addToast('Could not share that resub.', 'error');

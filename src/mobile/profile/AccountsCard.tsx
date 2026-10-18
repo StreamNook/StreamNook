@@ -2,9 +2,13 @@
 // in, what that account does for you here, and the one action that matters.
 //
 // Twitch is the account the whole app runs on, so its row only ever offers
-// signing out (which signs you out of StreamNook). Kick is optional: signed out
-// it offers Kick's own branded sign-in; signed in it can re-read your follows
-// and sign out of Kick alone.
+// signing out (which signs you out of StreamNook). 7TV is what lets you wear a
+// paint and a 7TV badge: Connect in 7TV's own blue, Disconnect with the same
+// two-tap confirm. Kick is optional: signed out it offers Kick's own branded
+// sign-in; signed in it can re-read your follows and sign out of Kick alone.
+//
+// Each row shows that account's own picture, never the other's: the Twitch row
+// your Twitch picture, the 7TV row your 7TV picture.
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowsClockwise } from 'phosphor-react';
@@ -16,6 +20,10 @@ import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { usePicksStore } from './picksStore';
+import { BrandMark, BrandTile } from './IdentityParts';
+import { SEVENTV_BLUE, SEVENTV_INK } from './identity';
+import type { AvatarPick } from '../../types/profileView';
 
 /** Two-tap confirm that disarms itself, shared by both sign-out buttons. */
 function useArmed(ms = 3000): [boolean, () => boolean] {
@@ -66,10 +74,37 @@ const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undef
   </div>
 );
 
-const SignOutButton: React.FC<{ armed: boolean; disabled?: boolean; onTap: () => void }> = ({
+/** The 7TV row's picture: your 7TV picture with 7TV's mark on a disc at its
+ *  corner, or the mark alone in a tile of 7TV's blue when you have none. */
+const SevenTvAccountPicture: React.FC<{ picture: AvatarPick | null | undefined }> = ({ picture }) => {
+  const [failedFor, setFailedFor] = useState<string | null>(null);
+  if (picture && failedFor !== picture.still) {
+    return (
+      <div className="relative shrink-0">
+        <img
+          src={picture.animated ?? picture.still}
+          alt=""
+          draggable={false}
+          className="w-11 h-11 rounded-full object-cover"
+          onError={(e) => {
+            if (picture.animated && e.currentTarget.src !== picture.still) e.currentTarget.src = picture.still;
+            else setFailedFor(picture.still);
+          }}
+        />
+        <span className="absolute -bottom-0.5 -right-1 w-[17px] h-[17px] rounded-full bg-tertiary flex items-center justify-center">
+          <BrandMark brand="seventv" size={9} />
+        </span>
+      </div>
+    );
+  }
+  return <BrandTile brand="seventv" color={SEVENTV_BLUE} />;
+};
+
+const SignOutButton: React.FC<{ armed: boolean; disabled?: boolean; onTap: () => void; label?: string }> = ({
   armed,
   disabled,
   onTap,
+  label = 'Sign out',
 }) => (
   <button
     onClick={onTap}
@@ -82,7 +117,7 @@ const SignOutButton: React.FC<{ armed: boolean; disabled?: boolean; onTap: () =>
         armed ? 'bg-error/15 text-error' : 'glass-button text-textSecondary'
       }`}
     >
-      {armed ? 'Confirm' : 'Sign out'}
+      {armed ? 'Confirm' : label}
     </span>
   </button>
 );
@@ -97,7 +132,27 @@ export const AccountsCard: React.FC = () => {
   const kickFollows = useFollowsStore((s) => s.follows.filter((f) => f.provider === 'kick').length);
 
   const [twitchArmed, armTwitch] = useArmed();
+  const [sevenTvArmed, armSevenTv] = useArmed();
   const [kickArmed, armKick] = useArmed();
+  // Read by the identity card above (useOwnPicks), so this row needs no read of
+  // its own; null until the 7TV status has answered.
+  const sevenTv = usePicksStore((s) => (s.userId === currentUser?.user_id ? s.sevenTv : null));
+  const sevenTvPicture = usePicksStore((s) => (s.userId === currentUser?.user_id ? s.identity?.picture : null));
+  const sevenTvConnecting = usePicksStore((s) => s.connecting);
+
+  const connectSevenTv = async () => {
+    const user = currentUser;
+    if (!user?.user_id) return;
+    const store = usePicksStore.getState();
+    if (!(await store.connectSevenTv(user.user_id))) return;
+    // Your paints and 7TV badges become yours to change; read them again.
+    void store.loadPicks({
+      userId: user.user_id,
+      login: user.login || user.username,
+      displayName: user.display_name || user.username,
+    });
+  };
+
   const [syncing, setSyncing] = useState(false);
 
   const resyncKick = async () => {
@@ -129,7 +184,7 @@ export const AccountsCard: React.FC = () => {
     <div className="glass-panel divide-y divide-borderSubtle">
       {/* Twitch */}
       <div className="flex items-center gap-3 p-3.5">
-        <AccountAvatar provider="twitch" src={currentUser?.profile_image_url} sevenTvId={currentUser?.user_id} />
+        <AccountAvatar provider="twitch" src={currentUser?.profile_image_url} />
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold text-textPrimary truncate">
             {currentUser?.display_name || currentUser?.login || PROVIDERS.twitch.label}
@@ -144,6 +199,44 @@ export const AccountsCard: React.FC = () => {
             if (armTwitch()) void signOutActiveAccount();
           }}
         />
+      </div>
+
+      {/* 7TV */}
+      <div className="flex items-center gap-3 p-3.5">
+        <SevenTvAccountPicture picture={sevenTvPicture} />
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-semibold text-textPrimary truncate">7TV</div>
+          <div className="text-[12.5px] text-textMuted leading-snug truncate">
+            {sevenTv?.signedIn
+              ? sevenTvArmed
+                ? 'Your paint and badge stay on 7TV'
+                : 'Connected'
+              : 'Paints and badges'}
+          </div>
+        </div>
+        {sevenTv?.signedIn ? (
+          <SignOutButton
+            armed={sevenTvArmed}
+            label="Disconnect"
+            onTap={() => {
+              if (armSevenTv()) void usePicksStore.getState().disconnectSevenTv();
+            }}
+          />
+        ) : sevenTv ? (
+          // 7TV's own colors, so it reads as connecting WITH 7TV.
+          <button
+            onClick={() => void connectSevenTv()}
+            disabled={sevenTvConnecting}
+            className="sn-touch shrink-0 flex items-center disabled:opacity-60"
+          >
+            <span
+              className="px-3.5 py-1.5 rounded-full text-[12.5px] font-bold whitespace-nowrap"
+              style={{ backgroundColor: SEVENTV_BLUE, color: SEVENTV_INK }}
+            >
+              {sevenTvConnecting ? 'Connecting' : 'Connect'}
+            </span>
+          </button>
+        ) : null}
       </div>
 
       {/* Kick */}
@@ -178,7 +271,7 @@ export const AccountsCard: React.FC = () => {
             />
           </>
         ) : (
-          // Kick's own colours, so it reads as signing in WITH Kick.
+          // Kick's own colors, so it reads as signing in WITH Kick.
           <button
             onClick={() => void connect('kick')}
             disabled={kick.busy}

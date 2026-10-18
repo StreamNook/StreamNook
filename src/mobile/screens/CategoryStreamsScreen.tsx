@@ -12,6 +12,7 @@ import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
+import { EmptyNote } from '../ui/EmptyNote';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import { bumpPreviewStamp } from '../followRefresh';
@@ -167,9 +168,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
         {loading ? (
           <SkeletonCards />
         ) : streams.length === 0 ? (
-          <div className="flex items-center justify-center py-20 text-sm text-textMuted">
-            No live streams in this category.
-          </div>
+          <EmptyNote text="No live streams in this category." hint={null} />
         ) : (
           // Was `grid-cols-1 md:grid-cols-2 xl:grid-cols-3`, which is the exact
           // anti-pattern AdaptiveGrid was written for: Tailwind's breakpoints
@@ -188,6 +187,8 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
                     hypeTrain={activeHypeTrainChannels.get(s.user_id) ?? undefined}
                     watchStreak={watchStreaks[s.user_id]}
                     onPress={(stream) => void startStream(stream.user_login, stream)}
+                    // The screen's title already names the category.
+                    showCategory={false}
                   />
                 </SettleIn>
               ))}

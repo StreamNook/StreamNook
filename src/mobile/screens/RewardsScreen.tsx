@@ -21,6 +21,8 @@ import { MobileSheet } from '../ui/MobileSheet';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery } from '../rewards/badgeGalleryStore';
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
+import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
+import { ProviderMark } from '../../components/ProviderLogo';
 import {
   blurbText,
   getRewardsDrops,
@@ -100,14 +102,6 @@ const GameGroupSection: React.FC<{
   </div>
 );
 
-const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
-  { id: 'newest', label: 'Newest' },
-  { id: 'available', label: 'Available' },
-  { id: 'soon', label: 'Coming soon' },
-  { id: 'usage', label: 'Most used' },
-  { id: 'oldest', label: 'Oldest' },
-];
-
 const wordColor = (tile: BadgeTile) =>
   tile.owned
     ? 'text-accent'
@@ -155,6 +149,14 @@ export const RewardsScreen: React.FC = () => {
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
+  // The search as typed, read when an answer lands. Written from the input's
+  // change handler rather than during render.
+  const latestQuery = useRef('');
+  const changeQuery = (value: string) => {
+    latestQuery.current = value;
+    setDropsQuery(value);
+  };
+
   useEffect(() => {
     if (!badgeDetail) return;
     const [setId, versionId] = (badgeDetail.keys[0] ?? '').split('/');
@@ -180,12 +182,35 @@ export const RewardsScreen: React.FC = () => {
 
   // A read on mount and on pull-to-refresh asks Twitch again; a new search
   // re-filters Rust's last read.
+  //
+  // Answers can land out of order (a refresh reads the network, a filter only
+  // the cache), so one is drawn only if it was filtered by the search on
+  // screen now; Rust echoes the trimmed query it used. A fresh read that lost
+  // that race is filtered again by the current search, so its new data is
+  // not thrown away.
   const load = useCallback(async (query: string, refresh: boolean) => {
+    const current = () => latestQuery.current.trim();
     try {
-      setDrops(await getRewardsDrops(query, refresh));
+      const next = await getRewardsDrops(query, refresh);
+      if (next.query === current()) {
+        setDrops(next);
+        return;
+      }
+      if (!refresh) return;
+      const refiltered = await getRewardsDrops(latestQuery.current, false);
+      if (refiltered.query === current()) setDrops(refiltered);
     } catch (err) {
       Logger.warn('[Rewards] load failed:', err);
-      setDrops({ connected: false, query: '', in_progress: [], available: [], earned: [], in_progress_empty: '' });
+      if (query.trim() !== current()) return;
+      setDrops({
+        connected: false,
+        query: '',
+        in_progress: [],
+        available: [],
+        earned: [],
+        in_progress_empty: '',
+        no_match: '',
+      });
     }
   }, []);
 
@@ -226,19 +251,32 @@ export const RewardsScreen: React.FC = () => {
   // The account is the signed-in main one, which Rust resolves itself; the id
   // only re-runs the load when the account changes.
   const uid = currentUser?.user_id;
+  // Which account the open Badges segment last asked Twitch about; cleared on
+  // leaving it, so every visit asks again.
+  const badgeVisit = useRef<string | null>(null);
   useEffect(() => {
-    if (tab !== 'badges') return;
+    if (tab !== 'badges') {
+      badgeVisit.current = null;
+      return;
+    }
     followBadgeSync();
-    // Opening the tab is when someone checks what they have: Rust re-reads the
-    // collection in the background even when the wall is still warm.
-    void loadBadgeGallery(badgeSort, true);
+    // Opening the segment (or switching account) is when someone checks what
+    // they have: Rust re-reads the collection in the background even when the
+    // wall is still warm. A new sort only reorders what Rust already holds,
+    // so it reads the cache.
+    const visit = uid ?? '';
+    const fresh = badgeVisit.current !== visit;
+    badgeVisit.current = visit;
+    void loadBadgeGallery(badgeSort, fresh);
   }, [tab, uid, badgeSort]);
 
   // A relay push, a claim, a finished collection read, the metadata backfill
-  // or an earn window opening or closing: Rust says so, and the wall is read again.
+  // or an earn window opening or closing: Rust says so, and the wall is read
+  // again, but only once it has been read at all; the segment's own first
+  // read covers a wall never opened.
   useEffect(() => {
     const unlisten = listen('badge-standing-changed', () => {
-      void loadBadgeGallery(badgeSort, false);
+      if (useBadgeGallery.getState().wall) void loadBadgeGallery(badgeSort, false);
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -341,28 +379,28 @@ export const RewardsScreen: React.FC = () => {
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2 pt-1 pb-2">
-                <span className="text-[12px] text-textMuted">{wall?.count_label}</span>
-                {syncLeft > 0 && <span className="ml-auto text-[11.5px] text-textMuted">{syncLeft} to sync</span>}
-              </div>
-              {wall && <MobileMissingNow missing={wall.missing} onOpen={openMissing} />}
-              {/* The sort row wears the glaze and the chosen sort is the darker
-                  pill inside it. The options scroll inside the glass, so its
-                  rim stays put. */}
-              <div className="mb-2 w-fit max-w-full chrome-glaze chrome-glaze--flat">
-                <div className="flex gap-1 p-1 overflow-x-auto rounded-full">
-                  {BADGE_SORTS.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setBadgeSort(s.id)}
-                      className={`shrink-0 px-3 py-1 rounded-full text-[12.5px] transition-colors ${
-                        badgeSort === s.id ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
-                      }`}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
+              {/* What can still be earned leads; the whole wall follows under
+                  its own heading. */}
+              {wall && (
+                <div className="pt-2">
+                  <MobileMissingNow missing={wall.missing} onOpen={openMissing} />
                 </div>
+              )}
+              <div className="flex items-center gap-2 pb-3">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-[12px] font-semibold text-textMuted uppercase tracking-wide">All badges</h2>
+                  <div className="mt-[3px] flex items-center gap-1.5 text-[12px] text-textMuted min-w-0">
+                    <span className="truncate">{wall?.count_label}</span>
+                    {syncLeft > 0 && (
+                      // The metadata backfill, in the strip's own "checking" language.
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        <span aria-hidden className="missing-now-pulse" />
+                        <span>Updating badges</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <BadgeSortMenu sort={badgeSort} onChange={setBadgeSort} />
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-7 gap-2">
                 {tiles.map((tile, bi) => {
@@ -403,7 +441,7 @@ export const RewardsScreen: React.FC = () => {
           {drops?.connected === false && (
             <div className="glass-panel p-4 mt-2">
               <div className="flex items-center gap-2 mb-1.5">
-                <Gift size={18} className="text-accent" />
+                <ProviderMark provider="twitch" size={15} />
                 <span className="text-[15px] font-semibold text-textPrimary">Twitch Drops</span>
               </div>
               <p className="text-[13px] text-textSecondary mb-3 leading-relaxed">
@@ -431,13 +469,13 @@ export const RewardsScreen: React.FC = () => {
                 <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted z-10" />
                 <input
                   value={dropsQuery}
-                  onChange={(e) => setDropsQuery(e.target.value)}
+                  onChange={(e) => changeQuery(e.target.value)}
                   placeholder="Search games or campaigns"
                   className="glass-input w-full rounded-lg pl-9 pr-9 py-2.5 text-[14px] text-textPrimary placeholder:text-textMuted outline-none"
                 />
                 {dropsQuery && (
                   <button
-                    onClick={() => setDropsQuery('')}
+                    onClick={() => changeQuery('')}
                     aria-label="Clear search"
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-textMuted z-10"
                   >
@@ -446,127 +484,135 @@ export const RewardsScreen: React.FC = () => {
                 )}
               </div>
 
-              <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-2 mb-1.5">
-                In progress
-              </div>
-              {inProgressGroups.length === 0 ? (
-                <div className="glass-panel p-4 text-[13px] text-textMuted">{drops.in_progress_empty}</div>
+              {drops.no_match ? (
+                // A search that found nothing anywhere says so once, rather
+                // than as three empty sections.
+                <p className="mt-4 text-[12.5px] text-textMuted leading-snug">{drops.no_match}</p>
               ) : (
-                inProgressGroups.map((group, gIdx) => (
-                  <SettleIn key={group.key} index={gIdx} settled={dropsSettled}>
-                    <GameGroupSection
-                      art={group.art}
-                      game={group.game}
-                      countLabel={group.count_label}
-                      expanded={isGroupOpen(group.key)}
-                      onToggle={() => toggleGroup(group.key)}
-                    >
-                      {group.campaigns.map((card) => (
-                        <div
-                          key={card.id}
-                          ref={(el) => {
-                            campaignRefs.current[card.id] = el;
-                          }}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setCampaignDetail(card)}
-                          className={`glass-panel p-2.5 flex gap-2.5 transition-shadow duration-500 active:opacity-80 ${
-                            flashedCampaign === card.id ? 'ring-2 ring-accent' : ''
-                          }`}
-                        >
-                          <div className="flex-1 min-w-0 flex flex-col justify-center">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
-                              <span className="text-[12px] text-textMuted shrink-0">{card.claimed_label}</span>
-                            </div>
-                            <div className="h-1.5 rounded-full bg-surface overflow-hidden mt-1.5">
-                              <div
-                                className="h-full rounded-full bg-accent transition-[width]"
-                                style={{ width: `${card.percent}%` }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </GameGroupSection>
-                  </SettleIn>
-                ))
-              )}
-
-              {availableGroups.length > 0 && (
                 <>
-                  <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-4 mb-1.5">
-                    Available now
+                  <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-2 mb-1.5">
+                    In progress
                   </div>
-                  {availableGroups.map((group, gIdx) => (
-                    <SettleIn key={group.key} index={inProgressGroups.length + gIdx} settled={dropsSettled}>
-                      <GameGroupSection
-                        art={group.art}
-                        game={group.game}
-                        countLabel={group.count_label}
-                        expanded={isGroupOpen(group.key)}
-                        onToggle={() => toggleGroup(group.key)}
-                      >
-                        {group.campaigns.map((card) => (
-                          <div
-                            key={card.id}
-                            ref={(el) => {
-                              campaignRefs.current[card.id] = el;
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => setCampaignDetail(card)}
-                            className="glass-panel p-2.5 flex gap-2.5 active:opacity-80"
-                          >
-                            {card.art ? (
-                              <img
-                                src={card.art}
-                                alt=""
-                                loading="lazy"
-                                draggable={false}
-                                className="w-[52px] h-[52px] shrink-0 object-cover rounded-md ring-1 ring-white/10"
-                              />
-                            ) : (
-                              <div className="w-[52px] h-[52px] shrink-0 rounded-md bg-surface flex items-center justify-center">
-                                <Gift size={18} className="text-textMuted" />
+                  {inProgressGroups.length === 0 ? (
+                    <div className="glass-panel p-4 text-[13px] text-textMuted">{drops.in_progress_empty}</div>
+                  ) : (
+                    inProgressGroups.map((group, gIdx) => (
+                      <SettleIn key={group.key} index={gIdx} settled={dropsSettled}>
+                        <GameGroupSection
+                          art={group.art}
+                          game={group.game}
+                          countLabel={group.count_label}
+                          expanded={isGroupOpen(group.key)}
+                          onToggle={() => toggleGroup(group.key)}
+                        >
+                          {group.campaigns.map((card) => (
+                            <div
+                              key={card.id}
+                              ref={(el) => {
+                                campaignRefs.current[card.id] = el;
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setCampaignDetail(card)}
+                              className={`glass-panel p-2.5 flex gap-2.5 transition-shadow duration-500 active:opacity-80 ${
+                                flashedCampaign === card.id ? 'ring-2 ring-accent' : ''
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
+                                  <span className="text-[12px] text-textMuted shrink-0">{card.claimed_label}</span>
+                                </div>
+                                <div className="h-1.5 rounded-full bg-surface overflow-hidden mt-1.5">
+                                  <div
+                                    className="h-full rounded-full bg-accent transition-[width]"
+                                    style={{ width: `${card.percent}%` }}
+                                  />
+                                </div>
                               </div>
-                            )}
-                            <div className="flex-1 min-w-0 flex flex-col justify-center">
-                              <div className="flex items-center gap-2">
-                                <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
-                                {card.needs_link && <Warning size={14} className="text-warning shrink-0" />}
-                              </div>
-                              <div className="text-[11.5px] text-textMuted mt-1">{card.detail}</div>
                             </div>
+                          ))}
+                        </GameGroupSection>
+                      </SettleIn>
+                    ))
+                  )}
+
+                  {availableGroups.length > 0 && (
+                    <>
+                      <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-4 mb-1.5">
+                        Available now
+                      </div>
+                      {availableGroups.map((group, gIdx) => (
+                        <SettleIn key={group.key} index={inProgressGroups.length + gIdx} settled={dropsSettled}>
+                          <GameGroupSection
+                            art={group.art}
+                            game={group.game}
+                            countLabel={group.count_label}
+                            expanded={isGroupOpen(group.key)}
+                            onToggle={() => toggleGroup(group.key)}
+                          >
+                            {group.campaigns.map((card) => (
+                              <div
+                                key={card.id}
+                                ref={(el) => {
+                                  campaignRefs.current[card.id] = el;
+                                }}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => setCampaignDetail(card)}
+                                className="glass-panel p-2.5 flex gap-2.5 active:opacity-80"
+                              >
+                                {card.art ? (
+                                  <img
+                                    src={card.art}
+                                    alt=""
+                                    loading="lazy"
+                                    draggable={false}
+                                    className="w-[52px] h-[52px] shrink-0 object-cover rounded-md ring-1 ring-white/10"
+                                  />
+                                ) : (
+                                  <div className="w-[52px] h-[52px] shrink-0 rounded-md bg-surface flex items-center justify-center">
+                                    <Gift size={18} className="text-textMuted" />
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[13.5px] font-medium text-textPrimary truncate">{card.name}</span>
+                                    {card.needs_link && <Warning size={14} className="text-warning shrink-0" />}
+                                  </div>
+                                  <div className="text-[11.5px] text-textMuted mt-1">{card.detail}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </GameGroupSection>
+                        </SettleIn>
+                      ))}
+                    </>
+                  )}
+
+                  {drops.earned.length > 0 && (
+                    <>
+                      <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-4 mb-1.5">
+                        Recently earned
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        {drops.earned.map((drop) => (
+                          <div key={drop.id} className="glass-panel p-2.5 flex items-center gap-2.5">
+                            {drop.image ? (
+                              <img src={drop.image} alt="" className="w-9 h-9 rounded object-cover shrink-0" draggable={false} />
+                            ) : (
+                              <Gift size={20} className="text-accent shrink-0" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[13.5px] text-textPrimary truncate">{drop.name}</div>
+                              {drop.game && <div className="text-[12px] text-textMuted truncate">{drop.game}</div>}
+                            </div>
+                            <CheckCircle size={16} className="text-success shrink-0" />
                           </div>
                         ))}
-                      </GameGroupSection>
-                    </SettleIn>
-                  ))}
-                </>
-              )}
-
-              {drops.earned.length > 0 && (
-                <>
-                  <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mt-4 mb-1.5">
-                    Recently earned
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {drops.earned.map((drop) => (
-                      <div key={drop.id} className="glass-panel p-2.5 flex items-center gap-2.5">
-                        {drop.image ? (
-                          <img src={drop.image} alt="" className="w-9 h-9 rounded object-cover shrink-0" draggable={false} />
-                        ) : (
-                          <Gift size={20} className="text-accent shrink-0" />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[13.5px] text-textPrimary truncate">{drop.name}</div>
-                          {drop.game && <div className="text-[12px] text-textMuted truncate">{drop.game}</div>}
-                        </div>
-                        <CheckCircle size={16} className="text-success shrink-0" />
                       </div>
-                    ))}
-                  </div>
+                    </>
+                  )}
                 </>
               )}
             </>
@@ -575,7 +621,7 @@ export const RewardsScreen: React.FC = () => {
       </PullToRefresh>
 
       {/* Badge detail: art, status, how it is earned and when. */}
-      <MobileSheet open={!!badgeDetail} onClose={() => setBadgeDetail(null)} maxHeightFraction={0.66}>
+      <MobileSheet open={!!badgeDetail} onClose={() => setBadgeDetail(null)} maxHeightFraction={0.8}>
         {badgeDetail && (
           <div className="flex flex-col items-center text-center pb-1">
             <img src={badgeDetail.image} alt="" className="w-20 h-20 object-contain mb-2.5" draggable={false} />
@@ -662,18 +708,19 @@ export const RewardsScreen: React.FC = () => {
         )}
       </MobileSheet>
 
-      {/* Every reward in one campaign, in the order you earn them. */}
-      <MobileSheet
-        open={!!campaignDetail}
-        onClose={() => setCampaignDetail(null)}
-        title={campaignDetail?.name}
-        maxHeightFraction={0.8}
-      >
+      {/* Every reward in one campaign, in the order you earn them. Sized to
+          its content up to 80 percent; "Find a stream" stays at the bottom. */}
+      <MobileSheet open={!!campaignDetail} onClose={() => setCampaignDetail(null)} maxHeightFraction={0.8}>
         {campaignDetail && (
           <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 text-[12.5px] text-textMuted">
-              {campaignDetail.game_name && <span className="truncate">{campaignDetail.game_name}</span>}
-              <span className="ml-auto shrink-0">{campaignDetail.meta_label}</span>
+            {/* Title and its one line of context, centered as one block. The
+                sheet's own title slot is a 14 px label in the drag handle, too
+                slight to head a campaign. */}
+            <div className="flex flex-col items-center gap-1 text-center pt-2 pb-2">
+              <h2 className="text-[16px] font-semibold text-textPrimary leading-snug">{campaignDetail.name}</h2>
+              <div className="text-[12.5px] text-textMuted tabular-nums">
+                {[campaignDetail.game_name, campaignDetail.meta_label].filter(Boolean).join(' · ')}
+              </div>
             </div>
 
             {/* Twitch will not credit watch time until the game account is
@@ -728,7 +775,9 @@ export const RewardsScreen: React.FC = () => {
                           transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
                           className="overflow-hidden"
                         >
-                          <div className="max-h-[40vh] overflow-y-auto mt-1 flex flex-col">
+                          {/* About 40 percent of the screen, so eighty channels
+                              never push the rewards away. */}
+                          <div className="glass-panel max-h-[40vh] overflow-y-auto mt-1 flex flex-col">
                             {campaignDetail.channels.map((c) => (
                               <button
                                 key={c.id || c.name}
@@ -750,9 +799,13 @@ export const RewardsScreen: React.FC = () => {
                                     started_at: new Date().toISOString(),
                                   });
                                 }}
-                                className="px-3 py-2.5 text-left text-[13px] text-textPrimary border-b border-borderSubtle last:border-b-0 active:opacity-70"
+                                aria-label={`Watch ${c.name}`}
+                                className="shrink-0 h-10 px-3 flex items-center gap-2 text-left border-b border-borderSubtle last:border-b-0 active:opacity-70"
                               >
-                                {c.name}
+                                <span className="flex-1 min-w-0 truncate text-[13px] text-textPrimary">{c.name}</span>
+                                {/* Says what the tap does: it leaves the sheet
+                                    and starts that channel. */}
+                                <span className="shrink-0 text-[12px] text-textMuted">Watch</span>
                               </button>
                             ))}
                           </div>
@@ -762,20 +815,6 @@ export const RewardsScreen: React.FC = () => {
                   </div>
                 );
               })()}
-
-            {campaignDetail.find_stream && (
-              <button
-                onClick={() => {
-                  const category = campaignDetail.find_stream!;
-                  setCampaignDetail(null);
-                  openBrowseCategory(category);
-                  setNavTab('browse');
-                }}
-                className="glass-button rounded-lg py-2.5 text-[13px] font-medium text-textPrimary"
-              >
-                Find a stream
-              </button>
-            )}
 
             {campaignDetail.drops.map((drop) => (
               <div key={drop.id} className="flex items-center gap-2.5 py-1">
@@ -817,6 +856,31 @@ export const RewardsScreen: React.FC = () => {
                 </div>
               </div>
             ))}
+
+            {/* Last, and sticky: a long campaign scrolls its rewards under the
+                button instead of pushing the way to watch out of reach. The
+                band behind it fades the rows out rather than cutting them.
+                glass-exempt: a fade-out band in the sheet's own color, solid where the button sits. */}
+            {campaignDetail.find_stream && (
+              <div
+                className="sticky bottom-0 -mx-4 px-4 pt-3 pb-1 mt-1"
+                style={{
+                  background: 'linear-gradient(to top, var(--color-background-tertiary) 65%, transparent)',
+                }}
+              >
+                <button
+                  onClick={() => {
+                    const category = campaignDetail.find_stream!;
+                    setCampaignDetail(null);
+                    openBrowseCategory(category);
+                    setNavTab('browse');
+                  }}
+                  className="glass-button sn-touch w-full rounded-lg text-[13.5px] font-semibold text-textPrimary"
+                >
+                  Find a stream
+                </button>
+              </div>
+            )}
           </div>
         )}
       </MobileSheet>

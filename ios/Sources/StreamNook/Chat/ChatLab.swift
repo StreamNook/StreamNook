@@ -128,6 +128,8 @@ struct ChatLabView: View {
 /// - `chatpins[:close]` unrolls (or rolls up) the pinned banner
 /// - `chatreload` reloads the room on screen (the core rebuilds the connection)
 /// - `chatrooms` logs the tabs, the room on screen, its pins and streaks
+/// - `chatlifecycle[:TEXT]` logs the core's chat connection log (which transport authenticated,
+///   reconnects, fallbacks), its last 20 lines, or only those holding TEXT (`_` for spaces)
 /// - `findpins` opens, beside the stream, the first Browse channel with pinned messages
 /// - `findstreak` opens the first followed live channel with a watch streak to share
 @MainActor
@@ -227,6 +229,16 @@ enum ChatDrive {
             }.joined(separator: ",")
             let streaks = rooms.activeStreaks
             log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen)")
+        case "chatlifecycle":
+            let filter = value.replacingOccurrences(of: "_", with: " ")
+            guard let json = try? await model.core.invoke("get_chat_lifecycle_log", "{}"),
+                  let lines = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) else {
+                log.error("drive lifecycle: no log")
+                return true
+            }
+            let shown = lines.filter { filter.isEmpty || $0.localizedCaseInsensitiveContains(filter) }.suffix(20)
+            if shown.isEmpty { log.notice("drive lifecycle: no lines\(filter.isEmpty ? "" : " holding \(filter)", privacy: .public)") }
+            for line in shown { log.notice("drive lifecycle \(line, privacy: .public)") }
         case "findpins":
             await findPins(model)
         case "findstreak":

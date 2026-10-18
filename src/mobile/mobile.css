@@ -81,6 +81,27 @@
   width: 40px;
   width: clamp(22px, 18cqh, 60px);
   height: auto;
+  /* The mark's mass leans left of its box, so box-centered it reads off
+     center; it moves right by 6 percent of its width. */
+  transform: translateX(6%);
+}
+
+/* Concentric corners on the stream cards. The preview sits 8px inside the
+   card, so its corner is the card's minus 8px in the same corner shape, and
+   the two curves share a center. A 4px preview inside an 8px (or 24px
+   squircle) card read as two unrelated shapes. Round cards are 18px here, a
+   step softer than desktop's 8px; the squircle keeps desktop's 24px. */
+.sn-mobile .media-card {
+  --media-card-radius: 18px;
+}
+@supports (corner-shape: squircle) {
+  .sn-mobile .media-card {
+    --media-card-radius: 24px;
+  }
+}
+.sn-mobile .media-card .sn-card-thumb {
+  border-radius: calc(var(--media-card-radius) - 8px);
+  corner-shape: var(--media-card-corner);
 }
 
 /* One tile of the badge wall. Several hundred of these mount at once; with
@@ -130,4 +151,50 @@
   box-shadow:
     inset -1px 0 0 0 rgba(255, 255, 255, 0.1),
     0 0 40px -10px rgba(0, 0, 0, 0.6);
+}
+
+/* The segment track (SegmentedControl): the theme's own raised surface, its
+   surface over its background, which is the very pair the theme's text floors
+   are measured on, so the secondary labels' contrast holds on what the phone
+   draws. Opaque, so a list scrolling under it never shows through. The edge is
+   the glass family's: a lit rim all the way round that fades inward over about
+   four pixels (nested inset strokes adding up to roughly 0.26 white at the
+   outer pixel), and a dark hairline just outside it. The rim stays at the edge,
+   clear of the labels. */
+.sn-mobile .sn-segment-track {
+  border-radius: 9999px;
+  background: linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background);
+  box-shadow:
+    inset 0 0 0 0.33px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 0.67px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.02),
+    inset 0 0 0 4px rgba(255, 255, 255, 0.025),
+    0 0 0 0.5px rgba(0, 0, 0, 0.4);
+}
+
+/* The floor under the floating tab bar: the page's own background rising from
+   clear on an eased curve (smoothstep, to 92%), so content scrolling down fades
+   out under the bar instead of showing through its glass, with no visible
+   start line and no bare strip below it. It covers the bar, the gesture inset
+   under it, and a 28px lead-in above it; content higher up stays at full
+   strength. It never takes a touch. */
+.sn-mobile .sn-tabbar-floor {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 56px) + 28px);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    color-mix(in srgb, var(--color-background) 5.6%, transparent) 15%,
+    color-mix(in srgb, var(--color-background) 19.9%, transparent) 30%,
+    color-mix(in srgb, var(--color-background) 39.1%, transparent) 45%,
+    color-mix(in srgb, var(--color-background) 59.6%, transparent) 60%,
+    color-mix(in srgb, var(--color-background) 77.6%, transparent) 75%,
+    color-mix(in srgb, var(--color-background) 89.4%, transparent) 90%,
+    color-mix(in srgb, var(--color-background) 92%, transparent) 100%
+  );
 }

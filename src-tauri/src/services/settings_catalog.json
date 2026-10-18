@@ -1140,8 +1140,10 @@
    ],
    "nested": true,
    "logo": null,
-   "detail": "Scales emotes in chat relative to the text, with 1.00x being the default size.",
-   "aliases": []
+   "detail": "Scales GIFs in chat relative to the text, with 1.00x being the default size.",
+   "aliases": [
+    "gif size"
+   ]
   },
   {
    "page": "chat",

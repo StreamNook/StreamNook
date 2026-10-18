@@ -28,17 +28,41 @@ export interface SnMemberBadge {
   label: string;
 }
 
+/** A 7TV profile picture as one surface draws it: the still, and the moving
+ *  rendition when the picture moves and the viewer lets this surface animate. */
+export interface AvatarPick {
+  still: string;
+  animated?: string;
+}
+
+/** An Atmosphere as the registry serves it (camelCase, the same CSS the
+ *  pages paint). Only the fields the profile surfaces read are named. */
+export interface AtmosphereView {
+  id: string;
+  name: string;
+  /** "r, g, b". */
+  accent: string;
+  /** The picker's full-strength CSS background; the identity band draws it. */
+  swatch: string;
+  baseColor: string;
+  chatFrost?: boolean;
+}
+
 export interface ProfileSheetView {
   user_id: string;
   login: string;
   display_name: string;
   shown_login?: string;
   avatar_url?: string;
+  /** Their 7TV picture, when they set one and the viewer shows 7TV pictures. */
+  picture?: AvatarPick;
   name_color: string;
   /** The worn 7TV paint as 7TV defines it. */
   paint_def?: PaintV4;
   groups: ProfileBadgeGroup[];
   streamnook?: SnMemberBadge;
+  /** The Atmosphere they wear on their profile, after the wear gate. */
+  atmosphere?: AtmosphereView;
 }
 
 export interface OwnIdentityView {
@@ -47,9 +71,14 @@ export interface OwnIdentityView {
   display_name: string;
   shown_login?: string;
   paint_def?: PaintV4;
+  /** Your 7TV picture, when you set one and you show 7TV pictures. */
+  picture?: AvatarPick;
+  /** Your Twitch profile banner; absent when the account has none. */
+  banner_url?: string;
   /** Worn, in order, images only, at most eight. */
   badges: ProfileBadge[];
   streamnook?: SnMemberBadge;
+  atmosphere?: AtmosphereView;
 }
 
 export interface CssFill {
@@ -81,4 +110,15 @@ export interface ExternalPickerView {
   drops_signed_in: boolean;
   twitch_selectable: ChatIdentityBadge[];
   twitch_earned: ProfileBadge[];
+  /** Your Twitch name color (`#rrggbb`), when Twitch says. */
+  chat_color?: string;
+  /** Twitch's named colors, which every account may pick, in Twitch's order. */
+  named_colors: NamedChatColor[];
+}
+
+/** One of Twitch's named chat colors: its label, the value Helix takes, its hex. */
+export interface NamedChatColor {
+  label: string;
+  value: string;
+  hex: string;
 }

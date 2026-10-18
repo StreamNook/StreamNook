@@ -159,9 +159,90 @@ def _diagonal(size: int, top: tuple, bottom: tuple) -> Image.Image:
     return ramp
 
 
+# The aurora icon the iPhone ships (ios/scripts/make-app-icon.py): a violet to
+# indigo diagonal with a soft pool of light at the top left, and the mark
+# redrawn in white over it. One app, one icon on both phones.
+AURORA_TOP = (0x7B, 0x6C, 0xFF)
+AURORA_BOTTOM = (0x4F, 0x46, 0xE5)
+# The mark's height in the 108dp canvas: 60 percent of the ~72dp a launcher
+# shows, the share the iPhone icon gives it.
+AURORA_ART_DP = 44
+# A right-pointing triangle's weight sits left of its box, so the white mark
+# moves right by this share of the canvas, as on the iPhone.
+AURORA_NUDGE = 0.018
+
+
+def _aurora(size: int) -> Image.Image:
+    """The iPhone's eased diagonal (smoothstep, worked on a small grid and
+    scaled up) plus its sheen."""
+    n = 256
+    grid = Image.new('RGB', (n, n))
+    px = grid.load()
+    for y in range(n):
+        for x in range(n):
+            t = (x + y) / (2 * (n - 1))
+            t = t * t * (3 - 2 * t)
+            px[x, y] = tuple(round(AURORA_TOP[i] + (AURORA_BOTTOM[i] - AURORA_TOP[i]) * t) for i in range(3))
+    base = grid.resize((size, size), Image.BICUBIC).convert('RGBA')
+    mask = Image.new('L', (size, size), 0)
+    r = int(size * 0.55)
+    ImageDraw.Draw(mask).ellipse((-r // 2, -r // 2, r, r), fill=int(255 * 0.22))
+    mask = mask.filter(ImageFilter.GaussianBlur(size * 0.18))
+    light = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+    light.putalpha(mask)
+    return Image.alpha_composite(base, light).convert('RGB')
+
+
+def _percentile(hist, q):
+    total = sum(hist)
+    run = 0
+    for value, count in enumerate(hist):
+        run += count
+        if run >= total * q:
+            return value
+    return 255
+
+
+def white_mark(height_px: int) -> Image.Image:
+    """The mark in white, each face keeping its shade: lit faces white, shaded
+    faces white mixed 42 percent toward the gradient's deep end (the iPhone's
+    white_logo)."""
+    logo = mark(height_px)
+    alpha = logo.getchannel('A')
+    lum = logo.convert('L')
+    solid = alpha.point(lambda v: 255 if v > 200 else 0)
+    hist = lum.histogram(mask=solid)
+    lo, hi = _percentile(hist, 0.02), _percentile(hist, 0.98)
+    shade = tuple(int(255 + (c - 255) * 0.42) for c in AURORA_BOTTOM)
+    lut = [min(1, max(0, (v - lo) / max(1, hi - lo))) ** 0.8 for v in range(256)]
+    chans = [lum.point([int(shade[i] + (255 - shade[i]) * lut[v]) for v in range(256)]) for i in range(3)]
+    out = Image.merge('RGB', chans).convert('RGBA')
+    out.putalpha(alpha)
+    return out
+
+
+def aurora_glyph(canvas: int, art_px: int) -> Image.Image:
+    """The white mark with its soft drop shadow, nudged right, on a
+    transparent square."""
+    glyph = white_mark(art_px)
+    x = (canvas - glyph.width) // 2 + int(canvas * AURORA_NUDGE)
+    y = (canvas - glyph.height) // 2
+    shadow = Image.new('RGBA', glyph.size, (0, 0, 0, 0))
+    shadow.putalpha(glyph.getchannel('A').point(lambda v: int(v * 0.18)))
+    out = Image.new('RGBA', (canvas, canvas), (0, 0, 0, 0))
+    out.paste(shadow, (x, y + int(canvas * 0.012)), shadow)
+    out = out.filter(ImageFilter.GaussianBlur(canvas * 0.016))
+    out.alpha_composite(glyph, (x, y))
+    return out
+
+
 def background(style: str, size: int) -> Image.Image:
-    """Candidate launcher grounds. All stay well under the mark's luminance:
-    it is a mid steel blue, and anything light swallows it."""
+    """Candidate launcher grounds. All but aurora stay well under the mark's
+    luminance: it is a mid steel blue, and anything light swallows it. Aurora
+    draws the mark white instead (see aurora_glyph)."""
+    if style == 'aurora':
+        return _aurora(size)
+
     if style == 'brushed':
         return brushed_metal(size)
 
@@ -241,8 +322,10 @@ def centred(art: Image.Image, canvas: int) -> Image.Image:
     return out
 
 
-def foreground(scale: float) -> Image.Image:
+def foreground(scale: float, style: str = 'glow') -> Image.Image:
     canvas = round(ADAPTIVE_DP * scale)
+    if style == 'aurora':
+        return aurora_glyph(canvas, round(AURORA_ART_DP * scale))
     return centred(mark(round(ART_DP * scale)), canvas)
 
 
@@ -250,9 +333,13 @@ def legacy(scale: float, round_mask: bool, style: str) -> Image.Image:
     """Pre-composited icon for launchers older than adaptive icons."""
     size = round(LEGACY_DP * scale)
     plate = background(style, size).convert('RGBA')
-    # Legacy icons have no mask overhead, so the mark can take more of the face.
-    art = mark(round(size * 0.62))
-    plate.alpha_composite(art, ((size - art.width) // 2, (size - art.height) // 2))
+    if style == 'aurora':
+        # The iPhone icon's proportions: the mark 60 percent of the face.
+        plate.alpha_composite(aurora_glyph(size, round(size * 0.60)))
+    else:
+        # Legacy icons have no mask overhead, so the mark can take more of the face.
+        art = mark(round(size * 0.62))
+        plate.alpha_composite(art, ((size - art.width) // 2, (size - art.height) // 2))
     if round_mask:
         m = Image.new('L', (size, size), 0)
         ImageDraw.Draw(m).ellipse((0, 0, size - 1, size - 1), fill=255)
@@ -264,7 +351,7 @@ def write_all(style: str) -> None:
     for name, scale in DENSITIES.items():
         d = os.path.join(RES, f'mipmap-{name}')
         os.makedirs(d, exist_ok=True)
-        foreground(scale).save(os.path.join(d, 'ic_launcher_foreground.png'))
+        foreground(scale, style).save(os.path.join(d, 'ic_launcher_foreground.png'))
         # Separate asset, NOT the colour foreground. See monochrome().
         monochrome(scale).save(os.path.join(d, 'ic_launcher_monochrome.png'))
         legacy(scale, False, style).save(os.path.join(d, 'ic_launcher.png'))
@@ -329,17 +416,18 @@ def write_preview(path: str) -> None:
     print(f'preview -> {path}')
 
 
-STYLES = ['ink', 'glow', 'slate', 'teal', 'ring', 'brushed']
-# Chosen by eye off `--options`. Brushed metal was tried and rejected; so were a
+STYLES = ['aurora', 'ink', 'glow', 'slate', 'teal', 'ring', 'brushed']
+# Aurora, the icon the iPhone ships, so both phones wear one icon. Before it,
+# glow was chosen by eye off `--options`. Brushed metal was tried and rejected; so were a
 # flat #fff and a violet gradient before it.
-DEFAULT_STYLE = 'glow'
+DEFAULT_STYLE = 'aurora'
 
 
 def write_options(path: str) -> None:
     """Every candidate ground under the squircle mask, plus the themed layer."""
     size = 200
     pad = 18
-    fg = foreground(size / ADAPTIVE_DP)
+    scale = size / ADAPTIVE_DP
 
     def squircle(img):
         m = Image.new('L', (size, size), 0)
@@ -352,7 +440,7 @@ def write_options(path: str) -> None:
     tiles = []
     for s in STYLES:
         t = background(s, size).convert('RGBA')
-        t.alpha_composite(fg)
+        t.alpha_composite(foreground(scale, s))
         tiles.append((s, squircle(t)))
 
     # Themed icon: the launcher flat-tints the monochrome layer onto its own

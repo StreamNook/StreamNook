@@ -1,11 +1,30 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, Lock, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import {
+  Fingerprint as ModeUnique,
+  Heart as ModeFollowers,
+  Smile as ModeEmotes,
+  Star as ModeSubs,
+  Timer as ModeSlow,
+  type LucideIcon,
+} from 'lucide-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import type { ProviderId } from '../../types/providers';
+import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
+
+// The same glyph per mode as the composer's room-mode icon, so the icon you
+// tapped is the one you find named here.
+const MODE_ICONS: Record<RoomModeKind, LucideIcon> = {
+  subs_only: ModeSubs,
+  emote_only: ModeEmotes,
+  followers_only: ModeFollowers,
+  slow: ModeSlow,
+  unique: ModeUnique,
+};
 
 interface Props {
   open: boolean;
@@ -18,8 +37,9 @@ interface Props {
   /** Broadcaster id, for follow/unfollow. Null when no chat is open. */
   channelId: string | null;
   isModerator: boolean;
-  /** Active room restrictions, shown as context. Empty when unrestricted. */
-  gatingLabels: string[];
+  /** The room's modes in Rust's words, shown as context. Null when the room
+   *  has none. */
+  roomModes: RoomModeView | null;
   modToolsOn: boolean;
   onToggleModTools: () => void;
   onAddChat: () => void;
@@ -38,7 +58,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   activeLabel,
   channelId,
   isModerator,
-  gatingLabels,
+  roomModes,
   modToolsOn,
   onToggleModTools,
   onAddChat,
@@ -84,14 +104,37 @@ export const ComposerMenuSheet: React.FC<Props> = ({
       <div className="flex flex-col">
         {/* Room state lives here rather than above the composer. Followers-only
             while you can still talk is context worth having, not a warning worth
-            a permanent line over chat. */}
-        {gatingLabels.length > 0 && (
-          <div className="flex items-start gap-3 px-2 pb-2 mb-1 border-b border-borderSubtle">
-            <Lock size={17} className="text-textSecondary shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <div className="text-[13.5px] text-textSecondary">This chat is in</div>
-              <div className="text-[14px] text-textPrimary">{gatingLabels.join(' · ')}</div>
+            a permanent line over chat. Status, not actions: one quiet block, its
+            lines closer together than the rows below, so it never reads as a
+            set of buttons. Each mode carries the composer's glyph for it, its
+            name and what it means; the footer says where you stand when every
+            mode spares you. */}
+        {roomModes && roomModes.modes.length > 0 && (
+          <div className="px-2 pb-3 mb-1 border-b border-borderSubtle">
+            <div className="text-[12px] font-semibold uppercase tracking-wide text-textMuted mb-2">
+              This chat is in
             </div>
+            <div className="flex flex-col gap-2">
+              {roomModes.modes.map((mode) => {
+                const Icon = MODE_ICONS[mode.kind];
+                return (
+                  <div key={mode.kind} className="flex items-start gap-3">
+                    <span className="flex w-[19px] h-[19px] shrink-0 items-center justify-center" aria-hidden>
+                      <Icon size={14} strokeWidth={2.2} className="text-textMuted" />
+                    </span>
+                    <p className="flex-1 min-w-0 text-[13.5px] leading-[19px]">
+                      <span className="font-medium text-textSecondary">{mode.compact}</span>{' '}
+                      <span className="text-textMuted">{mode.detail}</span>
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+            {roomModes.standing && (
+              <div className="mt-2 pl-[31px] text-[12.5px] leading-snug text-textSecondary">
+                {roomModes.standing}
+              </div>
+            )}
           </div>
         )}
         {/* Follow / unfollow. Green heart to follow, red broken heart to

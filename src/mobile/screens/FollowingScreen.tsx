@@ -12,8 +12,9 @@ import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import type { TwitchStream } from '../../types';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
 import { followsKick, phoneFollowedLive } from '../followingMerge';
-import { ProviderMark } from '../../components/ProviderLogo';
 import { PROVIDERS } from '../../types/providers';
+import { ALL_PLATFORMS, KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
+import { EmptyNote } from '../ui/EmptyNote';
 
 /** Which platform Following shows. null is everything. */
 type PlatformFilter = 'twitch' | 'kick' | null;
@@ -62,12 +63,15 @@ export const FollowingScreen: React.FC = () => {
     () => (activeFilter ? merged.filter((s) => streamProvider(s) === activeFilter) : merged),
     [merged, activeFilter],
   );
-  // Tap a platform to show only it; tap it again to show everything.
-  const toggleFilter = (p: 'twitch' | 'kick') => {
-    const next = filter === p ? null : p;
+  // The menu's choice: everything, or one platform.
+  const chooseFilter = (choice: 'all' | 'twitch' | 'kick') => {
+    const next = choice === 'all' ? null : choice;
     setFilter(next);
     writeFilter(next);
   };
+  // Kick rows wear Kick's mark only where the list mixes platforms; a list of
+  // one platform (filtered, or simply all Twitch right now) needs no marks.
+  const mixed = useMemo(() => new Set(rows.map((s) => streamProvider(s))).size > 1, [rows]);
   const loadFollowedStreams = useAppStore((s) => s.loadFollowedStreams);
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
@@ -123,7 +127,17 @@ export const FollowingScreen: React.FC = () => {
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 shrink-0">
         <h1 className="text-xl font-bold text-textPrimary">Following</h1>
-        <div className="flex">
+        <div className="flex items-center">
+          {/* The filter only exists once you follow someone on Kick, and sits
+              in the title row so it spends no row of its own. */}
+          {hasKick && (
+            <PlatformMenu
+              options={[ALL_PLATFORMS, TWITCH_PLATFORM, KICK_PLATFORM]}
+              value={activeFilter ?? 'all'}
+              onChange={chooseFilter}
+            />
+          )}
+          {hasKick && <span aria-hidden className="w-2" />}
           <button
             onClick={() => setViewPersisted('cards')}
             className={`sn-touch flex items-center justify-center ${
@@ -144,30 +158,6 @@ export const FollowingScreen: React.FC = () => {
           </button>
         </div>
       </div>
-      {hasKick && (
-        <div className="flex items-center px-4 pb-2 shrink-0">
-          {/* The filter pair wears the glaze; the chosen platform is the
-              darker pill inside it. */}
-          <div className="flex items-center gap-1.5 p-1 chrome-glaze chrome-glaze--flat">
-            {(['twitch', 'kick'] as const).map((p) => {
-              const on = activeFilter === p;
-              return (
-                <button
-                  key={p}
-                  onClick={() => toggleFilter(p)}
-                  aria-pressed={on}
-                  className={`flex items-center gap-1.5 pl-2.5 pr-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                    on ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
-                  }`}
-                >
-                  <ProviderMark provider={p} size={15} />
-                  {PROVIDERS[p].label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
       <PullToRefresh
         onRefresh={refresh}
         className="px-0 [padding-left:var(--sn-safe-l)] [padding-right:var(--sn-safe-r)]"
@@ -175,14 +165,13 @@ export const FollowingScreen: React.FC = () => {
         {firstLoad ? (
           <SkeletonCards />
         ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-1">
-            <div className="text-sm text-textMuted">
-              {activeFilter
+          <EmptyNote
+            text={
+              activeFilter
                 ? `No ${PROVIDERS[activeFilter].label} channels you follow are live right now.`
-                : 'No followed channels are live right now.'}
-            </div>
-            <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
-          </div>
+                : 'No followed channels are live right now.'
+            }
+          />
         ) : (
           <AdaptiveGrid
             variant={view === 'list' ? 'row' : 'card'}
@@ -197,8 +186,7 @@ export const FollowingScreen: React.FC = () => {
                   watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
                   onPress={onPress}
                   variant={view === 'list' ? 'row' : 'card'}
-                  // Marks tell platforms apart; a filtered list is one platform.
-                  showPlatform={!activeFilter}
+                  showPlatform={mixed}
                 />
               </SettleIn>
             ))}

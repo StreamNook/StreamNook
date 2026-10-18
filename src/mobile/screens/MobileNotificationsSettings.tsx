@@ -32,6 +32,8 @@ import {
   requestIgnoreBatteryOptimizations,
 } from '../nativeBridge';
 import type { LiveNotificationSettings } from '../../types';
+import { Logger } from '../../utils/logger';
+import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
 
 const TOGGLES: {
   key: keyof LiveNotificationSettings;
@@ -100,7 +102,6 @@ const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 const MobileNotificationsSettings: React.FC = () => {
   const settings = useAppStore((s) => s.settings);
-  const updateSettings = useAppStore((s) => s.updateSettings);
   const [delivery, setDelivery] = useState<NotifyDelivery | null>(null);
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [channelsOpen, setChannelsOpen] = useState(false);
@@ -137,18 +138,24 @@ const MobileNotificationsSettings: React.FC = () => {
   const prefs: Partial<LiveNotificationSettings> = settings.live_notifications ?? {};
   const masterOn = prefs.enabled !== false;
 
+  // One field per write: the changed switches only, never the whole group from
+  // this screen's copy, which could put back a list another surface had just
+  // edited (the muted channels, from the player's bell).
   const patch = useCallback(
     async (changes: Partial<LiveNotificationSettings>) => {
-      const current = settings.live_notifications;
+      const current = useAppStore.getState().settings.live_notifications;
       if (!current) return;
-      const next = {
-        ...current,
-        ...changes,
-        // On mobile the system shade IS the delivery surface, so keep the
-        // native flag on whenever any category is enabled.
-        use_native_notifications: true,
-      };
-      await updateSettings({ ...settings, live_notifications: next });
+      // On mobile the system shade IS the delivery surface, so keep the
+      // native flag on whenever any category is enabled.
+      const written = { ...changes, use_native_notifications: true };
+      try {
+        await setSettingsFields(fieldsIn('live_notifications', written));
+      } catch (err) {
+        Logger.warn('[MobileNotificationsSettings] save failed:', err);
+        useAppStore.getState().addToast('Could not save that change.', 'error');
+        return;
+      }
+      const next = { ...current, ...written };
       syncBackgroundChecks(next);
       // Push registration follows the same switches: registered while the
       // master and push toggles are both on, dropped from the server otherwise.
@@ -158,7 +165,7 @@ const MobileNotificationsSettings: React.FC = () => {
         void invoke('push_unregister').catch(() => {});
       }
     },
-    [settings, updateSettings],
+    [],
   );
 
   const requestPermission = async () => {

@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { ExternalLink, Lock, Settings, Smile, SquareSlash } from 'lucide-react';
+import { Clock, ExternalLink, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
 import { invoke } from '@tauri-apps/api/core';
@@ -62,6 +62,23 @@ import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
+
+/** What leads a section header on the phone: the tab's provider logo, a clock
+ *  on Recently used, a star on the rest of Favorites. The logo already names
+ *  the provider, so the header keeps only the section's own title beside it.
+ *  FrankerFaceZ's brand is white, so it takes the text color and reads in
+ *  both themes. */
+function SectionMark({ tab, sectionKey }: { tab: ProviderTab; sectionKey: string }) {
+  if (tab === 'favorites') {
+    return sectionKey === 'recent' ? (
+      <Clock className="w-[11px] h-[11px] shrink-0" strokeWidth={2.75} aria-hidden="true" />
+    ) : (
+      <Star className="w-[11px] h-[11px] shrink-0 text-yellow-400" fill="currentColor" strokeWidth={0} aria-hidden="true" />
+    );
+  }
+  if (tab === 'emoji' || tab === 'gifs') return null;
+  return <EmoteProviderLogo provider={tab} tinted={tab !== 'ffz'} className="w-[11px] h-[11px] shrink-0" />;
+}
 
 /** The viewer's personal emote that shows instead of a channel emote of the
  *  same name in their own messages. */
@@ -647,15 +664,29 @@ export function EmotePickerPanel({
     };
   }, [open, emojiData]);
 
-  const allEmojis = useMemo(
-    () =>
-      emojiData
-        ? Object.entries(emojiData.EMOJI_CATEGORIES).flatMap(([category, emojis]) =>
-            emojis.map((emoji) => ({ emoji, category })),
-          )
-        : [],
-    [emojiData],
-  );
+  // The emoji tab's sections after the search, computed once and read by both
+  // the grid and its empty state, so the two can never disagree (they did: the
+  // empty check knew keywords and the grid did not, so "heart" drew a blank
+  // pane). A query matches a category name, an emoji's keywords, or the emoji
+  // itself when one is pasted in. Categories left empty are dropped.
+  const emojiSections = useMemo((): [string, string[]][] => {
+    if (!emojiData) return [];
+    const query = searchQuery.trim().toLowerCase();
+    return Object.entries(emojiData.EMOJI_CATEGORIES)
+      .map(([category, emojis]): [string, string[]] =>
+        !query || category.toLowerCase().includes(query)
+          ? [category, emojis]
+          : [
+              category,
+              emojis.filter(
+                (emoji) =>
+                  emoji.includes(query) ||
+                  (emojiData.EMOJI_KEYWORDS[emoji]?.some((k) => k.includes(query)) ?? false),
+              ),
+            ],
+      )
+      .filter(([, emojis]) => emojis.length > 0);
+  }, [emojiData, searchQuery]);
 
   // The selected tab's sections. Rust's answer is used once it is for this
   // tab; until then (or for YouTube, see below) the groups come from here.
@@ -697,16 +728,6 @@ export function EmotePickerPanel({
   const waitingForRust = rustTab && !rustGroups && !!pickerProvider;
   // Twitch, Kick and YouTube cells keep their names under the image on desktop.
   const namedCells = selectedProvider === 'twitch' || selectedProvider === 'kick' || selectedProvider === 'youtube';
-
-  const filteredEmojis = useMemo(() => {
-    if (!searchQuery) return allEmojis;
-    const query = searchQuery.toLowerCase();
-    return allEmojis.filter(({ emoji, category }) => {
-      if (category.toLowerCase().includes(query)) return true;
-      const keywords = emojiData?.EMOJI_KEYWORDS[emoji];
-      return keywords ? keywords.some((k) => k.includes(query)) : false;
-    });
-  }, [searchQuery, allEmojis]);
 
   const toggleFavorite = useCallback(
     async (emote: Emote, isFavorited: boolean) => {
@@ -990,15 +1011,15 @@ export function EmotePickerPanel({
             </div>
           )
         ) : selectedProvider === 'emoji' ? (
-          filteredEmojis.length === 0 ? (
+          !emojiData ? (
+            // The emoji set loads on first open; say so instead of a brief
+            // "No emojis found" for a set that has not arrived yet.
+            <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">Loading emojis...</p></div>
+          ) : emojiSections.length === 0 ? (
             <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">No emojis found</p></div>
           ) : (
             <div className="flex flex-col gap-4 pt-2">
-              {Object.entries(emojiData?.EMOJI_CATEGORIES ?? {}).map(([category, emojis]) => {
-                const filteredCategoryEmojis = searchQuery
-                  ? emojis.filter((emoji) => emoji.includes(searchQuery) || category.toLowerCase().includes(searchQuery.toLowerCase()))
-                  : emojis;
-                if (filteredCategoryEmojis.length === 0) return null;
+              {emojiSections.map(([category, filteredCategoryEmojis]) => {
                 return (
                   <div key={category} className="flex flex-col">
                     <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>{category}</h3>
@@ -1062,7 +1083,8 @@ export function EmotePickerPanel({
           <div className="flex flex-col gap-4 pt-2">
             {groups.map((group) => ({ groupKey: group.key, group: { name: group.title, emotes: group.emotes } })).map(({ groupKey, group }) => (
               <div key={groupKey} className="flex flex-col">
-                <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                  {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={groupKey} />}
                   <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
                 </h3>
                 {chunkArray(group.emotes, TWITCH_COLS * TWITCH_BLOCK_ROWS).map((block, bi) => {
@@ -1138,7 +1160,8 @@ export function EmotePickerPanel({
               .map((g) => ({ label: g.title, key: g.key, emotes: g.emotes, cols: g.columns, gridCols: GRID_COLS[g.columns] ?? 'grid-cols-7' }))
               .map((group) => (
                 <div key={group.key} className="flex flex-col">
-                  <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                  <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                    {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={group.key} />}
                     <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
                   </h3>
                   {chunkArray(group.emotes, group.cols * WIDTH_BLOCK_ROWS).map((block, bi) => {

@@ -1,21 +1,21 @@
-// The You tab: who you are, the accounts you are signed in with (each with its
-// own sign in / sign out), then settings sections inline (no intermediate menu).
+// The You tab: your identity card as the screen's header (no title above it:
+// the card says whose tab this is, and its Edit profile row is the way in to
+// every picture, name and cosmetic), the accounts you are signed in with (each
+// with its own sign in / sign out), then settings sections inline.
 import React, { useEffect, useState } from 'react';
-import { ArrowCircleDown, PaintBrush } from 'phosphor-react';
+import { ArrowCircleDown } from 'phosphor-react';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from '../navStore';
 import { usePhonePrefs } from '../phonePrefs';
 import { SegmentedSelect } from '../../components/settings/_primitives';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
-import { OwnIdentityHeader } from '../profile/OwnIdentityHeader';
-import { SETTINGS_ROWS } from './SettingsScreen';
+import { OwnIdentityCard, SignedOutIdentityCard } from '../profile/OwnIdentityHeader';
+import { SettingsDirectory } from './SettingsSearch';
 import { AccountsCard } from '../profile/AccountsCard';
-import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
-  const openSettings = useMobileNavStore((s) => s.openSettings);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
@@ -38,35 +38,18 @@ export const YouScreen: React.FC = () => {
 
   return (
     <div className="sn-mobile-screen sn-tabbar-clearance">
-      {/* items-start, not items-center: the identity block can run to two lines
-          for a long name plus a badge row, and centring against it would drag
-          the avatar off the name it belongs to. */}
-      <div className="flex items-start gap-3 px-4 pt-4 pb-3">
-        {currentUser?.profile_image_url ? (
-          <SevenTvAvatar
-            cosmeticsId={currentUser.user_id}
-            px={56}
-            motion="animate"
-            src={currentUser.profile_image_url}
-            alt=""
-            className="w-14 h-14 rounded-full shrink-0"
-            draggable={false}
-          />
-        ) : (
-          <div className="w-14 h-14 rounded-full bg-surface shrink-0" />
-        )}
+      <div className="px-4 pt-2 pb-5">
         {currentUser?.user_id ? (
-          <OwnIdentityHeader
+          <OwnIdentityCard
             userId={currentUser.user_id}
-            displayName={currentUser.display_name || currentUser.username || 'Signed in'}
+            displayName={currentUser.display_name || currentUser.username || currentUser.login || ''}
             login={currentUser.login}
+            platformUrl={currentUser.profile_image_url}
+            onEdit={() => setCosmeticsOpen(true)}
           />
         ) : (
-          <div className="min-w-0 flex-1">
-            <div className="text-lg font-bold text-textPrimary truncate">Signed in</div>
-          </div>
+          <SignedOutIdentityCard />
         )}
-
       </div>
 
       {/* Only rendered when there is genuinely a newer build. Sideloaded apps
@@ -97,22 +80,6 @@ export const YouScreen: React.FC = () => {
           </button>
         </div>
       )}
-
-      <div className="px-3 mb-2">
-        <button
-          onClick={() => setCosmeticsOpen(true)}
-          className="w-full flex items-center gap-3 px-3 py-3 rounded-lg active:bg-surface-active text-left"
-        >
-          <PaintBrush size={20} className="text-accent shrink-0" />
-          <span className="flex-1 min-w-0">
-            <span className="block text-[15px] font-medium text-textPrimary">Cosmetics</span>
-            <span className="block text-[12.5px] text-textMuted truncate">
-              Your badges, atmosphere, and 7TV paint
-            </span>
-          </span>
-          <ChevronRight size={16} className="text-textMuted shrink-0" />
-        </button>
-      </div>
 
       {/* Sign-in and sign-out live on each account's own row, so the action
           reads as acting on the account beside it, and nothing about signing
@@ -147,22 +114,9 @@ export const YouScreen: React.FC = () => {
       <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">
         Settings
       </div>
-      <div className="px-3">
-        {SETTINGS_ROWS.map(({ id, label, icon: Icon, description }) => (
-          <button
-            key={id}
-            onClick={() => openSettings(id)}
-            className="w-full flex items-center gap-3 px-3 py-3 rounded-lg active:bg-surface-active text-left"
-          >
-            <Icon size={20} className="text-textSecondary shrink-0" />
-            <span className="flex-1 min-w-0">
-              <span className="block text-[15px] font-medium text-textPrimary">{label}</span>
-              <span className="block text-[12.5px] text-textMuted truncate">{description}</span>
-            </span>
-            <ChevronRight size={16} className="text-textMuted shrink-0" />
-          </button>
-        ))}
-      </div>
+      {/* The search field over the section rows; while something is typed
+          the rows give way to the settings that match. */}
+      <SettingsDirectory />
     </div>
   );
 };

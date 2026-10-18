@@ -167,6 +167,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       labels: view ? view.modes.map((m) => m.label) : [],
       blocked: view?.blocked ?? null,
       reason: view?.reason ?? null,
+      view: view && view.modes.length > 0 ? view : null,
     };
   }, [roomState]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
