@@ -61,7 +61,7 @@ extension ThemeLight {
               let gradients = json["gradients"] as? [String: Any],
               let surfaces = json["surfaces"] as? [String: Any] else { return nil }
         let palette: [String: RGBA] = colors.compactMapValues { value in
-            guard let rgb = (value as? [Any])?.compactMap(number), rgb.count == 3 else { return nil }
+            guard let rgb = (value as? [Any])?.compactMap { number($0) }, rgb.count == 3 else { return nil }
             return RGBA(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
         }
         func stops(_ raw: [Any]) -> [Stop] {
@@ -81,8 +81,8 @@ extension ThemeLight {
         func layer(_ name: String) -> Layer? {
             guard let gradient = gradients[name] as? [String: Any], let raw = gradient["stops"] as? [Any] else { return nil }
             if let angle = number(gradient["angle"]) { return .linear(angle: angle, stops: stops(raw)) }
-            guard let size = (gradient["size"] as? [Any])?.compactMap(number), size.count == 2,
-                  let center = (gradient["center"] as? [Any])?.compactMap(number), center.count == 2 else { return nil }
+            guard let size = (gradient["size"] as? [Any])?.compactMap { number($0) }, size.count == 2,
+                  let center = (gradient["center"] as? [Any])?.compactMap { number($0) }, center.count == 2 else { return nil }
             return .radial(radii: CGSize(width: size[0] / 100, height: size[1] / 100),
                            center: CGPoint(x: center[0] / 100, y: center[1] / 100), stops: stops(raw))
         }
