@@ -468,6 +468,7 @@ fn handle_text(txt: &str, app_handle: &AppHandle, seen: &mut SeenMessages) -> Op
                                 "message_id": row.message_id,
                                 "status": row.status,
                                 "moderator": moderator,
+                                "line": crate::services::automod_queue::resolved_line(&row),
                             }),
                         );
                         let frame = crate::services::automod_queue::row_frame(&row, moderator).to_string();
