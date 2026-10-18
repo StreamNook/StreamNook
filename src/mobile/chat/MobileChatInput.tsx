@@ -620,6 +620,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
+              // Its own hide-keyboard button replaces commands while typing.
+              data-keyboard-hide="own"
               onFocus={() => setTyping(true)}
               onBlur={() => setTyping(false)}
               onKeyDown={(e) => {
