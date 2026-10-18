@@ -61,6 +61,9 @@ private struct ComposerBar: View {
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
+        // The wallet reads Rust's channel state for this room and follows its pushes.
+        .task { await model.wallet?.start() }
+        .onDisappear { model.wallet?.stop() }
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
             ChatMenuSheet(model: model, session: session)
@@ -219,7 +222,7 @@ private struct ComposerBar: View {
                     .accessibilityLabel("Chat commands")
                 }
                 // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
-                if !session.isKick { WalletButton(session: session) { model.panel = .none } }
+                if let wallet = model.wallet { WalletButton(wallet: wallet, session: session) { model.panel = .none } }
             }
             .padding(.leading, 4)
             .padding(.trailing, 5)

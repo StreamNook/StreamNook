@@ -57,9 +57,13 @@ final class ChatComposerModel {
         focusRequest = (focusRequest.0 + 1, on)
     }
 
+    /// The room's channel wallet (points and bits); Twitch rooms only.
+    let wallet: WalletModel?
+
     init(session: ChatSession) {
         self.session = session
         picker = EmotePickerModel(session: session)
+        wallet = session.isKick ? nil : WalletModel(login: session.channel, core: session.core)
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending }

@@ -6,28 +6,20 @@ import SwiftUI
 /// for a waiting bonus chest, and a "+N" for every gain Rust records. A tap collects a waiting
 /// chest on the way in and opens the wallet sheet.
 struct WalletButton: View {
+    /// Owned and started by the composer (ChatComposerModel.wallet); this only draws it.
+    let wallet: WalletModel
     let session: ChatSession
     /// Closes the composer's own panels as the wallet opens.
     var onOpen: () -> Void = {}
-    @State private var wallet: WalletModel?
     @State private var pulse = 0
 
     var body: some View {
-        Group {
-            if let wallet, wallet.faces.hasAny {
-                button(wallet)
-                    .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
-                        WalletSheet(wallet: wallet, session: session)
-                    }
-            }
+        if wallet.faces.hasAny {
+            button(wallet)
+                .sheet(isPresented: Binding(get: { wallet.sheetOpen }, set: { wallet.sheetOpen = $0 })) {
+                    WalletSheet(wallet: wallet, session: session)
+                }
         }
-        .task(id: session.channel) {
-            guard !session.isKick else { return }
-            let model = WalletModel(login: session.channel, core: session.core)
-            wallet = model
-            await model.start()
-        }
-        .onDisappear { wallet?.stop() }
     }
 
     private func button(_ wallet: WalletModel) -> some View {
