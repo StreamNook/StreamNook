@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
-import { ListBullets, SquaresFour } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { bumpPreviewStamp } from '../followRefresh';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
@@ -15,6 +14,8 @@ import { followsKick, phoneFollowedLive } from '../followingMerge';
 import { PROVIDERS } from '../../types/providers';
 import { ALL_PLATFORMS, KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
 import { EmptyNote } from '../ui/EmptyNote';
+import { ScreenHeader } from '../ui/ScreenHeader';
+import { TitleCapsule, ViewToggle } from '../ui/TitleControls';
 
 /** Which platform Following shows. null is everything. */
 type PlatformFilter = 'twitch' | 'kick' | null;
@@ -125,39 +126,20 @@ export const FollowingScreen: React.FC = () => {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-center justify-between px-4 pt-3 pb-2 shrink-0">
-        <h1 className="text-xl font-bold text-textPrimary">Following</h1>
-        <div className="flex items-center">
-          {/* The filter only exists once you follow someone on Kick, and sits
-              in the title row so it spends no row of its own. */}
-          {hasKick && (
+      {/* The filter only exists once you follow someone on Kick, and sits in
+          the title row so it spends no row of its own. */}
+      <ScreenHeader title="Following">
+        {hasKick && (
+          <TitleCapsule>
             <PlatformMenu
               options={[ALL_PLATFORMS, TWITCH_PLATFORM, KICK_PLATFORM]}
               value={activeFilter ?? 'all'}
               onChange={chooseFilter}
             />
-          )}
-          {hasKick && <span aria-hidden className="w-2" />}
-          <button
-            onClick={() => setViewPersisted('cards')}
-            className={`sn-touch flex items-center justify-center ${
-              view === 'cards' ? 'text-accent' : 'text-textMuted'
-            }`}
-            aria-label="Card view"
-          >
-            <SquaresFour size={20} weight={view === 'cards' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            onClick={() => setViewPersisted('list')}
-            className={`sn-touch flex items-center justify-center ${
-              view === 'list' ? 'text-accent' : 'text-textMuted'
-            }`}
-            aria-label="List view"
-          >
-            <ListBullets size={20} weight={view === 'list' ? 'bold' : 'regular'} />
-          </button>
-        </div>
-      </div>
+          </TitleCapsule>
+        )}
+        <ViewToggle value={view} onChange={setViewPersisted} />
+      </ScreenHeader>
       <PullToRefresh
         onRefresh={refresh}
         className="px-0 [padding-left:var(--sn-safe-l)] [padding-right:var(--sn-safe-r)]"
