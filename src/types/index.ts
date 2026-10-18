@@ -1208,6 +1208,8 @@ export interface Settings {
   snippets?: SnippetSettings;
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
+  /** The phones' Chats screen keeps the screen on while in front, until 30 min pass with no touch. Default on. */
+  chats_keep_screen_on?: boolean;
   live_notifications?: LiveNotificationSettings;
   last_seen_version?: string;
   auto_switch?: AutoSwitchSettings;
