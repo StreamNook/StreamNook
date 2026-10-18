@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { managerAct, type ActOutcome } from '../../services/streamManager';
 import { BarChart3, Trophy, Plus, X, ChevronUp, ChevronDown, History } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { Tooltip } from '../ui/Tooltip';
@@ -42,12 +42,15 @@ interface RecentEntry {
 
 interface Props {
   broadcasterId: string;
+  channelLogin: string;
   /** Pre-selects a tab when opened from /poll or /prediction. */
   initialKind?: Kind;
   onClose: () => void;
+  /** The stream manager's answer, so the Tools menu shows the running poll. */
+  onOutcome?: (outcome: ActOutcome) => void;
 }
 
-export function PollPredictionComposer({ broadcasterId, initialKind = 'poll', onClose }: Props) {
+export function PollPredictionComposer({ broadcasterId, channelLogin, initialKind = 'poll', onClose, onOutcome }: Props) {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const addToast = useAppStore((s) => s.addToast);
@@ -133,24 +136,25 @@ export function PollPredictionComposer({ broadcasterId, initialKind = 'poll', on
     if (problem || busy) return;
     setBusy(true);
     try {
-      if (kind === 'poll') {
-        await invoke('create_poll', {
-          broadcasterId,
-          title: title.trim(),
-          choices: filled,
-          duration,
-          pointsPerVote: pointsPerVote > 0 ? pointsPerVote : null,
-        });
-      } else {
-        await invoke('create_prediction', {
-          broadcasterId,
-          title: title.trim(),
-          outcomes: filled,
-          window: duration,
-        });
-      }
+      // One Rust door: Helix for the broadcaster, Twitch's own GQL for a
+      // moderator or editor, with Twitch's limits checked first.
+      const outcome = await managerAct(
+        broadcasterId,
+        channelLogin,
+        kind === 'poll'
+          ? {
+              kind: 'create_poll',
+              title: title.trim(),
+              choices: filled,
+              seconds: duration,
+              points_per_vote: pointsPerVote > 0 ? pointsPerVote : null,
+            }
+          : { kind: 'create_prediction', title: title.trim(), outcomes: filled, seconds: duration },
+      );
+      onOutcome?.(outcome);
+      addToast(outcome.message, outcome.ok ? 'success' : 'error');
+      if (!outcome.ok) return;
       rememberRecent({ title: title.trim(), options: filled });
-      addToast(kind === 'poll' ? 'Poll started' : 'Prediction started', 'success');
       onClose();
     } catch (err) {
       Logger.error(`[Composer] create ${kind} failed:`, err);

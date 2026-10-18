@@ -63,6 +63,8 @@ import PredictionOverlay from './PredictionOverlay';
 import PollOverlay from './PollOverlay';
 import { ChatOverlayStack } from './chat/ChatOverlayStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
+import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
+import { useStreamManager } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
@@ -2773,6 +2775,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     isVodReplay: !!isVodReplay,
     hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
   });
+  // The stream manager, read from Rust the first time the Tools menu opens in
+  // this channel and kept current while a builder is up.
+  const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
+  const [toolsOpened, setToolsOpened] = useState(false);
+  useEffect(() => {
+    setManagerPanel(null);
+    setToolsOpened(false);
+  }, [currentStream?.user_id]);
+  const handleToolsOpenChange = useCallback((open: boolean) => {
+    if (open) setToolsOpened(true);
+  }, []);
+  const streamManager = useStreamManager(
+    toolSections.polls ? currentStream?.user_id : null,
+    currentStream?.user_login ?? '',
+    toolsOpened || !!managerPanel,
+  );
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
       ? {
@@ -5511,8 +5529,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {composerKind && currentStream?.user_id && (
                 <PollPredictionComposer
                   broadcasterId={currentStream.user_id}
+                  channelLogin={currentStream.user_login}
                   initialKind={composerKind}
                   onClose={() => setComposerKind(null)}
+                  onOutcome={streamManager.apply}
+                />
+              )}
+              {managerPanel && streamManager.view && (
+                <StreamManagerPanel
+                  kind={managerPanel}
+                  view={streamManager.view}
+                  queue={streamManager.queue}
+                  onQueue={streamManager.setQueue}
+                  onOutcome={streamManager.apply}
+                  onClose={() => setManagerPanel(null)}
                 />
               )}
               <AnimatePresence>
@@ -5683,8 +5713,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     isBroadcaster={!!isBroadcaster}
                     canModerate={toolSections.moderate}
                     canRunPolls={toolSections.polls}
-                    onStartPoll={setComposerKind}
-                    pollBuilderOpen={!!composerKind}
+                    onStartPoll={(kind) => {
+                      setManagerPanel(null);
+                      setComposerKind(kind);
+                    }}
+                    pollBuilderOpen={!!composerKind || !!managerPanel}
+                    manager={streamManager.view}
+                    onOpenManager={(kind) => {
+                      setComposerKind(null);
+                      setManagerPanel(kind);
+                    }}
+                    onManagerOutcome={streamManager.apply}
+                    onOpenChange={handleToolsOpenChange}
                     drops={dropsTool}
                     roomState={roomState}
                   />
