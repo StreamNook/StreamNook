@@ -75,7 +75,6 @@ export interface Theme {
 // too (services/theme_palette.rs), so every shell paints from one copy. The
 // order there is the gallery order.
 import builtIn from './builtinThemes.json';
-import { IS_MOBILE } from '../utils/platform';
 
 export const themes: Theme[] = builtIn.themes as Theme[];
 
@@ -309,14 +308,6 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
     };
 };
 
-// Source-over of `color` onto an opaque base, returned opaque (#rrggbb).
-const overOpaque = (color: string, base: { r: number; g: number; b: number }): string => {
-    const a = parseColorOpacity(color) / 100;
-    const { r, g, b } = hexToRgb(parseColorToHex(color));
-    const mix = (c: number, under: number) => Math.round(c * a + under * (1 - a)).toString(16).padStart(2, '0');
-    return `#${mix(r, base.r)}${mix(g, base.g)}${mix(b, base.b)}`;
-};
-
 /**
  * A phone's page floors: nothing shows behind a phone's app (desktop's window
  * can be see-through, a phone's never is), so a custom theme's see-through
@@ -324,10 +315,8 @@ const overOpaque = (color: string, base: { r: number; g: number; b: number }): s
  * that. Flattened once here, every surface built as solid from them (static
  * popovers, menus, the tab bar floor, fades, Glassiness 0) is solid.
  */
-export const phoneFloors = (background: string, tertiary: string): { background: string; tertiary: string } => {
-    const page = overOpaque(background, { r: 0, g: 0, b: 0 });
-    return { background: page, tertiary: overOpaque(tertiary, hexToRgb(page)) };
-};
+export const phoneFloors = (background: string, tertiary: string): { background: string; tertiary: string } =>
+    opaqueFloors(background, tertiary, PHONE_FLOOR);
 
 // Whether a background needs light-coloured content drawn on top of it.
 // Relative luminance with the sRGB coefficients, split at the midpoint. Used for
