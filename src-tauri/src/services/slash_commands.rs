@@ -968,6 +968,11 @@ pub fn announce_my_vote(channel_id: &str, poll_id: &str, choice_id: &str) {
             json!({ "channel_id": channel_id, "poll_id": poll_id, "choice_id": choice_id }),
         );
     }
+    // The card marks the vote at once, before the next count arrives.
+    if let Some(mut last) = active_poll(channel_id).filter(|c| c.poll_id == poll_id).map(|c| c.last) {
+        stamp_my_vote(&mut last);
+        crate::services::poll_view::publish(&last);
+    }
 }
 
 /// A normalized poll with this viewer's vote on it as `my_choice_id` (null
@@ -1163,6 +1168,7 @@ fn emit_poll(event: &str, payload: &Value) {
     if let Some(app) = crate::services::providers::app_handle() {
         let mut payload = payload.clone();
         stamp_my_vote(&mut payload);
+        crate::services::poll_view::publish(&payload);
         let _ = app.emit(event, payload);
     }
 }

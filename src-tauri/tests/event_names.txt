@@ -81,12 +81,14 @@ plugin://state-changed
 plugin://status
 poll-completed
 poll-created
+poll-state
 poll-updated
 poll-voted
 prediction-created
 prediction-ended
 prediction-locked
 prediction-self-updated
+prediction-state
 prediction-updated
 profile-capture-stats
 provider-live-update

@@ -193,6 +193,8 @@ pub mod collaboration;
 pub mod shared_chat;
 pub mod share_link;
 pub mod slash_commands;
+pub mod poll_view;
+pub mod predictions;
 pub mod slash_dispatch;
 pub mod nuke;
 pub mod hls_kind;

@@ -2213,6 +2213,10 @@ pub fn run() {
             // Channel Points Rewards commands
             get_channel_rewards,
             get_cached_channel_rewards,
+            get_channel_prediction,
+            prediction_bet,
+            predict,
+            watch_channel_poll_view,
             redeem_channel_reward,
             redeem_reward,
             send_highlighted_message,
