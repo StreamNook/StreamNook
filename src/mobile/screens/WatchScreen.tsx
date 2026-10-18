@@ -73,8 +73,8 @@ const EDGE_GAP = 12;
 // the cards under it. Used by the clamp, the resting spot and the snap alike.
 const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar
-// (64 px tall with its labels).
-const BOTTOM_GAP = 112;
+// (56 px, icons only, riding 14 px above the gesture strip).
+const BOTTOM_GAP = 104;
 // On the Chats tab the composer sits on the bar too; the box rests above it.
 const CHATS_COMPOSER_GAP = 66;
 
