@@ -5,10 +5,11 @@ import { Bell, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, I
 import { X, SpeakerSlash, Trash, PuzzlePiece, Package, Gift, Sparkle } from 'phosphor-react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { useAppStore } from '../stores/AppStore';
+import { useAppStore, type SettingsTab } from '../stores/AppStore';
 import { useTitleBarLifted } from '../hooks/useTitleBarAutoHide';
 import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
+import { requestWallet } from '../utils/walletRequest';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
@@ -115,14 +116,27 @@ interface DropClaimedEvent {
 }
 
 /** A burst of channel-points earns, gathered by Rust
- *  (services/channel_points_summary.rs). Channels are busiest first. */
+ *  (services/channel_points_summary.rs). Channels are busiest first, each with
+ *  its face, its own name for its points and its points icon when Rust knows
+ *  them (services/points_notify.rs). Rust also raises the system notification
+ *  for it, so this only presents the app's own toast and list row. */
 interface ChannelPointsSummary {
     total_points: number;
-    channels: Array<{ name: string; points: number }>;
+    channels: Array<{
+        name: string;
+        points: number;
+        avatar_url?: string;
+        points_name?: string;
+        icon_url?: string;
+    }>;
     reasons: Array<{ name: string; points: number }>;
     first_reason: string;
     last_balance: number | null;
 }
+
+/** Settings tabs a notification may open (a notification link can come from
+ *  anywhere, so only these). */
+const SETTINGS_TABS_FROM_NOTICES: SettingsTab[] = ['Notifications'];
 
 // Cache helpers
 const loadCachedNotifications = (): DynamicIslandNotification[] => {
@@ -171,7 +185,7 @@ const getPreviewText = (n: DynamicIslandNotification): string => {
             return 'Drop claimed';
         case 'channel_points': {
             const d = n.data as ChannelPointsNotificationData;
-            const base = `+${d.points_earned.toLocaleString()} Channel Points`;
+            const base = `+${d.points_earned.toLocaleString()} ${d.points_name || 'Channel Points'}`;
             // channel_name can hold a reason summary like "+20 (watching)" rather
             // than a real channel; only append it when it's a real channel.
             const isReasonSummary = !!d.channel_name && d.channel_name.includes('(');
@@ -191,6 +205,28 @@ const getPreviewText = (n: DynamicIslandNotification): string => {
             return '';
     }
 };
+
+// Twitch's channel points mark, for a burst with no single face to show.
+const PointsGlyph = ({ size }: { size: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="text-orange-400 flex-shrink-0" fill="currentColor">
+        <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
+        <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
+    </svg>
+);
+
+// A channel's face with its points icon attached at the corner, the same
+// seal the level uses (a dark outline, no chip). Without a custom icon the
+// seal is Twitch's own mark.
+const PointsFace = ({ avatarUrl, iconUrl }: { avatarUrl: string; iconUrl?: string }) => (
+    <div className="relative flex-shrink-0 w-[34px] h-[34px]">
+        <img src={avatarUrl} alt="" className="w-[34px] h-[34px] rounded-full object-cover" />
+        <span className="sn-notif-seal">
+            {iconUrl
+                ? <img src={iconUrl} alt="" className="w-4 h-4 object-contain" />
+                : <PointsGlyph size={14} />}
+        </span>
+    </div>
+);
 
 // The leading mark for the collapsed preview AND for the stacked faces on the
 // trigger, which is why it has to agree with the rows in the list below: a
@@ -216,13 +252,12 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
             return <Download size={11} className="text-yellow-400 flex-shrink-0" />;
         case 'drops':
             return <Package size={11} className="text-green-400 flex-shrink-0" />;
-        case 'channel_points':
-            return (
-                <svg width="11" height="11" viewBox="0 0 24 24" className="text-orange-400 flex-shrink-0" fill="currentColor">
-                    <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
-                    <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
-                </svg>
-            );
+        case 'channel_points': {
+            const d = n.data as ChannelPointsNotificationData;
+            return d.avatar_url
+                ? <img src={d.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                : <PointsGlyph size={11} />;
+        }
         case 'badge':
             return <Award size={11} className="text-cyan-400 flex-shrink-0" />;
         case 'gift_sub': {
@@ -591,6 +626,23 @@ const DynamicIsland = () => {
                     return;
                 case 'changelog':
                     requestChangelog(action.version ?? undefined);
+                    return;
+                case 'rewards': {
+                    // The chat showing that channel opens its wallet once it is up.
+                    requestWallet(action.channel);
+                    const current = store.currentStream?.user_login?.toLowerCase();
+                    if (current === action.channel.toLowerCase()) return;
+                    const go = () => { void useAppStore.getState().startStream(action.channel); };
+                    if (!store.isBooting) { go(); return; }
+                    const stop = useAppStore.subscribe((s) => {
+                        if (!s.isBooting) { stop(); go(); }
+                    });
+                    return;
+                }
+                case 'settings':
+                    if (SETTINGS_TABS_FROM_NOTICES.includes(action.tab as SettingsTab)) {
+                        store.openSettings(action.tab as SettingsTab);
+                    }
                     return;
             }
         };
@@ -1167,7 +1219,7 @@ const DynamicIsland = () => {
         const reasonMap: Record<string, string> = {
             'WATCH': 'watching',
             'WATCH_STREAK': 'watch streak',
-            'CLAIM': 'bonus claim',
+            'CLAIM': 'bonus chest',
             'AUTOMATION': 'automation',
             'RAID': 'raid',
             'PREDICTION': 'prediction',
@@ -1202,6 +1254,9 @@ const DynamicIsland = () => {
         });
         const firstReason = formatReasonCode(summary.first_reason || 'watch');
         const lastBalance = summary.last_balance ?? undefined;
+        // One channel: its face, and its own name for its points ("Goldwig").
+        const only = summary.channels.length === 1 ? summary.channels[0] : undefined;
+        const currency = only?.points_name || 'Channel Points';
 
         // Create notification data - we'll store the breakdown for expanded view
         const reasonSummary = Object.entries(reasonCounts)
@@ -1238,6 +1293,9 @@ const DynamicIsland = () => {
                     total_points: uniqueChannels.length > 1 ? undefined : lastBalance,
                     // Mark if this is a reason summary (not a real channel name)
                     is_reason_summary: !channelNameDisplay,
+                    avatar_url: only?.avatar_url,
+                    points_name: only?.points_name,
+                    icon_url: only?.icon_url,
                 } as ChannelPointsNotificationData,
             };
 
@@ -1257,24 +1315,26 @@ const DynamicIsland = () => {
                 <div className="flex items-center gap-3 w-full">
                     {/* Free-standing, same as the notification centre. The toast is
                         already a surface; a filled disc inside it was a box in a box,
-                        and ToastManager's own icons never had one. */}
-                    <span className="sn-notif-glyph">
-                        <svg width="22" height="22" viewBox="0 0 24 24" className="text-orange-400" fill="currentColor">
-                            <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
-                            <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
-                        </svg>
-                    </span>
+                        and ToastManager's own icons never had one. One channel
+                        shows its face with its points icon attached instead. */}
+                    {only?.avatar_url ? (
+                        <PointsFace avatarUrl={only.avatar_url} iconUrl={only.icon_url} />
+                    ) : (
+                        <span className="sn-notif-glyph">
+                            <PointsGlyph size={22} />
+                        </span>
+                    )}
 
                     {/* Text Content */}
                     <div className="flex-1 min-w-0">
                         <div className="text-base font-semibold text-textPrimary">
-                            +{totalPoints.toLocaleString()} Channel Points
+                            +{totalPoints.toLocaleString()} {currency}
                         </div>
                         <div className="text-xs text-textSecondary">
                             {uniqueChannels.length === 1 && uniqueChannels[0] ? (
                                 // Single channel - show channel name, reason, and new balance
                                 lastBalance
-                                    ? `${uniqueChannels[0]} • ${firstReason} • ${lastBalance.toLocaleString()} points`
+                                    ? `${uniqueChannels[0]} • ${firstReason} • ${lastBalance.toLocaleString()} ${only?.points_name || 'points'}`
                                     : `${uniqueChannels[0]} • ${firstReason}`
                             ) : uniqueChannels.length > 1 ? (
                                 // Multiple channels - name the streamers + each earn
@@ -1293,18 +1353,9 @@ const DynamicIsland = () => {
             addToast(toastContent, 'channel_points');
         }
 
-        const channelInfo = uniqueChannels.length === 1 && uniqueChannels[0]
-            ? uniqueChannels[0]
-            : uniqueChannels.length > 1
-                ? (channelListDisplay ?? `${uniqueChannels.length} channels`)
-                : firstReason;
-        mirrorNotification({
-            kind: 'channel_points',
-            title: `+${totalPoints.toLocaleString()} Channel Points`,
-            body: channelInfo,
-        });
-
-    }, [useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, mirrorNotification]);
+        // No mirrorNotification here: Rust raises the system notification and
+        // the MultiChat card for the same burst (services/points_notify.rs).
+    }, [useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound]);
 
     useEffect(() => {
         const unlisten = listen<ChannelPointsSummary>('channel-points-summary', (event) => {
@@ -2304,22 +2355,28 @@ const DynamicIsland = () => {
                                                         </>
                                                     ) : notification.type === 'channel_points' ? (
                                                         <>
-                                                            {/* Channel Points notification */}
-                                                            <div className="relative flex-shrink-0">
-                                                                <div className="sn-notif-glyph">
-                                                                    <svg width="18" height="18" viewBox="0 0 24 24" className="text-orange-400" fill="currentColor">
-                                                                        <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
-                                                                        <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
-                                                                    </svg>
+                                                            {/* Channel Points notification: one channel shows its
+                                                                face with its points icon attached; a mixed burst
+                                                                keeps the plain mark. */}
+                                                            {(notification.data as ChannelPointsNotificationData).avatar_url ? (
+                                                                <PointsFace
+                                                                    avatarUrl={(notification.data as ChannelPointsNotificationData).avatar_url as string}
+                                                                    iconUrl={(notification.data as ChannelPointsNotificationData).icon_url}
+                                                                />
+                                                            ) : (
+                                                                <div className="relative flex-shrink-0">
+                                                                    <div className="sn-notif-glyph">
+                                                                        <PointsGlyph size={18} />
+                                                                    </div>
                                                                 </div>
-                                                            </div>
+                                                            )}
                                                             <div className="flex-1 min-w-0">
                                                                 {/* One points mark per row. The leading glyph already
                                                                     says what this is; a second copy beside the title was
                                                                     the same icon twice on one line. */}
                                                                 <div className="flex items-center gap-2">
                                                                     <span className="text-white text-sm font-semibold truncate">
-                                                                        Channel Points +{(notification.data as ChannelPointsNotificationData).points_earned.toLocaleString()}
+                                                                        {(notification.data as ChannelPointsNotificationData).points_name || 'Channel Points'} +{(notification.data as ChannelPointsNotificationData).points_earned.toLocaleString()}
                                                                     </span>
                                                                 </div>
                                                                 <p className="text-white/50 text-sm truncate mt-0.5">
@@ -2334,7 +2391,7 @@ const DynamicIsland = () => {
                                                                             return channelName;
                                                                         } else if (channelName && totalPoints) {
                                                                             // Real channel name with total - show "channelname: total points"
-                                                                            return `${channelName}: ${totalPoints.toLocaleString()} points`;
+                                                                            return `${channelName}: ${totalPoints.toLocaleString()} ${data.points_name || 'points'}`;
                                                                         } else if (channelName) {
                                                                             // Real channel name without total - just show channel name
                                                                             return channelName;

@@ -14,6 +14,7 @@ use crate::models::settings::AppState;
 use crate::rt::AppHandle;
 use crate::services::chat_history::{ChatHistory, SweepEntry};
 use crate::services::chat_send_limiter::Role;
+use crate::services::moderation::{ModAction, ModRequest};
 use crate::services::slash_commands as sc;
 use crate::services::slash_dispatch::{self, Backend, BoxFut, Me};
 use crate::services::twitch_service::TwitchService;
@@ -49,6 +50,23 @@ fn to<T: Serialize>(r: Result<T, String>) -> Result<Value, String> {
 
 fn unit(r: Result<(), String>) -> Result<Value, String> {
     r.map(|_| Value::Null)
+}
+
+/// One Twitch moderation action through `services::moderation`, from the
+/// arguments the page's `ban_user` / `unban_user` / `delete_chat_message` took.
+/// Answers the outcome (`message` is ready for a toast).
+async fn moderate(a: &Value, action: ModAction) -> Result<Value, String> {
+    let request = ModRequest {
+        provider: None,
+        broadcaster_id: os(a, "broadcasterId"),
+        channel: None,
+        target_user_id: os(a, "targetUserId"),
+        target_name: os(a, "targetName"),
+        action,
+        reason: os(a, "reason"),
+        use_saved_reason: false,
+    };
+    to(crate::services::moderation::moderate(request).await.map_err(|e| e.to_string()))
 }
 
 impl TauriBackend {
@@ -113,10 +131,18 @@ impl TauriBackend {
         let app = self.app.clone();
         match cmd {
             "get_user_by_login" => to(tw::get_user_by_login(s(&a, "login")).await),
-            "ban_user" => unit(tw::ban_user(s(&a, "broadcasterId"), s(&a, "targetUserId"), ou32(&a, "duration"), os(&a, "reason")).await),
-            "unban_user" => unit(tw::unban_user(s(&a, "broadcasterId"), s(&a, "targetUserId")).await),
+            // Bans, timeouts, unbans and deletes go through the one moderation
+            // door every surface uses (`services::moderation`).
+            "ban_user" => {
+                let action = match ou32(&a, "duration") {
+                    Some(seconds) => ModAction::Timeout { seconds },
+                    None => ModAction::Ban,
+                };
+                moderate(&a, action).await
+            }
+            "unban_user" => moderate(&a, ModAction::Unban { timeout: false }).await,
             "clear_chat" => unit(tw::clear_chat(s(&a, "broadcasterId")).await),
-            "delete_chat_message" => unit(tw::delete_chat_message(s(&a, "broadcasterId"), s(&a, "messageId")).await),
+            "delete_chat_message" => moderate(&a, ModAction::Delete { message_id: s(&a, "messageId") }).await,
             "update_chat_settings" => unit(tw::update_chat_settings(s(&a, "broadcasterId"), a["settings"].clone()).await),
             "send_chat_announcement" => {
                 unit(tw::send_chat_announcement(s(&a, "broadcasterId"), s(&a, "message"), os(&a, "color")).await)
@@ -138,8 +164,9 @@ impl TauriBackend {
             "unblock_user" => unit(tw::unblock_user(s(&a, "targetUserId")).await),
             "send_whisper" => unit(tw::send_whisper(s(&a, "toUserId"), s(&a, "message")).await),
             "stop_chat" => to(crate::services::chat_service::ChatService::stop(&self.window).await.map_err(|e| e.to_string())),
-            "get_chatters_by_role" => tw::get_chatters_by_role(s(&a, "channelLogin")).await,
-            "get_channel_chatters" => tw::get_channel_chatters(s(&a, "broadcasterId"), s(&a, "channelLogin")).await,
+            "get_chatters_by_role" => tw::get_chatters_by_role(self.state(), s(&a, "channelLogin")).await,
+            "slash_role_list" => to(sl::slash_role_list(self.state(), s(&a, "channel"), s(&a, "role")).await),
+            "get_channel_chatters" => tw::get_channel_chatters(self.state(), s(&a, "broadcasterId"), s(&a, "channelLogin")).await,
             "update_suspicious_user_status" => {
                 unit(tw::update_suspicious_user_status(s(&a, "broadcasterId"), s(&a, "targetUserId"), s(&a, "status")).await)
             }

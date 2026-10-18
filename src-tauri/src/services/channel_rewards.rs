@@ -9,6 +9,13 @@
 //! and re-judges it on a change, pushing the result as `channel-rewards`. No
 //! refetch from Twitch is needed for that.
 //!
+//! Rewards nothing the viewer can wait for would open this stream (turned off,
+//! paused, sold out for the stream, or the viewer's own per-stream limit used
+//! up) leave the list in Rust, so every shell shows the same list with no view
+//! logic. The channel points feed keeps the kept list current while a menu is
+//! open (`apply_feed`), and a new stream resets the per-stream counts
+//! (`note_stream_seen`), so a reward comes back without a reopen.
+//!
 //! It also keeps every open chat's reward names (`reward_name`). A reward that
 //! asks for text arrives as an ordinary chat message tagged only with its id,
 //! so the chat row can name it only from here. The names come from the list
@@ -68,6 +75,13 @@ struct Judged {
 static ROOMS: OnceLock<Mutex<HashMap<String, Room>>> = OnceLock::new();
 static LISTS: OnceLock<Mutex<HashMap<String, Judged>>> = OnceLock::new();
 static NAMES: OnceLock<Mutex<HashMap<String, RewardNames>>> = OnceLock::new();
+/// The viewer's own redemptions this stream, by channel then reward id. Twitch
+/// reports no per-viewer count, so this counts what this app redeemed and what
+/// Twitch refused as the viewer's limit.
+static USED: OnceLock<Mutex<HashMap<String, HashMap<String, i32>>>> = OnceLock::new();
+/// The start of the stream each channel was last seen live in, so a new stream
+/// (a different start) resets the per-stream counts and a poll blip does not.
+static STREAM_STARTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 /// A reward as a chat row names it.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,6 +213,14 @@ fn lists() -> std::sync::MutexGuard<'static, HashMap<String, Judged>> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+fn used() -> std::sync::MutexGuard<'static, HashMap<String, HashMap<String, i32>>> {
+    USED.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn stream_starts() -> std::sync::MutexGuard<'static, HashMap<String, String>> {
+    STREAM_STARTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Update one channel's room facts; true when something changed.
 fn update_room(login: &str, f: impl FnOnce(&mut Room)) -> bool {
     let mut rooms = rooms();
@@ -235,6 +257,213 @@ pub fn note_viewer_badges(login: &str, badges: &str) {
 /// the first time.
 pub fn note_live_changed(login: &str) {
     rejudge(login);
+}
+
+/// The channel-state poll saw `login` live in the stream that started at
+/// `started_at`. A start different from the last one seen is a new stream:
+/// every per-stream count starts again at zero, so a reward that sold out last
+/// stream (or that the viewer used up) is back.
+pub fn note_stream_seen(login: &str, started_at: &str) {
+    let login = login.to_lowercase();
+    let previous = stream_starts().insert(login.clone(), started_at.to_string());
+    if previous.as_deref().is_some_and(|p| p != started_at) {
+        new_stream(&login);
+    }
+}
+
+fn new_stream(login: &str) {
+    used().remove(login);
+    let had_list = match lists().get_mut(login) {
+        Some(judged) => {
+            for r in &mut judged.rewards {
+                if r.redemptions_redeemed_current_stream.is_some() {
+                    r.redemptions_redeemed_current_stream = Some(0);
+                }
+            }
+            true
+        }
+        None => false,
+    };
+    if had_list {
+        rejudge(login);
+    }
+}
+
+/// What Twitch answered a redeem this app sent. A success counts toward the
+/// viewer's own per-stream limit; a refusal for that limit, or for the
+/// channel's, takes the reward out of the list until the next stream.
+pub fn note_redeem_answer(login: &str, reward_id: &str, success: bool, error_code: Option<&str>) {
+    let login = login.to_lowercase();
+    let changed = match (success, error_code) {
+        (true, _) => {
+            *used().entry(login.clone()).or_default().entry(reward_id.to_string()).or_insert(0) += 1;
+            true
+        }
+        (false, Some("MAX_PER_USER_PER_STREAM_EXCEEDED" | "REWARD_MAX_PER_USER_PER_STREAM")) => {
+            used().entry(login.clone()).or_default().insert(reward_id.to_string(), i32::MAX);
+            true
+        }
+        (false, Some("MAX_PER_STREAM_EXCEEDED" | "REWARD_MAX_PER_STREAM")) => {
+            let mut lists = lists();
+            let reward = lists.get_mut(&login).and_then(|j| j.rewards.iter_mut().find(|r| r.id == reward_id));
+            match reward {
+                Some(r) => {
+                    r.is_in_stock = false;
+                    if let Some(max) = r.max_per_stream {
+                        r.redemptions_redeemed_current_stream = Some(max);
+                    }
+                    true
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    if changed {
+        rejudge(&login);
+    }
+}
+
+/// The channel points feed (`community-points-channel-v1`) changed a reward:
+/// turned on or off, paused, restocked, sold out, made, deleted, or redeemed by
+/// anyone (a redemption carries the reward's new per-stream count). The kept
+/// list is patched and pushed, so an open menu follows with no refetch. A no-op
+/// for a channel whose rewards were never opened.
+pub fn apply_feed(login: &str, message: &serde_json::Value) {
+    let login = login.to_lowercase();
+    let changed = match lists().get_mut(&login) {
+        Some(judged) => patch_list(&mut judged.rewards, message),
+        None => return,
+    };
+    if changed {
+        rejudge(&login);
+    }
+}
+
+/// Patch `rewards` from one feed message; true when the list changed.
+fn patch_list(rewards: &mut Vec<ChannelReward>, message: &serde_json::Value) -> bool {
+    let data = &message["data"];
+    match message["type"].as_str() {
+        Some("custom-reward-updated") => patch_reward(rewards, &data["updated_reward"], false),
+        Some("custom-reward-created") => patch_reward(rewards, &data["new_reward"], true),
+        Some("reward-redeemed") => patch_reward(rewards, &data["redemption"]["reward"], false),
+        Some("custom-reward-deleted") => {
+            let Some(id) = data["deleted_reward"]["id"].as_str() else { return false };
+            let before = rewards.len();
+            rewards.retain(|r| r.id != id);
+            rewards.len() != before
+        }
+        _ => false,
+    }
+}
+
+fn patch_reward(rewards: &mut Vec<ChannelReward>, feed: &serde_json::Value, may_add: bool) -> bool {
+    let Some(id) = feed["id"].as_str().filter(|id| !id.is_empty()) else { return false };
+    if let Some(r) = rewards.iter_mut().find(|r| r.id == id) {
+        let before = state_of(r);
+        apply_state(r, feed);
+        return state_of(r) != before;
+    }
+    if !may_add {
+        return false;
+    }
+    let Some(title) = feed["title"].as_str().filter(|t| !t.trim().is_empty()) else { return false };
+    let mut r = ChannelReward {
+        id: id.to_string(),
+        title: title.to_string(),
+        cost: 0,
+        prompt: None,
+        image_url: feed_image(feed),
+        background_color: feed["background_color"].as_str().unwrap_or_default().to_string(),
+        is_enabled: true,
+        is_paused: false,
+        is_in_stock: true,
+        is_user_input_required: feed["is_user_input_required"].as_bool().unwrap_or(false),
+        cooldown_expires_at: None,
+        max_per_stream: None,
+        max_per_user_per_stream: None,
+        global_cooldown_seconds: None,
+        reward_type: None,
+        redemptions_redeemed_current_stream: None,
+        is_sub_only: false,
+        is_hidden_for_subs: false,
+        description: None,
+        availability: RewardAvailability::default(),
+        view: Default::default(),
+    };
+    apply_state(&mut r, feed);
+    rewards.push(r);
+    true
+}
+
+/// The fields a feed message can change, to tell whether one did.
+type RewardState = (
+    String, i32, Option<String>, bool, bool, bool, bool,
+    Option<String>, Option<i32>, Option<i32>, Option<i32>, Option<i32>,
+);
+
+fn state_of(r: &ChannelReward) -> RewardState {
+    (
+        r.title.clone(), r.cost, r.prompt.clone(), r.is_enabled, r.is_paused, r.is_in_stock, r.is_sub_only,
+        r.cooldown_expires_at.clone(), r.max_per_stream, r.max_per_user_per_stream, r.global_cooldown_seconds,
+        r.redemptions_redeemed_current_stream,
+    )
+}
+
+/// Copy what the feed says about a reward onto it. A field the message leaves
+/// out keeps its value; a null one (a cooldown ending) clears it.
+fn apply_state(r: &mut ChannelReward, feed: &serde_json::Value) {
+    if let Some(title) = feed["title"].as_str().filter(|t| !t.trim().is_empty()) {
+        r.title = title.to_string();
+    }
+    if let Some(cost) = feed["cost"].as_i64() {
+        r.cost = cost as i32;
+    }
+    if let Some(prompt) = feed.get("prompt") {
+        r.prompt = prompt.as_str().map(str::trim).filter(|p| !p.is_empty()).map(String::from);
+    }
+    for (key, field) in [
+        ("is_enabled", &mut r.is_enabled),
+        ("is_paused", &mut r.is_paused),
+        ("is_in_stock", &mut r.is_in_stock),
+        ("is_sub_only", &mut r.is_sub_only),
+    ] {
+        if let Some(v) = feed[key].as_bool() {
+            *field = v;
+        }
+    }
+    if let Some(at) = feed.get("cooldown_expires_at") {
+        r.cooldown_expires_at = at.as_str().filter(|s| !s.is_empty()).map(String::from);
+    }
+    if let Some(n) = feed.get("redemptions_redeemed_current_stream") {
+        r.redemptions_redeemed_current_stream = n.as_i64().map(|n| n as i32);
+    }
+    if let Some(v) = feed_setting(feed, "max_per_stream", "max_per_stream") {
+        r.max_per_stream = v;
+    }
+    if let Some(v) = feed_setting(feed, "max_per_user_per_stream", "max_per_user_per_stream") {
+        r.max_per_user_per_stream = v;
+    }
+    if let Some(v) = feed_setting(feed, "global_cooldown", "global_cooldown_seconds") {
+        r.global_cooldown_seconds = v;
+    }
+}
+
+/// A feed limit setting (`{ "is_enabled": true, "max_per_stream": 3 }`): None
+/// when the message has no such setting, Some(None) when it is turned off.
+fn feed_setting(feed: &serde_json::Value, key: &str, field: &str) -> Option<Option<i32>> {
+    let setting = feed.get(key)?.as_object()?;
+    let on = setting.get("is_enabled").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    Some(if on { setting.get(field).and_then(serde_json::Value::as_i64).map(|n| n as i32) } else { None })
+}
+
+fn feed_image(feed: &serde_json::Value) -> Option<String> {
+    ["image", "default_image"]
+        .into_iter()
+        .find_map(|k| feed.get(k).filter(|v| v.is_object()))
+        .and_then(|img| ["url_4x", "url_2x", "url_1x"].into_iter().find_map(|k| img[k].as_str()))
+        .filter(|u| !u.is_empty())
+        .map(String::from)
 }
 
 /// IRC left the channel: its room facts are no longer current and its kept
@@ -345,7 +574,8 @@ fn push(login: &str, judged: Judged, room: Room, live: Option<bool>) {
 }
 
 /// The list as the viewer should see it: rewards Twitch hides from
-/// subscribers are left out for one, and every reward carries its verdict.
+/// subscribers are left out for one, so are rewards nothing the viewer can wait
+/// for would open this stream (`unusable`), and every reward carries its verdict.
 fn snapshot(
     login: &str,
     rewards: Vec<ChannelReward>,
@@ -353,9 +583,11 @@ fn snapshot(
     fetched_at_ms: i64,
     now_ms: i64,
 ) -> ChannelRewardsSnapshot {
+    let used = used().get(&login.to_lowercase()).cloned().unwrap_or_default();
     let rewards = rewards
         .into_iter()
         .filter(|r| !(r.is_hidden_for_subs && ctx.viewer_is_sub == Some(true)))
+        .filter(|r| !unusable(r, used.get(&r.id).copied().unwrap_or(0)))
         .map(|mut r| {
             r.availability = reward_availability(&r, ctx, now_ms);
             r.view = crate::services::reward_redeem::view_of(&r);
@@ -370,6 +602,34 @@ fn snapshot(
     }
 }
 
+/// Whether nothing the viewer can wait for will open `reward` this stream:
+/// turned off, paused by the broadcaster, sold out for the stream, or the
+/// viewer's own per-stream limit used up (`used_by_viewer` redemptions). Those
+/// leave the list. A cooldown, too few points, a chat mode or a live-only limit
+/// keep the reward listed, since each clears on its own.
+pub fn unusable(reward: &ChannelReward, used_by_viewer: i32) -> bool {
+    let viewer_cap_reached = reward.max_per_user_per_stream.is_some_and(|max| max > 0 && used_by_viewer >= max);
+    !reward.is_enabled || reward.is_paused || stream_cap_reached(reward) || viewer_cap_reached || sold_out(reward)
+}
+
+/// The channel-wide per-stream limit is used up.
+fn stream_cap_reached(reward: &ChannelReward) -> bool {
+    matches!(
+        (reward.max_per_stream, reward.redemptions_redeemed_current_stream),
+        (Some(max), Some(done)) if max > 0 && done >= max
+    )
+}
+
+/// Twitch says it is out of stock. Twitch turns `isInStock` off while a
+/// reward's global cooldown runs and leaves it off after the cooldown ends, so
+/// for a reward with a cooldown timestamp the stock flag only restates the
+/// cooldown (judged from the timestamp itself). Twitch's own client reads it the
+/// same way.
+fn sold_out(reward: &ChannelReward) -> bool {
+    let stock_held_by_cooldown = reward.global_cooldown_seconds.is_some() && reward.cooldown_expires_at.is_some();
+    !reward.is_in_stock && !stock_held_by_cooldown
+}
+
 /// Decide whether the viewer can redeem `reward` right now. `now_ms` is Unix
 /// ms. Earlier checks win when several apply, in Twitch's checkout order.
 pub fn reward_availability(reward: &ChannelReward, ctx: &RewardContext, now_ms: i64) -> RewardAvailability {
@@ -381,20 +641,11 @@ pub fn reward_availability(reward: &ChannelReward, ctx: &RewardContext, now_ms: 
         .filter(|&until| until > now_ms);
     let affordable = ctx.balance.map_or(true, |b| b >= i64::from(reward.cost));
     let is_bypass = reward.reward_type.as_deref() == Some(SUB_MODE_BYPASS_REWARD);
-    let stream_cap_reached = matches!(
-        (reward.max_per_stream, reward.redemptions_redeemed_current_stream),
-        (Some(max), Some(done)) if max > 0 && done >= max
-    );
+    let stream_cap_reached = stream_cap_reached(reward);
     // Twitch refuses a reward with a per-stream limit while the channel is
     // offline, since there is no stream to count against.
     let has_stream_limit = reward.max_per_stream.is_some() || reward.max_per_user_per_stream.is_some();
-    // Twitch turns `isInStock` off while a reward's global cooldown runs and
-    // leaves it off after the cooldown ends, so for a reward with a cooldown
-    // timestamp the stock flag only restates the cooldown (judged above from
-    // the timestamp itself). Twitch's own client reads it the same way.
-    let stock_held_by_cooldown =
-        reward.global_cooldown_seconds.is_some() && reward.cooldown_expires_at.is_some();
-    let out_of_stock = !reward.is_in_stock && !stock_held_by_cooldown;
+    let out_of_stock = sold_out(reward);
 
     let reason = if !reward.is_enabled {
         Some(RewardBlock::Disabled)
@@ -1168,5 +1419,166 @@ mod tests {
                 "detail": "Paused by the streamer"
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod usable_tests {
+    use super::*;
+    use serde_json::json;
+
+    const NOW_MS: i64 = 1_700_000_000_000;
+
+    fn reward(id: &str) -> ChannelReward {
+        ChannelReward {
+            id: id.to_string(),
+            title: "Hydrate".to_string(),
+            cost: 500,
+            prompt: None,
+            image_url: None,
+            background_color: "#9147FF".to_string(),
+            is_enabled: true,
+            is_paused: false,
+            is_in_stock: true,
+            is_user_input_required: false,
+            cooldown_expires_at: None,
+            max_per_stream: None,
+            max_per_user_per_stream: None,
+            global_cooldown_seconds: None,
+            reward_type: None,
+            redemptions_redeemed_current_stream: None,
+            is_sub_only: false,
+            is_hidden_for_subs: false,
+            description: None,
+            availability: RewardAvailability::default(),
+            view: Default::default(),
+        }
+    }
+
+    fn ids(snap: &ChannelRewardsSnapshot) -> Vec<&str> {
+        snap.rewards.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    fn shown(login: &str, rewards: Vec<ChannelReward>, balance: Option<i64>) -> ChannelRewardsSnapshot {
+        let ctx = RewardContext { balance, live: Some(true), ..Default::default() };
+        snapshot(login, rewards, &ctx, NOW_MS, NOW_MS)
+    }
+
+    #[test]
+    fn turned_off_paused_and_sold_out_rewards_leave_the_list() {
+        let mut off = reward("off");
+        off.is_enabled = false;
+        let mut paused = reward("paused");
+        paused.is_paused = true;
+        let mut sold = reward("sold");
+        sold.max_per_stream = Some(3);
+        sold.redemptions_redeemed_current_stream = Some(3);
+        let mut stock = reward("stock");
+        stock.is_in_stock = false;
+        let snap = shown("usable-a", vec![reward("open"), off, paused, sold, stock], Some(10_000));
+        assert_eq!(ids(&snap), vec!["open"]);
+    }
+
+    #[test]
+    fn cooldowns_and_unaffordable_rewards_stay() {
+        let mut cooling = reward("cooling");
+        cooling.global_cooldown_seconds = Some(300);
+        cooling.cooldown_expires_at = Some(chrono::DateTime::from_timestamp_millis(NOW_MS + 60_000).unwrap().to_rfc3339());
+        // Twitch holds isInStock off for the cooldown; that is not sold out.
+        cooling.is_in_stock = false;
+        let mut pricey = reward("pricey");
+        pricey.cost = 50_000;
+        let mut left = reward("left");
+        left.max_per_stream = Some(3);
+        left.redemptions_redeemed_current_stream = Some(2);
+        let snap = shown("usable-b", vec![cooling, pricey, left], Some(1_000));
+        assert_eq!(ids(&snap), vec!["cooling", "pricey", "left"]);
+        assert_eq!(snap.rewards[0].availability.reason, Some(RewardBlock::OnCooldown));
+        assert_eq!(snap.rewards[1].availability.reason, Some(RewardBlock::NotEnoughPoints));
+    }
+
+    #[test]
+    fn a_reward_the_viewer_used_up_leaves_until_the_next_stream() {
+        let login = "usable-c";
+        let mut once = reward("once");
+        once.max_per_user_per_stream = Some(1);
+        note_redeem_answer(login, "once", true, None);
+        assert!(ids(&shown(login, vec![once.clone()], None)).is_empty());
+        // A new stream (a different start) gives the viewer their redemption back.
+        note_stream_seen(login, "2026-10-18T10:00:00Z");
+        note_stream_seen(login, "2026-10-18T10:00:00Z");
+        assert!(ids(&shown(login, vec![once.clone()], None)).is_empty(), "the same stream changes nothing");
+        note_stream_seen(login, "2026-10-18T20:00:00Z");
+        assert_eq!(ids(&shown(login, vec![once], None)), vec!["once"]);
+    }
+
+    #[test]
+    fn twitch_refusing_the_viewer_limit_hides_it_too() {
+        let login = "usable-d";
+        let mut twice = reward("twice");
+        twice.max_per_user_per_stream = Some(2);
+        note_redeem_answer(login, "twice", false, Some("MAX_PER_USER_PER_STREAM_EXCEEDED"));
+        assert!(ids(&shown(login, vec![twice.clone()], None)).is_empty());
+        note_redeem_answer("usable-d2", "twice", false, Some("INSUFFICIENT_POINTS"));
+        assert_eq!(ids(&shown("usable-d2", vec![twice], None)), vec!["twice"]);
+    }
+
+    #[test]
+    fn the_feed_pauses_restocks_and_reenables_a_reward() {
+        let mut list = vec![reward("r1")];
+        let paused = json!({ "type": "custom-reward-updated", "data": { "updated_reward": { "id": "r1", "is_paused": true } } });
+        assert!(patch_list(&mut list, &paused));
+        assert!(unusable(&list[0], 0));
+        assert!(!patch_list(&mut list, &paused), "the same state again is no change");
+        let back = json!({ "type": "custom-reward-updated", "data": { "updated_reward": {
+            "id": "r1", "is_paused": false, "is_enabled": true, "is_in_stock": true,
+            "max_per_stream": { "is_enabled": true, "max_per_stream": 5 },
+            "redemptions_redeemed_current_stream": 1, "cooldown_expires_at": null } } });
+        assert!(patch_list(&mut list, &back));
+        assert!(!unusable(&list[0], 0));
+        assert_eq!(list[0].max_per_stream, Some(5));
+        let off = json!({ "type": "custom-reward-updated", "data": { "updated_reward": { "id": "r1", "is_enabled": false } } });
+        assert!(patch_list(&mut list, &off));
+        assert!(unusable(&list[0], 0));
+    }
+
+    #[test]
+    fn a_redemption_that_sells_it_out_takes_it_off() {
+        let mut capped = reward("r1");
+        capped.max_per_stream = Some(2);
+        capped.redemptions_redeemed_current_stream = Some(1);
+        let mut list = vec![capped];
+        let redeemed = json!({ "type": "reward-redeemed", "data": { "redemption": {
+            "reward": { "id": "r1", "redemptions_redeemed_current_stream": 2 } } } });
+        assert!(patch_list(&mut list, &redeemed));
+        assert!(unusable(&list[0], 0));
+    }
+
+    #[test]
+    fn the_feed_adds_and_deletes_rewards() {
+        let mut list = vec![reward("r1")];
+        let made = json!({ "type": "custom-reward-created", "data": { "new_reward": {
+            "id": "r2", "title": "Song request", "cost": 2500, "prompt": "Name a song",
+            "is_user_input_required": true, "is_enabled": true, "is_paused": false, "is_in_stock": true,
+            "background_color": "#FF0000", "image": null,
+            "default_image": { "url_1x": "a", "url_2x": "b", "url_4x": "c" } } } });
+        assert!(patch_list(&mut list, &made));
+        assert_eq!(list[1].title, "Song request");
+        assert_eq!(list[1].cost, 2500);
+        assert_eq!(list[1].image_url.as_deref(), Some("c"));
+        assert!(list[1].is_user_input_required);
+        let gone = json!({ "type": "custom-reward-deleted", "data": { "deleted_reward": { "id": "r1" } } });
+        assert!(patch_list(&mut list, &gone));
+        assert_eq!(list.len(), 1);
+        // An update for a reward this list never had adds nothing.
+        let stray = json!({ "type": "custom-reward-updated", "data": { "updated_reward": { "id": "zz", "title": "x" } } });
+        assert!(!patch_list(&mut list, &stray));
+    }
+
+    #[test]
+    fn every_reward_gone_leaves_an_empty_list_for_the_empty_state() {
+        let mut off = reward("off");
+        off.is_enabled = false;
+        assert!(shown("usable-e", vec![off], None).rewards.is_empty());
     }
 }

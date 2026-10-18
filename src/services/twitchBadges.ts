@@ -14,7 +14,19 @@ import { Logger } from '../utils/logger';
 // message (and parseMessage runs per row), so the nested set/version array
 // scans were O(sets x versions) on the chat hot path; these make it two Map
 // hits with the info objects constructed once at index time.
-type BadgeVersionInfo = Record<string, unknown>;
+/** One Twitch badge version as chat rows read it. `id` is the version id
+ *  (the part after the slash in `set/version`); BadgeDetailOverlay keys its
+ *  metadata, earn guide and window lookups on it. */
+export interface BadgeVersionInfo {
+  id: string;
+  image_url_1x?: string;
+  image_url_2x?: string;
+  image_url_4x?: string;
+  title?: string;
+  description?: string;
+  click_action?: string | null;
+  click_url?: string | null;
+}
 type BadgeIndex = Map<string, Map<string, BadgeVersionInfo>>;
 let globalBadgeIndex: BadgeIndex | null = null;
 const channelBadgeIndexes = new Map<string, BadgeIndex>();
@@ -29,6 +41,7 @@ function buildBadgeIndex(payload: any): BadgeIndex {
     const versions = new Map<string, BadgeVersionInfo>();
     for (const v of badgeSet.versions ?? []) {
       versions.set(v.id, {
+        id: v.id,
         image_url_1x: v.image_url_1x,
         image_url_2x: v.image_url_2x,
         image_url_4x: v.image_url_4x,
