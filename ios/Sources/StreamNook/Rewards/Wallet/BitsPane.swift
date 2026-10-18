@@ -77,7 +77,7 @@ struct BitsPane: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 34)
-                .snPanel(radius: 10)
+                .snPanel(radius: 10, light: nil)
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
                         ForEach(state.quickAmounts, id: \.self) { n in

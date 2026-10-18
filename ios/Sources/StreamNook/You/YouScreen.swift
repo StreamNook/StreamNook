@@ -105,7 +105,7 @@ private struct SignedOutIdentityCard: View {
         }
         .background(alignment: .top) { AtmosphereGlow(look: nil).frame(height: OwnIdentityCard.glow) }
         .clipShape(RoundedRectangle(cornerRadius: OwnIdentityCard.radius, style: .continuous))
-        .snPanel(radius: OwnIdentityCard.radius, light: nil)
+        .snPanel(radius: OwnIdentityCard.radius, stage: true)
     }
 }
 

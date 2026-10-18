@@ -56,7 +56,7 @@ struct OwnIdentityCard: View {
             AtmosphereGlow(look: look, tint: nameColor(picks.ext?.chatColor)).frame(height: Self.glow)
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
-        .snPanel(radius: Self.radius, light: nil)
+        .snPanel(radius: Self.radius, stage: true)
         .task(id: user.id) { await load() }
         .task(id: model.cosmetics.registryVersion) { if identity != nil { await refresh() } }
     }

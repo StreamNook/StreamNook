@@ -171,7 +171,7 @@ private struct DropsSearchField: View {
         .padding(.leading, 12)
         .padding(.trailing, text.isEmpty ? 12 : 4)
         .frame(height: 40)
-        .snPanel(radius: 10)
+        .snPanel(radius: 10, light: nil)
         .contentShape(Rectangle())
         .onTapGesture { focused = true }
     }

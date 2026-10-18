@@ -8,12 +8,16 @@ extension View {
     /// A panel in the page: the opaque floor, the theme's faint wash and its share of the theme's
     /// light, light along its top edge, a dark contour and a small shadow. No blur: its backdrop is
     /// the page, whose light is already soft. A panel that is a text field passes `light: nil`:
-    /// a field being typed into stays plain.
+    /// a field being typed into stays plain. A `stage` (a card showing someone's cosmetics) takes
+    /// no light and, under a theme that throws light, hides the page's light behind it too, so
+    /// the theme's light is never read as part of the cosmetic.
     @MainActor
-    func snPanel(radius: CGFloat = 12, light: ThemeLight.Surface? = .panel) -> some View {
+    func snPanel(radius: CGFloat = 12, light: ThemeLight.Surface? = .panel, stage: Bool = false) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let light = stage ? nil : light
         return background {
             ZStack {
+                if stage && Look.shared.light != nil { shape.fill(SN.background) }
                 shape.fill(SN.floor)
                 shape.fill(SN.backgroundSecondary)
                 if let light { ThemeLightLayer(surface: light).clipShape(shape) }
