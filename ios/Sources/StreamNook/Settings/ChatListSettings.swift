@@ -143,7 +143,7 @@ struct AddField: View {
         VStack(alignment: .leading, spacing: 4) {
             if let label { Text(label).font(.sn(11)).foregroundStyle(SN.textSecondary) }
             HStack(spacing: 8) {
-                TextField(placeholder, text: $text)
+                TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(SN.textMuted))
                     .font(monospaced ? .system(size: 13, design: .monospaced) : .sn(13))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -166,14 +166,15 @@ struct AddField: View {
                             Text("Add").font(.sn(13, 600))
                         }
                     }
-                    .foregroundStyle(SN.accent)
+                    .foregroundStyle(empty ? SN.textMuted : SN.accent)
                     .padding(.horizontal, 12)
                     .frame(minWidth: 44, minHeight: 36)
-                    .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SN.accent.opacity(0.15)) }
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous).fill(empty ? SN.surface : SN.accent.opacity(0.15))
+                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(empty)
-                .opacity(empty ? 0.4 : 1)
                 .accessibilityLabel(buttonSymbol == nil ? "Add" : "Add word")
             }
             if let error { Text(error).font(.sn(12)).foregroundStyle(SN.error) }
@@ -512,9 +513,9 @@ struct EventHighlightsSettings: View {
     var body: some View {
         SettingsBlock(title: "Event Highlights", detail: "Highlight messages from certain kinds of chatters. Works alongside your phrase highlights and never changes the mention or reply flash.") {
             rule("first_time_chatter", "First-time chatters",
-                 "Highlight a user's first ever message in this channel (Twitch first-msg tag). Already on by default with the purple gradient. Toggle it off or re-color it here.",
+                 "Highlight a user's first ever message in this channel.",
                  help: "Style is a tinted wash with a bar down the left, or a ring around the message; Ring fill adds a faint color-matched fill inside it. Glint is a short highlight as the row lands (a sheen, a pulse, or a spark around the edge), and Loop keeps it going.")
-            rule("returning_chatter", "Returning chatters", "Highlight users coming back after a long absence (Twitch returning-chatter tag).")
+            rule("returning_chatter", "Returning chatters", "Highlight users coming back after a long absence.")
             rule("self_message", "Your own messages", "Tint your own outgoing messages so they're easy to spot in fast chats.")
             rule("raider", "Raid announcements", "Highlight the \"X is raiding with Y viewers\" notice row when a raid lands.")
         }
@@ -523,13 +524,12 @@ struct EventHighlightsSettings: View {
     private func rule(_ key: String, _ title: String, _ detail: String, help: String? = nil) -> some View {
         let base = "chat_highlights.built_in.\(key)"
         return SettingRow(title: title, detail: detail, help: help, paths: ["\(base).enabled", "\(base).color"]) {
-            HStack(spacing: 10) {
-                SettingColor(path: "\(base).color", unset: "#a855f7", label: "Highlight color").frame(width: 32)
-                SettingToggle(path: "\(base).enabled", label: title)
-            }
+            SettingToggle(path: "\(base).enabled", label: title)
         } nested: {
-            if key == "first_time_chatter", store.bool("\(base).enabled", true) {
+            if store.bool("\(base).enabled", true) {
                 NestedSettings {
+                    NestedColor(title: "Color", path: "\(base).color", unset: "#a855f7")
+                    if key == "first_time_chatter" {
                     NestedChoice(title: "Style", path: "\(base).style", choices: [Choice("Wash", "wash"), Choice("Ring", "ring")], fallback: "wash")
                     if store.string("\(base).style", "wash") == "ring" {
                         NestedToggle(title: "Ring fill", path: "\(base).fill")
@@ -541,6 +541,7 @@ struct EventHighlightsSettings: View {
                     }
                     if store.string("\(base).animation", "none") != "none" {
                         NestedToggle(title: "Loop", path: "\(base).animate_repeat")
+                    }
                     }
                 }
             }
@@ -657,7 +658,7 @@ struct CustomCommandsSettings: View {
             }
             .buttonStyle(.plain)
         ), bare: true) {
-            Text("Define your own commands. A trigger of `lurk` with expansion `I'm lurking, BRB` means typing `/lurk` sends that message instead.")
+            Text(verbatim: "Define your own commands. A trigger of \"lurk\" with the text \"I'm lurking, BRB\" means typing /lurk sends that text instead.")
                 .font(.sn(12)).foregroundStyle(SN.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             if reference { CommandReference() }

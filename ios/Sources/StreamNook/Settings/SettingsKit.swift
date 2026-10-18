@@ -27,11 +27,9 @@ struct SettingsBlock<Content: View>: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if let logo { BrandLogo(id: logo, size: 13) }
                 Text(shownTitle ?? title).snSectionStyle()
-                if let accessory {
-                    Spacer(minLength: 8)
-                    accessory
-                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .trailing) { accessory }
             if let detail {
                 Text(detail)
                     .font(.sn(12))
@@ -128,6 +126,8 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
     var paths: [String] = []
     var logo: String?
     var afterReset: (() async -> Void)?
+    /// Centers the control on the title and its text together (a row whose control is a button).
+    var centersControl = false
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var below: Below
     @ViewBuilder var nested: Nested
@@ -136,34 +136,74 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // The control lines up with the title, not the middle of a long description.
-            HStack(alignment: .settingTitle, spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, logo: logo,
-                                 afterReset: afterReset)
-                        .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+            RowTop(centersControl: centersControl) {
+                SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, logo: logo,
+                             afterReset: afterReset)
+                VStack(alignment: .leading, spacing: 0) {
                     if let detail {
                         Text(detail)
                             .font(.sn(12))
                             .foregroundStyle(SN.textSecondary)
                             .lineSpacing(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
                     }
                     if helpOpen, let help {
                         Text(help)
                             .font(.sn(12))
                             .foregroundStyle(SN.textMuted)
-                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 4)
                             .transition(.opacity)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                trailing.alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+                ZStack { trailing }
             }
             below
             nested
         }
         .padding(.vertical, 12)
+    }
+}
+
+/// A row's top: the title line with its text under it on the left, the control on the right
+/// centered on the title line (or on the title and text together, for a button). The text is
+/// measured at exactly the width it is drawn at. Takes three views: the title, the text under it
+/// (a stack, possibly empty), and the control (a stack, possibly empty).
+struct RowTop: Layout {
+    var centersControl = false
+    var spacing: CGFloat = 16
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 320
+        return CGSize(width: width, height: measure(width, subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let m = measure(bounds.width, subviews)
+        let titleY = bounds.minY + m.top
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: titleY), proposal: ProposedViewSize(width: m.text, height: m.title))
+        subviews[1].place(at: CGPoint(x: bounds.minX, y: titleY + m.title), proposal: ProposedViewSize(width: m.text, height: m.under))
+        let controlY = centersControl
+            ? bounds.minY + (m.height - m.control.height) / 2
+            : titleY + m.title / 2 - m.control.height / 2
+        subviews[2].place(at: CGPoint(x: bounds.maxX - m.control.width, y: controlY),
+                          proposal: ProposedViewSize(m.control))
+    }
+
+    private func measure(_ width: CGFloat, _ subviews: Subviews)
+        -> (text: CGFloat, title: CGFloat, under: CGFloat, control: CGSize, top: CGFloat, height: CGFloat) {
+        guard subviews.count == 3 else { return (width, 0, 0, .zero, 0, 0) }
+        let control = subviews[2].sizeThatFits(.unspecified)
+        let text = control.width > 0 ? max(0, width - control.width - spacing) : width
+        let title = subviews[0].sizeThatFits(ProposedViewSize(width: text, height: nil)).height
+        let under = subviews[1].sizeThatFits(ProposedViewSize(width: text, height: nil)).height
+        // A control taller than the title line pushes the title down so the control stays inside the row.
+        if centersControl {
+            let top = max(0, (control.height - title - under) / 2)
+            return (text, title, under, control, top, max(top + title + under, control.height))
+        }
+        let top = max(0, (control.height - title) / 2)
+        return (text, title, under, control, top, max(top + title + under, top + title / 2 + control.height / 2))
     }
 }
 
@@ -178,9 +218,9 @@ extension SettingRow where Below == EmptyView {
 
 extension SettingRow where Below == EmptyView, Nested == EmptyView {
     init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [], logo: String? = nil,
-         afterReset: (() async -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
+         afterReset: (() async -> Void)? = nil, centersControl: Bool = false, @ViewBuilder trailing: () -> Trailing) {
         self.init(title: title, detail: detail, help: help, paths: paths, logo: logo, afterReset: afterReset,
-                  trailing: trailing, below: { EmptyView() }, nested: { EmptyView() })
+                  centersControl: centersControl, trailing: trailing, below: { EmptyView() }, nested: { EmptyView() })
     }
 }
 
@@ -221,10 +261,16 @@ struct NestedSettings<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) { content }
-            .padding(.leading, 16)
-            .overlay(alignment: .leading) { Rectangle().fill(SN.borderSubtle).frame(width: 1) }
-            .padding(.top, 16)
+        // Nothing nested (a switch row with no dependents, or dependents that are hidden) draws
+        // nothing: an empty block still added its 16 point gap, a blank line under the row.
+        Group(subviews: content) { rows in
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 14) { ForEach(rows) { $0 } }
+                    .padding(.leading, 16)
+                    .overlay(alignment: .leading) { Rectangle().fill(SN.borderSubtle).frame(width: 1) }
+                    .padding(.top, 16)
+            }
+        }
     }
 }
 
