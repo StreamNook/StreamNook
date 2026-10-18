@@ -15,14 +15,19 @@ public struct ChatRowModel: Sendable, Equatable, Identifiable {
     public var moderation: ChatModeration?
     /// Arrived live (not from history), so it may animate in and buzz for a mention.
     public var live: Bool
+    /// A message AutoMod held, shown to a moderator with Allow and Deny; folds to one line once
+    /// decided.
+    public var held: HeldRow?
 
     public var id: String { message.id }
 
-    public init(message: ChatMessage, revision: Int = 0, moderation: ChatModeration? = nil, live: Bool = true) {
+    public init(message: ChatMessage, revision: Int = 0, moderation: ChatModeration? = nil, live: Bool = true,
+                held: HeldRow? = nil) {
         self.message = message
         self.revision = revision
         self.moderation = moderation
         self.live = live
+        self.held = held
     }
 }
 
@@ -149,6 +154,23 @@ public struct ChatRoomBuffer: Sendable {
                 }
             case .roomState(_, let modes):
                 if let modes { self.modes = modes }
+            case .held(_, let held):
+                let id = Self.heldRowID(held.held.messageID)
+                if let i = index[id] {
+                    var row = rows[i - base]
+                    guard row.held != held else { continue }
+                    row.held = held
+                    row.revision += 1
+                    rows[i - base] = row
+                    replaceAppended(row, &change)
+                    updated[id] = row
+                } else if held.held.isPending, let message = Self.heldMessage(held.held) {
+                    // A decision on a message held before this room opened has nothing to fold.
+                    let row = ChatRowModel(message: message, live: true, held: held)
+                    index[id] = base + rows.count
+                    rows.append(row)
+                    change.appended.append(row)
+                }
             default:
                 break
             }
@@ -159,6 +181,30 @@ public struct ChatRoomBuffer: Sendable {
         // than the cap keeps its appended rows listed and lets the trim take them.
         change.updated = updated.values.filter { index[$0.id] != nil && !appendedIDs.contains($0.id) }
         return change
+    }
+
+    /// The row id a held message lives under, apart from the real message Twitch delivers if it
+    /// is allowed.
+    public static func heldRowID(_ messageID: String) -> String { "held-\(messageID)" }
+
+    /// The row a held message is drawn from: its author and text, as the room shows a message.
+    static func heldMessage(_ held: HeldMessage) -> ChatMessage? {
+        let sent = held.heldAtMs > 0 ? Date(timeIntervalSince1970: Double(held.heldAtMs) / 1000) : Date()
+        let row: [String: Any] = [
+            "id": heldRowID(held.messageID),
+            "user_id": held.userID,
+            "username": held.userLogin,
+            "display_name": held.userName,
+            "color": NSNull(),
+            "badges": [Any](),
+            "timestamp": ISO8601DateFormatter().string(from: sent),
+            "content": held.text,
+            "provider": "twitch",
+            "channel": held.channel,
+            "tags": [String: String](),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
+        return try? JSONDecoder().decode(ChatMessage.self, from: data)
     }
 
     /// Rows a moderation mark touches are drawn again; the row stays unless the style hides it.

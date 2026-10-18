@@ -322,9 +322,11 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     public var atmosphere: String?
     /// The CS2 Major Cologne look behind them instead.
     public var cologne: CologneLook?
+    /// The viewer's own nickname for the author, drawn in place of their name.
+    public var nickname: String?
 
     enum CodingKeys: String, CodingKey {
-        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne
+        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne, nickname
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -345,6 +347,7 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         parentSpans = try c.decodeIfPresent([ChatSpan].self, forKey: .parentSpans)
         atmosphere = try c.decodeIfPresent(String.self, forKey: .atmosphere)
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
+        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
     }
 }
 

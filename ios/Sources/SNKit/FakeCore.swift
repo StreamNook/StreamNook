@@ -118,6 +118,9 @@ public final class FakeCore: CoreBridge {
                                   "cumulative_months": 0, "badge_url": NSNull()] as [String: Any])
         case "asset_cache_set_burst":
             return "null"
+        case "get_chatter_mod_history", "acknowledge_chat_warning", "resolve_automod_message":
+            // Moderation never reaches Twitch from the fake: canned answers only.
+            return try FakeModTools.answer(cmd, args)
         case "send_chat_message":
             let text = args["message"] as? String ?? ""
             // Rust holds a message that cheers rather than sending it, as the real core does.
