@@ -1455,8 +1455,8 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                     o.err(format!("Refused to open {}: URL", parsed.scheme()));
                 }
                 Ok(parsed) => {
-                    if b.invoke("open_url", json!({ "url": parsed.as_str() })).await.is_err() {
-                        o.err(format!("Not a valid URL: {target}"));
+                    if let Err(e) = b.invoke("open_url", json!({ "url": parsed.as_str() })).await {
+                        o.err(format!("Couldn't open {target}: {e}"));
                     }
                 }
                 Err(_) => o.err(format!("Not a valid URL: {target}")),
@@ -1505,7 +1505,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 }),
                 Err(e) => {
                     log::warn!("[Command Handler] /chatters failed: {e}");
-                    o.say("Chatter count needs moderator access on this channel.");
+                    o.err(format!("Couldn't count the chatters: {e}"));
                 }
             }
         }
@@ -2265,7 +2265,13 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
                 o.err("Open a channel first");
                 return Ok(true);
             }
-            let counts = b.invoke("emote_counts", json!({ "channel": login, "channelId": opt(&id) })).await.unwrap_or(Value::Null);
+            let counts = match b.invoke("emote_counts", json!({ "channel": login, "channelId": opt(&id) })).await {
+                Ok(counts) => counts,
+                Err(e) => {
+                    o.err(format!("Couldn't read this channel's emotes: {e}"));
+                    return Ok(true);
+                }
+            };
             if !counts.is_object() {
                 o.say("Emotes for this channel have not loaded yet.");
                 return Ok(true);

@@ -214,6 +214,18 @@ async fn uptime_says_offline_only_when_twitch_says_so() {
 }
 
 #[tokio::test]
+async fn chatters_emoteinfo_and_openurl_show_the_real_failure() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "get_channel_chatters" | "emote_counts" | "open_url" => Err("Twitch answered HTTP 500".into()),
+        _ => Ok(Value::Null),
+    });
+    assert_eq!(toast(&run(&fake, "/chatters").await, ToastKind::Error), ["Couldn't count the chatters: Twitch answered HTTP 500"]);
+    assert_eq!(toast(&run(&fake, "/emoteinfo").await, ToastKind::Error), ["Couldn't read this channel's emotes: Twitch answered HTTP 500"]);
+    assert_eq!(toast(&run(&fake, "/openurl example.com").await, ToastKind::Error), ["Couldn't open example.com: Twitch answered HTTP 500"]);
+}
+
+#[tokio::test]
 async fn a_failed_disconnect_is_shown() {
     let fake = Fake::new();
     fake.answer(|cmd, _| if cmd == "stop_chat" { Err("socket busy".into()) } else { Ok(Value::Null) });
