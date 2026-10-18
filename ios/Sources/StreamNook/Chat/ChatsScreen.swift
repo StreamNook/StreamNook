@@ -1,5 +1,6 @@
 import SNKit
 import SwiftUI
+import UIKit
 
 /// Chats: your chats with no stream playing. The same rooms as the strip under the player (the
 /// core keeps one list), with the strip as the header and its controls beside the rooms: the play
@@ -54,9 +55,6 @@ struct ChatsScreen: View {
         .onAppear { awake.start(on: keepsAwake, idle: rooms.state.keepAwakeIdleSecs) }
         .onDisappear { awake.stop() }
         .onChange(of: keepsAwake) { _, on in awake.start(on: on, idle: rooms.state.keepAwakeIdleSecs) }
-        // Any touch keeps the screen on for another idle span.
-        .simultaneousGesture(TapGesture().onEnded { awake.touched() })
-        .simultaneousGesture(DragGesture(minimumDistance: 4).onChanged { _ in awake.touched() })
     }
 
     /// Keep-awake is on in settings, and there is chat to read.
@@ -147,17 +145,36 @@ struct ChatsScreen: View {
     }
 }
 
-/// Holds the screen on until `idle` seconds pass with no touch.
+/// Holds the screen on until `idle` seconds pass with no touch. Touches are watched at the window,
+/// by a recognizer that never claims one, so scrolling and taps behave exactly as without it.
 @Observable @MainActor
 final class AwakeTimer {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var on = false
     @ObservationIgnored private var idle = 1800
+    @ObservationIgnored private var watcher: TouchWatcher?
 
     func start(on: Bool, idle: Int) {
         self.on = on
         self.idle = max(60, idle)
+        watch(on)
         touched()
+    }
+
+    private func watch(_ on: Bool) {
+        if !on {
+            watcher.map { $0.view?.removeGestureRecognizer($0) }
+            watcher = nil
+            return
+        }
+        guard watcher == nil else { return }
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first
+        guard let window else { return }
+        let w = TouchWatcher { [weak self] in self?.touched() }
+        window.addGestureRecognizer(w)
+        watcher = w
     }
 
     func touched() {
@@ -177,8 +194,28 @@ final class AwakeTimer {
 
     func stop() {
         on = false
+        watch(false)
         timer?.cancel()
         ScreenAwake.hold("chats", false)
+    }
+}
+
+/// Reports every touch that begins anywhere in its window, then steps aside at once: it fails
+/// immediately, cancels nothing and delays nothing.
+private final class TouchWatcher: UIGestureRecognizer {
+    private let onTouch: () -> Void
+
+    init(onTouch: @escaping () -> Void) {
+        self.onTouch = onTouch
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouch()
+        state = .failed
     }
 }
 
