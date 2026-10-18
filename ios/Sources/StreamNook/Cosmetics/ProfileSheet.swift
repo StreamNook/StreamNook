@@ -29,6 +29,11 @@ final class ProfileSheetModel {
         pickedGroup = group
     }
 
+    /// Opens a group past its first two rows (drive steps: `profile:open:Twitch`).
+    func open(_ group: String) {
+        expanded.insert(group)
+    }
+
     /// Opens or closes a group. Closing it drops a picked badge that is no longer shown.
     func toggle(_ group: String, badges: [ProfileBadge]) {
         if expanded.remove(group) == nil {
