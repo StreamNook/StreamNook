@@ -53,6 +53,7 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
         break;
       case 'collab':
         next.collab = update.collab;
+        next.shared_chat = update.shared_chat ?? null;
         next.collab_at = update.at;
         break;
     }
@@ -91,6 +92,7 @@ function emptyState(login: string): ChannelState {
     pinned: [],
     pinned_at: null,
     collab: null,
+    shared_chat: null,
     collab_at: null,
   };
 }
@@ -121,6 +123,7 @@ export function newestSections(prev: ChannelState, incoming: ChannelState): Chan
   }
   if (isNewer(prev.collab_at, incoming.collab_at)) {
     out.collab = prev.collab;
+    out.shared_chat = prev.shared_chat;
     out.collab_at = prev.collab_at;
   }
   return out;

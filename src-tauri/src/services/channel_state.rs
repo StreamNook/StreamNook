@@ -32,6 +32,7 @@ use tokio::sync::RwLock;
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
 use crate::services::collaboration::{self, Collaboration};
+use crate::services::shared_chat::{self, SharedChat};
 use crate::services::twitch_service::TwitchService;
 
 pub const EVENT: &str = "channel-state";
@@ -139,6 +140,10 @@ pub struct ChannelState {
     pub pinned: Vec<serde_json::Value>,
     pub pinned_at: Option<u64>,
     pub collab: Option<Collaboration>,
+    /// Outside a Stream Together group, the Twitch Shared Chat session the
+    /// channel's chat is in (the channel first, then its live partners), so
+    /// the chat header can say whose chatters these are. Read with `collab`.
+    pub shared_chat: Option<SharedChat>,
     pub collab_at: Option<u64>,
     /// Numbers each pinned fetch as it starts. Fetches overlap (the poll, a
     /// refresh after a pin, the follow-up checks), and only the newest one to
@@ -186,6 +191,7 @@ pub enum ChannelUpdate {
     Collab {
         login: String,
         collab: Option<Collaboration>,
+        shared_chat: Option<SharedChat>,
         at: u64,
     },
 }
@@ -524,22 +530,40 @@ async fn refresh_collab(inner: &Inner, watched: &HashMap<String, String>, live_l
             fresh.insert(login.clone(), collab);
         }
     }
+    // Outside a group (a group already shares its chat), the Shared Chat
+    // session: cached per channel and signed-in only, so a failed or missing
+    // answer keeps what the channel last had.
+    let solo: Vec<String> = live_logins
+        .iter()
+        .filter(|l| matches!(fresh.get(*l), Some(None)) || !fresh.contains_key(*l))
+        .filter_map(|l| watched.get(l).cloned())
+        .collect();
+    let mut sessions = if solo.is_empty() { HashMap::new() } else { shared_chat::fetch(&solo).await };
     let at = now_secs();
-    let mut changed: Vec<(String, Option<Collaboration>)> = Vec::new();
+    let mut changed: Vec<(String, Option<Collaboration>, Option<SharedChat>)> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, collab) in fresh {
             if let Some(s) = state.get_mut(&login) {
-                if s.collab != collab {
-                    changed.push((login.clone(), collab.clone()));
+                let shared = if collab.is_some() || !live_logins.contains(&login) {
+                    None
+                } else {
+                    match watched.get(&login).and_then(|id| sessions.remove(id)) {
+                        Some(answer) => answer,
+                        None => s.shared_chat.clone(),
+                    }
+                };
+                if s.collab != collab || s.shared_chat != shared {
+                    changed.push((login.clone(), collab.clone(), shared.clone()));
                 }
                 s.collab = collab;
+                s.shared_chat = shared;
                 s.collab_at = Some(at);
             }
         }
     }
-    for (login, collab) in changed {
-        emit(&inner.app, ChannelUpdate::Collab { login, collab, at });
+    for (login, collab, shared_chat) in changed {
+        emit(&inner.app, ChannelUpdate::Collab { login, collab, shared_chat, at });
     }
 }
 

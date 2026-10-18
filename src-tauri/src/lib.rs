@@ -1797,7 +1797,6 @@ pub fn run() {
             get_user_by_id,
             get_user_by_login,
             get_shared_chat_source,
-            get_shared_chat_partners,
             get_channel_moderators,
             get_channel_vips,
             follow_channel,

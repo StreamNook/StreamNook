@@ -3297,6 +3297,34 @@ html[data-motion="reduced"] .sub-progress-fill {
   padding: 0.09em;
 }
 
+/* A Twitch Shared Chat row from a partner channel: that channel's own color
+   (--sn-src, from the core, floored for the theme; the accent until it
+   answers) on a 3px left edge, washing in from it and gone by the middle, so
+   two partners read as two colors at chat speed. Behind the row's content
+   (the row is isolated), so it never fights a mention's border or a member's
+   background. The home channel's rows carry nothing. */
+.sn-shared-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  box-shadow: inset 3px 0 0 var(--sn-src, var(--color-accent));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sn-src, var(--color-accent)) 10%, transparent),
+    transparent 55%
+  );
+}
+
+/* The partner channel's face leading its row: round, ringed in the channel's
+   color, a step apart from the badges that follow. */
+.sn-shared-face {
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1.5px var(--sn-src, var(--color-accent));
+  margin-right: 0.15em;
+}
+
 /* Every chat row's badge group, centred on the name it sits beside. An
    image-only inline-flex box takes its baseline from the images' bottom edge,
    so the offset lowers that edge until the badge centre meets the text centre

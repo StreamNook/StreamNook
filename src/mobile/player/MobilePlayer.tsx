@@ -148,8 +148,9 @@ export const MobilePlayer: React.FC<{
     };
   }, [channelStateLogin, currentStream?.user_id]);
   // Shared Viewership: a Together chip beside the channel's own count, tapped
-  // open into who else is on.
-  const collab = channelState?.collab ?? null;
+  // open into who else is on. Outside a group, the Twitch Shared Chat session
+  // takes the same chip ("Shared chat" and the partners' faces).
+  const collab = channelState?.collab ?? channelState?.shared_chat ?? null;
   const viewerCount = channelState?.viewer_count ?? currentStream?.viewer_count ?? 0;
 
   // Title, category and start time follow the same pushes, so a retitle or a
