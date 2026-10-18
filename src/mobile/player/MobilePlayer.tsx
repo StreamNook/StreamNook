@@ -19,7 +19,7 @@ import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from 
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
-import { collabLabel } from '../../utils/sharedViewers';
+import { collabLabel, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
 import { CastSheet } from '../cast/CastSheet';
 import { isCastable } from '../cast/castState';
@@ -559,7 +559,7 @@ export const MobilePlayer: React.FC<{
     const together = collab && (
       <>
         <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
-        {!compactGroup && 'Together'}
+        {!compactGroup && (isTogether(collab) ? 'Together' : 'Shared chat')}
       </>
     );
     return (
