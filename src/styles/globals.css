@@ -1736,7 +1736,7 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   --color-surface-active: rgba(151, 177, 185, 0.35);
 
   /* Text colors */
-  --color-text-primary: #ffffff;
+  --color-text-primary: #ebf0f2;
   --color-text-secondary: #97b1b9;
   --color-text-muted: rgba(151, 177, 185, 0.75);
 

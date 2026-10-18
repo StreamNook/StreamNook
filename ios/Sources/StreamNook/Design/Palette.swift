@@ -98,7 +98,7 @@ struct Palette: Equatable, Sendable {
         surface: RGBA(hex: 0x97B1B9, alpha: 0.15),
         surfaceHover: RGBA(hex: 0x97B1B9, alpha: 0.25),
         surfaceActive: RGBA(hex: 0x97B1B9, alpha: 0.35),
-        textPrimary: RGBA(hex: 0xFFFFFF),
+        textPrimary: RGBA(hex: 0xEBF0F2),
         textSecondary: RGBA(hex: 0x97B1B9),
         textMuted: RGBA(hex: 0x97B1B9, alpha: 0.75),
         accent: RGBA(hex: 0x97B1B9),
