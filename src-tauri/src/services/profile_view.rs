@@ -502,8 +502,10 @@ const CHANNEL_SCOPED: &[&str] = &[
     "clip-champ",
 ];
 
-/// A backstop, not a design: a 127-badge wall once buried the You tab.
-const HEADER_BADGE_CAP: usize = 8;
+/// How many badges the You card's row draws (a 127-badge wall once buried the
+/// You tab). Decided here, so the phones never cut the row themselves and drop
+/// the StreamNook badge at its end.
+const HEADER_BADGE_CAP: usize = 6;
 const OWN_FILE: &str = "own_identity_header.json";
 
 fn own_path() -> Option<std::path::PathBuf> {
@@ -556,7 +558,13 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
     let selected_badge = resolver::peek(user_id)
         .and_then(|c| selected(&c.badges).cloned())
         .or_else(|| inventory.as_ref().and_then(|i| selected(&i.badges).cloned()));
-    let seventv_worn: Vec<ProfileBadge> = selected_badge.as_ref().and_then(seventv_badge).into_iter().collect();
+    // Tagged as 7TV so the surface order places it.
+    let seventv_worn: Vec<ProfileBadge> = selected_badge
+        .as_ref()
+        .and_then(seventv_badge)
+        .map(|b| ProfileBadge { provider: Some("7tv".to_string()), ..b })
+        .into_iter()
+        .collect();
     // The other apps: a member's Identity loadout, else the raw chat-client set.
     let loadout: Vec<ProfileBadge> = resolved
         .map(|r| {
@@ -598,9 +606,10 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
     header
 }
 
-/// The header's badge row: your StreamNook badge first (it is the one that is
-/// yours here), then what Twitch, 7TV and the other apps show, deduped and
-/// capped. A StreamNook badge the other apps also list is not drawn twice.
+/// The header's badge row: what Twitch, 7TV and the other apps show plus your
+/// StreamNook badge, deduped, in the one surface order every badge row uses
+/// (`badge_service::surface_rank`: StreamNook last). The cap never squeezes the
+/// StreamNook badge out, and one the other apps also list is not drawn twice.
 fn own_worn_badges(streamnook: Option<&SnBadge>, rest: Vec<ProfileBadge>) -> Vec<ProfileBadge> {
     let own = streamnook.map(|b| ProfileBadge {
         id: b.slug.clone().unwrap_or_else(|| registry::DEFAULT_SLUG.to_string()),
@@ -611,11 +620,17 @@ fn own_worn_badges(streamnook: Option<&SnBadge>, rest: Vec<ProfileBadge>) -> Vec
         ..Default::default()
     });
     let mut seen = HashSet::new();
-    own.into_iter()
-        .chain(rest.into_iter().filter(|b| b.provider.as_deref() != Some("streamnook")))
+    let mut row: Vec<ProfileBadge> = rest
+        .into_iter()
+        .filter(|b| b.provider.as_deref() != Some("streamnook"))
         .filter(|b| !b.url.is_empty() && seen.insert(b.id.clone()))
-        .take(HEADER_BADGE_CAP)
-        .collect()
+        .collect();
+    let rank = |b: &ProfileBadge| crate::services::badge_service::surface_rank(b.provider.as_deref().unwrap_or(""));
+    row.sort_by_key(rank);
+    row.truncate(HEADER_BADGE_CAP - usize::from(own.is_some()));
+    row.extend(own);
+    row.sort_by_key(rank);
+    row
 }
 
 // ---- The Cosmetics screen --------------------------------------------------------
@@ -1042,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn the_header_row_leads_with_your_streamnook_badge_once() {
+    fn the_header_row_follows_the_surface_order_with_your_streamnook_badge_last() {
         let shown = |id: &str, provider: Option<&str>| ProfileBadge {
             id: id.into(),
             url: format!("https://x/{id}.webp"),
@@ -1054,16 +1069,32 @@ mod tests {
             image_url: "https://cdn.streamnook.app/badges/streamnook-singularity.webp?v=2".into(),
             label: "StreamNook Singularity".into(),
         };
-        let rest = vec![shown("premium", None), shown("7tv-sub", Some("7tv")), shown("sn-loadout", Some("streamnook"))];
+        let rest = vec![
+            shown("ffz-sub", Some("ffz")),
+            shown("premium", None),
+            shown("7tv-sub", Some("7tv")),
+            shown("sn-loadout", Some("streamnook")),
+        ];
         let row = own_worn_badges(Some(&sn), rest.clone());
         let ids: Vec<&str> = row.iter().map(|b| b.id.as_str()).collect();
-        assert_eq!(ids, ["streamnook-singularity", "premium", "7tv-sub"]);
-        assert_eq!(row[0].url, sn.image_url);
-        assert_eq!(row[0].provider.as_deref(), Some("streamnook"));
+        assert_eq!(ids, ["premium", "7tv-sub", "ffz-sub", "streamnook-singularity"]);
+        let last = row.last().unwrap();
+        assert_eq!((last.url.as_str(), last.provider.as_deref()), (sn.image_url.as_str(), Some("streamnook")));
         // Not a member: the row is what the platforms show.
-        assert_eq!(own_worn_badges(None, rest).len(), 2);
-        // The cap holds with the StreamNook badge counted.
+        assert_eq!(own_worn_badges(None, rest).len(), 3);
+        // The cap holds with the StreamNook badge counted, and never drops it.
         let many: Vec<ProfileBadge> = (0..20).map(|i| shown(&format!("b{i}"), None)).collect();
-        assert_eq!(own_worn_badges(Some(&sn), many).len(), HEADER_BADGE_CAP);
+        let capped = own_worn_badges(Some(&sn), many);
+        assert_eq!(capped.len(), HEADER_BADGE_CAP);
+        assert_eq!(capped.last().map(|b| b.id.as_str()), Some("streamnook-singularity"));
+    }
+
+    #[test]
+    fn every_badge_row_shares_one_surface_order() {
+        use crate::services::badge_service::surface_rank;
+        let order = ["", "twitch", "kick", "7tv", "ffz", "bttv", "dankchat", "some-new-client", "streamnook"];
+        let ranks: Vec<usize> = order.iter().map(|p| surface_rank(p)).collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+        assert!(surface_rank("some-new-client") < surface_rank("streamnook"));
     }
 }

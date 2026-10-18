@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Who you are, at the top of the You tab: your Atmosphere glowing behind you, your picture on its
 /// own (no marks: your accounts show in the rows below), your name in your 7TV paint, the badges
-/// you wear (your StreamNook badge first) and what you have on, and the way into Edit profile,
+/// you wear (in the core's one badge order, StreamNook last, already capped) and what you have
+/// on, and the way into Edit profile,
 /// whose chat row previews your picks live. The core saves the identity for the next cold launch,
 /// so the card paints on the first frame, then rebuilds it fresh.
 struct OwnIdentityCard: View {
@@ -81,7 +82,7 @@ struct OwnIdentityCard: View {
             let wearing = wearingLine
             if !badges.isEmpty || wearing != nil {
                 HStack(spacing: 6) {
-                    ForEach(badges.prefix(6)) { badge in
+                    ForEach(badges) { badge in
                         WornBadge(badge: badge)
                     }
                     if !badges.isEmpty && wearing != nil {

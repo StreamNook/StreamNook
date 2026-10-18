@@ -5,9 +5,10 @@
 // your picks live. The header shows; Edit profile changes.
 //
 // Rust builds the identity (`own_identity_header`, services/profile_view.rs):
-// your StreamNook badge first, then Twitch's displayed badges minus the
-// channel-only sets, the selected 7TV badge, your 7TV picture, the Atmosphere
-// you wear. It
+// Twitch's displayed badges minus the channel-only sets, the selected 7TV
+// badge, the chat clients and your StreamNook badge, in the one badge order
+// every row uses and already capped; your 7TV picture; the Atmosphere you
+// wear. It
 // saves the answer for the next cold launch, so the saved copy paints the
 // first frame and the fresh read follows. Your picks (the chosen theme, paint
 // and name color) come from the same two picker answers Edit profile edits,
@@ -52,7 +53,7 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
     ? sn.atmospheres.find((a) => a.worn && a.id !== 'tier')?.name
     : identity?.atmosphere?.name;
   const wearing = [atmosphereName, paint?.name ? `${paint.name} paint` : null].filter(Boolean).join(' · ');
-  const badges = (identity?.badges ?? []).slice(0, 6);
+  const badges = identity?.badges ?? [];
   const showLogin = !!login && login.toLowerCase() !== displayName.toLowerCase();
 
   return (

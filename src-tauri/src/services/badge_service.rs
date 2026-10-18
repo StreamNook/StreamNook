@@ -190,6 +190,20 @@ pub fn third_party_rank(provider_key: &str) -> usize {
     THIRD_PARTY_ORDER.iter().position(|p| *p == provider_key).unwrap_or(THIRD_PARTY_ORDER.len())
 }
 
+/// Where a badge sits on every surface that lines badges up (chat rows, the
+/// You card), by provider key: the platform's own (Twitch, Kick, YouTube,
+/// TikTok; an empty key is Twitch) first, then 7TV, then the chat clients in
+/// `THIRD_PARTY_ORDER`, and a member's StreamNook badge last. Sort stably by
+/// it, so badges of one provider keep their own order.
+pub fn surface_rank(provider_key: &str) -> usize {
+    match provider_key {
+        "" | "twitch" | "kick" | "youtube" | "tiktok" => 0,
+        "7tv" => 1,
+        "streamnook" => 3 + THIRD_PARTY_ORDER.len(),
+        other => 2 + third_party_rank(other),
+    }
+}
+
 /// A third-party badge's `set_id` is its WEAR CATEGORY: what the provider
 /// itself treats as one separate thing. A chatter wears at most one badge per
 /// (provider, category) (`worn_third_party`), and the frontend receives it as

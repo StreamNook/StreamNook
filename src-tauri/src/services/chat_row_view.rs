@@ -1098,6 +1098,8 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             out.push(badge);
         }
     }
+    // The one surface order decides, so this row and the You card never disagree.
+    out.sort_by_key(|b| crate::services::badge_service::surface_rank(&b.provider));
     out
 }
 
