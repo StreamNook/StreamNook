@@ -5,6 +5,7 @@ import { Logger } from '../utils/logger';
 import { streamProvider, followIdentifier } from '../utils/streamProvider';
 import { useFollowsStore } from '../stores/followsStore';
 import { useChatConnectionStore } from '../stores/chatConnectionStore';
+import { useChannelState } from '../stores/channelStateStore';
 import { makeKey } from '../utils/providerKey';
 import type { ProviderId } from '../types/providers';
 import { IS_MOBILE } from '../utils/platform';
@@ -52,6 +53,15 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     !isTwitch && !providerProp && currentStream
       ? followIdentifier(currentStream)
       : (userLogin ?? '');
+
+  // Twitch: while a chat is open on the channel, Rust holds the viewer's
+  // relationship in its channel state (services/channel_state.rs), read when
+  // the chat opened and set at once by a follow, unfollow or sub. A menu then
+  // opens with it known and nothing here asks again; only a channel no chat
+  // is watching falls back to the lookup below.
+  const watchedState = useChannelState(isTwitch ? userLogin : null);
+  const pushed = watchedState?.relationship ?? null;
+  const hasPushed = pushed !== null;
 
   // Follow state
   const [isFollowing, setIsFollowing] = useState<boolean | null>(null);
@@ -239,7 +249,11 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
 
     // Twitch: whether you follow (null while unknown, never guessed), whether
     // you subscribe or used to, and the badge your next month wears, all from
-    // Rust (services/channel_relationship.rs).
+    // Rust (services/channel_relationship.rs). Already held for a watched chat.
+    if (hasPushed) {
+      setCheckingFollowStatus(false);
+      return;
+    }
     let cancelled = false;
     setCheckingFollowStatus(true);
     void invoke<{
@@ -271,16 +285,19 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     return () => {
       cancelled = true;
     };
-  }, [enabled, userId, userLogin, currentUser?.login, provider, providerChannel, providerFollows]);
+  }, [enabled, userId, userLogin, currentUser?.login, provider, providerChannel, providerFollows, hasPushed]);
+
+  // What the controls show: the held relationship when Rust has one.
+  const following = pushed ? pushed.following : isFollowing;
 
   // Handle follow/unfollow action
   const handleFollowClick = useCallback(async () => {
     if (followLoading || (isTwitch ? !userId : !providerChannel)) return;
 
-    const action = isFollowing ? 'unfollow' : 'follow';
+    const action = following ? 'unfollow' : 'follow';
 
     // If unfollowing, play the heart-drop animation first
-    if (isFollowing) {
+    if (following) {
       setHeartDropAnimation(true);
       await new Promise((resolve) => setTimeout(resolve, 600));
       setHeartDropAnimation(false);
@@ -291,17 +308,18 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
 
     try {
       if (isTwitch) {
-        const command = isFollowing ? 'unfollow_channel' : 'follow_channel';
+        // Rust also sets the held relationship, so every open menu flips with it.
+        const command = following ? 'unfollow_channel' : 'follow_channel';
         await invoke(command, { targetUserId: userId });
       } else {
         // Non-Twitch: the app's own follow list, which for a signed-in YouTube
         // account also subscribes on YouTube itself. `follow_channel` is Helix, so
         // sending a YouTube channel to it was never going to work.
         const store = useFollowsStore.getState();
-        if (isFollowing) await store.unfollow(provider, providerChannel);
+        if (following) await store.unfollow(provider, providerChannel);
         else await store.follow(provider, providerChannel, userName ?? undefined);
       }
-      const nowFollowing = !isFollowing;
+      const nowFollowing = !following;
       // A followers-only room you are in rewords itself from Rust once the
       // follow lands (follow_channel / unfollow_channel).
       setIsFollowing(nowFollowing);
@@ -315,7 +333,7 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     } finally {
       setFollowLoading(false);
     }
-  }, [userLogin, userId, isFollowing, followLoading, isTwitch, provider, providerChannel, userName]);
+  }, [userLogin, userId, following, followLoading, isTwitch, provider, providerChannel, userName]);
 
   // Track the subscribe window's label so we can auto-close it on a successful sub
   const subscribeWindowLabelRef = useRef<string | null>(null);
@@ -378,22 +396,22 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
 
   return {
     // Follow
-    isFollowing,
+    isFollowing: following,
     followLoading,
-    checkingFollowStatus,
+    checkingFollowStatus: pushed ? false : checkingFollowStatus,
     heartDropAnimation,
     handleFollowClick,
     // Subscribe
-    isSubscribed,
+    isSubscribed: pushed ? pushed.subscribed : isSubscribed,
     // A member's OWN badge when we have it, else the channel's base-tier badge
     // seen in chat, so the control is never a bare placeholder on a channel that
     // clearly has member badges.
-    subscriberBadgeUrl: subscriberBadgeUrl || chatMemberBadge,
+    subscriberBadgeUrl: (pushed ? pushed.badge_url : subscriberBadgeUrl) || chatMemberBadge,
     offersMembership,
     membershipTier,
     membershipDuration,
-    hasSubHistory,
-    cumulativeMonths,
+    hasSubHistory: pushed ? pushed.has_sub_history : hasSubHistory,
+    cumulativeMonths: pushed ? pushed.cumulative_months : cumulativeMonths,
     handleSubscribeClick,
   };
 }
