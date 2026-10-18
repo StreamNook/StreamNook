@@ -45,11 +45,11 @@ function useArmed(ms = 3000): [boolean, () => boolean] {
   return [armed, tap];
 }
 
-// glass-exempt: every account picture sits on this disc, the theme's raised
-// surface made solid, so a picture with transparent parts never floats over the
+// glass-exempt: every account picture sits on this disc, pure black like the
+// profile pictures, so a picture with transparent parts never floats over the
 // card and an empty one is still a circle.
 const DISC_STYLE: React.CSSProperties = {
-  background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background)',
+  background: '#000',
 };
 
 /** Avatar with the platform's mark pinned to its corner. */
