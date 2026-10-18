@@ -194,7 +194,31 @@ async fn me_goes_to_chat_as_typed() {
     assert!(!run(&fake, "/nosuchcommand x").await.handled);
 }
 
-// ─────────────────────────────── dispatch ───────────────────────────────
+#[tokio::test]
+async fn mods_and_vips_run_here_and_never_reach_chat() {
+    let fake = Fake::new();
+    fake.answer(|cmd, a| match cmd {
+        "slash_role_list" => Ok(json!([format!("{} of this channel", a["role"].as_str().unwrap_or_default())])),
+        _ => Ok(Value::Null),
+    });
+    for line in ["/mods", "/vips"] {
+        let o = run(&fake, line).await;
+        assert!(o.handled && o.send.is_none(), "{line} must run here");
+        assert_eq!(o.notices.len(), 1);
+    }
+    assert!(fake.calls("send_chat_message").is_empty() && fake.calls("chat_send_paced").is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_mods_list_is_an_error_never_sent() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "slash_role_list" { Err("GQL request failed".into()) } else { Ok(Value::Null) });
+    let o = run(&fake, "/mods").await;
+    assert!(o.handled && o.send.is_none());
+    assert!(o.notices.is_empty(), "no \"There are no moderators\" line");
+    assert_eq!(toast(&o, ToastKind::Error), ["Command failed: GQL request failed"]);
+    assert!(fake.calls("send_chat_message").is_empty());
+}
 
 #[tokio::test]
 async fn aliases_make_the_same_call_as_the_full_name() {
