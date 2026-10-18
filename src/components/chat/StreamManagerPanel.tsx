@@ -554,7 +554,7 @@ function RewardsQueue({
             <button
               onClick={() => void act({ kind: 'reward', reward_id: g.reward_id, paused: !g.paused })}
               disabled={busy}
-              className="px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
+              className="sm-btn sm-head px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
             >
               {g.paused ? 'Resume' : 'Pause'}
             </button>
@@ -562,7 +562,7 @@ function RewardsQueue({
               <button
                 onClick={() => void act({ kind: 'reward_queue', reward_id: g.reward_id, fulfill: true })}
                 disabled={busy}
-                className="px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
+                className="sm-btn sm-head px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
               >
                 Complete all
               </button>
@@ -570,21 +570,21 @@ function RewardsQueue({
           </div>
           <div className="rounded-lg bg-white/5 divide-y divide-white/5">
             {g.rows.map((r) => (
-              <div key={r.id} className="flex items-start gap-2.5 px-2.5 py-2">
+              <div key={r.id} className={`sm-row flex gap-2.5 px-2.5 py-2 ${r.input ? 'items-start' : 'items-center'}`}>
                 {r.avatar_url ? (
-                  <img src={r.avatar_url} alt="" className="w-6 h-6 rounded-full flex-shrink-0 mt-0.5" />
+                  <img src={r.avatar_url} alt="" className={`w-6 h-6 rounded-full flex-shrink-0 ${r.input ? 'mt-0.5' : ''}`} />
                 ) : (
-                  <span className="w-6 h-6 rounded-full bg-white/10 flex-shrink-0 mt-0.5" />
+                  <span className={`w-6 h-6 rounded-full bg-white/10 flex-shrink-0 ${r.input ? 'mt-0.5' : ''}`} />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] text-textSecondary truncate">{r.line}</p>
                   {r.input && <p className="text-sm text-textPrimary break-words">{r.input}</p>}
                 </div>
-                <div className="flex gap-1 flex-shrink-0">
+                <div className="sm-acts flex gap-1 flex-shrink-0">
                   <button
                     onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: true })}
                     disabled={busy}
-                    className="px-2 py-1 text-[11px] font-semibold rounded bg-success/15 hover:bg-success/25 text-success transition-colors disabled:opacity-50"
+                    className="sm-btn px-2 py-1 text-[11px] font-semibold rounded bg-success/15 hover:bg-success/25 text-success transition-colors disabled:opacity-50"
                   >
                     Complete
                   </button>
@@ -592,7 +592,7 @@ function RewardsQueue({
                     <button
                       onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: false })}
                       disabled={busy}
-                      className="px-2 py-1 text-[11px] font-semibold rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 transition-colors disabled:opacity-50"
+                      className="sm-btn px-2 py-1 text-[11px] font-semibold rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 transition-colors disabled:opacity-50"
                     >
                       Reject
                     </button>

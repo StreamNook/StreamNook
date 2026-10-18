@@ -166,6 +166,32 @@ body:has(.sn-mobile) .glass-input:focus {
   min-height: 44px;
   font-size: 15px;
 }
+.sn-manage-touch .sm-btn {
+  min-height: 40px;
+  padding-left: 14px;
+  padding-right: 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+/* A reward's Pause and Complete all serve its heading: a step quieter than the
+   row actions. */
+.sn-manage-touch .sm-btn.sm-head {
+  min-height: 34px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+/* A redemption's actions go on their own line under its text, so the text
+   keeps the row's width. */
+.sn-manage-touch .sm-row {
+  flex-wrap: wrap;
+}
+.sn-manage-touch .sm-acts {
+  flex-basis: 100%;
+  gap: 8px;
+  padding-left: 34px;
+}
 
 /* Bottom clearance for scroll content that runs behind the floating pill tab
    bar. The bar sits at `safe-b + 14px` and is `--sn-tabbar-h` tall, so it ends

@@ -190,7 +190,7 @@ export function PollPredictionComposer({
       }
     >
       {/* Kind switch */}
-      <div className="flex items-center gap-1 p-2">
+      <div className={`flex items-center gap-1 ${inline ? 'pb-2' : 'p-2'}`}>
         {(['poll', 'prediction'] as const).map((k) => {
           const active = kind === k;
           const Icon = k === 'poll' ? BarChart3 : Trophy;
@@ -209,18 +209,21 @@ export function PollPredictionComposer({
             </button>
           );
         })}
-        <Tooltip content="Close" side="top">
-          <button
-            onClick={onClose}
-            className="p-1.5 text-textSecondary hover:text-textPrimary transition-colors"
-            aria-label="Close"
-          >
-            <X size={14} />
-          </button>
-        </Tooltip>
+        {/* In a page the sheet's Back closes it. */}
+        {!inline && (
+          <Tooltip content="Close" side="top">
+            <button
+              onClick={onClose}
+              className="p-1.5 text-textSecondary hover:text-textPrimary transition-colors"
+              aria-label="Close"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
+        )}
       </div>
 
-      <div className="overflow-y-auto scrollbar-thin px-3 pb-3 space-y-3">
+      <div className={`overflow-y-auto scrollbar-thin pb-3 space-y-3 ${inline ? '' : 'px-3'}`}>
         {/* Title */}
         <div>
           <div className="flex items-baseline justify-between mb-1">
@@ -415,7 +418,7 @@ export function PollPredictionComposer({
       </div>
 
       {/* Commit */}
-      <div className="p-3 pt-0">
+      <div className={inline ? 'pt-0' : 'p-3 pt-0'}>
         <button
           onClick={submit}
           disabled={!!problem || busy}
