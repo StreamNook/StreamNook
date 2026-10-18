@@ -8,7 +8,7 @@
 // restores them at launch without joining). While it is in front it keeps the
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChatsCircle, Play, Plus } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
@@ -89,6 +89,10 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const startStream = useAppStore((s) => s.startStream);
   const [addOpen, setAddOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
+  // The closed banner's height: the list starts under it. Opened, the banner
+  // floats over the rows, so nothing below it moves.
+  const pinsRef = useRef<HTMLDivElement | null>(null);
+  const [pinsBox, setPinsBox] = useState(0);
 
   // The first look joins the saved chats; a parked set comes back too.
   useEffect(() => {
@@ -98,6 +102,21 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 
   const pinned = useRoomPins(shown && tabs.length > 0);
+  const hasPins = pinned.length > 0;
+  useLayoutEffect(() => {
+    const el = pinsRef.current;
+    if (!hasPins || !el) {
+      setPinsBox(0);
+      return;
+    }
+    const read = () => {
+      if (!pinsOpen) setPinsBox(el.offsetHeight);
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasPins, pinsOpen]);
   const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
@@ -284,8 +303,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
       ) : (
         <>
           <div className="flex-1 min-h-0 relative flex flex-col">
-            {pinned.length > 0 && (
-              <div className="absolute left-0 right-0 top-0 px-2.5 pt-1.5 pb-2 z-20 pointer-events-none flex flex-col gap-1">
+            {hasPins && (
+              // A grabber's gap under the header, 4 px over the list.
+              <div
+                ref={pinsRef}
+                className="absolute left-0 right-0 top-0 px-2.5 pt-3 pb-1 z-20 pointer-events-none flex flex-col gap-1"
+              >
                 <PinnedBanner
                   pins={pinned}
                   channelId={chatChannelId ?? undefined}
@@ -294,6 +317,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
                 />
               </div>
             )}
+            {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
             <MobileChatPane strip={false} paused={!shown} />
           </div>
         </>

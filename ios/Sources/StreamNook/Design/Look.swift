@@ -83,8 +83,11 @@ enum SN {
     static var twitch: Color { FixedColor.twitch.color }
     static var kick: Color { FixedColor.kick.color }
 
-    /// The darker pill that marks the chosen item inside glass.
-    static let glazeSelected = Color.black.opacity(0.72)
+    /// The darker pill that marks the chosen item inside glass. On a light theme a dark pill
+    /// would sink the theme's dark text into it, so there it is a tint of that text instead.
+    static var glazeSelected: Color {
+        p.lightContent ? Color.black.opacity(0.72) : p.textPrimary.color.opacity(0.1)
+    }
 
     /// The 1 point edge of a layer floating over content (the mini player), so it reads over any
     /// thumbnail, with `floatShadow` under it.

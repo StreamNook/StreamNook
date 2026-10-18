@@ -36,8 +36,14 @@ struct ChatsScreen: View {
             } else if rooms.tabs.isEmpty {
                 // No chat open: the tab is the picker itself.
                 ChatPicker(rooms: rooms)
+                    .onAppear { model.nav.chatsFloor = nil }
             } else if let session = rooms.activeSession {
-                ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) })
+                ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) },
+                          pinsInline: true, onFloor: { top in
+                              // A slide down moves the whole screen; the mini box keeps its rest.
+                              guard drop == 0, model.nav.chatsFloor != top else { return }
+                              withAnimation(SNMotion.run(.snappy(duration: 0.25))) { model.nav.chatsFloor = top }
+                          })
                     .id(ObjectIdentifier(session))
             } else {
                 Color.clear
@@ -71,7 +77,10 @@ struct ChatsScreen: View {
             if model.signedIn, rooms.state.connection != "connected" { rooms.connect() }
         }
         .onAppear { awake.start(on: keepsAwake, idle: rooms.state.keepAwakeIdleSecs) }
-        .onDisappear { awake.stop() }
+        .onDisappear {
+            awake.stop()
+            model.nav.chatsFloor = nil
+        }
         .onChange(of: keepsAwake) { _, on in awake.start(on: on, idle: rooms.state.keepAwakeIdleSecs) }
     }
 

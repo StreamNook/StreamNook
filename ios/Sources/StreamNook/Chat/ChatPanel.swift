@@ -90,21 +90,32 @@ struct ChatPanel: View {
     var streamBanner: AnyView?
     /// Opens a chatter's profile (the profile sheet belongs to the profile screens).
     var onProfile: (ProfileTarget) -> Void = { _ in }
+    /// The pins and live votes take their own room above the list instead of floating over its
+    /// top rows (the Chats screen, which has the height), a grabber's gap under the header.
+    var pinsInline = false
+    /// Where the column's bottom (the composer and any banner over it) starts, in global points,
+    /// so the mini player can rest clear of it.
+    var onFloor: ((CGFloat) -> Void)?
 
     @State private var toast: String?
+    /// The pinned banner's and the vote cards' heights, for the inline room.
+    @State private var pinsBox: CGFloat = 0
+    @State private var votesBox: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
             ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show, onOutcome: show)
+                .padding(.top, inlineTop)
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
-                // Under the tab strip, a short fade instead of a hard cut too.
+                // Under the tab strip (or under inline pins), a short fade instead of a hard cut.
                 .mask {
                     let pinned = !overlay && !(rooms?.activePins.isEmpty ?? true)
                     let cards = votes.map { !$0.slots.isEmpty } ?? false
                     if pinned || cards || (!overlay && rooms?.showsStrip == true) {
                         VStack(spacing: 0) {
+                            Color.clear.frame(height: inlineTop)
                             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: pinned || cards ? 30 : 12)
+                                .frame(height: (pinned || cards) && inlineTop == 0 ? 30 : 12)
                             Color.black
                         }
                     } else {
@@ -118,13 +129,19 @@ struct ChatPanel: View {
                             PinnedBanner(pins: rooms.activePins,
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
                                 .padding(.horizontal, 10)
-                                .padding(.top, 6)
+                                .padding(.top, topGap)
+                                // Opened, the banner floats over the rows; the list keeps the
+                                // closed banner's room, so nothing below it moves.
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                                    if !rooms.pinsOpen { pinsBox = height }
+                                }
                         }
                         // The live poll and prediction, under the pins; never over landscape video.
                         if let votes {
                             LiveVotesStack(model: votes)
                                 .padding(.horizontal, 10)
-                                .padding(.top, rooms?.activePins.isEmpty ?? true ? 6 : 0)
+                                .padding(.top, rooms?.activePins.isEmpty ?? true ? topGap : 0)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { votesBox = $0 }
                         }
                         if let toast {
                             Text(toast)
@@ -138,10 +155,13 @@ struct ChatPanel: View {
                     }
                 }
             if !overlay {
-                if let rooms {
-                    StreakBanners(rooms: rooms, session: session)
+                VStack(spacing: 0) {
+                    if let rooms {
+                        StreakBanners(rooms: rooms, session: session)
+                    }
+                    ChatComposer(session: session, onProfile: onProfile)
                 }
-                ChatComposer(session: session, onProfile: onProfile)
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { onFloor?($0) }
             }
         }
         .onAppear {
@@ -158,6 +178,18 @@ struct ChatPanel: View {
                 votes.start()
             }
         }
+    }
+
+    /// The pins' gap under the header: the grabber's gap on Chats, a tight 6 under the player.
+    private var topGap: CGFloat { pinsInline ? 12 : 6 }
+
+    /// The room the inline pins and votes take above the list, and 4 points of air under them.
+    private var inlineTop: CGFloat {
+        guard pinsInline, !overlay else { return 0 }
+        let pins = rooms?.activePins.isEmpty ?? true ? 0 : pinsBox
+        let cards = (votes.map { !$0.slots.isEmpty } ?? false) ? votesBox : 0
+        let total = pins + cards + (pins > 0 && cards > 0 ? 4 : 0)
+        return total > 0 ? total + 4 : 0
     }
 
     /// The room's poll and prediction cards, never in the read-only landscape overlay.

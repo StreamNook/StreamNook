@@ -549,6 +549,7 @@ export const applyTheme = (
     // call: this file is shared, and shared code must not reach for a native
     // bridge that only exists on the phone.
     themeDark = needsLightContentOn(floors.background);
+    root.dataset.themeTone = themeDark ? 'dark' : 'light';
     window.dispatchEvent(
         new CustomEvent('sn:theme-applied', {
             detail: {

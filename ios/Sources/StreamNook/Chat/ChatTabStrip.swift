@@ -4,10 +4,11 @@ import SwiftUI
 /// The open rooms over the chat, shown from two rooms up under the player so single-room chat
 /// keeps every point of height, and always on the Chats tab, where its controls sit at the right.
 /// A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill. The capsule
-/// hugs its rooms and sits centered in the bar. When they outgrow the bar the row compresses in place and never
-/// scrolls, clips or wraps: rooms behind the one on screen fold to their faces one at a time, the
-/// longest name first, until the row fits; with every other room folded, the name on screen
-/// truncates. It reads only the tabs, never the rows, so arriving messages never rebuild it.
+/// and whatever sits beside it hug their content and sit centered in the bar as one group. When
+/// they outgrow the bar the row compresses in place and never scrolls, clips or wraps: rooms behind
+/// the one on screen fold to their faces one at a time, the longest name first, until the row
+/// fits; then the folded faces shrink and draw closer; only then does the name on screen truncate.
+/// It reads only the tabs, never the rows, so arriving messages never rebuild it.
 struct ChatTabStrip: View {
     let rooms: ChatRooms
     /// Controls after the rooms, outside their glass (the Chats tab's play and add buttons).
@@ -22,27 +23,22 @@ struct ChatTabStrip: View {
     static let height: CGFloat = 45
 
     var body: some View {
-        // The rooms sit centered between two equal sides and stay centered as rooms are added;
-        // the controls live in the right side, so they never pull the center off.
+        // The group (the room's group chip, the rooms, their controls) sits centered as one, so a
+        // single room never reads lopsided; past the width the rooms give way first.
         HStack(spacing: 6) {
-            HStack(spacing: 0) {
-                if let leading { leading }
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
+            if let leading { leading }
             ViewThatFits(in: .horizontal) {
                 ForEach(0..<max(1, rooms.tabs.count), id: \.self) { folds in
                     row(folding: folds)
                 }
+                row(folding: max(0, rooms.tabs.count - 1), tight: true)
             }
             .padding(4)
             .snGlass(Capsule())
             .layoutPriority(1)
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                if let trailing { trailing.fixedSize() }
-            }
-            .frame(maxWidth: .infinity)
+            if let trailing { trailing.fixedSize() }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .frame(height: height)
@@ -52,15 +48,16 @@ struct ChatTabStrip: View {
         }
     }
 
-    /// The row with `folds` rooms folded: those not on screen, longest name first.
-    private func row(folding folds: Int) -> some View {
+    /// The row with `folds` rooms folded: those not on screen, longest name first. Tight, the
+    /// folded faces are smaller and closer, so the name on screen keeps its letters.
+    private func row(folding folds: Int, tight: Bool = false) -> some View {
         let active = rooms.state.activeChannel
         let order = rooms.tabs.filter { $0.channel != active }.sorted { $0.label.count > $1.label.count }
         let folded = Set(order.prefix(folds).map(\.channel))
-        return TabRow(spacing: 4) {
+        return TabRow(spacing: tight ? 2 : 4) {
             ForEach(rooms.tabs) { tab in
                 TabPill(tab: tab, active: tab.channel == active, folded: folded.contains(tab.channel),
-                        crowded: folds > 0,
+                        crowded: folds > 0, tight: tight,
                         mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
                         select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
             }
@@ -143,6 +140,8 @@ private struct TabPill: View {
     var folded = false
     /// Other rooms are folded: the room on screen may use the width they gave up.
     var crowded = false
+    /// The row is at its tightest: a folded room is a smaller face with less air.
+    var tight = false
     let mark: Bool
     let select: () -> Void
     let close: () -> Void
@@ -151,7 +150,7 @@ private struct TabPill: View {
         HStack(spacing: 0) {
             Button(action: select) {
                 HStack(spacing: 6) {
-                    TabFace(url: tab.avatar, label: tab.label)
+                    TabFace(url: tab.avatar, label: tab.label, size: folded && tight ? 16 : 20)
                         // Live rooms wear the sidebar's dot; the stream's tab says it with its mark.
                         .overlay(alignment: .bottomTrailing) {
                             if tab.live == true && !tab.pinnedToStream {
@@ -216,19 +215,20 @@ private struct TabPill: View {
                 .accessibilityLabel("Close \(tab.label) chat")
             }
         }
-        // A folded pill is a chip: the face 6 pt from each end.
-        .padding(.leading, folded ? 6 : 10)
-        .padding(.trailing, folded ? 6 : 4)
+        // A folded pill is a chip: the face 6 pt from each end (2 pt when tight).
+        .padding(.leading, folded ? (tight ? 2 : 6) : 10)
+        .padding(.trailing, folded ? (tight ? 2 : 6) : 4)
         .frame(height: 32)
         .background { if active { GlazeSelected() } }
         .animation(SNMotion.run(.easeOut(duration: 0.2)), value: folded)
     }
 }
 
-/// A room's 20 point face, or its first letter on a surface circle.
+/// A room's face (20 points, 16 in the tightest row), or its first letter on a surface circle.
 private struct TabFace: View {
     let url: String?
     let label: String
+    var size: CGFloat = 20
 
     var body: some View {
         Group {
@@ -242,7 +242,7 @@ private struct TabFace: View {
                 initial
             }
         }
-        .frame(width: 20, height: 20)
+        .frame(width: size, height: size)
         .clipShape(Circle())
         .accessibilityHidden(true)
     }

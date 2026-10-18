@@ -63,7 +63,8 @@ struct WatchLayer: View {
             let landscape = screen.width > screen.height
             let mini = nav.playerMode == .mini
             let full = !mini
-            let miniRect = Self.miniRect(screen: screen, insets: insets, origin: nav.miniOrigin, drag: miniDrag)
+            let miniRect = Self.miniRect(screen: screen, insets: insets, origin: nav.miniOrigin, drag: miniDrag,
+                                         floor: nav.tab == .chats ? nav.chatsFloor : nil)
             let progress: CGFloat = mini ? 1 : (landscape ? 0 : shrink)
             let layer = Self.lerp(CGRect(origin: .zero, size: screen), miniRect, progress)
             let chat = chat
@@ -372,11 +373,17 @@ struct WatchLayer: View {
 
     // MARK: Geometry
 
+    /// The resting mini box's gap over what is under it: the default rest leaves this much over
+    /// the tab bar's top, and on Chats (no tab bar) it keeps the same gap over the composer.
+    static let restGap: CGFloat = 22
+
     /// The mini box: where the person left it (bottom-right above the tab bar at first), kept 12
     /// points clear of the safe area and the tab bar, worked out against the screen as it is now.
-    static func miniRect(screen: CGSize, insets: EdgeInsets, origin: CGPoint?, drag: CGSize) -> CGRect {
+    /// `floor` is where the Chats composer starts, when Chats is in front with a chat open.
+    static func miniRect(screen: CGSize, insets: EdgeInsets, origin: CGPoint?, drag: CGSize,
+                         floor: CGFloat? = nil) -> CGRect {
         let size = miniSize
-        let bottomClear = max(104, insets.bottom + 76)
+        let bottomClear = floor.map { screen.height - $0 + restGap } ?? max(104, insets.bottom + 76)
         let minX = insets.leading + gutter
         let maxX = screen.width - insets.trailing - gutter - size.width
         let minY = insets.top + 12

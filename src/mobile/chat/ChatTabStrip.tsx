@@ -71,7 +71,7 @@ const ChatTabStripImpl: React.FC<{
   const setActive = useChatTabsStore((s) => s.setActive);
   const removeTab = useChatTabsStore((s) => s.removeTab);
 
-  // The rooms sit centered in the strip and stay centered as rooms are added.
+  // The rooms and what sits beside them are centered in the strip as one group.
   // Once they outgrow it, the row scrolls from its leading edge, fades on the
   // side that has more, and keeps the room on screen in view.
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -106,13 +106,12 @@ const ChatTabStripImpl: React.FC<{
 
   return (
     <div
-      className="shrink-0 flex items-center gap-1.5 px-2 border-b border-borderSubtle"
+      className="shrink-0 flex items-center justify-center gap-1.5 px-2 border-b border-borderSubtle"
       style={{ height }}
     >
-      {/* Two equal sides hold the rooms in the middle; the controls live in
-          the right side, so they never pull the center off. The right side
-          keeps the controls' own width when space runs out. */}
-      <div className="flex-1 basis-0 min-w-0 flex items-center justify-start">{leading}</div>
+      {/* One centered group, so a single room never reads lopsided. The
+          controls keep their own width when space runs out; the rooms scroll. */}
+      {leading && <div className="min-w-0 flex items-center">{leading}</div>}
       {/* The row of rooms wears the glaze and the open room is the darker pill
           inside it. The rooms scroll inside the glass, so its rim stays put. */}
       <div className="min-w-0 max-w-full chrome-glaze chrome-glaze--flat">
@@ -199,7 +198,7 @@ const ChatTabStripImpl: React.FC<{
           })}
         </div>
       </div>
-      <div className="flex-1 basis-0 min-w-max flex items-center justify-end gap-1.5">{trailing}</div>
+      {trailing && <div className="shrink-0 flex items-center gap-1.5">{trailing}</div>}
     </div>
   );
 };

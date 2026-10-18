@@ -81,6 +81,9 @@ final class Navigator {
     /// The tab Chats was opened from: Chats is a full-screen surface with no tab bar, and leaving
     /// it (the grabber, a slide down) returns here.
     var chatsReturnTab = MobileTab.following
+    /// Where the Chats screen's composer (and any banner over it) starts, in global points, while
+    /// a chat shows there: Chats has no tab bar, so the mini player rests above this instead.
+    var chatsFloor: CGFloat?
 
     /// Leaves Chats for the tab it was opened from.
     func exitChats() {
