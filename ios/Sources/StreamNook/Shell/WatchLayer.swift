@@ -47,6 +47,19 @@ struct WatchLayer: View {
     /// below it, the field ends 20 pt above the screen edge, just clear of the home indicator.
     static let indicatorOverlap: CGFloat = 24
 
+    #if DEBUG
+    /// A drive step's switch back to the layout before the keyboard fix, to show the old overlap.
+    @MainActor static var legacyKeyboard = false
+    #endif
+
+    private var legacyLayout: Bool {
+        #if DEBUG
+        Self.legacyKeyboard
+        #else
+        false
+        #endif
+    }
+
     private var chat: LandscapeChatLayout {
         LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "overlay"),
                             side: store.string("fullscreen_chat.side", "auto"),
@@ -123,13 +136,14 @@ struct WatchLayer: View {
                 // With the keyboard up the chat ends at its top edge (the composer keeps its own
                 // 8 pt below the field); with it down, nothing moves.
                 let bottomKeep = max(0, insets.bottom - Self.indicatorOverlap)
-                let portraitBottom = full && keyboardLift > 0 ? keyboardLift : bottomKeep * (1 - progress)
+                let lift = legacyLayout ? 0 : keyboardLift
+                let portraitBottom = full && lift > 0 ? lift : bottomKeep * (1 - progress)
                 ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
                          backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
                          outerInset: landscapeChat ? outer : 0, leading: chat.leading)
-                    .ignoresSafeArea(.keyboard)
+                    .ignoresSafeArea(legacyLayout ? [] : .keyboard)
                     .frame(width: landscapeChat ? columnWidth : layer.width,
-                           height: landscapeChat ? max(0, screen.height - keyboardLift)
+                           height: landscapeChat ? max(0, screen.height - lift)
                                                  : max(0, layer.maxY - band.maxY - portraitBottom))
                     .offset(x: landscapeChat ? columnX : layer.minX, y: landscapeChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)

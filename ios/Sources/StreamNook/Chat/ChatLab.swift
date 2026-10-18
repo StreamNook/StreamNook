@@ -114,6 +114,7 @@ struct ChatLabView: View {
 /// - `chatperf:SECONDS` logs frame pacing and memory every five seconds, then a summary
 /// - `chattype:TEXT` puts TEXT in the composer, `chatsend` sends it
 /// - `chatfocus` focuses the composer (raises the keyboard), `chatblur` lowers it
+/// - `chatkeyboard:legacy|fixed` lays the watch chat out as before or after the keyboard fix
 /// - `chatpicker`, `chatmenu`, `chatcommands` open the emote picker, the chat menu, the command list
 /// - `chatreply` drafts a reply to the newest row
 /// - `chatmod[:off]` turns the room's moderator tools on (or off) for the fan
@@ -175,8 +176,21 @@ enum ChatDrive {
             await composer?.send()
         case "chatfocus":
             composer?.requestFocus(true)
+            // A focus request from a drive does not always reach the field (no touch made its
+            // window key); the field holding the draft is then focused directly.
+            try? await Task.sleep(for: .milliseconds(600))
+            let field = composer.flatMap { draftField(holding: $0.draft) }
+            let took = field?.isFirstResponder ?? false
+            if !took { field?.becomeFirstResponder() }
+            log.notice("drive focus field \(field != nil) focus request took \(took) now \(field?.isFirstResponder ?? false)")
         case "chatblur":
             composer?.requestFocus(false)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        case "chatkeyboard":
+            // `legacy` lays the chat out as before the keyboard fix (to show the old overlap),
+            // `fixed` as now; it applies to the next layout.
+            WatchLayer.legacyKeyboard = value == "legacy"
+            log.notice("drive keyboard layout \(value, privacy: .public)")
         case "chatpicker":
             composer?.panel = .emotes
         case "chatmenu":
@@ -258,6 +272,18 @@ enum ChatDrive {
         }
         log.notice("drive chatadd \(row.userLogin, privacy: .public) live \(row.isLive)")
         rooms.add(row)
+    }
+
+    /// The on-screen text field showing `draft` (the composer's), searched through the scene's
+    /// windows.
+    private static func draftField(holding draft: String) -> UITextField? {
+        func search(_ view: UIView) -> UITextField? {
+            if let field = view as? UITextField, field.text == draft, field.window != nil, !field.isHidden { return field }
+            for sub in view.subviews { if let found = search(sub) { return found } }
+            return nil
+        }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        return windows.lazy.compactMap { search($0) }.first
     }
 
     /// The first Browse channel whose chat has pinned messages, opened beside the stream.
