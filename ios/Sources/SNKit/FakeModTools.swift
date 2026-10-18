@@ -4,7 +4,7 @@ import Foundation
 /// held message. Nothing here reaches Twitch, so no test ever acts on a real chatter or channel.
 public enum FakeModTools {
     /// A history for any chatter: a timeout, a deleted message, a warning and a mod comment.
-    public static let history: [String: Any] = [
+    public static var history: [String: Any] { [
         "status": "available",
         "entries": [
             ["kind": "comment", "id": "c1", "title": "Mod comment", "by": "mod_kay", "at_ms": 1_760_000_000_000,
@@ -17,7 +17,7 @@ public enum FakeModTools {
             ["kind": "warn", "id": "a2", "title": "Warned", "by": "zoox", "at_ms": 1_758_800_000_000,
              "when": "2 weeks ago", "quote": "zoox warned gus. Reason: keep it friendly"],
         ] as [[String: Any]],
-    ]
+    ] }
 
     static func button(_ id: String, _ label: String, _ kind: String, _ action: [String: Any], danger: Bool = false,
                        reason: Any = NSNull(), asksReason: Bool = false, spoken: String) -> [String: Any] {
@@ -27,7 +27,7 @@ public enum FakeModTools {
 
     /// The card a moderator sees for any chatter: the four default lengths and Ban, two of their
     /// own buttons, the history above, no note and no color yet.
-    public static let cardTools: [String: Any] = [
+    public static var cardTools: [String: Any] { [
         "note": NSNull(), "nickname": NSNull(), "color": NSNull(),
         "swatches": ["#7FD3FF", "#5AA9FF", "#C49BFF", "#FF7AD9", "#FF7A90", "#FF9F43", "#FFD166", "#7BE08E", "#4FD1C5", "#E6E6E6"],
         "moderate": [
@@ -45,7 +45,7 @@ public enum FakeModTools {
             ],
             "history": history,
         ] as [String: Any],
-    ]
+    ] }
 
     static func answer(_ cmd: String, _ args: [String: Any]) throws -> String {
         let value: Any
