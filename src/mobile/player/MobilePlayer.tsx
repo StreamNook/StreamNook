@@ -88,6 +88,9 @@ export const MobilePlayer: React.FC<{
   chatOpen?: boolean;
   /** Keep the control layer off one edge: landscape chat floats there. */
   controlsInset?: { side: 'left' | 'right'; px: number };
+  /** An offline room's card sits in a chin below the band (MobileOfflineChin),
+   *  so the band draws the offline art alone. */
+  offlineCardBelow?: boolean;
 }> = ({
   immersive = false,
   onToggleFullscreen,
@@ -97,6 +100,7 @@ export const MobilePlayer: React.FC<{
   onToggleLayout,
   chatOpen = false,
   controlsInset,
+  offlineCardBelow = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
@@ -510,8 +514,9 @@ export const MobilePlayer: React.FC<{
       </>
     );
 
+  // A step below the name it sits beside: secondary ink at ordinary weight.
   const subscribeClass =
-    'shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[11.5px] font-semibold text-white leading-none whitespace-nowrap';
+    'shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[12px] font-medium text-white/75 leading-none whitespace-nowrap';
   const subscribeInk = (
     <>
       {sub.subscriberBadgeUrl ? (
@@ -621,7 +626,7 @@ export const MobilePlayer: React.FC<{
       {/* An offline room: who, when, what is next, and the stream starts here
           when they go live. Not an error, so no Retry and no live chrome. The
           mini box shows it compact: the face and an Offline ring. */}
-      {offline && !noticeLine && <MobileOfflineRoom mini={compact} />}
+      {offline && !noticeLine && <MobileOfflineRoom mini={compact} cardBelow={offlineCardBelow} />}
 
       {/* Playback that cannot go on: what happened in plain words, and Retry.
           A provider stream that ended or never started says so here while its
@@ -665,9 +670,21 @@ export const MobilePlayer: React.FC<{
             title and the category all start at the name's edge, so the three
             read as one block about one stream. The live red is the avatar's
             ring alone; the counts stay white so they never out-pull the name. */}
+        {/* A scrim under the header alone, plus a soft shadow on its text, so
+            the category line holds on bright video. */}
         {currentStream && (
           <div
-            className="absolute inset-x-0 top-0 px-3 pt-2"
+            aria-hidden
+            className="absolute inset-x-0 top-0 pointer-events-none"
+            style={{
+              height: immersive ? 'calc(var(--sn-safe-t, 0px) + 72px)' : 72,
+              background: 'linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)',
+            }}
+          />
+        )}
+        {currentStream && (
+          <div
+            className="absolute inset-x-0 top-0 px-3 pt-2 [text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"
             style={immersive ? { paddingTop: 'calc(var(--sn-safe-t, 0px) + 8px)' } : undefined}
           >
             <div className="flex items-start gap-2.5">
@@ -752,9 +769,11 @@ export const MobilePlayer: React.FC<{
           )}
         </button>
 
-        {/* Bottom bar */}
+        {/* Bottom bar, on the header's visible edges: the LIVE dot starts at
+            the avatar ring's outer edge (pl-2.5: px-3 less the 2px ring), and
+            the last icon's ink ends where the uptime text does. */}
         <div
-          className="absolute inset-x-0 bottom-0 flex items-center justify-between px-3 pb-2"
+          className="absolute inset-x-0 bottom-0 flex items-center justify-between pl-2.5 pr-3 pb-2"
           style={immersive ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' } : undefined}
         >
           {/* A status, not a control: a dot and the word, no filled badge.
@@ -773,8 +792,9 @@ export const MobilePlayer: React.FC<{
           </div>
           {/* One size and one weight for every bar icon, so no button
               out-pulls another. The last icon's ink, not its 44 px target,
-              ends on the header's right edge. */}
-          <div className="flex items-center -mr-[9px]">
+              ends on the header's right edge: 12px of target padding plus the
+              glyph's own inset sit past the row's padding. */}
+          <div className="flex items-center -mr-[13px]">
             <button
               onClick={toggleMute}
               className="sn-touch flex items-center justify-center text-white"
