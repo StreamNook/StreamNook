@@ -672,7 +672,11 @@ fn build_standing_with(
                 .or_else(|| enrichment.and_then(|e| string_field(e, "category")));
             // Where the badge's own copy says nothing, the campaign's numbers do.
             if let Some(fill) = fills.get(&key) {
-                if earn.steps.is_empty() {
+                let says_nothing = earn
+                    .steps
+                    .iter()
+                    .all(|s| matches!(s, crate::services::badge_earn::EarnStep::Other));
+                if says_nothing {
                     earn = fill.earn.clone();
                 }
                 if category.is_none() {
