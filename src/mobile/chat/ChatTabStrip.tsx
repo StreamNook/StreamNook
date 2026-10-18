@@ -74,7 +74,7 @@ const ChatTabStripImpl: React.FC<{
     >
       {/* The row of rooms wears the glaze and the open room is the darker pill
           inside it. The rooms scroll inside the glass, so its rim stays put. */}
-      <div className={`min-w-0 chrome-glaze chrome-glaze--flat ${trailing ? 'flex-1' : 'max-w-full'}`}>
+      <div className="min-w-0 max-w-full chrome-glaze chrome-glaze--flat">
         <div className="flex items-center gap-1 p-1 overflow-x-auto rounded-full [scrollbar-width:none]">
           {tabs.map((tab) => {
             const active = tab.channel === activeChannel;
@@ -152,7 +152,7 @@ const ChatTabStripImpl: React.FC<{
           })}
         </div>
       </div>
-      {trailing}
+      {trailing && <div className="ml-auto shrink-0 flex items-center gap-1.5">{trailing}</div>}
     </div>
   );
 };

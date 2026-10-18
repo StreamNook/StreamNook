@@ -95,8 +95,9 @@ struct MainShell: View {
                 }
         }
         .overlay {
-            // Not on Chats: its composer sits right above the bar and would fade into it.
-            if showsTabBar(tab) && tab != .chats { TabBarFloor() }
+            // Not on Chats with a chat open: its composer sits right above the bar and would
+            // fade into it. The picker there keeps the fade.
+            if showsTabBar(tab) && (tab != .chats || model.chat.tabs.isEmpty) { TabBarFloor() }
         }
     }
 

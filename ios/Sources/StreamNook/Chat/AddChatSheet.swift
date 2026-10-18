@@ -206,9 +206,9 @@ private struct RoomRow: View {
                 .overlay(alignment: .bottomTrailing) {
                     if row.isLive {
                         Circle().fill(SN.live)
-                            .frame(width: 12, height: 12)
+                            .frame(width: 10, height: 10)
                             .overlay { Circle().stroke(SN.background, lineWidth: 2) }
-                            .offset(x: 2, y: 2)
+                            .offset(x: 1, y: 1)
                             .accessibilityHidden(true)
                     }
                 }

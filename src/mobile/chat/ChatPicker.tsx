@@ -86,7 +86,7 @@ const Row: React.FC<{
         {row.is_live && (
           <span
             aria-label="Live"
-            className="absolute -right-0.5 -bottom-0.5 w-3 h-3 rounded-full bg-live ring-2 ring-background"
+            className="absolute right-0 bottom-0 w-2.5 h-2.5 rounded-full bg-live ring-2 ring-background"
           />
         )}
       </span>

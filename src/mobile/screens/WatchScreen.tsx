@@ -21,6 +21,7 @@ import { X } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { useRoomPins } from '../chat/useRoomPins';
+import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useWindowShape } from '../ui/useWindowShape';
 import {
   readWatchLayout,
@@ -74,6 +75,8 @@ const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar
 // (64 px tall with its labels).
 const BOTTOM_GAP = 112;
+// On the Chats tab the composer sits on the bar too; the box rests above it.
+const CHATS_COMPOSER_GAP = 66;
 
 // Where the mini player is ALLOWED to be.
 //
@@ -102,6 +105,7 @@ function clampMini(
   vw: number,
   vh: number,
   ins: ResolvedInsets,
+  floor: number = BOTTOM_GAP,
 ): { x: number; y: number } {
   // Clear of the BACK strips at the sides, and of the status bar plus the home /
   // quick-switch strips top and bottom. An app cannot opt out of the home
@@ -109,7 +113,7 @@ function clampMini(
   const left = MINI_GUTTER + Math.max(ins.left, ins.gestureLeft);
   const right = MINI_GUTTER + Math.max(ins.right, ins.gestureRight);
   const top = EDGE_GAP + Math.max(ins.top, ins.gestureTop);
-  const bottom = Math.max(BOTTOM_GAP, ins.bottom + ins.gestureBottom + EDGE_GAP);
+  const bottom = Math.max(floor, ins.bottom + ins.gestureBottom + EDGE_GAP);
 
   // Math.max applied LAST, so that on a viewport too small to satisfy both
   // bounds the box lands at the top-left edge rather than off-screen. Getting
@@ -151,6 +155,7 @@ export const WatchScreen: React.FC = () => {
   const [pinsOpen, setPinsOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const chatTabsVisible = useChatTabsVisible();
+  const chatTabsOpen = useChatTabsStore((s) => s.tabs.length > 0);
   const viewingStreamChat = useViewingStreamChat();
   // Hype train, drops, polls and predictions are Twitch contracts keyed by a
   // numeric user_id; a Kick id would name an unrelated Twitch channel.
@@ -389,9 +394,20 @@ export const WatchScreen: React.FC = () => {
   // getComputedStyle forces a style resolve, so the insets are read inside this
   // memo rather than every render: they can only have changed when the viewport
   // did, and the viewport is already a dependency of the clamp itself.
+  // Shown higher over the Chats tab while a chat is open there, so the box
+  // never covers its composer; the stored spot is kept for the other tabs.
+  const overChatsComposer = useMobileNavStore((s) => s.activeTab === 'chats') && chatTabsOpen;
   const miniClamped = useMemo(
-    () => clampMini(miniPos.x, miniPos.y, viewport.w, viewport.h, readInsets()),
-    [miniPos.x, miniPos.y, viewport.w, viewport.h],
+    () =>
+      clampMini(
+        miniPos.x,
+        miniPos.y,
+        viewport.w,
+        viewport.h,
+        readInsets(),
+        overChatsComposer ? BOTTOM_GAP + CHATS_COMPOSER_GAP : BOTTOM_GAP,
+      ),
+    [miniPos.x, miniPos.y, viewport.w, viewport.h, overChatsComposer],
   );
 
   // System PiP strip-down flag from MainActivity. Also mirrored onto <html> so

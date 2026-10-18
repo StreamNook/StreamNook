@@ -29,6 +29,7 @@ import { YouScreen } from './screens/YouScreen';
 import { WatchScreen } from './screens/WatchScreen';
 import { ChatsScreen } from './screens/ChatsScreen';
 import { useChatsLifecycle } from './chat/useChatsLifecycle';
+import { useChatTabsStore } from './chat/chatTabsStore';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
@@ -64,6 +65,8 @@ const MobileApp: React.FC = () => {
   const setupComplete = useAppStore((s) => s.settings.setup_complete);
   const [wizardDismissed, setWizardDismissed] = useState(false);
   const activeTab = useMobileNavStore((s) => s.activeTab);
+  // The Chats tab with a chat open has its composer on the bar: no fade there.
+  const chatTabsOpen = useChatTabsStore((s) => s.tabs.length > 0);
 
   // Is the tab shell completely hidden behind the full-screen watch layer?
   //
@@ -168,7 +171,7 @@ const MobileApp: React.FC = () => {
             </AnimatePresence>
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
-          <MobileTabBar hidden={shellCovered} floor={activeTab !== 'chats'} />
+          <MobileTabBar hidden={shellCovered} floor={activeTab !== 'chats' || !chatTabsOpen} />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />
