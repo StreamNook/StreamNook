@@ -141,6 +141,24 @@ public struct ChatRoomBuffer: Sendable {
                     replaceAppended(next, &change)
                     updated[next.id] = next
                 }
+            case .preview(let url, let preview):
+                for (offset, row) in rows.enumerated() {
+                    guard var view = row.message.metadata.view,
+                          let at = view.previews.firstIndex(where: { $0.url == url }) else { continue }
+                    let before = view
+                    if let preview {
+                        view.previews[at].preview = preview
+                    } else {
+                        view.previews.remove(at: at)
+                    }
+                    guard view != before else { continue }
+                    var next = row
+                    next.message.metadata.view = view
+                    next.revision += 1
+                    rows[offset] = next
+                    replaceAppended(next, &change)
+                    updated[next.id] = next
+                }
             case .patch(_, let patches):
                 for patch in patches {
                     guard let i = index[patch.id] else { continue }

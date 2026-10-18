@@ -190,3 +190,60 @@ import Testing
         #expect(style.bufferCap == 300)
     }
 }
+
+@Suite struct LinkPreviewTests {
+    private let invite = "https://discord.gg/discord-developers"
+
+    private func row(_ id: String, previews: [ChatRowPreview]) -> ChatSocketFrame {
+        var metadata = ChatMetadata()
+        var view = ChatRowView(nameColor: "#ffffff")
+        view.previews = previews
+        metadata.view = view
+        return .row(ChatMessage(id: id, username: "u", content: "x", metadata: metadata))
+    }
+
+    @Test func theFixtureInviteCarriesItsServerCard() throws {
+        let rows = try #require(ChatFixture.bundled()).frames.compactMap {
+            if case .row(let m) = ChatSocketFrame.decode($0) { return m } else { return nil }
+        }
+        let card = try #require(rows.first { $0.id == "fx-discord" }?.metadata.view?.previews.first)
+        #expect(card.url == invite)
+        #expect(card.preview?.kind == "discord")
+        #expect(card.preview?.title == "Discord Developers")
+        #expect(card.preview?.memberCount == 308559)
+        #expect(card.preview?.onlineCount == 70761)
+    }
+
+    @Test func aPreviewFrameDecodesForEveryRoom() {
+        let frame = ChatSocketFrame.decode(#"{"type":"ROW_PREVIEW","url":"https://x.com/a","preview":{"url":"https://x.com/a","kind":"tweet","title":"Hi"}}"#)
+        guard case .preview(let url, let preview) = frame else {
+            Issue.record("\(frame)")
+            return
+        }
+        #expect(url == "https://x.com/a")
+        #expect(preview?.title == "Hi")
+        #expect(frame.room == nil)
+        let none = ChatSocketFrame.decode(#"{"type":"ROW_PREVIEW","url":"https://x.com/a","preview":null}"#)
+        guard case .preview(_, nil) = none else {
+            Issue.record("\(none)")
+            return
+        }
+    }
+
+    @Test func theAnswerFillsEveryRowWithTheLinkAndANoneDropsTheHeldCard() {
+        var buffer = ChatRoomBuffer(cap: 100)
+        _ = buffer.apply([
+            row("a", previews: [ChatRowPreview(url: invite, reserve: true)]),
+            row("b", previews: [ChatRowPreview(url: invite, reserve: true)]),
+            row("c", previews: [ChatRowPreview(url: "https://youtu.be/x")]),
+        ])
+        let card = ChatLinkPreview(url: invite, kind: "discord", title: "Discord Developers", onlineCount: 1, memberCount: 2)
+        let filled = buffer.apply([.preview(url: invite, preview: card)])
+        #expect(Set(filled.updated.map(\.id)) == ["a", "b"])
+        #expect(buffer.row("a")?.message.metadata.view?.previews.first?.preview == card)
+        #expect(buffer.row("a")?.revision == 1)
+        let dropped = buffer.apply([.preview(url: "https://youtu.be/x", preview: nil)])
+        #expect(dropped.updated.map(\.id) == ["c"])
+        #expect(buffer.row("c")?.message.metadata.view?.previews.isEmpty == true)
+    }
+}
