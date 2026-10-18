@@ -37,6 +37,7 @@ import {
 } from '../watch/watchLayout';
 import { SplitHandle } from '../watch/SplitHandle';
 import { MobilePlayer } from '../player/MobilePlayer';
+import { MobileOfflineChin } from '../player/MobileOfflineRoom';
 import { useLiveVideoPaused } from '../player/liveVideo';
 import { MobileChatPane } from '../chat/MobileChatPane';
 import {
@@ -91,8 +92,9 @@ const EDGE_GAP = 12;
 // The mini box's side gutter: the pages' own 16 px, so its edge lines up with
 // the cards under it. Used by the clamp, the resting spot and the snap alike.
 const MINI_GUTTER = 16;
-// Clearance so the resting mini player never sits under the floating pill bar.
-const BOTTOM_GAP = 104;
+// Clearance so the resting mini player never sits under the floating pill bar
+// (64 px tall with its labels).
+const BOTTOM_GAP = 112;
 
 // Where the mini player is ALLOWED to be.
 //
@@ -332,6 +334,9 @@ export const WatchScreen: React.FC = () => {
   const sideBySide = !tabletop && shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
   const chatBeside = sideBySide && twoColumns;
   const chatOverlay = sideBySide && immersiveLandscape && landscapeChat && phoneOverlayChat;
+  // Only the stacked portrait band has room below it for the offline card;
+  // everywhere else the card stays over the art.
+  const offlineChin = !sideBySide && !tabletop && !mini && !pip;
   // A phone's "Beside the video" is the overlay column taken out of the
   // picture: same edge, same width and the same drag handle, still immersive,
   // but the video gets the rest of the screen to itself instead of sitting
@@ -1062,6 +1067,7 @@ export const WatchScreen: React.FC = () => {
             // under the very column it was meant to dismiss.
             controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
             layoutMode={twoColumns ? 'columns' : 'stacked'}
+            offlineCardBelow={offlineChin}
             onToggleLayout={
               // Nothing to arrange while chat is hidden.
               canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
@@ -1118,6 +1124,9 @@ export const WatchScreen: React.FC = () => {
             </>
           )}
         </div>
+
+        {/* The offline room's card sits under the band, never over the art. */}
+        {offlineChin && <MobileOfflineChin />}
 
         {/* Between the panes, so its parent rect is the container the drag
             measures against. Hidden in mini/PiP and on phones. */}

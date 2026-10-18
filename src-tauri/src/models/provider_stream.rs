@@ -62,7 +62,9 @@ pub struct StreamPage {
 }
 
 /// A browsable category on a platform (Twitch's "games" equivalent).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Serialized with `viewers_line`, the tile's words for `viewer_count`
+/// (`count_text::viewers_line`), so no shell formats the number itself.
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProviderCategory {
     pub provider: String,
     /// Platform category id, as a string so it can ride the same routing as slugs.
@@ -76,6 +78,22 @@ pub struct ProviderCategory {
     /// Live channels currently in this category, where known.
     #[serde(default)]
     pub channel_count: u32,
+}
+
+impl Serialize for ProviderCategory {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut row = serializer.serialize_struct("ProviderCategory", 7)?;
+        row.serialize_field("provider", &self.provider)?;
+        row.serialize_field("id", &self.id)?;
+        row.serialize_field("name", &self.name)?;
+        row.serialize_field("thumbnail", &self.thumbnail)?;
+        row.serialize_field("viewer_count", &self.viewer_count)?;
+        row.serialize_field("channel_count", &self.channel_count)?;
+        let line = crate::services::count_text::viewers_line(Some(u64::from(self.viewer_count)));
+        row.serialize_field("viewers_line", &line)?;
+        row.end()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

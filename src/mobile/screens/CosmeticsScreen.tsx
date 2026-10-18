@@ -26,6 +26,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { setOwnThemeHiddenInChat } from '../../stores/chatUserStore';
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
+import { Button } from '../ui/Button';
 import { FallbackImage } from '../../components/FallbackImage';
 import { clearUserCache as clear7TVCache } from '../../services/seventvService';
 import { applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
@@ -368,7 +369,15 @@ export const CosmeticsScreen: React.FC = () => {
       {/* You as others see you, held above the choices while they scroll.
           Solid at any Glassiness: nothing passes through it. */}
       {userId && (
-        <div className="shrink-0 px-4 pt-1 pb-3">
+        <div className="relative shrink-0 px-4 pt-1 pb-3">
+          {/* glass-exempt: the page's own background fading out just under the
+              card, so the choices slide softly under it instead of being cut
+              at its edge. Over the list, never in the way of a tap. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-full z-10 h-6"
+            style={{ background: 'linear-gradient(var(--color-background), transparent)' }}
+          />
           <div className="rounded-[18px] bg-secondary pb-3" style={{ boxShadow: '0 8px 12px rgba(0,0,0,0.55)' }}>
             <AtmosphereBand
               swatch={sn ? bandSwatch(sn.theme) : (identity?.atmosphere?.swatch ?? null)}
@@ -533,18 +542,16 @@ export const CosmeticsScreen: React.FC = () => {
                     ? `Connect 7TV to switch paints. You own ${ext.paints.length}.`
                     : 'Connect 7TV to wear your paints and badges.'}
                 </span>
-                <button
+                <Button
+                  size="row"
+                  kind="brand"
                   onClick={connectSevenTv}
                   disabled={connecting}
-                  className="sn-touch shrink-0 flex items-center disabled:opacity-60"
+                  className="whitespace-nowrap"
+                  style={{ backgroundColor: SEVENTV_BLUE, color: SEVENTV_INK }}
                 >
-                  <span
-                    className="px-3.5 h-8 flex items-center rounded-full text-[13px] font-bold whitespace-nowrap"
-                    style={{ backgroundColor: SEVENTV_BLUE, color: SEVENTV_INK }}
-                  >
-                    {connecting ? 'Connecting' : 'Connect'}
-                  </span>
-                </button>
+                  {connecting ? 'Connecting' : 'Connect'}
+                </Button>
               </div>
             )}
             {ext.paints.length > 0 && (

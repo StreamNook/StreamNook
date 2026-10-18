@@ -2,12 +2,12 @@
 // while nothing is typed. Rust ranks the rows (`search_settings`, the same
 // catalog the iPhone reads: titles, aliases, sections and descriptions), so
 // this only draws the answer and opens the page a hit lives on.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
-import { MagnifyingGlass, X } from 'phosphor-react';
 import { ChevronRight } from 'lucide-react';
 import { useMobileNavStore } from '../navStore';
+import { SearchField } from '../ui/SearchField';
 import EmoteProviderLogo, { type EmoteProviderId } from '../../components/chat/EmoteProviderLogo';
 import { SETTINGS_ROWS } from './SettingsScreen';
 import { catalogRowKey, openCatalogRow, pageViewOf, rowPlace, type CatalogRow } from './settingsCatalog';
@@ -28,6 +28,72 @@ export const CatalogLogo: React.FC<{ logo?: string | null; size?: number }> = ({
       aria-hidden
     >
       <EmoteProviderLogo provider={logo as EmoteProviderId} tinted={logo !== 'ffz'} className="h-full w-full" />
+    </span>
+  );
+};
+
+let measureCanvas: HTMLCanvasElement | null = null;
+
+/** The longest start of `text` that fits `width` with an ellipsis after it,
+ *  trimmed first, so the ellipsis never trails a space ("go large ..."), which
+ *  the browser's own truncation leaves. */
+function fitLine(text: string, width: number, font: string): string {
+  measureCanvas ??= document.createElement('canvas');
+  const ctx = measureCanvas.getContext('2d');
+  if (!ctx || width <= 0) return text;
+  ctx.font = font;
+  if (ctx.measureText(text).width <= width) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(`${text.slice(0, mid).trimEnd()}…`).width <= width) lo = mid;
+    else hi = mid - 1;
+  }
+  return `${text.slice(0, lo).trimEnd()}…`;
+}
+
+/** One line of quiet text, cut to fit with a trimmed ellipsis. The CSS
+ *  truncation stays as the backstop for the frame before it has measured. */
+const FittedLine: React.FC<{ text: string; className: string }> = ({ text, className }) => {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState(text);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let live = true;
+    // Canvas and layout disagree on this font (features and axes the canvas
+    // ignores), so the budget is scaled by how wide layout really draws what
+    // is shown now (a Range measures the text, overflow included), and kept a
+    // pixel short, so the browser never cuts the fitted line a second time.
+    const fit = () => {
+      if (!live) return;
+      const font = getComputedStyle(el).font;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const drawn = range.getBoundingClientRect().width;
+      const ctx = (measureCanvas ??= document.createElement('canvas')).getContext('2d');
+      let scale = 1;
+      if (ctx && drawn > 0) {
+        ctx.font = font;
+        const measured = ctx.measureText(el.textContent ?? '').width;
+        if (measured > 0) scale = drawn / measured;
+      }
+      setShown(fitLine(text, (el.clientWidth - 1) / scale, font));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    // A web font arriving after the first measure changes every width.
+    void document.fonts?.ready.then(fit);
+    return () => {
+      live = false;
+      observer.disconnect();
+    };
+  }, [text]);
+  return (
+    <span ref={ref} className={`block truncate ${className}`} title={shown === text ? undefined : text}>
+      {shown}
     </span>
   );
 };
@@ -113,15 +179,15 @@ export const SettingsDirectory: React.FC = () => {
 
   return (
     <div>
-      <div ref={fieldRef} className="relative px-4 mb-2">
-        <MagnifyingGlass
-          size={17}
-          className="absolute left-7 top-1/2 -translate-y-1/2 text-textMuted pointer-events-none z-10"
-        />
-        <input
+      <div ref={fieldRef} className="px-4 mb-2">
+        <SearchField
           ref={inputRef}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(next) => {
+            setQuery(next);
+            // Cleared with the X: keep the keyboard up for the next search.
+            if (!next) inputRef.current?.focus();
+          }}
           onFocus={() => {
             setFocused(true);
             // After the keyboard has started to open, so the rise lands where
@@ -131,24 +197,7 @@ export const SettingsDirectory: React.FC = () => {
           onBlur={() => setFocused(false)}
           placeholder="Search settings"
           aria-label="Search settings"
-          className="glass-input w-full h-11 pl-10 pr-10 text-[15px] text-textPrimary placeholder:text-textMuted bg-transparent outline-none"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          enterKeyHint="search"
         />
-        {query && (
-          <button
-            onClick={() => {
-              setQuery('');
-              inputRef.current?.focus();
-            }}
-            className="absolute right-5 top-1/2 -translate-y-1/2 sn-touch flex items-center justify-center text-textMuted"
-            aria-label="Clear search"
-          >
-            <X size={16} />
-          </button>
-        )}
       </div>
 
       <div className="px-3" style={searching ? { minHeight: '100dvh' } : undefined}>
@@ -162,7 +211,7 @@ export const SettingsDirectory: React.FC = () => {
               <Icon size={20} className="text-textSecondary shrink-0" />
               <span className="flex-1 min-w-0">
                 <span className="block text-[15px] font-medium text-textPrimary">{label}</span>
-                <span className="block text-[12.5px] text-textMuted truncate">{description}</span>
+                <FittedLine text={description} className="text-[12.5px] text-textMuted" />
               </span>
               <ChevronRight size={16} className="text-textMuted shrink-0" />
             </button>
@@ -198,8 +247,10 @@ const SearchHit: React.FC<{ row: CatalogRow; onOpen: (row: CatalogRow) => void }
           <CatalogLogo logo={row.logo} />
           {row.title}
         </span>
-        <span className="block truncate text-[12.5px] font-medium text-textSecondary">{rowPlace(row)}</span>
-        {row.detail && <span className="block truncate text-[12.5px] text-textMuted">{row.detail}</span>}
+        {/* Where it lives, in the description's quiet color: the title is the
+            one bright line of a hit. */}
+        <FittedLine text={rowPlace(row)} className="text-[12.5px] font-medium text-textMuted" />
+        {row.detail && <FittedLine text={row.detail} className="text-[12.5px] text-textMuted" />}
       </span>
       <span className="flex h-5 shrink-0 items-center">
         <ChevronRight size={16} className="text-textMuted" />

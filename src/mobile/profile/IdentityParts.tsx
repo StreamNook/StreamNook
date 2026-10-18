@@ -148,12 +148,25 @@ export const CutoutAvatar: React.FC<{
         aria-label={explains ? 'Which picture shows where' : undefined}
         aria-hidden={explains ? undefined : true}
         tabIndex={explains ? 0 : -1}
-        className="block rounded-full bg-secondary"
-        style={{ padding: ring, boxShadow: '0 4px 8px rgba(0,0,0,0.35)' }}
+        // Solid, not the theme's translucent tints: the ring is the card's own
+        // fill laid on the page, so it reads as a cut in the card, and the disc
+        // under the picture is the floor the tab-bar picture sits on. With the
+        // tints the banner showed through both, and a 7TV picture with
+        // transparent parts floated over the art.
+        className="block rounded-full"
+        style={{
+          padding: ring,
+          boxShadow: '0 4px 8px rgba(0,0,0,0.35)',
+          background: 'linear-gradient(var(--color-background-secondary), var(--color-background-secondary)), var(--color-background)',
+        }}
       >
         <span
-          className="block rounded-full overflow-hidden bg-surface ring-1 ring-white/10"
-          style={{ width: size, height: size }}
+          className="block rounded-full overflow-hidden ring-1 ring-white/10"
+          style={{
+            width: size,
+            height: size,
+            background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background-tertiary)',
+          }}
         >
           {face}
         </span>

@@ -24,14 +24,16 @@ export const ALL_PLATFORMS: PlatformOption<'all'> = { value: 'all', label: 'All 
 export const TWITCH_PLATFORM: PlatformOption<'twitch'> = { value: 'twitch', label: 'Twitch', marks: ['twitch'] };
 export const KICK_PLATFORM: PlatformOption<'kick'> = { value: 'kick', label: 'Kick', marks: ['kick'] };
 
-/** One or more marks side by side; two marks overlap a little, as a pair. */
+/** One or more marks side by side, a pair 3px apart. These marks' ink fills
+ *  their whole box (the Kick K runs edge to edge), so the overlap the iPhone's
+ *  vector marks take made the two touch. */
 export const PlatformMarks: React.FC<{ marks: ProviderId[]; size?: number }> = ({ marks, size = 18 }) => {
   const pair = marks.length > 1;
   const each = pair ? Math.round(size * 0.82) : size;
   return (
     <span className="flex items-center" aria-hidden>
       {marks.map((m, i) => (
-        <span key={m} style={i > 0 ? { marginLeft: -size * 0.12 } : undefined}>
+        <span key={m} style={i > 0 ? { marginLeft: 3 } : undefined}>
           <ProviderMark provider={m} size={each} />
         </span>
       ))}
@@ -128,11 +130,10 @@ export function PlatformMenu<T extends string>({
               <motion.div
                 role="menu"
                 aria-label="Platform"
-                className="sn-popover absolute min-w-[210px] py-1.5 origin-top-right"
+                className="sn-menu absolute min-w-[210px] origin-top-right"
                 style={{
                   top: anchor.top,
                   right: `max(${anchor.right}px, calc(${SAFE_R} + 12px))`,
-                  borderRadius: 14,
                 }}
                 initial={{ scale: 0.94, y: -4 }}
                 animate={{ scale: 1, y: 0 }}
@@ -147,18 +148,14 @@ export function PlatformMenu<T extends string>({
                       role="menuitemradio"
                       aria-checked={on}
                       onClick={() => pick(o.value)}
-                      className="flex h-11 w-full items-center gap-3 pl-3.5 pr-3 text-left active:bg-white/5"
+                      className="sn-menu-row"
                     >
                       {/* A fixed slot, so the pair and the single marks put
                           their labels on one line. */}
                       <span className="flex w-[30px] shrink-0 items-center justify-center">
                         <PlatformMarks marks={o.marks} size={size} />
                       </span>
-                      <span
-                        className={`flex-1 truncate text-[15px] text-textPrimary ${on ? 'font-semibold' : ''}`}
-                      >
-                        {o.label}
-                      </span>
+                      <span className="flex-1 truncate">{o.label}</span>
                       {/* The slot stays when empty, so the menu is one width
                           whichever row is chosen. */}
                       <span className="flex w-4 shrink-0 items-center justify-center text-accent">

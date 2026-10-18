@@ -56,12 +56,13 @@ export function BadgeSortMenu({ sort, onChange }: { sort: BadgeSort; onChange: (
                 setOpen(false);
                 if (!chosen) onChange(s.id);
               }}
-              className={`w-full h-10 px-3 rounded-lg flex items-center gap-2 text-left text-[13.5px] outline-none focus-visible:bg-white/10 active:bg-white/10 ${
-                chosen ? 'text-textPrimary font-semibold' : 'text-textSecondary'
-              }`}
+              className="sn-menu-row"
             >
               <span className="flex-1 truncate">{s.label}</span>
-              {chosen && <Check size={14} weight="bold" className="text-accent shrink-0" aria-hidden />}
+              {/* The slot stays when empty, so every label keeps one width. */}
+              <span className="flex w-4 shrink-0 items-center justify-center text-accent">
+                {chosen && <Check size={16} weight="bold" aria-hidden />}
+              </span>
             </button>
           );
         })}

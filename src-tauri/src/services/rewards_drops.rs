@@ -31,7 +31,7 @@ pub struct RewardsDrops {
     /// "No drops in progress match that search." or the plain empty line,
     /// for when `in_progress` is empty.
     pub in_progress_empty: String,
-    /// `Nothing matches "rust".` when a search left all three lists empty
+    /// `Nothing matches “rust”.` when a search left all three lists empty
     /// (the sections are not drawn then); empty otherwise.
     pub no_match: String,
 }
@@ -380,7 +380,7 @@ pub fn build(
     RewardsDrops {
         connected: true,
         query: query.to_string(),
-        no_match: if !query.is_empty() && nothing { format!("Nothing matches \"{query}\".") } else { String::new() },
+        no_match: if !query.is_empty() && nothing { format!("Nothing matches \u{201C}{query}\u{201D}.") } else { String::new() },
         in_progress,
         available,
         earned,
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(view.available[0].game, "Apex");
         assert_eq!(view.in_progress_empty, "No drops in progress match that search.");
         assert_eq!(view.no_match, "");
-        assert_eq!(build(None, &campaigns, "zzz", now()).no_match, "Nothing matches \"zzz\".");
+        assert_eq!(build(None, &campaigns, "zzz", now()).no_match, "Nothing matches “zzz”.");
     }
 
     #[test]

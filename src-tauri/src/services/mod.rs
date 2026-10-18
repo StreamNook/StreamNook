@@ -166,6 +166,7 @@ pub mod twitch_auth_service;
 pub mod twitch_web_gql;
 pub mod twitch_integrity;
 pub mod bits;
+pub mod count_text;
 pub mod twitch_resolver;
 pub mod twitch_limits;
 pub mod token_vault;

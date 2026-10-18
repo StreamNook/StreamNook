@@ -86,7 +86,7 @@ const YouTabIcon: React.FC<{ selected: boolean }> = ({ selected }) => {
 
   // Another account's picture never stands in for yours.
   if (!shown || shown.userId !== userId) {
-    return <UserCircle size={25} weight={selected ? 'fill' : 'regular'} />;
+    return <UserCircle size={24} weight={selected ? 'fill' : 'regular'} />;
   }
   const diameter = selected ? CANVAS - 2 * (RING + GAP) : PLAIN;
   return (
@@ -159,13 +159,13 @@ export const MobileTabBar: React.FC<{
                   active ? 'text-accent' : 'text-textPrimary'
                 }`}
                 aria-current={active ? 'page' : undefined}
-                aria-label={label}
               >
-                {/* The selected pill hugs the glyph, not the whole tab column,
+                {/* Icon over label (Brandon: labels, like the iPhone and
+                    Material 3's navigation bar). The selected pill holds both,
                     leaves the same strip of glass above and below it, and
                     glides between tabs on one shared layoutId, the way the
                     desktop strip's highlight does. */}
-                <span className="relative flex items-center justify-center w-[62px] h-11">
+                <span className="relative flex flex-col items-center justify-center gap-0.5 w-[74px] h-[54px]">
                   {active && (
                     <motion.span
                       layoutId="mobileTabHighlight"
@@ -173,13 +173,14 @@ export const MobileTabBar: React.FC<{
                       transition={{ type: 'spring', stiffness: 350, damping: 30 }}
                     />
                   )}
-                  <span className="relative z-10 flex items-center">
+                  <span className="relative z-10 flex h-[26px] items-center">
                     {id === 'you' ? (
                       <YouTabIcon selected={active} />
                     ) : (
-                      <Icon size={25} weight={active ? 'fill' : 'regular'} />
+                      <Icon size={24} weight={active ? 'fill' : 'regular'} />
                     )}
                   </span>
+                  <span className="relative z-10 text-[12px] font-semibold leading-[14px]">{label}</span>
                 </span>
               </button>
             );

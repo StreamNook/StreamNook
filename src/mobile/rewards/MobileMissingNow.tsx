@@ -159,11 +159,28 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
     <div className="relative pointer-events-none flex items-center gap-3 px-3 py-2">
       <img src={row.image} alt="" className="w-9 h-9 object-contain shrink-0" draggable={false} />
       <div className="flex-1 min-w-0">
+        {/* The chip and the time ride the title line as one group, so they
+            share a center whether or not a note line follows. */}
         <div className="flex items-center gap-1.5 min-w-0">
           <span aria-hidden className="min-w-[3.5rem] flex-1 text-[13px] font-medium text-textPrimary truncate">
             {row.title}
           </span>
-          <EarnPill chips={row.chips} iconsOnly={row.icons_only} title={row.title} />
+          <div className="flex shrink-0 items-center gap-3">
+            <EarnPill chips={row.chips} iconsOnly={row.icons_only} title={row.title} />
+            {row.time_left && (
+              // Closing within a day is the one time worth raising a voice.
+              // Fixed-width digits and a set width keep every row's time on
+              // one right edge.
+              <span
+                aria-hidden
+                className={`min-w-[52px] text-right text-[11px] font-medium tabular-nums whitespace-nowrap ${
+                  row.urgent ? 'text-warning' : 'text-textSecondary'
+                }`}
+              >
+                {row.time_left}
+              </span>
+            )}
+          </div>
         </div>
         {(row.random_note || row.channels_note) && (
           <div className="mt-0.5 flex items-center gap-2 min-w-0" aria-hidden>
@@ -182,15 +199,6 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
           </div>
         )}
       </div>
-      {row.time_left && (
-        // Closing within a day is the one time worth raising a voice.
-        <span
-          aria-hidden
-          className={`text-[11px] font-medium shrink-0 ${row.urgent ? 'text-warning' : 'text-textSecondary'}`}
-        >
-          {row.time_left}
-        </span>
-      )}
     </div>
   </div>
 );
@@ -243,7 +251,7 @@ export function MobileMissingNow({ missing, onOpen }: { missing: MissingNow; onO
             <MissingRowItem key={row.key} row={row} onOpen={onOpen} />
           ))}
           {missing.rows.length > COLLAPSED_ROWS && (
-            <button onClick={() => setExpanded((v) => !v)} className="self-start px-1 py-1 text-[12px] font-medium text-accent">
+            <button onClick={() => setExpanded((v) => !v)} className="self-start py-1 text-[12px] font-medium text-accent">
               {expanded ? 'Show fewer' : `Show all ${missing.rows.length}`}
             </button>
           )}
