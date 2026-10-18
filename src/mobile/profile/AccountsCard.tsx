@@ -20,8 +20,9 @@ import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { Button } from '../ui/Button';
 import { usePicksStore } from './picksStore';
-import { BrandMark, BrandTile } from './IdentityParts';
+import { BrandMark } from './IdentityParts';
 import { SEVENTV_BLUE, SEVENTV_INK } from './identity';
 import type { AvatarPick } from '../../types/profileView';
 
@@ -44,6 +45,13 @@ function useArmed(ms = 3000): [boolean, () => boolean] {
   return [armed, tap];
 }
 
+// glass-exempt: every account picture sits on this disc, the theme's raised
+// surface made solid, so a picture with transparent parts never floats over the
+// card and an empty one is still a circle.
+const DISC_STYLE: React.CSSProperties = {
+  background: 'linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background)',
+};
+
 /** Avatar with the platform's mark pinned to its corner. */
 const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undefined; sevenTvId?: string | null }> = ({
   provider,
@@ -61,7 +69,7 @@ const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undef
         draggable={false}
       />
     ) : (
-      <div className="w-11 h-11 rounded-full bg-surface flex items-center justify-center">
+      <div className="w-11 h-11 rounded-full flex items-center justify-center" style={DISC_STYLE}>
         <ProviderMark provider={provider} size={20} />
       </div>
     )}
@@ -75,29 +83,35 @@ const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undef
 );
 
 /** The 7TV row's picture: your 7TV picture with 7TV's mark on a disc at its
- *  corner, or the mark alone in a tile of 7TV's blue when you have none. */
+ *  corner, or the mark alone on the disc when you have none. */
 const SevenTvAccountPicture: React.FC<{ picture: AvatarPick | null | undefined }> = ({ picture }) => {
   const [failedFor, setFailedFor] = useState<string | null>(null);
   if (picture && failedFor !== picture.still) {
     return (
       <div className="relative shrink-0">
-        <img
-          src={picture.animated ?? picture.still}
-          alt=""
-          draggable={false}
-          className="w-11 h-11 rounded-full object-cover"
-          onError={(e) => {
-            if (picture.animated && e.currentTarget.src !== picture.still) e.currentTarget.src = picture.still;
-            else setFailedFor(picture.still);
-          }}
-        />
+        <span className="block w-11 h-11 rounded-full overflow-hidden" style={DISC_STYLE}>
+          <img
+            src={picture.animated ?? picture.still}
+            alt=""
+            draggable={false}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              if (picture.animated && e.currentTarget.src !== picture.still) e.currentTarget.src = picture.still;
+              else setFailedFor(picture.still);
+            }}
+          />
+        </span>
         <span className="absolute -bottom-0.5 -right-1 w-[17px] h-[17px] rounded-full bg-tertiary flex items-center justify-center">
           <BrandMark brand="seventv" size={9} />
         </span>
       </div>
     );
   }
-  return <BrandTile brand="seventv" color={SEVENTV_BLUE} />;
+  return (
+    <div className="w-11 h-11 shrink-0 rounded-full flex items-center justify-center" style={DISC_STYLE}>
+      <BrandMark brand="seventv" size={13} />
+    </div>
+  );
 };
 
 const SignOutButton: React.FC<{ armed: boolean; disabled?: boolean; onTap: () => void; label?: string }> = ({
@@ -105,22 +119,17 @@ const SignOutButton: React.FC<{ armed: boolean; disabled?: boolean; onTap: () =>
   disabled,
   onTap,
   label = 'Sign out',
-}) => (
-  <button
-    onClick={onTap}
-    disabled={disabled}
-    className="sn-touch shrink-0 flex items-center disabled:opacity-50"
-  >
-    {/* The tap target stays full size; the pill inside is what you see. */}
-    <span
-      className={`px-3 py-1.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition-colors ${
-        armed ? 'bg-error/15 text-error' : 'glass-button text-textSecondary'
-      }`}
-    >
-      {armed ? 'Confirm' : label}
-    </span>
-  </button>
-);
+}) =>
+  // Armed, the same row capsule in the error color.
+  armed ? (
+    <Button size="row" kind="brand" onClick={onTap} disabled={disabled} className="whitespace-nowrap bg-error/15 text-error">
+      Confirm
+    </Button>
+  ) : (
+    <Button size="row" onClick={onTap} disabled={disabled} className="whitespace-nowrap">
+      {label}
+    </Button>
+  );
 
 export const AccountsCard: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
@@ -224,18 +233,16 @@ export const AccountsCard: React.FC = () => {
           />
         ) : sevenTv ? (
           // 7TV's own colors, so it reads as connecting WITH 7TV.
-          <button
+          <Button
+            size="row"
+            kind="brand"
             onClick={() => void connectSevenTv()}
             disabled={sevenTvConnecting}
-            className="sn-touch shrink-0 flex items-center disabled:opacity-60"
+            className="whitespace-nowrap"
+            style={{ backgroundColor: SEVENTV_BLUE, color: SEVENTV_INK }}
           >
-            <span
-              className="px-3.5 py-1.5 rounded-full text-[12.5px] font-bold whitespace-nowrap"
-              style={{ backgroundColor: SEVENTV_BLUE, color: SEVENTV_INK }}
-            >
-              {sevenTvConnecting ? 'Connecting' : 'Connect'}
-            </span>
-          </button>
+            {sevenTvConnecting ? 'Connecting' : 'Connect'}
+          </Button>
         ) : null}
       </div>
 
@@ -271,19 +278,19 @@ export const AccountsCard: React.FC = () => {
             />
           </>
         ) : (
-          // Kick's own colors, so it reads as signing in WITH Kick.
-          <button
+          // Kick's own colors, so it reads as signing in WITH Kick. The mark is
+          // inked black like the label: Kick's green mark vanishes on its green.
+          <Button
+            size="row"
+            kind="brand"
+            brand="kick"
+            icon={<ProviderMark provider="kick" size={14} className="[&_img]:brightness-0" />}
             onClick={() => void connect('kick')}
             disabled={kick.busy}
-            className="sn-touch shrink-0 flex items-center disabled:opacity-60"
+            className="whitespace-nowrap"
           >
-            <span
-              className="px-3.5 py-1.5 rounded-full text-[12.5px] font-bold text-black whitespace-nowrap"
-              style={{ backgroundColor: PROVIDERS.kick.color }}
-            >
-              {kick.busy ? 'Signing in' : 'Sign in with Kick'}
-            </span>
-          </button>
+            {kick.busy ? 'Signing in' : 'Sign in with Kick'}
+          </Button>
         )}
       </div>
     </div>
