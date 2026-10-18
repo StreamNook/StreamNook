@@ -147,6 +147,7 @@ import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { lastLiveLabel } from '../utils/lastLive';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
+import { parseTimeoutSeconds } from '../utils/timeoutDuration';
 
 /** Lets ChatWidget render against a caller-supplied channel instead of the
  *  AppStore's currentStream — same pattern as the MultiNook synthesis branch
@@ -3300,7 +3301,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           );
       } catch (err) {
         Logger.error('[Provider] moderation command failed:', err);
-        useAppStore.getState().addToast('Moderation action failed', 'error');
+        const why = err instanceof Error ? err.message : String(err);
+        useAppStore.getState().addToast(why ? `Moderation action failed: ${why}` : 'Moderation action failed', 'error');
       }
     };
 
@@ -3311,8 +3313,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         await runModeration('ban', null);
         return;
       case 'timeout': {
-        const secs = Number(args[1]);
-        await runModeration('timeout', Number.isFinite(secs) && secs > 0 ? secs : 600);
+        // No length means Twitch's default ten minutes; a length that is not one is said so,
+        // never quietly turned into ten minutes.
+        const secs = args[1] === undefined ? 600 : parseTimeoutSeconds(args[1]);
+        if (secs === null) {
+          notice(`"${args[1]}" isn't a timeout length. Use seconds or 30s, 10m, 1h, 2d, 1w.`);
+          return;
+        }
+        await runModeration('timeout', secs);
         return;
       }
       // Clears their messages with the shortest timeout the platform has
