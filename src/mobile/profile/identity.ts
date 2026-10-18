@@ -4,7 +4,7 @@ import {
   DEFAULT_COSMETIC_SLUG,
   resolveCosmeticAsset,
 } from '../../components/cosmeticAssets';
-import { getAtmosphere } from '../../services/atmospheres';
+import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
 import type {
   ExternalPickerView,
   SnMemberBadge,
@@ -80,8 +80,8 @@ export function chatAtmosphereId(sn: StreamNookPickerView | null): string | null
   return sn && sn.show_chat_toggle && sn.chat_atmosphere ? sn.theme : null;
 }
 
-/** A theme id's band swatch; the Default and paint looks have none. */
-export function bandSwatch(theme: string | null | undefined): string | null {
+/** A theme id's look for the identity glow; the Default and paint looks have none. */
+export function glowAtmosphere(theme: string | null | undefined): Atmosphere | null {
   if (!theme || theme === 'tier' || theme === 'paint') return null;
-  return getAtmosphere(theme)?.swatch ?? null;
+  return getAtmosphere(theme);
 }
