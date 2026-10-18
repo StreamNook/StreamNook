@@ -173,6 +173,9 @@ struct ProfileSheet: View {
                         .foregroundStyle(SN.textMuted)
                         .padding(.top, 16)
                 }
+                if let member = sheet?.memberProfile {
+                    MemberSections(profile: member).padding(.top, 20)
+                }
                 recent.padding(.top, 20)
             }
             .padding(.horizontal, 16)
@@ -230,9 +233,12 @@ struct ProfileSheet: View {
 
     private func badgeGroup(_ group: ProfileBadgeGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ProfileSectionHeader(PlatformMark.Platform(named: group.title) == nil ? group.title : "Badges",
-                                 platform: PlatformMark.Platform(named: group.title),
-                                 detail: "\(group.badges.count)")
+            // A brand's group sits under its real mark (StreamNook's is the Penrose); "Relics"
+            // and "Chat clients" keep their words.
+            let platform = PlatformMark.Platform(named: group.title)
+            let streamNook = group.title == "StreamNook"
+            ProfileSectionHeader(platform == nil && !streamNook ? group.title : "Badges", platform: platform,
+                                 streamNook: streamNook, detail: "\(group.badges.count)")
             FlowLayout(spacing: 8) {
                 ForEach(group.badges) { badge in
                     ProfileBadgeButton(badge: badge) { model.picked = badge }
