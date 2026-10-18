@@ -39,6 +39,8 @@ pub fn frontend_owned_defaults() -> Value {
         "clip_chat_replay": true,
         "auto_claim_points_watching": true,
         "oled_accent": "#a064ff",
+        // Empty follows the device language (services/browse_languages.rs).
+        "discovery_languages": [],
         "fullscreen_chat": {
             "phone_layout": "overlay",
             "opacity": 55,
