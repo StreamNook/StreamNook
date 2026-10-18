@@ -6,14 +6,16 @@
 // letting it show through the glass.
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Compass, Heart, Package, UserCircle } from 'phosphor-react';
+import { ChatsCircle, Compass, Heart, Package, UserCircle } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from './navStore';
 import { usePicksStore } from './profile/picksStore';
+import { useChatTabsStore } from './chat/chatTabsStore';
 
 const TABS: { id: MobileTab; label: string; Icon: typeof Heart }[] = [
   { id: 'following', label: 'Following', Icon: Heart },
   { id: 'browse', label: 'Browse', Icon: Compass },
+  { id: 'chats', label: 'Chats', Icon: ChatsCircle },
   { id: 'rewards', label: 'Rewards', Icon: Package },
   { id: 'you', label: 'You', Icon: UserCircle },
 ];
@@ -116,16 +118,21 @@ export const MobileTabBar: React.FC<{
   /** The full-screen player covers the shell: keep the bar out of the
    *  compositor entirely rather than blurring a backdrop nobody can see. */
   hidden?: boolean;
-}> = ({ hidden = false }) => {
+  /** The fade of the page's own background under the bar. Off on the Chats
+   *  screen, whose composer sits right above the bar and would fade into it. */
+  floor?: boolean;
+}> = ({ hidden = false, floor = true }) => {
   const activeTab = useMobileNavStore((s) => s.activeTab);
   const setTab = useMobileNavStore((s) => s.setTab);
+  // Unread mentions across your chats, counted by Rust.
+  const mentions = useChatTabsStore((s) => s.mentionTotal);
 
   return (
     <>
       <div
         aria-hidden
         className="sn-tabbar-floor z-[29]"
-        style={{ visibility: hidden ? 'hidden' : undefined }}
+        style={{ visibility: hidden || !floor ? 'hidden' : undefined }}
       />
       <nav
         // The dock glaze: clear glass with a light blur and a thin black film,
@@ -165,7 +172,7 @@ export const MobileTabBar: React.FC<{
                     leaves the same strip of glass above and below it, and
                     glides between tabs on one shared layoutId, the way the
                     desktop strip's highlight does. */}
-                <span className="relative flex flex-col items-center justify-center gap-0.5 w-[74px] h-[54px]">
+                <span className="relative flex flex-col items-center justify-center gap-0.5 w-full max-w-[74px] h-[54px]">
                   {active && (
                     <motion.span
                       layoutId="mobileTabHighlight"
@@ -178,6 +185,14 @@ export const MobileTabBar: React.FC<{
                       <YouTabIcon selected={active} />
                     ) : (
                       <Icon size={24} weight={active ? 'fill' : 'regular'} />
+                    )}
+                    {id === 'chats' && mentions > 0 && (
+                      <span
+                        className="absolute -top-1 left-[15px] min-w-[16px] h-4 px-1 rounded-full bg-error text-white text-[10.5px] font-semibold leading-4 text-center tabular-nums"
+                        aria-label={`${mentions} unread mentions`}
+                      >
+                        {mentions > 99 ? '99+' : mentions}
+                      </span>
                     )}
                   </span>
                   <span

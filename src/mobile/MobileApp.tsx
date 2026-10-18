@@ -27,6 +27,8 @@ import { FollowingScreen } from './screens/FollowingScreen';
 import { BrowseScreen } from './screens/BrowseScreen';
 import { YouScreen } from './screens/YouScreen';
 import { WatchScreen } from './screens/WatchScreen';
+import { ChatsScreen } from './screens/ChatsScreen';
+import { useChatsLifecycle } from './chat/useChatsLifecycle';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
@@ -38,7 +40,7 @@ import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
 
-const TAB_ORDER = ['following', 'browse', 'rewards', 'you'] as const;
+const TAB_ORDER = ['following', 'browse', 'chats', 'rewards', 'you'] as const;
 
 const MobileApp: React.FC = () => {
   useThemeBoot();
@@ -53,6 +55,9 @@ const MobileApp: React.FC = () => {
   // Shared with the desktop shell: the watched stream's viewer count is written
   // once at playback start and never refreshed without this.
   useCurrentStreamStats();
+  // The chats outside any one screen: the stream tab, the saved chats, and
+  // leaving the rooms after a while in the background.
+  useChatsLifecycle();
 
   const isBooting = useAppStore((s) => s.isBooting);
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);
@@ -156,13 +161,14 @@ const MobileApp: React.FC = () => {
               >
                 {activeTab === 'following' && <FollowingScreen />}
                 {activeTab === 'browse' && <BrowseScreen />}
+                {activeTab === 'chats' && <ChatsScreen />}
                 {activeTab === 'rewards' && <RewardsScreen />}
                 {activeTab === 'you' && <YouScreen />}
               </motion.div>
             </AnimatePresence>
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
-          <MobileTabBar hidden={shellCovered} />
+          <MobileTabBar hidden={shellCovered} floor={activeTab !== 'chats'} />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />

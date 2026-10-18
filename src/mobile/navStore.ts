@@ -8,7 +8,7 @@ import { useAppStore } from '../stores/AppStore';
 import { startTab } from './phonePrefs';
 import type { TwitchCategory } from '../types';
 
-export type MobileTab = 'following' | 'browse' | 'rewards' | 'you';
+export type MobileTab = 'following' | 'browse' | 'chats' | 'rewards' | 'you';
 
 /** Where an opened settings page should land: a section by its heading, and
  *  the row inside it when the page draws one by that title. */

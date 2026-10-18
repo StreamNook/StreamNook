@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, BookmarkSimple, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -15,6 +15,7 @@ import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
+import { useChatTabsStore } from './chatTabsStore';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -70,6 +71,13 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onBrowseCommands,
   onCloseChat,
 }) => {
+  // The stream's own chat closes with the player unless you keep it; every
+  // other open chat is already one of yours.
+  const streamTab = useChatTabsStore((s) => {
+    const t = s.tabs.find((tab) => tab.channel === s.activeChannel);
+    return t?.pinnedToStream ? t : null;
+  });
+  const keep = useChatTabsStore((s) => s.keep);
   const row =
     'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70 disabled:opacity-45';
   const iconBox = 'flex w-6 h-6 shrink-0 items-center justify-center';
@@ -227,6 +235,20 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           </span>
           <span className="flex-1 text-left">Reload this chat</span>
         </button>
+
+        {streamTab && (
+          <button onClick={() => keep(streamTab.channel, !streamTab.kept)} className={row}>
+            <span className={iconBox}>
+              <BookmarkSimple
+                size={ICON}
+                weight={streamTab.kept ? 'fill' : 'regular'}
+                className={streamTab.kept ? 'text-accent' : 'text-textSecondary'}
+              />
+            </span>
+            <span className="flex-1 text-left">Keep this chat</span>
+            <span className="text-[12px] text-textMuted">{streamTab.kept ? 'On' : 'Off'}</span>
+          </button>
+        )}
 
         {onBrowseCommands && (
           <button

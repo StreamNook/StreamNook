@@ -55,6 +55,20 @@ export function setBarsLightContent(light: boolean): void {
   }
 }
 
+// Who wants the screen on right now: the playing stream, the Chats screen.
+// The flag is one window-wide switch, so each asks through `holdScreenOn` and
+// it stays on while anyone still holds it.
+const screenHolds = new Set<string>();
+
+/** Keep the screen on while `on`, for `owner`; off once nobody holds it. */
+export function holdScreenOn(owner: string, on: boolean): void {
+  const before = screenHolds.size > 0;
+  if (on) screenHolds.add(owner);
+  else screenHolds.delete(owner);
+  const after = screenHolds.size > 0;
+  if (before !== after) setKeepScreenOn(after);
+}
+
 export function setKeepScreenOn(on: boolean): void {
   try {
     bridge()?.setKeepScreenOn?.(on);
