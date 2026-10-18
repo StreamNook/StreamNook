@@ -109,6 +109,14 @@ body:has(.sn-mobile) .glass-input:focus {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
+/* A sheet's content once it has scrolled under the handle (MobileSheet adds
+   it): the top 24px fade out, so nothing meets the handle with a hard edge.
+   The iPhone's fitted sheets fade the same way. */
+.sn-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+
 /* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
    the chat wash at 70%, faded in from both sides and down from just under the
    top to nothing well before the bottom, so no edge of the art ever shows.
