@@ -168,7 +168,7 @@ import Testing
         #expect(throws: CoreFailure.self) { _ = try fake.answer("vote_on_poll", ["pollId": poll.pollID, "choiceId": "a"]) }
         let endedPush = try decode(PollPush.self, fake.pollPush(channel: "4242", .ended))
         let ended = try #require(endedPush.view)
-        #expect(ended.phase == "ended" && ended.badge == "Ended" && ended.resultLine == "Malenia won · 58%")
+        #expect(ended.phase == "ended" && ended.badge == "Final" && ended.resultLine == "Malenia won · 58%")
         #expect(ended.choices.first?.winner == true)
         #expect(try decode(PollPush.self, fake.pollPush(channel: "4242", .off)).view == nil)
 

@@ -197,10 +197,10 @@ public final class FakeLiveVotes: Sendable {
             "channel_id": channel, "poll_id": "fake-poll", "title": "Which boss next?",
             "phase": ended ? "ended" : "open",
             "deadline_ms": ended ? NSNull() : deadline as Any,
-            "badge": ended ? "Ended" as Any : NSNull(),
+            "badge": ended ? "Final" as Any : NSNull(),
             "choices": choices, "can_vote": phase == .open,
             "my_choice_id": vote.map { $0 as Any } ?? NSNull(),
-            "footer": mine.map { "You voted \($0)" } ?? (ended ? "Final results" : "Tap a choice to vote"),
+            "footer": mine.map { "You voted \($0)" } ?? (ended ? "Voting is closed" : "Tap a choice to vote"),
             "voters_line": "\(Self.grouped(Int64(voters))) voters",
             "result_line": ended ? "Malenia won · 58%" as Any : NSNull(),
         ] as [String: Any]
