@@ -1366,7 +1366,10 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             } else {
                 "Chat stayed connected because another chat window is still using it"
             }),
-            Err(e) => log::warn!("[Command Handler] Disconnect failed: {e}"),
+            Err(e) => {
+                log::warn!("[Command Handler] Disconnect failed: {e}");
+                o.err(format!("Couldn't disconnect from chat: {e}"));
+            }
         },
         "mods" | "vips" => {
             let chatters = b.invoke("get_chatters_by_role", json!({ "channelLogin": login })).await?;
