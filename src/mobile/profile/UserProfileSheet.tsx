@@ -396,7 +396,10 @@ const ProfileBody: React.FC<{
 
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
-      <div className="flex flex-col pb-2">
+      {/* No scroll anchoring: opening a badge group grows the sheet below the
+          tap, and Chromium would otherwise pin something under it and slide
+          everything above out of place. */}
+      <div className="flex flex-col pb-2 [overflow-anchor:none]">
         {/* Their Atmosphere glowing behind the picture and name across the
             sheet's full width, else a faint glow of their name color. */}
         <div className="relative -mx-4 px-4 pt-3">
