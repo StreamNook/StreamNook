@@ -209,15 +209,13 @@ struct ProfileSheet: View {
                 // top emotes and accolades.
                 if let member = sheet?.memberProfile {
                     VStack(alignment: .leading, spacing: 0) {
-                        if !member.relics.isEmpty {
-                            badgeGroup("Relics", badges: member.relics).padding(.top, 20)
-                        }
+                        badgeGroup("Relics", badges: member.relics)
                         MemberSections(profile: member).padding(.top, 20)
                     }
                     .id("member")
                 }
                 ForEach(sheet?.groups ?? []) { group in
-                    badgeGroup(group.title, badges: group.badges).padding(.top, 20).id(group.title)
+                    badgeGroup(group.title, badges: group.badges).id(group.title)
                 }
                 if sheet?.hasNoBadges == true && model.medal == nil {
                     Text("No badges to show for this user.")
@@ -277,44 +275,55 @@ struct ProfileSheet: View {
 
     // MARK: Badges
 
-    /// One group: its first two rows, then "Show all N" opening the rest in place with "Show
-    /// fewer" at the end (a group of 16 or fewer shows whole). A tapped badge's panel opens under
-    /// its own group. Rust serves every badge; the cap is only how many draw.
-    private func badgeGroup(_ title: String, badges: [ProfileBadge]) -> some View {
-        let capped = badges.count > ProfileSheetModel.collapsedBadges
-        let open = model.expanded.contains(title)
-        let shown = capped && !open ? Array(badges.prefix(ProfileSheetModel.collapsedBadges)) : badges
-        // A brand's group sits under its real mark (StreamNook's is the Penrose); "Relics" and
-        // "Chat clients" keep their words.
-        let platform = PlatformMark.Platform(named: title)
-        let streamNook = title == "StreamNook"
-        return VStack(alignment: .leading, spacing: 8) {
-            ProfileSectionHeader(platform == nil && !streamNook ? title : "Badges", platform: platform,
-                                 streamNook: streamNook, detail: "\(badges.count)")
-            FlowLayout(spacing: 8) {
-                ForEach(shown) { badge in
-                    ProfileBadgeButton(badge: badge) { model.pick(badge, in: title) }
+    /// One group, 20 pt under what comes before it: its first two rows, then "Show all N" opening
+    /// the rest in place with "Show fewer" at the end (a group of 16 or fewer shows whole). A
+    /// tapped badge's panel opens under its own group. Rust serves every badge; the cap is only
+    /// how many draw. A badge whose every image failed drops out (the grid keeps no hole), and a
+    /// group left with none goes with its heading and its gap.
+    @ViewBuilder
+    private func badgeGroup(_ title: String, badges all: [ProfileBadge]) -> some View {
+        let badges = all.filter { !model.failed.contains($0.id) }
+        if !badges.isEmpty {
+            let capped = badges.count > ProfileSheetModel.collapsedBadges
+            let open = model.expanded.contains(title)
+            let shown = capped && !open ? Array(badges.prefix(ProfileSheetModel.collapsedBadges)) : badges
+            // A brand's group sits under its real mark (StreamNook's is the Penrose); "Relics" and
+            // "Chat clients" keep their words.
+            let platform = PlatformMark.Platform(named: title)
+            let streamNook = title == "StreamNook"
+            VStack(alignment: .leading, spacing: 8) {
+                ProfileSectionHeader(platform == nil && !streamNook ? title : "Badges", platform: platform,
+                                     streamNook: streamNook, detail: "\(badges.count)")
+                // Eight across on every phone, so two rows are always the first 16.
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .leading), count: 8),
+                          alignment: .leading, spacing: 8) {
+                    ForEach(shown) { badge in
+                        ProfileBadgeButton(badge: badge, onFailure: { model.failed.insert(badge.id) }) {
+                            model.pick(badge, in: title)
+                        }
+                    }
+                }
+                if capped {
+                    // Rewards' control: quiet accent words 8 pt under the rows, on a 44 pt target
+                    // that reaches into the gaps around them without taking layout room.
+                    Button { model.toggle(title, badges: badges) } label: {
+                        Text(open ? "Show fewer" : "Show all \(badges.count)")
+                            .font(.sn(12, 500))
+                            .foregroundStyle(SN.accent)
+                            .padding(.top, 8)
+                            .padding(.bottom, 22)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, -8)
+                    .padding(.bottom, -22)
+                }
+                if let picked = model.picked, model.pickedGroup == title {
+                    pickedPanel(picked).padding(.top, 4)
                 }
             }
-            if capped {
-                // Rewards' control: quiet accent words 8 pt under the rows, on a 44 pt target that
-                // reaches into the gaps around them without taking layout room.
-                Button { model.toggle(title, badges: badges) } label: {
-                    Text(open ? "Show fewer" : "Show all \(badges.count)")
-                        .font(.sn(12, 500))
-                        .foregroundStyle(SN.accent)
-                        .padding(.top, 8)
-                        .padding(.bottom, 22)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.top, -8)
-                .padding(.bottom, -22)
-            }
-            if let picked = model.picked, model.pickedGroup == title {
-                pickedPanel(picked).padding(.top, 4)
-            }
+            .padding(.top, 20)
         }
     }
 
