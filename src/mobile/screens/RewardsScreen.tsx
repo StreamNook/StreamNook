@@ -11,12 +11,13 @@
 // grant on the drops client.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowSquareOut, Broadcast, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
+import { ArrowSquareOut, Broadcast, CalendarBlank, CaretRight, CheckCircle, Gift, Warning } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { PullToRefresh } from '../ui/PullToRefresh';
+import { SearchField } from '../ui/SearchField';
 import { MobileSheet } from '../ui/MobileSheet';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery } from '../rewards/badgeGalleryStore';
@@ -421,14 +422,16 @@ export const RewardsScreen: React.FC = () => {
                           className={`w-11 h-11 object-contain ${lit ? '' : 'opacity-45 grayscale'}`}
                           draggable={false}
                         />
+                        {/* Two lines reserved whether the name needs them or
+                            not, so the status word lines up across a row. */}
                         <span
-                          className={`text-[10.5px] text-center line-clamp-2 leading-tight ${
+                          className={`w-full min-h-[28px] text-[11px] text-center line-clamp-2 leading-[14px] ${
                             lit ? 'text-textPrimary' : 'text-textMuted'
                           }`}
                         >
                           {tile.title}
                         </span>
-                        <span className={`text-[9.5px] font-semibold leading-none ${wordColor(tile)}`}>{tile.word}</span>
+                        <span className={`text-[11px] font-semibold leading-none ${wordColor(tile)}`}>{tile.word}</span>
                       </button>
                     </SettleIn>
                   );
@@ -465,24 +468,12 @@ export const RewardsScreen: React.FC = () => {
             <>
               {/* Searching by game, since that is how anyone thinks about
                   drops. Campaign names are matched too. */}
-              <div className="relative mt-1 mb-1">
-                <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted z-10" />
-                <input
-                  value={dropsQuery}
-                  onChange={(e) => changeQuery(e.target.value)}
-                  placeholder="Search games or campaigns"
-                  className="glass-input w-full rounded-lg pl-9 pr-9 py-2.5 text-[14px] text-textPrimary placeholder:text-textMuted outline-none"
-                />
-                {dropsQuery && (
-                  <button
-                    onClick={() => changeQuery('')}
-                    aria-label="Clear search"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-textMuted z-10"
-                  >
-                    <X size={15} />
-                  </button>
-                )}
-              </div>
+              <SearchField
+                value={dropsQuery}
+                onChange={changeQuery}
+                placeholder="Search games or campaigns"
+                className="mt-1 mb-1"
+              />
 
               {drops.no_match ? (
                 // A search that found nothing anywhere says so once, rather

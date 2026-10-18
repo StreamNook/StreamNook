@@ -87,10 +87,10 @@ const Surface: React.FC<SurfaceProps> = ({ onClose, anchor, width, align = 'star
         role={role}
         aria-label={label}
         tabIndex={-1}
-        className="sn-popover absolute rounded-xl p-1 outline-none"
-        // .sn-popover eases opacity and transform in CSS; left on, it would
-        // trail every frame framer writes and smear the open.
-        style={{ width, transitionProperty: 'background-color, box-shadow, border-color' }}
+        // The phone's one menu surface, near-opaque and solid at Glassiness 0,
+        // for the sort menu and the tap-open notes alike.
+        className="sn-menu absolute outline-none"
+        style={{ width }}
         initial={{ opacity: 0, scale: 0.94 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.94 }}
