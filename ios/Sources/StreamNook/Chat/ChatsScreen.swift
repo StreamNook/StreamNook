@@ -30,7 +30,9 @@ struct ChatsScreen: View {
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rooms.tabs.isEmpty {
-                empty
+                // No chat open: the tab is the picker itself.
+                ChatPicker(rooms: rooms)
+                    .padding(.top, 8)
             } else {
                 VStack(spacing: 0) {
                     ChatTabStrip(rooms: rooms, trailing: AnyView(controls))
@@ -101,40 +103,6 @@ struct ChatsScreen: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Add a chat")
         }
-    }
-
-    private var empty: some View {
-        VStack(spacing: 0) {
-            Image(systemName: Symbol.chats)
-                .font(.system(size: 20))
-                .foregroundStyle(SN.textSecondary)
-                .frame(width: 48, height: 48)
-                .snGlass(Circle())
-                .padding(.bottom, 12)
-            Text("No chats open")
-                .font(.sn(16, 600))
-                .foregroundStyle(SN.textPrimary)
-            Text("Open a channel's chat to read it here without watching. Your chats stay open between launches.")
-                .font(.sn(13))
-                .foregroundStyle(SN.textMuted)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 280)
-                .padding(.top, 4)
-                .padding(.bottom, 16)
-            Button {
-                rooms.addOpen = true
-            } label: {
-                Label("Add a chat", systemImage: "plus")
-                    .font(.sn(14, 500))
-                    .foregroundStyle(SN.textPrimary)
-                    .padding(.horizontal, 16)
-                    .frame(height: 40)
-                    .snGlass(Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// The room on screen as the player's start reads it; the core fills what a tab does not know.

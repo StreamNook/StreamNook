@@ -220,3 +220,20 @@ import Testing
         #expect(WebCookie.site(ofOrigin: "https://kick.com") == "kick.com")
     }
 }
+
+@Suite struct ChatPickerDecodingTests {
+    @Test func offlineRowsSayWhenTheyWereLastLive() throws {
+        let json = """
+        {"live":[{"provider":"twitch","key":"a","user_login":"a","user_id":"1","user_name":"A","profile_image_url":null,
+        "is_live":true,"viewer_count":120,"game_name":"Art","last_live":null,"open":false}],
+        "offline":[{"provider":"kick","key":"kick:b","user_login":"b","user_id":"","user_name":"B","profile_image_url":null,
+        "is_live":false,"viewer_count":null,"game_name":null,"last_live":null,"open":true}],"mixed_platforms":true}
+        """
+        let lists = try JSONDecoder().decode(ChatPickerLists.self, from: Data(json.utf8))
+        #expect(lists.live.first?.subline == "Art")
+        #expect(lists.live.first?.viewerCount == 120)
+        #expect(lists.offline.first?.subline == "Offline")
+        #expect(lists.offline.first?.viewerCount == 0)
+        #expect(lists.mixedPlatforms)
+    }
+}

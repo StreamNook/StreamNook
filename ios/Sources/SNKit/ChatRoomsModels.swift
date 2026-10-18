@@ -128,13 +128,32 @@ public struct ChatRoomRow: Codable, Sendable, Equatable, Hashable, Identifiable 
     public var gameName: String
     /// From a pasted link, not a search.
     public var pasted: Bool
+    /// When an offline follow last went live (RFC 3339), from the picker's lists.
+    public var lastLive: String?
 
     public var id: String { key }
 
     enum CodingKeys: String, CodingKey {
         case provider, key, userLogin = "user_login", userID = "user_id", userName = "user_name"
         case profileImageURL = "profile_image_url", isLive = "is_live", viewerCount = "viewer_count"
-        case gameName = "game_name", pasted
+        case gameName = "game_name", pasted, lastLive = "last_live"
+    }
+
+    /// Search rows and the picker's rows both: the picker leaves an offline row's audience and
+    /// category out.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? "twitch"
+        key = try c.decode(String.self, forKey: .key)
+        userLogin = try c.decode(String.self, forKey: .userLogin)
+        userID = try c.decodeIfPresent(String.self, forKey: .userID) ?? ""
+        userName = try c.decodeIfPresent(String.self, forKey: .userName) ?? ""
+        profileImageURL = try c.decodeIfPresent(String.self, forKey: .profileImageURL)
+        isLive = try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false
+        viewerCount = try c.decodeIfPresent(Int.self, forKey: .viewerCount) ?? 0
+        gameName = try c.decodeIfPresent(String.self, forKey: .gameName) ?? ""
+        pasted = try c.decodeIfPresent(Bool.self, forKey: .pasted) ?? false
+        lastLive = try c.decodeIfPresent(String.self, forKey: .lastLive)
     }
 
     public init(provider: String = "twitch", key: String, userLogin: String, userID: String = "", userName: String,
@@ -160,11 +179,31 @@ public struct ChatRoomRow: Codable, Sendable, Equatable, Hashable, Identifiable 
                   isLive: s.isLive ?? true, viewerCount: s.viewerCount, gameName: s.gameName)
     }
 
-    /// The line under the name: the game (or "Live") while live, "Offline" when not.
+    /// The line under the name: the game (or "Live") while live, when it was last live, else
+    /// "Offline".
     public var subline: String {
         if pasted { return "Open this Kick chat" }
         if isLive { return gameName.isEmpty ? "Live" : gameName }
-        return "Offline"
+        return RoomText.lastLive(lastLive) ?? "Offline"
+    }
+}
+
+/// The "add a chat" picker's lists (Rust `chat_picker`): live follows in the Following order, then
+/// offline follows, most recently live first.
+public struct ChatPickerLists: Codable, Sendable, Equatable {
+    public var live: [ChatRoomRow]
+    public var offline: [ChatRoomRow]
+    /// The lists span platforms, so rows wear a platform mark.
+    public var mixedPlatforms: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case live, offline, mixedPlatforms = "mixed_platforms"
+    }
+
+    public init(live: [ChatRoomRow] = [], offline: [ChatRoomRow] = [], mixedPlatforms: Bool = false) {
+        self.live = live
+        self.offline = offline
+        self.mixedPlatforms = mixedPlatforms
     }
 }
 

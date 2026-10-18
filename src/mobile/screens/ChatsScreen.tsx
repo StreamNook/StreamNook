@@ -9,12 +9,13 @@
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChatsCircle, Play, Plus } from 'phosphor-react';
+import { Play, Plus } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
 import { MobileChatPane } from '../chat/MobileChatPane';
 import { ChatTabStrip, useActiveChatChannelId } from '../chat/ChatTabStrip';
 import { AddChatSheet } from '../chat/AddChatSheet';
+import { ChatPicker } from '../chat/ChatPicker';
 import { useChatTabsStore, type ChatTab } from '../chat/chatTabsStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
@@ -133,21 +134,9 @@ export const ChatsScreen: React.FC = () => {
       }
     >
       {tabs.length === 0 ? (
-        <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-8 text-center sn-tabbar-clearance">
-          <span className="w-12 h-12 mb-3 rounded-full chrome-glaze chrome-glaze--flat flex items-center justify-center text-textSecondary">
-            <ChatsCircle size={24} />
-          </span>
-          <div className="text-[16px] font-semibold text-textPrimary">No chats open</div>
-          <p className="mt-1 mb-4 text-[13px] text-textMuted leading-snug max-w-[280px]">
-            Open a channel's chat to read it here without watching. Your chats stay open between launches.
-          </p>
-          <button
-            onClick={openAdd}
-            className="sn-touch glass-button flex items-center gap-1.5 rounded-full px-4 h-10 text-[14px] font-medium text-textPrimary"
-          >
-            <Plus size={14} weight="bold" />
-            Add a chat
-          </button>
+        // No chat open: the tab is the picker itself.
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 [scrollbar-width:none]">
+          <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 64px) + 16px)" />
         </div>
       ) : (
         <>
