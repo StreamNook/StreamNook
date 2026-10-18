@@ -151,6 +151,7 @@ struct VoteCardSurface: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .clipped()
             .modifier(StaticPopover(tint: 0.96))
+            .background(SN.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
