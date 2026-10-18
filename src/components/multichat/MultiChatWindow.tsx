@@ -348,19 +348,19 @@ function persistState(
 ) {
   const key = storageKey(windowId);
   if (!key) return;
+  const payload: PersistedWindowState = {
+    channels,
+    layoutMode,
+    showModLogs,
+    modLogsHeight,
+    activityHeight,
+    showActivityFeed,
+    isBlendedMode,
+    isMentionsMode,
+    layoutTree,
+    focusedLeafId,
+  };
   try {
-    const payload: PersistedWindowState = {
-      channels,
-      layoutMode,
-      showModLogs,
-      modLogsHeight,
-      activityHeight,
-      showActivityFeed,
-      isBlendedMode,
-      isMentionsMode,
-      layoutTree,
-      focusedLeafId,
-    };
     localStorage.setItem(key, JSON.stringify(payload));
   } catch (err) {
     Logger.warn('[MultiChatWindow] localStorage write failed:', err);
