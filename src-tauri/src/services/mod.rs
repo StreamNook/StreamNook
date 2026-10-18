@@ -209,6 +209,7 @@ pub mod shared_chat;
 pub mod shared_chat_source;
 pub mod share_link;
 pub mod slash_commands;
+pub mod chat_top_stack;
 pub mod poll_view;
 pub mod predictions;
 pub mod slash_dispatch;
