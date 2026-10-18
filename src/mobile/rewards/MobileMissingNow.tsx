@@ -2,7 +2,7 @@
 // above the badge wall. The strip, its order, its state and every word on it
 // come ready from Rust (`get_badge_wall`, services/badge_wall.rs); this only
 // lays it out at phone density.
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import { Clapperboard, Coins, Dices, Eye, Info, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { CardChip } from '../../components/ui/CardChip';
 import { RewardsPopover } from './RewardsPopover';
@@ -148,7 +148,37 @@ const CatchUpPanel = ({ catchUp }: { catchUp: CatchUp }) => {
  * the earn pill sits above it as its own button: nesting one button in another
  * is invalid and a tap on the pill would also open the sheet.
  */
-const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string) => void }) => (
+/** Narrower than this, a title stops reading; the chips give way first. */
+const MIN_TITLE_PX = 88;
+/** The gaps on the title line: title to chips, chips to time. */
+const LINE_GAPS_PX = 6 + 12;
+
+const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string) => void }) => {
+  // Overflow squeezes in place, in a fixed order: the chips drop their words
+  // and keep their icons, then the title wraps and ends in an ellipsis. Every
+  // row keeps one height and nothing moves under it; the time never wraps.
+  const lineRef = useRef<HTMLDivElement>(null);
+  const chipsRef = useRef<HTMLSpanElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
+  const fullChipsPx = useRef(0);
+  const [squeezed, setSqueezed] = useState(false);
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if (!line || row.chips.length === 0) return;
+    const fit = () => {
+      // Measured while the words show; kept for when they are hidden.
+      if (!squeezed && chipsRef.current) fullChipsPx.current = chipsRef.current.offsetWidth;
+      const room = line.clientWidth - (timeRef.current?.offsetWidth ?? 0) - LINE_GAPS_PX;
+      setSqueezed(room - fullChipsPx.current < MIN_TITLE_PX);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(line);
+    return () => observer.disconnect();
+  }, [squeezed, row.chips, row.time_left]);
+  const hasNote = !!(row.random_note || row.channels_note);
+
+  return (
   <div className="glass-panel relative [&:has(>.sn-missing-open:active)]:opacity-80">
     <button
       type="button"
@@ -158,27 +188,29 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
     />
     <div className="relative pointer-events-none flex items-center gap-3 px-3 py-2">
       <img src={row.image} alt="" className="w-9 h-9 object-contain shrink-0" draggable={false} />
-      <div className="flex-1 min-w-0">
+      {/* One height for every row: two title lines, or one over its note. */}
+      <div className="flex-1 min-w-0 h-9 flex flex-col justify-center">
         {/* The chip and the time ride the title line as one group, so they
             share a center whether or not a note line follows. */}
-        {/* When the chips and the time do not fit beside a readable title (two
-            chips, a narrow phone), they move under it, right-aligned, instead
-            of running past the card's edge. The title wraps to two lines, then
-            an ellipsis. */}
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0">
+        <div ref={lineRef} className="flex items-center gap-1.5 min-w-0">
           <span
             aria-hidden
-            className="min-w-[5rem] flex-1 text-[13px] leading-4 font-medium text-textPrimary line-clamp-2 [overflow-wrap:anywhere]"
+            className={`min-w-0 flex-1 text-[13px] leading-4 font-medium text-textPrimary [overflow-wrap:anywhere] ${
+              hasNote ? 'line-clamp-1' : 'line-clamp-2'
+            }`}
           >
             {row.title}
           </span>
-          <div className="ml-auto flex shrink-0 items-center gap-3">
-            <EarnPill chips={row.chips} iconsOnly={row.icons_only} title={row.title} />
+          <div className="flex shrink-0 items-center gap-3">
+            <span ref={chipsRef} className="flex shrink-0">
+              <EarnPill chips={row.chips} iconsOnly={row.icons_only || squeezed} title={row.title} />
+            </span>
             {row.time_left && (
               // Closing within a day is the one time worth raising a voice.
               // Fixed-width digits and a set width keep every row's time on
               // one right edge.
               <span
+                ref={timeRef}
                 aria-hidden
                 className={`min-w-[52px] text-right text-[11px] font-medium tabular-nums whitespace-nowrap ${
                   row.urgent ? 'text-warning' : 'text-textSecondary'
@@ -189,7 +221,7 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
             )}
           </div>
         </div>
-        {(row.random_note || row.channels_note) && (
+        {hasNote && (
           <div className="mt-0.5 flex items-center gap-2 min-w-0" aria-hidden>
             {row.random_note && (
               <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
@@ -208,7 +240,8 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
       </div>
     </div>
   </div>
-);
+  );
+};
 
 export function MobileMissingNow({ missing, onOpen }: { missing: MissingNow; onOpen: (key: string) => void }) {
   const [expanded, setExpanded] = useState(false);
