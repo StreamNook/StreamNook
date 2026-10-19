@@ -37,6 +37,8 @@ import SwiftUI
 ///   `controls` shows the player's controls
 /// - `menu:card:INDEX` lists the Browse card's long-press menu in a sheet (a system menu cannot
 ///   be opened from code)
+/// - `font:FAMILY` sets the Custom font to FAMILY (`_` for spaces) as typing it in Theme > Font
+///   does; `restore` puts the font back
 /// - `try:PATH=JSON` writes one setting for a look (the value it replaced is kept); `restore`
 ///   writes every replaced value back exactly as it was (absent stays absent); `ladd:PATH=TEXT`
 ///   and `lremove:PATH=TEXT` add or remove one entry of a settings list; `reset:PATH` is the reset
@@ -179,6 +181,12 @@ enum Drive {
                 let stream = model.streams[index]
                 model.nav.menuSample = MenuSample(title: stream.userName, items: StreamMenu.items(stream, category: true))
             case "try": await trySetting(value, model: model)
+            case "font":
+                // What typing a family in Theme > Font does: Custom with that family, saved, then
+                // the settings read again (both replaced values are kept for `restore`).
+                await trySetting("font=custom", model: model)
+                await trySetting("font_custom=\(value.replacingOccurrences(of: "_", with: " "))", model: model)
+                await model.loadSettings()
             case "restore": await restoreSettings(model: model)
             case "reset": await model.settingsStore.reset([value])
             case "ssearch": SettingsSearch.shared.query = value.replacingOccurrences(of: "_", with: " ")

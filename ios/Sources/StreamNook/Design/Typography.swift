@@ -82,29 +82,67 @@ enum Typeface {
     }
 
     /// The family typed for the Custom font, registered from the files the core keeps (fetched
-    /// once from Google Fonts). Nothing is said when the family is not found: the interface keeps
-    /// drawing in Satoshi.
+    /// once from Google Fonts). Until it draws, and when it cannot, the interface keeps its current
+    /// face; `Look.customFont` says which, for the line under the name field.
     static func loadCustom(fontID: String?, family raw: String?, core: CoreBridge) async {
         let family = CustomFont.sanitize(raw ?? "")
         guard fontID == "custom", !family.isEmpty else { return }
-        if customFamily?.caseInsensitiveCompare(family) == .orderedSame, !customFaces.isEmpty { return }
+        if customFamily?.caseInsensitiveCompare(family) == .orderedSame, !customFaces.isEmpty {
+            Look.shared.setCustomFont(.ready(family))
+            return
+        }
         customAsked = family
-        let answer = try? await core.invoke("get_custom_font", args: ["family": family], as: CustomFont.Faces?.self)
-        guard customAsked == family else { return }
+        Look.shared.setCustomFont(.loading(family))
+        log.notice("custom font: asking the core for \(family, privacy: .public)")
+        let lookup: CustomFont.Lookup
+        do {
+            lookup = try await core.invoke("get_custom_font", args: ["family": family], as: CustomFont.Lookup.self)
+        } catch {
+            log.error("custom font: \(family, privacy: .public) failed in the core: \(String(describing: error), privacy: .public)")
+            if customAsked == family { Look.shared.setCustomFont(.unreachable(family)) }
+            return
+        }
+        guard customAsked == family else {
+            log.notice("custom font: \(family, privacy: .public) answered after a newer name; dropped")
+            return
+        }
+        guard lookup.state == .ready, let font = lookup.font else {
+            log.notice("custom font: \(family, privacy: .public) \(lookup.state.rawValue, privacy: .public)")
+            Look.shared.setCustomFont(lookup.state == .notFound ? .notFound(family) : .unreachable(family))
+            return
+        }
         var registeredFaces: [Int: String] = [:]
-        for face in answer?.faces ?? [] {
+        for face in font.faces {
             let url = URL(filePath: face.path) as CFURL
-            // Registering a file twice in a run fails harmlessly; its names are read either way.
-            CTFontManagerRegisterFontsForURL(url, .process, nil)
+            var failure: Unmanaged<CFError>?
+            if !CTFontManagerRegisterFontsForURL(url, .process, &failure), let error = failure?.takeRetainedValue(),
+               CFErrorGetCode(error) != CTFontManagerError.alreadyRegistered.rawValue {
+                log.error("custom font: \(face.path, privacy: .public) did not register: \(String(describing: error), privacy: .public)")
+                continue
+            }
             guard let descriptor = (CTFontManagerCreateFontDescriptorsFromURL(url) as? [CTFontDescriptor])?.first,
-                  let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String else { continue }
+                  let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String else {
+                log.error("custom font: \(face.path, privacy: .public) has no readable face")
+                continue
+            }
+            guard UIFont(name: name, size: 12) != nil else {
+                log.error("custom font: \(name, privacy: .public) registered but does not open")
+                continue
+            }
             registeredFaces[face.weight] = name
         }
+        guard !registeredFaces.isEmpty else {
+            Look.shared.setCustomFont(.unreachable(family))
+            return
+        }
         customFaces = registeredFaces
-        customFamily = registeredFaces.isEmpty ? nil : family
+        customFamily = family
         cache.removeAll()
         publishChat()
         Look.shared.fontFacesChanged()
+        Look.shared.setCustomFont(.ready(family))
+        let drawn = registeredFaces.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        log.notice("custom font: drawing \(family, privacy: .public) (\(drawn, privacy: .public))")
     }
 
     /// Hands the chat rows, laid out off the main thread, the face they draw in now.

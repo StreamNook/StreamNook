@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useAppStore } from '../../stores/AppStore';
-import { themes, themeCategories, getThemeById, applyTheme, customThemeToTheme, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, DEFAULT_GLASS_BLUR, applyFont, FONT_OPTIONS, DEFAULT_FONT_ID, CUSTOM_FONT_ID, SUGGESTED_FONTS, customFontStack, sanitizeFontFamily, loadSuggestionPreviews, Theme, OLED_THEME_ID, DEFAULT_OLED_ACCENT, OLED_ACCENT_PRESETS, getOledTheme } from '../../themes';
+import { themes, themeCategories, getThemeById, applyTheme, customThemeToTheme, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, DEFAULT_GLASS_BLUR, applyFont, FONT_OPTIONS, DEFAULT_FONT_ID, CUSTOM_FONT_ID, SUGGESTED_FONTS, customFontStack, sanitizeFontFamily, loadSuggestionPreviews, Theme, OLED_THEME_ID, DEFAULT_OLED_ACCENT, OLED_ACCENT_PRESETS, getOledTheme, getCustomFontStatus, subscribeCustomFontStatus } from '../../themes';
 import { ResetArrow, SettingsRow, SettingsSection } from './_primitives';
 import { thenRun, useSettingReset } from './settingReset';
 import { GroupFooter } from '../../mobile/ui/GroupedList';
@@ -36,6 +36,30 @@ interface ThemeCardProps {
     isCustom?: boolean;
     onEdit?: () => void;
 }
+
+// One quiet line under the phone's font name field for the family typed there:
+// reading it, no such Google Font, or Google Fonts out of reach. Once it draws,
+// the tile and the app say so themselves. It keeps its height when empty, so
+// the suggestions under it never move.
+const CustomFontLine = ({ typed }: { typed: string }) => {
+    const status = useSyncExternalStore(subscribeCustomFontStatus, getCustomFontStatus);
+    const name = sanitizeFontFamily(typed);
+    const state = name && status.family.toLowerCase() === name.toLowerCase() ? status.state : 'idle';
+    return (
+        <p className="mt-1.5 flex min-h-[16px] items-center gap-1.5 text-xs leading-4 text-textMuted" aria-live="polite">
+            {state === 'loading' && (
+                <>
+                    <span className="h-3 w-3 shrink-0 animate-spin rounded-full border border-textMuted/40 border-t-textMuted" aria-hidden />
+                    <span className="truncate">Loading {status.family}{'…'}</span>
+                </>
+            )}
+            {state === 'not_found' && <span className="truncate">No Google Font named {status.family}</span>}
+            {state === 'unreachable' && (
+                <span className="truncate">Couldn{'’'}t reach Google Fonts. Try again when you{'’'}re online.</span>
+            )}
+        </p>
+    );
+};
 
 const ThemeCard = (props: ThemeCardProps) => (IS_MOBILE ? <PhoneThemeCard {...props} /> : <DesktopThemeCard {...props} />);
 
@@ -514,6 +538,7 @@ const ThemeSettings = () => {
                             style={{ fontFamily: customFontDraft ? customFontStack(customFontDraft) : undefined }}
                             className="w-full min-w-0 rounded-lg bg-glass border border-borderSubtle px-3 py-2 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60 transition-colors duration-200"
                         />
+                        {IS_MOBILE && <CustomFontLine typed={customFontDraft} />}
                     </div>
                     {/* Quick fills. Borderless so they read as a list of
                         names, not a row of buttons; each is drawn in its

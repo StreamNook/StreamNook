@@ -50,6 +50,13 @@ final class Look {
         fontRevision += 1
     }
 
+    /// Where the Custom family stands, for the line under its name field.
+    private(set) var customFont = CustomFontStatus.idle
+
+    func setCustomFont(_ status: CustomFontStatus) {
+        if status != customFont { customFont = status }
+    }
+
     /// Glass shows as Liquid Glass: blur is on and glassiness above zero.
     var frosted: Bool { glassBlur && glassiness > 0 }
     /// How much of the opaque floor shows under a glass surface.
@@ -63,6 +70,23 @@ final class Look {
             ChatTheme.use(glassiness: glassiness)
         }
         if let motion { self.motion = motion }
+    }
+}
+
+/// Where a typed Custom family stands: being read, drawn, not a Google Font, or not reachable now.
+enum CustomFontStatus: Equatable {
+    case idle
+    case loading(String)
+    case ready(String)
+    case notFound(String)
+    case unreachable(String)
+
+    /// The family this status is about.
+    var family: String? {
+        switch self {
+        case .idle: nil
+        case .loading(let f), .ready(let f), .notFound(let f), .unreachable(let f): f
+        }
     }
 }
 

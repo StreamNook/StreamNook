@@ -24,6 +24,15 @@ import Testing
         #expect(try JSONDecoder().decode(CustomFont.Faces?.self, from: Data("null".utf8)) == nil)
     }
 
+    @Test func theCoresLookupSaysReadyNotFoundOrUnreachable() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(CustomFont.Lookup.self, from: Data(json.utf8)) }
+        let ready = try decode(#"{"state":"ready","font":{"family":"Poppins","faces":[{"weight":400,"path":"/c/400.ttf"}]}}"#)
+        #expect(ready.state == .ready)
+        #expect(ready.font?.faces.first?.weight == 400)
+        #expect(try decode(#"{"state":"not_found"}"#).state == .notFound)
+        #expect(try decode(#"{"state":"unreachable"}"#).font == nil)
+    }
+
     @Test func settingsCarryTheTypedFamily() throws {
         let look = try JSONDecoder().decode(SettingsLook.self, from: Data(#"{"font":"custom","font_custom":"Poppins"}"#.utf8))
         #expect(look.font == "custom")

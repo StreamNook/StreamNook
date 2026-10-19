@@ -130,6 +130,7 @@ export const getThemesByCategory = (category: Theme['category']): Theme[] => {
 import { invoke } from '@tauri-apps/api/core';
 import type { CustomTheme, CustomThemeColor, CustomThemePalette } from '../types';
 import { IS_MOBILE } from '../utils/platform';
+import { Logger } from '../utils/logger';
 
 // Resolve a CustomThemeColor to a CSS-compatible string
 const resolveColor = (c: CustomThemeColor): string => {
@@ -842,16 +843,42 @@ let webfontTimer: ReturnType<typeof setTimeout> | null = null;
 let loadedFamily = '';
 
 interface CoreFontFace { weight: number; data?: string }
+type CoreFontLookup =
+    | { state: 'ready'; font: { faces: CoreFontFace[] } }
+    | { state: 'not_found' }
+    | { state: 'unreachable' };
 const coreFaces = new Set<string>();
+
+// Where the typed Custom family stands on a phone, for the line under its name
+// field: being read, drawn, not a Google Font, or Google Fonts out of reach.
+export type CustomFontState = 'idle' | 'loading' | 'ready' | 'not_found' | 'unreachable';
+export interface CustomFontStatus { family: string; state: CustomFontState }
+let customFontStatus: CustomFontStatus = { family: '', state: 'idle' };
+const customFontListeners = new Set<() => void>();
+const setCustomFontStatus = (family: string, state: CustomFontState): void => {
+    if (customFontStatus.family === family && customFontStatus.state === state) return;
+    customFontStatus = { family, state };
+    customFontListeners.forEach((listener) => listener());
+};
+export const getCustomFontStatus = (): CustomFontStatus => customFontStatus;
+export const subscribeCustomFontStatus = (listener: () => void): (() => void) => {
+    customFontListeners.add(listener);
+    return () => { customFontListeners.delete(listener); };
+};
 
 // The phone reads a typed family through the core, which fetches its files from
 // Google Fonts once and keeps them on disk (so the font holds offline), and
-// hands them over to load as FontFaces. Resolves false when the core knows no
-// such family; the stack then falls back to the house font.
+// hands them over to load as FontFaces. Resolves false when there is no font to
+// draw; the stack then falls back to the house font.
 const loadCoreFont = async (family: string): Promise<boolean> => {
-    const font = await invoke<{ faces: CoreFontFace[] } | null>('get_custom_font', { family, withData: true });
-    if (!font?.faces.length) return false;
-    for (const face of font.faces) {
+    setCustomFontStatus(family, 'loading');
+    const answer = await invoke<CoreFontLookup>('get_custom_font', { family, withData: true });
+    if (answer.state !== 'ready' || !answer.font.faces.length) {
+        Logger.warn(`[CustomFont] ${family}: ${answer.state === 'ready' ? 'no faces' : answer.state}`);
+        setCustomFontStatus(family, answer.state === 'not_found' ? 'not_found' : 'unreachable');
+        return false;
+    }
+    for (const face of answer.font.faces) {
         const key = `${family.toLowerCase()}|${face.weight}`;
         if (coreFaces.has(key) || !face.data) continue;
         const bytes = Uint8Array.from(atob(face.data), (c) => c.charCodeAt(0));
@@ -859,6 +886,8 @@ const loadCoreFont = async (family: string): Promise<boolean> => {
         document.fonts.add(loaded);
         coreFaces.add(key);
     }
+    Logger.warn(`[CustomFont] ${family}: drawing ${answer.font.faces.map((f) => f.weight).join(', ')}`);
+    setCustomFontStatus(family, 'ready');
     return true;
 };
 
@@ -874,16 +903,28 @@ export const loadWebFont = (family: string, onReady?: () => void): void => {
     if (webfontTimer) { clearTimeout(webfontTimer); webfontTimer = null; }
     const lower = family.toLowerCase();
     if (!family || NO_FETCH_FAMILIES.has(lower) || lower === loadedFamily) {
+        if (family) setCustomFontStatus(family, 'ready');
         onReady?.();
         return;
     }
     webfontTimer = setTimeout(() => {
         webfontTimer = null;
-        loadedFamily = lower;
         if (IS_MOBILE) {
-            void loadCoreFont(family).catch(() => false).then(() => onReady?.());
+            // Only a family that drew counts as loaded, so one that failed
+            // (offline, say) is asked again the next time it is typed.
+            void loadCoreFont(family)
+                .catch((e) => {
+                    Logger.warn(`[CustomFont] ${family}: the core call failed`, e);
+                    setCustomFontStatus(family, 'unreachable');
+                    return false;
+                })
+                .then((drawn) => {
+                    if (drawn) loadedFamily = lower;
+                    onReady?.();
+                });
             return;
         }
+        loadedFamily = lower;
         let link = document.getElementById(WEBFONT_LINK_ID) as HTMLLinkElement | null;
         if (!link) {
             link = document.createElement('link');

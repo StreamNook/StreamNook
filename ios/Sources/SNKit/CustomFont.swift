@@ -24,10 +24,23 @@ public enum CustomFont {
         }
     }
 
-    /// The core's answer for a family.
+    /// A family's kept faces.
     public struct Faces: Decodable, Sendable, Equatable {
         public var family: String
         public var faces: [Face]
+    }
+
+    /// The core's answer for a typed family (`get_custom_font`): its faces, no Google Font by that
+    /// name, or Google Fonts not reachable right now.
+    public struct Lookup: Decodable, Sendable, Equatable {
+        public enum State: String, Decodable, Sendable {
+            case ready
+            case notFound = "not_found"
+            case unreachable
+        }
+
+        public var state: State
+        public var font: Faces?
     }
 
     /// The weight among `weights` that stands in for `wanted`: the same weight, else the nearest,
