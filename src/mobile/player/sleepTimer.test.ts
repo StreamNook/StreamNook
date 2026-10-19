@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { customMinutes, sleepTimerRunning } from './sleepTimer';
+import { customMinutes, sleepTimerRunning } from './sleepTimerModel';
 
 describe('sleep timer helpers', () => {
   it('a custom pick comes to minutes, capped at a day', () => {

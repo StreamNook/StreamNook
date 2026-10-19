@@ -11,32 +11,17 @@ import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { getActiveVideo } from '../../utils/activeVideo';
 import { Logger } from '../../utils/logger';
+import {
+  customMinutes,
+  sleepTimerRunning,
+  type SleepTimerPreset,
+  type SleepTimerState,
+} from './sleepTimerModel';
 
-export interface SleepTimerPreset {
-  minutes: number;
-  label: string;
-}
-
-export interface SleepTimerState {
-  phase: 'off' | 'running' | 'fading' | 'fired';
-  endsAtMs?: number | null;
-  remainingSecs?: number | null;
-  /** "Stops in 42 min" while one runs. */
-  rowLabel?: string | null;
-  fadeSecs: number;
-  presets: SleepTimerPreset[];
-}
+export { customMinutes, sleepTimerRunning };
+export type { SleepTimerPreset, SleepTimerState };
 
 export const useSleepTimer = create<{ state: SleepTimerState | null }>(() => ({ state: null }));
-
-export const sleepTimerRunning = (state: SleepTimerState | null): boolean =>
-  state?.phase === 'running' || state?.phase === 'fading';
-
-/** Minutes for a custom pick of hours and minutes; null when it comes to nothing. */
-export const customMinutes = (hours: number, minutes: number): number | null => {
-  const total = Math.max(0, hours) * 60 + Math.max(0, minutes);
-  return total > 0 ? Math.min(total, 24 * 60) : null;
-};
 
 const take = (state: SleepTimerState | null | undefined) => {
   if (state) useSleepTimer.setState({ state });
