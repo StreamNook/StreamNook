@@ -701,8 +701,7 @@ export interface FontOption {
     stack: string;
     /**
      * Chat message body weight for this font, written to --chat-body-weight.
-     * Denser faces (Inter) read heavier at a given weight, so they go lighter
-     * here to keep chat looking lean. Defaults to 300 when omitted.
+     * Defaults to 300 when omitted; Twitch's own chat is Inter at 400.
      */
     chatWeight?: number;
 }
@@ -717,11 +716,10 @@ export const FONT_OPTIONS: FontOption[] = [
     {
         id: 'twitch',
         label: 'Twitch',
-        description: 'Inter — the open-source typeface Twitch uses across its UI and chat.',
+        description: 'Inter, the typeface Twitch uses for chat.',
         stack: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        // Inter is denser than Satoshi, so chat at the normal 300 reads heavy.
-        // Drop to 200 (ExtraLight) so chat stays lean under the Twitch font.
-        chatWeight: 200,
+        // Twitch draws chat in Inter 400 (names 700, buttons 600).
+        chatWeight: 400,
     },
     {
         id: 'geist',
@@ -767,7 +765,7 @@ const FONT_BY_ID: Record<string, FontOption> = Object.fromEntries(
     FONT_OPTIONS.map((o) => [o.id, o]),
 );
 
-// Default chat message body weight (most fonts). Inter overrides lighter.
+// Default chat message body weight (most fonts). The Twitch font sets its own.
 export const DEFAULT_CHAT_BODY_WEIGHT = 300;
 
 // ─── Custom font ────────────────────────────────────────────────────────────
@@ -789,10 +787,10 @@ export const SUGGESTED_FONTS: string[] = [
 export const sanitizeFontFamily = (raw: string): string =>
     (raw || '').replace(/["',;{}()\\]/g, '').trim().slice(0, 64);
 
-// Same fallback tail the bundled options use, so an unresolvable name still
-// lands somewhere readable instead of blanking the UI.
+// A name no font answers to falls back to the house font, then the same tail
+// the bundled options use, so it lands somewhere readable instead of blanking.
 export const customFontStack = (family: string): string =>
-    `"${family}", -apple-system, BlinkMacSystemFont, sans-serif`;
+    `"${family}", "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif`;
 
 // Families that never need a network fetch: CSS generics, and the faces this
 // app already ships as local woff2 (see the @font-face blocks in globals.css).
@@ -843,6 +841,27 @@ const whenFamilyReady = (family: string, done: () => void): void => {
 let webfontTimer: ReturnType<typeof setTimeout> | null = null;
 let loadedFamily = '';
 
+interface CoreFontFace { weight: number; data?: string }
+const coreFaces = new Set<string>();
+
+// The phone reads a typed family through the core, which fetches its files from
+// Google Fonts once and keeps them on disk (so the font holds offline), and
+// hands them over to load as FontFaces. Resolves false when the core knows no
+// such family; the stack then falls back to the house font.
+const loadCoreFont = async (family: string): Promise<boolean> => {
+    const font = await invoke<{ faces: CoreFontFace[] } | null>('get_custom_font', { family, withData: true });
+    if (!font?.faces.length) return false;
+    for (const face of font.faces) {
+        const key = `${family.toLowerCase()}|${face.weight}`;
+        if (coreFaces.has(key) || !face.data) continue;
+        const bytes = Uint8Array.from(atob(face.data), (c) => c.charCodeAt(0));
+        const loaded = await new FontFace(family, bytes, { weight: String(face.weight) }).load();
+        document.fonts.add(loaded);
+        coreFaces.add(key);
+    }
+    return true;
+};
+
 // Load a typed family, then call back once it is usable. ONE <link> is reused
 // and its href swapped, so switching fonts never leaves dead stylesheets
 // behind, and the fetch is debounced so typing a name does not fire a request
@@ -861,6 +880,10 @@ export const loadWebFont = (family: string, onReady?: () => void): void => {
     webfontTimer = setTimeout(() => {
         webfontTimer = null;
         loadedFamily = lower;
+        if (IS_MOBILE) {
+            void loadCoreFont(family).catch(() => false).then(() => onReady?.());
+            return;
+        }
         let link = document.getElementById(WEBFONT_LINK_ID) as HTMLLinkElement | null;
         if (!link) {
             link = document.createElement('link');

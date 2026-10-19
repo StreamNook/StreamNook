@@ -169,12 +169,12 @@ struct ChatRowLayoutBuilder {
     var emoteMargin: CGFloat { CGFloat(style.emoteMargin) * 16 }
 
     func font(_ size: CGFloat, _ weight: UIFont.Weight, italic: Bool = false) -> UIFont {
-        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        let base = ChatFont.font(size, weight)
         guard italic, let descriptor = base.fontDescriptor.withSymbolicTraits(.traitItalic) else { return base }
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    var bodyWeight: UIFont.Weight { .light }
+    var bodyWeight: UIFont.Weight { ChatFont.bodyWeight }
     var baseWeight: UIFont.Weight {
         switch style.fontWeight {
         case ..<350: return .light

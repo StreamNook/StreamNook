@@ -420,7 +420,10 @@ const ThemeSettings = () => {
                 })}
                 {/* Custom: same tile language as the presets: once a name
                     is typed, the tile label IS the preview, in that face. */}
-                <Tooltip content="Type any font name. Free fonts load automatically, and fonts installed on this PC work too." side="top">
+                <Tooltip
+                    content={IS_MOBILE ? 'Type any free font from Google Fonts.' : 'Type any font name. Free fonts load automatically, and fonts installed on this PC work too.'}
+                    side="top"
+                >
                     <button
                         onClick={() => handleFontChange(CUSTOM_FONT_ID)}
                         style={{ transform: 'translateZ(0)' }}
@@ -478,7 +481,9 @@ const ThemeSettings = () => {
                         ))}
                     </div>
                     <p className="text-xs text-textMuted leading-relaxed">
-                        Any free font from fonts.google.com works, just type its exact name. Fonts installed on this PC work too, with no download.
+                        {IS_MOBILE
+                            ? 'Any free font from fonts.google.com works, just type its exact name. It is kept on this phone after the first time.'
+                            : 'Any free font from fonts.google.com works, just type its exact name. Fonts installed on this PC work too, with no download.'}
                     </p>
                 </div>
             )}
