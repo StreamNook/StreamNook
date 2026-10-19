@@ -21,6 +21,11 @@ export interface ThemePalette {
     accent: string;
     accentHover: string;
     accentMuted: string;
+    /** The accent floored to 3:1 on the raised surface (Rust's
+     *  theme_palette::accent_on_surface), for accent marks that sit on a card:
+     *  share bars, accent words and icons. Every built-in ships it; a palette
+     *  without it paints the accent. */
+    accentOnSurface?: string;
 
     // Border colors
     border: string;
@@ -159,6 +164,9 @@ export const customThemeToTheme = (custom: CustomTheme): Theme => {
             accent: resolveColor(p.accent),
             accentHover: resolveColor(p.accentHover),
             accentMuted: resolveColor(p.accentMuted),
+            // Rust writes the floored accent into custom themes on load; one
+            // saved before that has none and paints its accent.
+            accentOnSurface: resolveColor(p.accentOnSurface ?? p.accent),
             border: resolveColor(p.border),
             borderLight: resolveColor(p.borderLight),
             borderSubtle: resolveColor(p.borderSubtle),
@@ -380,6 +388,10 @@ export const getOledTheme = (accentHex?: string): Theme => {
             accent,
             accentHover: lightenColor(accent, 20),
             accentMuted: `rgba(${r}, ${g}, ${b}, 0.5)`,
+            // The chosen accent already clears 3:1 on OLED's near-black cards
+            // (the Rust core's tests prove it for every preset), so it is its
+            // own on-surface accent.
+            accentOnSurface: accent,
             // Soft tint of the accent (lavender for purple, peach for orange…),
             // mixed toward white so secondary text stays readable on black.
             textSecondary: lightenColor(accent, OLED_SECONDARY_LIGHTEN),
@@ -496,6 +508,7 @@ export const applyTheme = (
     root.style.setProperty('--color-accent', palette.accent);
     root.style.setProperty('--color-accent-hover', palette.accentHover);
     root.style.setProperty('--color-accent-muted', palette.accentMuted);
+    root.style.setProperty('--color-accent-on-surface', palette.accentOnSurface ?? palette.accent);
     // Generate neon variant by lightening accent by 30%
     root.style.setProperty('--color-accent-neon', lightenColor(palette.accent, 30));
     // Raw accent channels for rgba(var(--color-accent-rgb), a) shadows/halos.

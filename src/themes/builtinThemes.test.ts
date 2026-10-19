@@ -5,7 +5,7 @@ import { DEFAULT_THEME_ID, OLED_THEME_ID, getOledTheme, phoneFloors, themeCatego
 // (services/theme_palette.rs), so a malformed entry breaks every shell at once.
 const PALETTE_KEYS = [
   'background', 'backgroundSecondary', 'backgroundTertiary', 'surface', 'surfaceHover', 'surfaceActive',
-  'textPrimary', 'textSecondary', 'textMuted', 'accent', 'accentHover', 'accentMuted', 'border', 'borderLight',
+  'textPrimary', 'textSecondary', 'textMuted', 'accent', 'accentHover', 'accentMuted', 'accentOnSurface', 'border', 'borderLight',
   'borderSubtle', 'success', 'warning', 'error', 'info', 'scrollbarThumb', 'scrollbarTrack', 'glassOpacity',
   'glassHoverOpacity', 'glassActiveOpacity',
 ];
@@ -36,6 +36,8 @@ describe('built-in themes', () => {
     const oled = getOledTheme('#ff9933');
     expect(oled.palette.accent).toBe('#ff9933');
     expect(oled.palette.accentMuted).toBe('rgba(255, 153, 51, 0.5)');
+    // A preset clears 3:1 on OLED's cards (theme_palette::every_oled_preset_clears_the_floor).
+    expect(oled.palette.accentOnSurface).toBe('#ff9933');
     // The Rust core pins the same value (theme_palette::oled_follows_its_accent).
     expect(oled.palette.textSecondary).toBe('#ffcd9b');
     expect(getOledTheme('bad').palette.accent).toBe('#a064ff');

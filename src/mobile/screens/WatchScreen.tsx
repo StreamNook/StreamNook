@@ -50,6 +50,8 @@ import { PinnedBanner } from '../watch/PinnedBanner';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
 import PollOverlay from '../../components/PollOverlay';
 import PredictionOverlay from '../../components/PredictionOverlay';
+import { ChatOverlayStack } from '../../components/chat/ChatOverlayStack';
+import { useChatTopStack } from '../../components/chat/chatTopStack';
 import {
   consumePipClosed,
   getMediaVolume,
@@ -159,8 +161,28 @@ export const WatchScreen: React.FC = () => {
   const [chatSplit, setChatSplit] = useState<number | null>(readWatchSplit);
   const [pip, setPip] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
-  const [dropActive, setDropActive] = useState(false);
+  // The poll, prediction and drop cards: one stack in the chat column's flow,
+  // laid out by Rust against the column's height. Opened together on a short
+  // column (a foldable's side-docked chat) they used to leave no room to read
+  // or type, and the drop card painted over the poll's fold control.
+  const [chatColumnEl, setChatColumnEl] = useState<HTMLDivElement | null>(null);
+  const topStack = useChatTopStack(chatColumnEl);
   const chatTabsVisible = useChatTabsVisible();
+  // The hype train and pinned message float over chat just under the stack:
+  // where the stack ends inside the chat column (its offset parent), or null
+  // while it is empty. Re-read when the tab strip above it comes or goes,
+  // which moves it without resizing it.
+  const [topStackEl, setTopStackEl] = useState<HTMLDivElement | null>(null);
+  const [topStackBottom, setTopStackBottom] = useState<number | null>(null);
+  useEffect(() => {
+    if (!topStackEl) return;
+    const read = () =>
+      setTopStackBottom(topStackEl.offsetHeight > 0 ? topStackEl.offsetTop + topStackEl.offsetHeight : null);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(topStackEl);
+    return () => ro.disconnect();
+  }, [topStackEl, chatTabsVisible]);
   const chatTabsOpen = useChatTabsStore((s) => s.tabs.length > 0);
   const viewingStreamChat = useViewingStreamChat();
   // Hype train, drops, polls and predictions are Twitch contracts keyed by a
@@ -173,10 +195,10 @@ export const WatchScreen: React.FC = () => {
   // opacity, width and side are one preference however big the screen is.
   const fsChat = useAppStore((s) => s.settings.fullscreen_chat);
   // The poll and prediction cards follow the same settings as desktop chat:
-  // each can be turned off, and the user picks which one sits on top.
+  // each can be turned off, and the user picks which one sits on top (read by
+  // the stack's layout).
   const showPolls = useAppStore((s) => s.settings.show_polls) !== false;
   const showPredictions = useAppStore((s) => s.settings.show_predictions) !== false;
-  const overlayOrder = useAppStore((s) => s.settings.chat_overlay_order) ?? 'prediction-first';
   // The dial being turned right now (brightness or volume), for the readout.
   const [dial, setDial] = useState<DialReading | null>(null);
   const dialHide = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1134,6 +1156,7 @@ export const WatchScreen: React.FC = () => {
         )}
 
         <div
+          ref={setChatColumnEl}
           className={chatClass}
           style={
             // Side by side, the row deliberately carries no top padding so the
@@ -1162,19 +1185,16 @@ export const WatchScreen: React.FC = () => {
         >
           {/* Chat header carries only live, transient signal now: the hype
               train and the pinned message. The persistent stream info lives in
-              the player overlay, so chat keeps its full height. */}
-          {/* Always mounted, hidden when empty. DropProgressBar has to run to
-              discover whether there is a drop to show, and gating the wrapper on
-              its answer would mean it never mounts to give one. `hidden` still
-              mounts children and runs their effects, so this breaks that cycle
-              without painting an empty strip. */}
+              the player overlay, so chat keeps its full height. The poll,
+              prediction and drop cards are not in here: they are the stack in
+              the chat pane's flow below, and this header starts under it, so
+              nothing paints over a card's fold control. */}
             <div
               className={
                 // The floating landscape column is for reading the room, so
-                // the stream's own banners (pins, drops, hype train) stay out
-                // of it; they are all still one rotation away. hidden keeps
-                // the drop bar mounted and polling.
-                !chatOverlay && ((streamScoped && (currentHypeTrain || dropActive)) || pinned.length > 0)
+                // the stream's own banners (pins, hype train) stay out of it;
+                // they are all still one rotation away.
+                !chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0)
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -1188,28 +1208,22 @@ export const WatchScreen: React.FC = () => {
                   : 'hidden'
               }
               style={{
-                // Sits BELOW the chat tab strip when several rooms are open.
-                // This header is absolutely positioned over the top of the chat
-                // column, so at top:0 it covered the tabs completely.
-                top: chatTabsVisible ? CHAT_TAB_STRIP_H : 0,
+                // Sits BELOW the chat tab strip when several rooms are open,
+                // and below the card stack under it. This header is absolutely
+                // positioned over the top of the chat column, so at top:0 it
+                // covered the tabs completely.
+                top: topStackBottom ?? (chatTabsVisible ? CHAT_TAB_STRIP_H : 0),
               }}
             >
-              {/* Hype train and drop progress belong to the STREAM, not to
-                  whichever chat tab you are reading. Showing them over another
-                  room's chat credits them to the wrong channel. */}
+              {/* The hype train belongs to the STREAM, not to whichever chat
+                  tab you are reading. Showing it over another room's chat
+                  credits it to the wrong channel. */}
               {streamScoped && currentHypeTrain && (
                 <HypeTrainBanner
                   train={currentHypeTrain}
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
                 />
               )}
-              {/* flex-col-reverse means DOM order here renders ABOVE the pinned
-                  strip and below the info row. Kept mounted even on another tab
-                  so its poll keeps running; it just does not render there. */}
-              <DropProgressBar
-                onActiveChange={setDropActive}
-                visible={streamScoped}
-              />
               <PinnedBanner
                 pins={pinned}
                 channelId={chatChannelId ?? undefined}
@@ -1218,35 +1232,38 @@ export const WatchScreen: React.FC = () => {
               />
             </div>
 
-          {/* Poll + prediction cards, exactly the desktop components: they
-              self-fetch off the channel and anchor under the header. Stream
-              scoped, so same rule as the hype train above. Either can be
-              turned off, and the order is the user's choice, as on desktop. */}
-          {currentStream && streamScoped && !chatOverlay &&
-            (overlayOrder === 'poll-first'
-              ? (['poll', 'prediction'] as const)
-              : (['prediction', 'poll'] as const)
-            ).map((kind) =>
-              kind === 'poll' ? (
-                showPolls && (
-                  <PollOverlay
-                    key="poll"
-                    channelId={currentStream.user_id}
-                    channelLogin={currentStream.user_login}
-                  />
-                )
-              ) : (
-                showPredictions && (
+          <MobileChatPane
+            readOnly={chatOverlay}
+            top={
+              // Poll + prediction cards are exactly the desktop components:
+              // they self-fetch off the channel. Either can be turned off.
+              // Rust orders the stack (the user's order, votes before the
+              // drop), keeps one card open and caps its height. Stream scoped,
+              // like the hype train; the drop card stays mounted on another tab
+              // so its poll keeps running, it just draws nothing there.
+              <ChatOverlayStack
+                maxHeight={topStack.maxHeight}
+                stackRef={setTopStackEl}
+                className="px-2.5 pt-1.5 pb-1 empty:hidden"
+              >
+                {currentStream && streamScoped && !chatOverlay && showPredictions && (
                   <PredictionOverlay
-                    key="prediction"
                     channelId={currentStream.user_id}
                     channelLogin={currentStream.user_login}
+                    stack={topStack.control.prediction}
                   />
-                )
-              ),
-            )}
-
-          <MobileChatPane readOnly={chatOverlay} />
+                )}
+                {currentStream && streamScoped && !chatOverlay && showPolls && (
+                  <PollOverlay
+                    channelId={currentStream.user_id}
+                    channelLogin={currentStream.user_login}
+                    stack={topStack.control.poll}
+                  />
+                )}
+                <DropProgressBar stack={topStack.control.drop} visible={streamScoped && !chatOverlay} />
+              </ChatOverlayStack>
+            }
+          />
           {chatOverlay && (
             <ChatOverlayChrome
               side={overlaySide}

@@ -62,6 +62,7 @@ import ErrorBoundary from './ErrorBoundary';
 import PredictionOverlay from './PredictionOverlay';
 import PollOverlay from './PollOverlay';
 import { ChatOverlayStack } from './chat/ChatOverlayStack';
+import { useChatTopStack } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
 import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
 import { useStreamManager } from '../services/streamManager';
@@ -1438,6 +1439,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // at the same spot, so a live poll and a pin are both readable at once.
   const [overlayStackEl, setOverlayStackEl] = useState<HTMLDivElement | null>(null);
   const [overlayStackHeight, setOverlayStackHeight] = useState(0);
+  // The poll and prediction stack's layout, from Rust: order, the one open
+  // card, and a cap measured against this chat's height.
+  const topStack = useChatTopStack(chatContainerEl);
   useEffect(() => {
     if (!overlayStackEl) return;
     const sync = () => setOverlayStackHeight(Math.round(overlayStackEl.getBoundingClientRect().height));
@@ -4598,36 +4602,34 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
         {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
-            prediction at once, so they stack in one column rather than both
-            pinning themselves to the same box. Order is the user's choice. */}
-        <ChatOverlayStack top={overlayTop} stackRef={setOverlayStackEl} hidden={activeView !== 'chat'}>
-          {(settings.chat_overlay_order === 'poll-first'
-            ? (['poll', 'prediction'] as const)
-            : (['prediction', 'poll'] as const)
-          ).map((kind) => {
-            // Polls and predictions are Twitch products driven by EventSub. On a
-            // provider stream both overlays were still mounting and watching a
-            // Kick slug / YouTube UC id that can never produce an event.
-            if (!isTwitch) return null;
-            if (kind === 'poll') {
-              if (settings.show_polls === false) return null;
-              return (
-                <PollOverlay
-                  key="poll"
-                  channelId={currentStream?.user_id}
-                  channelLogin={currentStream?.user_login}
-                />
-              );
-            }
-            if (settings.show_predictions === false) return null;
-            return (
-              <PredictionOverlay
-                key="prediction"
-                channelId={currentStream?.user_id}
-                channelLogin={currentStream?.user_login}
-              />
-            );
-          })}
+            prediction at once, so they stack in one column, laid out by Rust:
+            the user's order, one card open, and no more than its share of
+            the chat's height (the open card scrolls inside it).
+            Polls and predictions are Twitch products driven by EventSub. On a
+            provider stream both overlays were still mounting and watching a
+            Kick slug / YouTube UC id that can never produce an event. */}
+        <ChatOverlayStack
+          top={overlayTop}
+          maxHeight={topStack.maxHeight}
+          stackRef={setOverlayStackEl}
+          hidden={activeView !== 'chat'}
+        >
+          {isTwitch && settings.show_predictions !== false && (
+            <PredictionOverlay
+              key="prediction"
+              channelId={currentStream?.user_id}
+              channelLogin={currentStream?.user_login}
+              stack={topStack.control.prediction}
+            />
+          )}
+          {isTwitch && settings.show_polls !== false && (
+            <PollOverlay
+              key="poll"
+              channelId={currentStream?.user_id}
+              channelLogin={currentStream?.user_login}
+              stack={topStack.control.poll}
+            />
+          )}
         </ChatOverlayStack>
 
         {/* Chat header - transforms when Hype Train active */}

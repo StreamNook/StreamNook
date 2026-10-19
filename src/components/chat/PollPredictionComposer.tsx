@@ -3,7 +3,7 @@ import { managerAct, type ActOutcome } from '../../services/streamManager';
 import { BarChart3, Trophy, Plus, X, ChevronUp, ChevronDown, History } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { Tooltip } from '../ui/Tooltip';
-import { OverlayBanner } from './OverlayBanner';
+import { BannerStatus, OverlayBanner, ShareRow } from './OverlayBanner';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { Logger } from '../../utils/logger';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
@@ -388,27 +388,21 @@ export function PollPredictionComposer({
             <OverlayBanner
               icon={
                 kind === 'poll' ? (
-                  <BarChart3 className="w-4 h-4 text-accent" />
+                  <BarChart3 className="w-4 h-4 text-accent-on-surface" />
                 ) : (
-                  <Trophy className="w-4 h-4 text-accent" />
+                  <Trophy className="w-4 h-4 text-accent-on-surface" />
                 )
               }
+              kind={kind === 'poll' ? 'Poll' : 'Prediction'}
               title={title.trim() || (kind === 'poll' ? 'Your question' : 'Your prediction')}
               isExpanded
               onToggleExpanded={() => {}}
-              badges={
-                <span className="text-xs font-mono font-bold text-warning bg-warning/20 border border-warning/40 px-1.5 py-1 rounded-md">
-                  {durationLabel}
-                </span>
-              }
+              badges={<BannerStatus>{durationLabel}</BannerStatus>}
             >
-              <div className="p-3 space-y-2">
+              <div className="px-3 pb-3 space-y-2">
                 {(filled.length ? filled : ['Option 1', 'Option 2']).map((o, i) => (
-                  <div
-                    key={i}
-                    className="w-full relative p-2.5 rounded-lg border bg-backgroundSecondary border-border"
-                  >
-                    <span className="font-semibold text-textPrimary text-sm">{o}</span>
+                  <div key={i} className="block">
+                    <ShareRow title={o} percent={0} />
                   </div>
                 ))}
               </div>

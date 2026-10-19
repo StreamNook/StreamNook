@@ -6,27 +6,34 @@
 // the inventory, a network read, is only asked when one does. The progress is
 // the inventory's own per-drop minutes; `get_drop_progress` and the
 // `drop-progress` events belong to the desktop automation and are empty here.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { Gift } from 'phosphor-react';
+//
+// It is one card of the chat's top stack (components/chat/chatTopStack.ts): a
+// one-line strip (art, name, time left and a thin progress line) whose tap
+// opens it, and an open form whose art and campaign line jump to Rewards.
+import React, { useCallback, useEffect, useState } from 'react';
+import { CaretRight, Gift } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
 import { isBackgrounded } from '../backgroundGate';
 import { isTwitchStream } from '../../utils/streamProvider';
+import { BannerStatus, OverlayBanner } from '../../components/chat/OverlayBanner';
+import { useStackPresence, type StackCardControl } from '../../components/chat/chatTopStack';
 
 // Accrued minutes only move once a minute, so a faster poll learns nothing.
 const POLL_MS = 60_000;
 
-interface WatchDrop {
+export interface WatchDrop {
   campaign_id: string;
   drop_id: string;
   instance_id: string | null;
   name: string;
   image: string;
-  /** "12m left" or "Ready to claim". */
+  /** "12m to watch"; empty once the minutes are in (the Claim button says it). */
   trailing: string;
+  /** The strip's status: "12m to watch", or "Ready" once the minutes are in. */
+  status: string;
   /** "Campaign · 2 of 5". */
   line: string;
   percent: number;
@@ -36,15 +43,15 @@ interface WatchDrop {
 }
 
 interface Props {
-  /** Lets the chat header know whether it has anything to show. */
-  onActiveChange?: (active: boolean) => void;
+  /** Its slot in the chat's top stack. */
+  stack: StackCardControl;
   /** False while a different chat tab is on screen. Progress belongs to the
    *  stream, not to whatever room you are reading, so it hides but stays
    *  mounted so the poll keeps running. */
   visible?: boolean;
 }
 
-export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = true }) => {
+export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
   const currentStream = useAppStore((s) => s.currentStream);
   const originCategory = useAppStore((s) => s.streamOriginCategory);
   const addToast = useAppStore((s) => s.addToast);
@@ -102,20 +109,13 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
   const live = twitch && shown?.login === channelLogin ? shown.drop : null;
   const showing = visible && !!live;
 
-  // Appearing is reported at once so the header makes room as the card fades
-  // in. Going away is reported from onExitComplete below, after the fade out
-  // has played, or the header would hide its slot under the leaving card.
-  // Hidden counts as gone, so the header never reserves space for a bar it is
-  // not drawing.
-  const showingNow = useRef(showing);
-  useEffect(() => {
-    showingNow.current = showing;
-    if (showing) onActiveChange?.(true);
-  }, [showing, onActiveChange]);
-  useEffect(() => () => onActiveChange?.(false), [onActiveChange]);
+  // The campaign is the card's identity: the next drop of the same campaign
+  // keeps the viewer's fold, a new campaign starts fresh. Hidden counts as
+  // gone, so the stack never keeps a slot for a card it is not drawing.
+  useStackPresence(stack, showing && live ? live.campaign_id : null);
 
   const claim = async (e: React.MouseEvent) => {
-    // A claim stays on the player; only a tap on the card jumps to Rewards.
+    // A claim stays on the player; only a tap on the card's body jumps to Rewards.
     e.stopPropagation();
     if (!live || claiming) return;
     setClaiming(true);
@@ -131,92 +131,98 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
     }
   };
 
+  if (!showing || !live || !stack.placed) return null;
   return (
-    <AnimatePresence
-      onExitComplete={() => {
-        // A card that came back before this one finished leaving keeps its slot.
-        if (!showingNow.current) onActiveChange?.(false);
-      }}
-    >
-      {showing && live && (
-        // The fade and the short drop ride a wrapper, transform and opacity
-        // only: the card's own active:opacity press would lose to framer's
-        // inline opacity, and .sn-popover eases both properties in CSS, which
-        // would trail every frame framer writes. One key for every drop, so a
-        // new drop or a claim updates in place rather than replaying the entrance.
-        <motion.div
-          key="drop-bar"
-          initial={{ opacity: 0, y: -6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
-        >
-          <DropCard
-            live={live}
-            claiming={claiming}
-            onClaim={(e) => void claim(e)}
-            onOpen={() => openDropCampaign(live.campaign_id)}
-          />
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <DropCard
+      live={live}
+      open={stack.open}
+      order={stack.order}
+      onToggle={stack.onToggle}
+      claiming={claiming}
+      onClaim={(e) => void claim(e)}
+      onOpen={() => openDropCampaign(live.campaign_id)}
+    />
   );
 };
 
-const DropCard: React.FC<{
+const DropArt: React.FC<{ live: WatchDrop; size: 'strip' | 'open' }> = ({ live, size }) => {
+  const box = size === 'strip' ? 'w-5 h-5 rounded' : 'w-9 h-9 rounded-md';
+  return live.image ? (
+    <img src={live.image} alt="" className={`${box} object-cover shrink-0 ring-1 ring-white/10`} draggable={false} />
+  ) : (
+    <span className={`${box} bg-textPrimary/[0.08] flex items-center justify-center shrink-0`}>
+      <Gift size={size === 'strip' ? 12 : 16} className="text-accent-on-surface" />
+    </span>
+  );
+};
+
+export const DropCard: React.FC<{
   live: WatchDrop;
+  open: boolean;
+  order: number;
+  onToggle: () => void;
   claiming: boolean;
   onClaim: (e: React.MouseEvent) => void;
   onOpen: () => void;
-}> = ({ live, claiming, onClaim, onOpen }) => {
+}> = ({ live, open, order, onToggle, claiming, onClaim, onOpen }) => {
+  const fill = live.complete ? 'bg-success' : 'bg-accent-on-surface';
   return (
-    // Tapping the bar shrinks the player to the mini window rather than closing
-    // it: watching (and so earning) continues while you look at the campaign.
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label={live.spoken}
-      onClick={onOpen}
-      className="sn-popover sn-popover--static pointer-events-auto flex items-center gap-2.5 px-2.5 py-1.5 active:opacity-70"
+    <OverlayBanner
+      icon={<DropArt live={live} size="strip" />}
+      kind="Drop"
+      title={live.name}
+      badges={
+        <BannerStatus mono={false} tone={live.complete ? 'done' : 'quiet'}>
+          {live.status}
+        </BannerStatus>
+      }
+      openIcon={<Gift size={16} className="text-accent-on-surface" />}
+      isExpanded={open}
+      onToggleExpanded={onToggle}
+      order={order}
+      stripLine={
+        <span aria-hidden className="absolute left-0 right-0 bottom-0 h-[2px] bg-textPrimary/[0.08]">
+          <span className={`block h-full ${fill} transition-[width] duration-700`} style={{ width: `${live.percent}%` }} />
+        </span>
+      }
     >
-      {live.image ? (
-        <img src={live.image} alt="" className="w-9 h-9 rounded-md object-cover shrink-0 ring-1 ring-white/10" draggable={false} />
-      ) : (
-        <div className="w-9 h-9 rounded-md bg-surface flex items-center justify-center shrink-0">
-          <Gift size={16} className="text-accent" />
-        </div>
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <span className="text-[12px] font-semibold text-textPrimary truncate">{live.name}</span>
-          <span
-            className={`ml-auto text-[11px] shrink-0 tabular-nums ${
-              live.complete ? 'text-success font-semibold' : 'text-textMuted'
-            }`}
-          >
-            {live.trailing}
-          </span>
-        </div>
-        <div className="text-[11px] leading-[14px] text-textMuted truncate">{live.line}</div>
-        {/* The track is a light film, not the surface color: on the card's
-            near-solid fill the surface tint all but vanished, and the bar read
-            as a floating stub. */}
-        <div className="h-1 rounded-full bg-white/[0.12] overflow-hidden mt-1">
-          <div
-            className={`h-full rounded-full transition-[width] duration-700 ${live.complete ? 'bg-success' : 'bg-accent'}`}
-            style={{ width: `${live.percent}%` }}
-          />
+      {/* Tapping the body shrinks the player to the mini window rather than
+          closing it: watching (and so earning) continues while you look at
+          the campaign. The head above only folds the card. */}
+      <div className="px-3 pb-3">
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={live.spoken}
+          onClick={onOpen}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') onOpen();
+          }}
+          className="flex items-center gap-2.5 rounded-md active:opacity-70"
+        >
+          <DropArt live={live} size="open" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[12px] leading-4 text-textMuted truncate">{live.line}</div>
+            <div className="mt-1.5 h-1 rounded-full bg-textPrimary/[0.12] overflow-hidden">
+              <div
+                className={`h-full rounded-full ${fill} transition-[width] duration-700`}
+                style={{ width: `${live.percent}%` }}
+              />
+            </div>
+          </div>
+          {live.complete ? (
+            <button
+              onClick={onClaim}
+              disabled={claiming}
+              className="shrink-0 px-2.5 py-1 rounded-full text-[12px] font-semibold border border-success/60 text-success disabled:opacity-60"
+            >
+              {claiming ? '...' : live.claim_label}
+            </button>
+          ) : (
+            <CaretRight size={14} className="shrink-0 text-textMuted" />
+          )}
         </div>
       </div>
-      {live.complete && (
-        <button
-          onClick={onClaim}
-          disabled={claiming}
-          className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-success/20 text-success disabled:opacity-60"
-        >
-          {claiming ? '…' : live.claim_label}
-        </button>
-      )}
-    </div>
+    </OverlayBanner>
   );
 };
