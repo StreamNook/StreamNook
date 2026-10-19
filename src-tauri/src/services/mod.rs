@@ -55,6 +55,8 @@ pub mod version_report;
 pub mod twitch_recap;
 pub mod pronouns;
 pub mod mention_ping;
+pub mod mention_match;
+pub mod mention_inbox;
 pub mod stream_manager;
 pub mod streamer_mode;
 pub mod suspicious_users;

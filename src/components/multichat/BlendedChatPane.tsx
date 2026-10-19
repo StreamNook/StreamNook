@@ -80,14 +80,10 @@ function Check({ checked, indeterminate }: { checked: boolean; indeterminate?: b
 
 export function BlendedChatPane({
   channels,
-  mode = 'all',
   readOnly = false,
   transparent = false,
 }: {
   channels: BlendedChannel[];
-  /** 'mentions' keeps only rows the Rust rule engine stamped as a mention,
-   *  a reply to us, or a highlight match. */
-  mode?: 'all' | 'mentions';
   /** No composer: the overlay window is a viewer, not a place to type. */
   readOnly?: boolean;
   /** No own background: the host paints the (glass) ground. */
@@ -117,17 +113,6 @@ export function BlendedChatPane({
   // memo by changing every tick.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
-
-  const shownMessages = useMemo(() => {
-    if (mode !== 'mentions') return messages;
-    return messages.filter(
-      (m) =>
-        typeof m !== 'string' &&
-        (m.metadata?.is_mentioned === true ||
-          m.metadata?.is_reply_to_me === true ||
-          !!m.metadata?.highlight),
-    );
-  }, [messages, mode]);
 
   const getMessageId = useCallback(
     (m: string | BackendChatMessage) => (typeof m === 'string' ? m.match(/(?:^@|;)id=([^;]+)/)?.[1] ?? null : m.id),
@@ -563,7 +548,7 @@ export function BlendedChatPane({
       ))}
       <div ref={setFeedEl} className="relative min-h-0 flex-1 overflow-hidden">
         <ChatMessageList
-          messages={shownMessages}
+          messages={messages}
           renderToken={revision}
           isPaused={paused}
           onScroll={onScroll}

@@ -35,6 +35,7 @@ import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
+import { useMentionJump } from '../mentions/useMentionJump';
 import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 
@@ -204,9 +205,6 @@ export const MobileChatPane: React.FC<{
   // (which is a cascading-render error under react-hooks v7), and coming back to
   // a room restores nothing stale because the key simply stops matching.
   const [pausedChannel, setPausedChannel] = useState<string | null>(null);
-  // Briefly marks the message a reply jumped to, so it is findable after the
-  // glide lands. ChatMessageList already renders this; mobile just never set it.
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const isPaused = !!activeChannel && pausedChannel === activeChannel;
 
   const [sheetUser, setSheetUser] = useState<SheetUser | null>(null);
@@ -454,18 +452,27 @@ export const MobileChatPane: React.FC<{
   const handleReplyClick = useCallback(
     (parentMsgId: string) => {
       pause(true, { force: true });
-      const ok = scrollChatToMessage(parentMsgId, { align: 'center' });
-      if (!ok) {
-        addToast('Original message is no longer in chat history', 'info');
-        return;
-      }
-      setHighlightedMessageId(parentMsgId);
-      // Long enough to find the message by eye after the glide lands, short
-      // enough that it does not linger as a permanent-looking selection.
-      window.setTimeout(() => setHighlightedMessageId(null), 2000);
+      // The flash marks the message for ~2 s after the glide lands: long
+      // enough to find it by eye, short enough not to read as a selection. The
+      // same flash a mention jump uses, and it shows on a parent that is
+      // itself a mention, which the row's own highlight prop could not.
+      const ok = scrollChatToMessage(parentMsgId, { align: 'center', flash: true });
+      if (!ok) addToast('Original message is no longer in chat history', 'info');
     },
     [pause, addToast],
   );
+
+  // Opening a mention (an inbox row or a notification) lands here once its
+  // chat is on screen: scroll and flash, or one backfill, or the context card.
+  useMentionJump({
+    activeChannel,
+    messages,
+    getMessageId,
+    pause,
+    login: activeTab?.login ?? null,
+    provider: activeProvider,
+    channelId: broadcasterId,
+  });
 
   const onUsernameClick = useCallback(
     (
@@ -729,7 +736,7 @@ export const MobileChatPane: React.FC<{
           onEmoteRightClick={() => {}}
           onUsernameRightClick={() => {}}
           onBadgeClick={() => {}}
-          highlightedMessageId={highlightedMessageId}
+          highlightedMessageId={null}
           deletedMessageIds={deletedMessageIds}
           clearedUserContexts={clearedUserContexts}
           emotes={emotes}

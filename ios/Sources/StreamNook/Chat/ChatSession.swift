@@ -35,6 +35,9 @@ final class ChatSession {
     private(set) var connected = false
     private(set) var error: String?
     private(set) var rowCount = 0
+    /// The join backfill (recent history) landed or failed: a jump to an older message can look
+    /// for it now.
+    private(set) var historyLoaded = false
     /// The message a reply is drafted to, by room.
     var replyTo: ChatMessage?
     private(set) var paused = false
@@ -226,6 +229,25 @@ final class ChatSession {
         }
     }
 
+    /// One history fetch around a moment (a mention the rows no longer hold), put in time order
+    /// among the rows held. Answers once the rows are in the room's buffer.
+    func backfill(around atMs: Int64) async {
+        let rows: [ChatMessage]
+        if isKick {
+            // Kick's scrollback has no window: the recent rows again.
+            guard let json = try? await core.invoke("kick_chat_history", args: ["channel": login]),
+                  let found = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
+            rows = found
+        } else {
+            guard let json = try? await core.invoke("load_channel_history", args: [
+                "channel": channel, "afterMs": max(0, atMs - 60_000), "beforeMs": atMs + 60_000,
+            ]),
+                  let found = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
+            rows = found
+        }
+        pipeline.backfill(rows)
+    }
+
     /// The join backfill: recent history above the live rows, then the room's badge art.
     private func loadHistory() async {
         if isKick {
@@ -235,6 +257,7 @@ final class ChatSession {
                 pipeline.prepend(rows)
                 chatLog.notice("kick history for \(self.login, privacy: .public): \(rows.count) rows")
             }
+            historyLoaded = true
             return
         }
         // Cached when fresh, else fetched: moderator, VIP, partner and event badges come from here.
@@ -246,6 +269,7 @@ final class ChatSession {
             pipeline.prepend(rows)
             if roomID == nil { roomID = rows.first?.tags["room-id"] }
         }
+        historyLoaded = true
         // Without history the first live row names the room.
         for _ in 0..<60 where roomID == nil {
             try? await Task.sleep(for: .milliseconds(500))

@@ -34,6 +34,8 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
 import { CosmeticsScreen } from './screens/CosmeticsScreen';
+import { MentionsScreen } from './screens/MentionsScreen';
+import { installMentionInbox } from './mentions/mentionInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
@@ -130,6 +132,8 @@ const MobileApp: React.FC = () => {
 
   useEffect(() => installBackHandler(), []);
   useEffect(() => installLifecycle(), []);
+  // The mentions unread count (the You row and the chat menu read it).
+  useEffect(() => installMentionInbox(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
   useEffect(() => installVideoCap(), []);
   useEffect(() => {
@@ -200,6 +204,8 @@ const MobileApp: React.FC = () => {
           <WatchScreen />
           <CosmeticsScreen />
           <SettingsScreen />
+          {/* Over settings and the watch layer: the chat menu opens it too. */}
+          <MentionsScreen />
           {/* Consumes the same `clipModal` store field the desktop <ClipModal />
               does. Without a mobile consumer, tapping a clip in chat flipped
               that state and rendered nothing. Portals to z-[9000] via

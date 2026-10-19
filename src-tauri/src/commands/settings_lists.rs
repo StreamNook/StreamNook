@@ -100,7 +100,7 @@ fn kind_of(path: &str) -> Option<Kind> {
         "chat_commands.user_commands" => Kind::Entries(Entries::UserCommands),
         "chat_events.hidden_provider_events" | "chat_design.hidden_badge_providers" => Kind::Set(&[]),
         "chat_design.scrollbar_mark_kinds" => Kind::Set(MARK_KINDS),
-        "live_notifications.muted_live_channels" => Kind::Logins,
+        "live_notifications.muted_live_channels" | "mentions.muted_channels" => Kind::Logins,
         "chat_highlights.custom_sounds" => Kind::Entries(Entries::CustomSounds),
         "moderation.card_actions" => Kind::Entries(Entries::CardActions),
         _ => return None,

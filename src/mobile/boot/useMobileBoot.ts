@@ -39,7 +39,8 @@ import {
   stableNotifyId,
   syncBackgroundChecks,
 } from '../notifications';
-import { consumePendingChannel } from '../nativeBridge';
+import { consumePendingChannel, consumePendingMention } from '../nativeBridge';
+import { openMentionById } from '../mentions/mentionInbox';
 import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
 import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
 import type { ProviderId } from '../../types/providers';
@@ -345,8 +346,19 @@ export function useMobileBoot(): void {
       await addListener<string>('streamnook:watch', () => {
         void drainWatchLink();
       });
-      const tapped = consumePendingChannel();
-      if (tapped) {
+      // A tapped mention notification (posted from Rust, android_notify.rs)
+      // opens that mention: its chat, then the jump to the message. A warm tap
+      // is pushed in; it clears the native copy too, so a later remount does
+      // not open it a second time.
+      (window as Window & { __SN_OPEN_MENTION__?: (id: string) => void }).__SN_OPEN_MENTION__ = (id) => {
+        consumePendingMention();
+        if (id) void openMentionById(id);
+      };
+      const tappedMention = consumePendingMention();
+      const tapped = tappedMention ? null : consumePendingChannel();
+      if (tappedMention) {
+        void openMentionById(tappedMention);
+      } else if (tapped) {
         openChannel(tapped);
       } else {
         void drainWatchLink();
