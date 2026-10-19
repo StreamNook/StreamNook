@@ -42,7 +42,7 @@ pub fn frontend_owned_defaults() -> Value {
         // Empty follows the device language (services/browse_languages.rs).
         "discovery_languages": [],
         "fullscreen_chat": {
-            "phone_layout": "overlay",
+            "phone_layout": "beside",
             "opacity": 55,
             "width": 340,
             "side": "auto",

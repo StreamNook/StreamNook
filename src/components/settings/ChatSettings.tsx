@@ -827,12 +827,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <SettingsRow
             title="Layout"
-            onReset={resetFor(['fullscreen_chat.phone_layout', 'overlay'])}
+            onReset={resetFor(['fullscreen_chat.phone_layout', 'beside'])}
             description="Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it."
-            help="Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through. Width never goes past half the screen."
+            help="Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through."
           >
             <SegmentedSelect<'overlay' | 'beside'>
-              value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}
+              value={settings.fullscreen_chat?.phone_layout ?? 'beside'}
               onChange={(phone_layout) =>
                 updateSettings({
                   ...settings,
@@ -845,7 +845,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ]}
             />
             <SubControls>
-              {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
+              {(settings.fullscreen_chat?.phone_layout ?? 'beside') === 'overlay' && (
                 <SubControl
                   title="Background"
                   onReset={resetFor(['fullscreen_chat.opacity', 55])}

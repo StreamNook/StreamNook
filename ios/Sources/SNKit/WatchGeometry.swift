@@ -5,6 +5,10 @@ import Foundation
 /// "left" and on the right otherwise ("auto" included).
 public struct LandscapeChatLayout: Equatable, Sendable {
     public static let minWidth = 240.0
+    /// The video keeps at least this much of the screen's width beside the column.
+    public static let minVideo = 240.0
+    /// The column's text margin on an edge with no camera cutout (the rounded corner alone).
+    public static let cornerMargin = 12.0
 
     public var beside: Bool
     public var leading: Bool
@@ -20,15 +24,24 @@ public struct LandscapeChatLayout: Equatable, Sendable {
         self.opacity = min(max(opacity, 0), 100)
     }
 
-    /// The column's width on a screen this wide: the saved (or live, mid-drag) width, never under
-    /// 240 nor past half the screen, rounded.
+    /// The column's width on a screen this wide, edge to edge: the saved (or live, mid-drag) width,
+    /// never under 240 and never leaving the video less than 240, rounded. The range is the whole
+    /// screen's, safe areas included: the column's background always runs to the screen edge.
     public func width(screenWidth: Double, live: Double? = nil) -> Double {
         Self.clamp(live ?? width, screenWidth: screenWidth)
     }
 
     public static func clamp(_ width: Double, screenWidth: Double) -> Double {
-        let most = max(minWidth, (screenWidth / 2).rounded(.down))
+        let most = max(minWidth, screenWidth - minVideo)
         return min(max(width, minWidth), most).rounded()
+    }
+
+    /// How far the column's text stays in from the screen edge it sits against. The system
+    /// reports the same landscape inset on both sides, but only one has the camera cutout: that
+    /// side keeps the whole inset, the other only a corner margin, so no band of the column sits
+    /// empty.
+    public func textInset(edgeInset: Double, cutoutOnChatSide: Bool) -> Double {
+        cutoutOnChatSide ? edgeInset : min(edgeInset, Self.cornerMargin)
     }
 
     /// A drag on the handle on the column's inner edge: pulling toward the picture widens it.

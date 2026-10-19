@@ -352,13 +352,11 @@ export const WatchScreen: React.FC = () => {
   // fullscreen toggle there. Deciding this by WIDTH is what put chat on the
   // right of every landscape phone with no way to dismiss it.
   //
-  // On a phone the landscape chat toggle does not carve a column out of the
-  // picture by default: a phone on its side is ~800px wide, and a 300px chat
-  // column pillarboxes the video to a strip. Chat floats OVER the picture
-  // instead, translucent, at the width and opacity the overlay settings say,
-  // and the player keeps the whole screen. "Beside the video" is still there
-  // as a choice for anyone who prefers the split.
-  const phoneOverlayChat = !shape.largeScreen && (fsChat?.phone_layout ?? 'overlay') === 'overlay';
+  // On a phone the landscape chat toggle takes a column beside the picture by
+  // default: the video gets the rest of the screen to itself, edge to edge.
+  // "Over the video" floats the column over the picture instead, translucent,
+  // at the width and opacity the overlay settings say.
+  const phoneOverlayChat = !shape.largeScreen && (fsChat?.phone_layout ?? 'beside') === 'overlay';
   const twoColumns =
     shape.largeScreen
       ? largeChatHidden
@@ -405,8 +403,10 @@ export const WatchScreen: React.FC = () => {
     if (patch.width != null) setOverlayWidthLive(null);
     if (patch.opacity != null) setOverlayOpacityLive(null);
   }, []);
-  // Never more than half the picture, whatever the desktop slider was set to.
-  const overlayMaxWidth = Math.round(shape.w * 0.5);
+  // The handle's range is the whole screen's (the column's background runs to
+  // the edge through the cutout inset; only its text keeps clear of the cutout),
+  // and the video always keeps at least 240 beside it.
+  const overlayMaxWidth = Math.max(240, Math.round(shape.w - 240));
   const overlayWidth = Math.min(Math.max(240, overlayWidthLive ?? fsChat?.width ?? 340), overlayMaxWidth);
   const overlayOpacity = Math.max(0, Math.min(100, overlayOpacityLive ?? fsChat?.opacity ?? 55));
   // Resizable only where there is genuinely a trade to make. On a phone the
