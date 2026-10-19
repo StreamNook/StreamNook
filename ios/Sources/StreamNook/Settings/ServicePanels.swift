@@ -38,31 +38,39 @@ struct AdFreePanel: View {
                     Image(systemName: "bolt.slash")
                 }
             }
+            // Still behind a disclosure: the row says which list is in use, and the box to
+            // replace it only opens on purpose.
             SettingsBlock(title: "Relays") {
-                Button {
-                    withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
-                } label: {
-                    HStack {
-                        Label("Relays", systemImage: "point.3.connected.trianglepath.dotted")
-                        Spacer(minLength: 8)
+                let own = !store.string("video_player.ad_bypass_proxies").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                SettingRow(title: "Relays", detail: own ? "Your own list" : "The bundled list",
+                           paths: ["video_player.ad_bypass_proxies"], icon: "point.3.connected.trianglepath.dotted") {
+                    Button {
+                        withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
+                    } label: {
                         Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(SN.textMuted)
                             .rotationEffect(.degrees(relaysOpen ? 90 : 0))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(relaysOpen ? "Shown" : "Hidden")
-                if relaysOpen {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
-                        Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
-                        SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
-                                         limit: 4000, monospaced: true, multiline: true)
+                    .buttonStyle(.plain)
+                    .padding(.vertical, -12)
+                    .padding(.trailing, -12)
+                    .accessibilityLabel(relaysOpen ? "Hide the relay list" : "Show the relay list")
+                } below: {
+                    if relaysOpen {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
+                            Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
+                            SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
+                                             limit: 4000, monospaced: true, multiline: true)
+                        }
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 10)
+                        .transition(.opacity)
                     }
-                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
-                    .transition(.opacity)
+                } nested: {
+                    EmptyView()
                 }
             }
         }
@@ -567,7 +575,7 @@ struct SupportPanel: View {
                     .padding(.top, 10)
             }
         }
-        SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them.") {
+        SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few things against your account. Chat messages and anything you type are not among them.") {
             SettingRow(title: "Channels and emotes",
                        detail: "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
                        help: "Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted.") { EmptyView() }
@@ -576,6 +584,9 @@ struct SupportPanel: View {
                        help: "This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current.") { EmptyView() }
             SettingRow(title: "Linked accounts",
                        detail: "Records which other platforms you have connected, so they survive a reinstall.") { EmptyView() }
+            SettingRow(title: "VOD positions",
+                       detail: "With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.",
+                       help: "Only past broadcasts you open yourself, never live watching. Kept for 90 days. Turn off Device sync under Player > Resume VODs and nothing more is sent.") { EmptyView() }
         }
     }
 

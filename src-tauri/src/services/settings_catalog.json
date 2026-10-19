@@ -193,6 +193,38 @@
   },
   {
    "page": "player",
+   "section": "Playback",
+   "title": "Resume VODs",
+   "paths": [
+    "video_player.resume_vod_playback"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Reopening a past broadcast picks up where you left off.",
+   "aliases": [
+    "continue",
+    "resume",
+    "vod position",
+    "where I left off"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Device sync",
+   "paths": [
+    "video_player.sync_vod_progress"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "Keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account.",
+   "aliases": [
+    "sync",
+    "cross device"
+   ]
+  },
+  {
+   "page": "player",
    "section": "Latency & Buffering",
    "title": "Low latency",
    "paths": [
@@ -252,7 +284,7 @@
   },
   {
    "page": "player",
-   "section": "Song Identification",
+   "section": "Latency & Buffering",
    "title": "Target latency",
    "paths": [
     "video_player.ll_target_latency"
@@ -886,8 +918,7 @@
    "aliases": [
     "avatar",
     "pfp"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1596,8 +1627,7 @@
    "detail": "",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1666,7 +1696,7 @@
   },
   {
    "page": "chat",
-   "section": "Spam & Pyramid",
+   "section": "Mentions & Replies",
    "title": "Color",
    "paths": [
     "chat_design.mention_text_color"
@@ -1678,7 +1708,7 @@
   },
   {
    "page": "chat",
-   "section": "Spam & Pyramid",
+   "section": "Chat Input",
    "title": "Points balance",
    "paths": [
     "chat_input.hide_points_balance",
@@ -1692,7 +1722,7 @@
   },
   {
    "page": "chat",
-   "section": "Spam & Pyramid",
+   "section": "Chat Events",
    "title": "Wording",
    "paths": [
     "chat_events.event_templates"
@@ -1716,8 +1746,7 @@
    "detail": "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1729,8 +1758,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -1965,6 +1993,19 @@
    "logo": null,
    "detail": "Records which other platforms you have connected, so they survive a reinstall.",
    "aliases": []
+  },
+  {
+   "page": "support",
+   "section": "Account Data",
+   "title": "VOD positions",
+   "paths": [],
+   "nested": false,
+   "logo": null,
+   "detail": "With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.",
+   "aliases": [
+    "vod",
+    "privacy"
+   ]
   },
   {
    "page": "adFree",

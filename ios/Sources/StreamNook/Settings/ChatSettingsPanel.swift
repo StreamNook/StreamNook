@@ -171,8 +171,10 @@ struct ChatSettingsPanel: View {
                                 fallback: "none", accessibility: "Name separator", fullWidth: false)
                 }
                 if store.string("chat_design.username_separator", "none") != "none" || store.string("chat_design.username_style", "plain") != "plain" {
+                    // An earlier build saved "accent", which nothing reads; it shows as the theme choice.
                     NestedChoice(title: "Prefix color", path: "chat_design.username_accent_source",
-                                 choices: [Choice("User color", "user"), Choice("Theme accent", "accent")], fallback: "user")
+                                 choices: [Choice("User color", "user"), Choice("Theme accent", "theme")], fallback: "user",
+                                 shown: { $0 == "accent" ? "theme" : $0 })
                 }
             }
             ToggleRow(title: "Readable colors", path: "chat_design.name_color_adjustment",
@@ -193,11 +195,16 @@ struct ChatSettingsPanel: View {
                     SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
-            // The picture source (7TV or Twitch) is not read on the iPhone yet, so only Animation shows.
-            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_animation",
-                      choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
-                      detail: "Animated 7TV profile pictures play, or hold their first frame.",
-                      shown: { $0 == "hover" ? "never" : $0 })
+            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
+                      choices: [Choice("7TV", "seventv"), Choice("Twitch", "twitch")], fallback: "seventv",
+                      detail: "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
+                      help: "Twitch shows each platform's own picture (Kick included) and never asks 7TV for one; paints and badges stay. Animation has its own choice and does not follow Reduce Motion.") {
+                if store.string("cosmetics.profile_picture_source", "seventv") != "twitch" {
+                    NestedChoice(title: "Animation", path: "cosmetics.profile_picture_animation",
+                                 choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
+                                 shown: { $0 == "hover" ? "never" : $0 })
+                }
+            }
             ToggleRow(title: "@ prefix", path: "chat_design.show_at_sign", detail: "Writes every name as @name.")
             ChoiceRow(title: "Paint shadows", path: "cosmetics.paint_shadows",
                       choices: [Choice("All", "all"), Choice("One", "one"), Choice("None", "none")], fallback: "all",
@@ -357,11 +364,25 @@ struct ChatSettingsPanel: View {
 
     private var highlightAppearance: some View {
         SettingsBlock(title: "Highlight Appearance", detail: "Applies to every highlight type below: phrases, usernames, badges, and events.") {
-            SliderRow(title: { "Opacity: \(Int($0))%" }, path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
-                      fallback: 20, detail: "How bright a highlighted row's tint is; 20% matches the original look.",
-                      accessibility: "Highlight opacity")
+            ChoiceRow(title: "Style", path: "chat_highlights.appearance.display_style",
+                      choices: [Choice("Standard", "standard"), Choice("Minimal", "minimal"), Choice("None", "none")],
+                      fallback: "standard",
+                      help: "Opacity is how bright the row tint appears, in the Standard style only. 20% matches the original look.",
+                      detailFor: { Self.highlightStyleHints[$0 ?? "standard"] ?? "" },
+                      accessibility: "Highlight style") {
+                if store.string("chat_highlights.appearance.display_style", "standard") == "standard" {
+                    NestedSlider(title: "Opacity", path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
+                                 fallback: 20, readout: { "\(Int($0))%" })
+                }
+            }
         }
     }
+
+    static let highlightStyleHints = [
+        "standard": "Tinted row background plus colored left border.",
+        "minimal": "Colored left border only, no row tint.",
+        "none": "Nothing drawn on the row.",
+    ]
 
     private var spam: some View {
         SettingsBlock(title: "Spam & Pyramid", detail: "How /spam and /pyramid send their lines.") {
