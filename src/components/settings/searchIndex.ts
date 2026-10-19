@@ -1598,7 +1598,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Moderation Actions',
     title: 'Timeout lengths',
     parent: 'Hover buttons',
-    description: 'The lengths the arrow beside the quick 10m timeout opens on a hovered message, shortest first. Previously "Timeout presets", typed in seconds.'
+    description: 'The lengths the arrow beside the quick 10m timeout opens on a hovered message, shortest first. Pick from the list or type your own (45m, 1h30m, 2d). Previously "Timeout presets", typed in seconds.'
   },
   {
     tab: 'Moderation',
@@ -1650,7 +1650,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Moderation Actions',
     title: 'Buttons',
     parent: 'Message edge',
-    description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths. They run from mildest to harshest, left to right.'
+    description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They run from mildest to harshest, left to right.'
   },
   {
     tab: 'Moderation',
@@ -1671,7 +1671,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Moderation Actions',
     title: 'Steps',
     parent: 'Message edge',
-    description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths. They always run from mildest to harshest.'
+    description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They always run from mildest to harshest.'
   },
   {
     tab: 'Moderation',
