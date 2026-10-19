@@ -378,9 +378,14 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
         {expected === 'media' ? (
           <>
             <div className="w-full bg-white/5" style={{ aspectRatio: '16 / 9' }} />
-            <div className="space-y-2 px-3 py-2.5">
-              <div className="h-2.5 w-1/3 rounded bg-white/5" />
-              <div className="h-2.5 w-2/3 rounded bg-white/5" />
+            {/* The card's own lines under the picture: the byline, then one title line. */}
+            <div className="px-3 py-2">
+              <div className="flex items-center" style={{ height: 16.5 }}>
+                <div className="h-2.5 w-1/3 rounded bg-white/5" />
+              </div>
+              <div className="mt-0.5 flex h-5 items-center">
+                <div className="h-2.5 w-2/3 rounded bg-white/5" />
+              </div>
             </div>
           </>
         ) : (
