@@ -167,6 +167,23 @@ pub const MAX_CHATTERS: usize = 5;
 /// The Tab cycle's and the phone strip's row cap, chatters included.
 pub const CYCLE_CAP: usize = 50;
 
+/// While the viewer types, a word shorter than this (a leading colon aside)
+/// offers only an emote of exactly that name: one character starts most of a
+/// set's names, so a prefix list for it would be noise, but a channel emote
+/// named "0" is still found by typing 0.
+pub const MIN_PREFIX_CHARS: usize = 2;
+
+/// Whether `word` is under `MIN_PREFIX_CHARS` once a colon trigger is set
+/// aside. An `@` word names a chatter and is not short in this sense.
+pub fn is_short_word(word: &str) -> bool {
+    if word.starts_with('@') {
+        return false;
+    }
+    let rest = word.strip_prefix(':').unwrap_or(word);
+    let rest = rest.strip_suffix(':').unwrap_or(rest);
+    rest.chars().count() < MIN_PREFIX_CHARS
+}
+
 /// What a chatter row inserts: the display name when it differs from the
 /// login only by case, else the login (a localized display name mentions
 /// nobody), with `@` when the word had one.
@@ -398,6 +415,9 @@ pub struct Collector<'a> {
     inert: bool,
     /// Offer FFZ subscriber effects the viewer cannot use, marked locked.
     include_locked: bool,
+    /// A short word typed while suggestions follow the typing: only an emote
+    /// of exactly that name matches (see `MIN_PREFIX_CHARS`).
+    exact_only: bool,
     hits: [Vec<Hit>; Slot::COUNT],
 }
 
@@ -434,8 +454,17 @@ impl<'a> Collector<'a> {
             browse,
             inert,
             include_locked: false,
+            exact_only: false,
             hits: Default::default(),
         }
+    }
+
+    /// The caller asks as the viewer types (the phones' suggestion strip, the
+    /// desktop's colon list), not on Tab or in the emote menu: a word under
+    /// `MIN_PREFIX_CHARS` then matches only an emote of exactly that name.
+    pub fn typing(mut self, on: bool) -> Self {
+        self.exact_only = on && !self.browse && !self.needle.is_empty() && is_short_word(&self.needle);
+        self
     }
 
     /// The emote menu shows FFZ subscriber effects greyed out rather than
@@ -449,6 +478,10 @@ impl<'a> Collector<'a> {
     fn kind_of(&self, name: &str) -> Option<(Kind, Option<usize>, bool)> {
         if self.browse {
             return Some((Kind::Prefix, None, false));
+        }
+        if self.exact_only {
+            // Exact name, exact case: a typed "d" is a word, not the emote "D".
+            return (name == self.needle).then_some((Kind::ExactCase, Some(0), true));
         }
         let q = self.needle_lower.as_str();
         if name.is_ascii() && q.is_ascii() && self.needle.len() == q.len() {
@@ -1418,6 +1451,65 @@ mod tests {
         assert_eq!(rows[2].insert_text.as_deref(), Some("lunar"));
         assert_eq!(rows[0].insert_text.as_deref(), Some("Lulu"));
         assert_eq!(rows[2].login.as_deref(), Some("lunar"));
+    }
+
+    /// A channel with single-character emote names on every provider.
+    fn short_names() -> EmoteSet {
+        let mut s = EmoteSet::new();
+        s.seven_tv = vec![
+            emote(EmoteProvider::SevenTV, "s0", "0", None, None),
+            emote(EmoteProvider::SevenTV, "s00", "00", None, None),
+            emote(EmoteProvider::SevenTV, "s0h", "0head", None, None),
+            emote(EmoteProvider::SevenTV, "sD", "D", None, None),
+        ];
+        s.bttv = vec![emote(EmoteProvider::BTTV, "bB", "B", None, None)];
+        s.ffz = vec![emote(EmoteProvider::FFZ, "fF", "F", None, None)];
+        s.twitch = vec![emote(EmoteProvider::Twitch, "tT", "T", Some("subscriptions"), Some("42"))];
+        s
+    }
+
+    fn short_run(query: &str, profile: Profile, typing: bool) -> Vec<String> {
+        let (favorites, globals) = (HashSet::new(), HashSet::new());
+        let mut c = Collector::new(
+            Spec { query, profile, order: Order::Default, contains: false, limit: 50 },
+            Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        )
+        .typing(typing);
+        c.offer_set(&short_names());
+        c.finish().0.into_iter().map(|r| r.name).collect()
+    }
+
+    #[test]
+    fn a_one_character_word_offers_only_the_emote_of_exactly_that_name() {
+        // "0" finds the 7TV emote named 0, and nothing that merely starts with 0.
+        assert_eq!(short_run("0", Profile::Cycle, true), vec!["0"]);
+        // The colon path answers the same.
+        assert_eq!(short_run(":0", Profile::Cycle, true), vec!["0"]);
+        // The desktop colon list sends what follows the colon.
+        assert_eq!(short_run("0", Profile::Search, true), vec!["0"]);
+        // Two characters keep the prefix list.
+        assert_eq!(short_run("00", Profile::Cycle, true), vec!["00"]);
+        assert_eq!(short_run("0h", Profile::Cycle, true), vec!["0head"]);
+        // A common letter floods nothing: exact name and case only.
+        assert!(short_run("d", Profile::Cycle, true).is_empty());
+        assert_eq!(short_run("D", Profile::Cycle, true), vec!["D"]);
+        // BTTV, FFZ and Twitch channel emotes count too.
+        assert_eq!(short_run("B", Profile::Cycle, true), vec!["B"]);
+        assert_eq!(short_run("F", Profile::Cycle, true), vec!["F"]);
+        assert_eq!(short_run("T", Profile::Cycle, true), vec!["T"]);
+        // Tab asked on purpose: the prefix cycle is unchanged.
+        assert_eq!(short_run("0", Profile::Cycle, false), vec!["0", "00", "0head"]);
+    }
+
+    #[test]
+    fn short_words_are_counted_without_their_colon() {
+        assert!(is_short_word("0"));
+        assert!(is_short_word(":0"));
+        assert!(is_short_word(":0:"));
+        assert!(!is_short_word("00"));
+        assert!(!is_short_word(":00"));
+        // A mention is a chatter lookup, not an emote word.
+        assert!(!is_short_word("@l"));
     }
 
     #[test]
