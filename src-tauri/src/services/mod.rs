@@ -131,6 +131,7 @@ pub mod link_adapt;
 pub mod ll_origin;
 pub mod theme_palette;
 pub mod settings_backups;
+pub mod install_marker;
 pub mod settings_catalog;
 #[cfg(test)]
 mod ll_soak;

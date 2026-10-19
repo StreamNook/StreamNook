@@ -545,7 +545,7 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 /// another iPhone can never open there (the Keychain key stays on this one), so
 /// it must not travel at all.
 #[cfg(target_os = "ios")]
-fn exclude_from_backup(path: &Path) {
+pub(crate) fn exclude_from_backup(path: &Path) {
     use std::ffi::{c_char, c_int, c_void, CString};
     use std::os::unix::ffi::OsStrExt;
     extern "C" {
