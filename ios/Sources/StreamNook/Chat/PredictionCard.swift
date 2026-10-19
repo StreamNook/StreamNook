@@ -29,9 +29,6 @@ struct PredictionCard: View {
                     if prediction.canPredict {
                         sides
                         SplitBar(outcomes: prediction.outcomes)
-                        if let status = prediction.statusLine {
-                            VoteLinePill(text: status, icon: prediction.pointsIcon, showsIcon: true)
-                        }
                     } else {
                         SplitBar(outcomes: prediction.outcomes)
                         if let result = prediction.result {
@@ -52,6 +49,11 @@ struct PredictionCard: View {
             // button and the balance used to be below the fold with only a fade to say so.
             if open && prediction.canPredict {
                 VStack(alignment: .leading, spacing: 8) {
+                    // Placed: what the viewer staked, in view beside the bet while they can still
+                    // add to it.
+                    if let status = prediction.statusLine {
+                        VoteLinePill(text: status, icon: prediction.pointsIcon, showsIcon: true)
+                    }
                     betControls
                 }
                 .padding(.top, 8)

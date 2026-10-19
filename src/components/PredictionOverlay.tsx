@@ -268,13 +268,30 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
         })}
       </div>
 
-      {/* The bet, then a confirm before any points are spent. */}
-      {/* The bet stays pinned to the card's bottom edge while the outcomes
-          scroll under it: under the phones' capped stack the button and the
-          balance used to sit below the fold, with only a faint fade to hint
-          that the card scrolled. */}
+      {/* What the viewer staked, and how it stands: above the pinned bet, so a
+          placed prediction says so in view however tight the card is. */}
+      {view.status_line && !(canPredict && side) && (
+        <div className="px-3 pb-2">
+          <div className="py-2 px-3 bg-backgroundSecondary border border-border rounded-lg flex items-center justify-center gap-2">
+            {pointsIcon('text-textSecondary')}
+            <span className="text-textPrimary text-sm font-medium">{view.status_line}</span>
+          </div>
+        </div>
+      )}
+
+      {/* What this bet would win, above the pinned bet so it scrolls with the
+          outcomes it is about. */}
+      {canPredict && side && bet?.ok && !showConfirm && (
+        <p className="px-3 pb-1.5 text-center text-xs text-textSecondary">{bet.win_line}</p>
+      )}
+
+      {/* The bet, then a confirm before any points are spent. It stays pinned
+          to the card's bottom edge while the outcomes scroll above it: under
+          the phones' capped stack the button and the balance used to sit below
+          the fold, with only a faint fade to hint that the card scrolled. Kept
+          to two rows so the outcomes keep their room above it. */}
       {canPredict && side && (
-        <div className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-3 border-t border-borderSubtle/60">
+        <div className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-2.5 border-t border-borderSubtle/60">
           {showConfirm && bet ? (
             <div className="p-3 bg-backgroundSecondary rounded-lg border border-border text-center">
               <p className="text-sm font-semibold text-textPrimary">{bet.confirm_title}</p>
@@ -300,17 +317,15 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
             </div>
           ) : (
             <>
-              {/* What there is to spend, right where the amount is set. */}
-              {bet?.balance_line && (
-                <div className="mb-1.5 flex items-center justify-between text-xs text-textSecondary">
-                  <span>Your points</span>
-                  <span className="flex items-center gap-1 font-medium text-textPrimary tabular-nums">
-                    {pointsIcon('text-textSecondary')}
-                    {bet.balance_line}
-                  </span>
-                </div>
+              {/* Placed: what the viewer staked, kept in view in the pinned
+                  bet while they can still add to it. */}
+              {view.status_line && (
+                <p className="mb-1.5 flex items-center justify-center gap-1.5 truncate text-xs font-medium text-textPrimary">
+                  {pointsIcon('text-textSecondary')}
+                  {view.status_line}
+                </p>
               )}
-              <div className="flex items-center gap-2 p-2 bg-backgroundSecondary rounded-lg border border-border">
+              <div className="flex items-center gap-1.5 p-1.5 min-w-0 bg-backgroundSecondary rounded-lg border border-border">
                 <input
                   type="text"
                   inputMode="numeric"
@@ -320,15 +335,16 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                   onBlur={() => {
                     if (bet) setAmountInput(String(bet.amount));
                   }}
-                  className="w-20 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
+                  className="w-16 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
                   placeholder="Amount"
+                  aria-label="Amount"
                 />
                 <div className="flex gap-1">
                   {(bet?.presets ?? []).map((preset) => (
                     <button
                       key={preset.label}
                       onClick={() => setAmountInput(String(preset.amount))}
-                      className={`px-2 py-1.5 text-xs font-medium rounded transition-colors border ${
+                      className={`px-1.5 py-1.5 text-xs font-medium rounded transition-colors border ${
                         bet?.amount === preset.amount
                           ? 'bg-transparent border-accent-on-surface text-accent-on-surface'
                           : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
@@ -338,13 +354,24 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                     </button>
                   ))}
                 </div>
+                {/* What there is to spend, at the end of the amount row. */}
+                {bet?.balance_line && (
+                  <span
+                    className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
+                    title={`Your points: ${bet.balance_line}`}
+                    aria-label={`Your points: ${bet.balance_line}`}
+                  >
+                    {pointsIcon('text-textSecondary')}
+                    {bet.balance_line.split(' ')[0]}
+                  </span>
+                )}
               </div>
               {failureLine && (
-                <p role="alert" className="mt-2 truncate text-center text-xs font-medium text-error">
+                <p role="alert" className="mt-1.5 truncate text-center text-xs font-medium text-error">
                   {failureLine}
                 </p>
               )}
-              <div className="mt-2">
+              <div className="mt-1.5">
                 {bet?.problem ? (
                   <p className="py-1.5 text-center text-xs font-medium text-textSecondary">{bet.problem}</p>
                 ) : (
@@ -358,19 +385,8 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                   </button>
                 )}
               </div>
-              {bet?.ok && <p className="mt-1.5 text-center text-xs text-textSecondary">{bet.win_line}</p>}
             </>
           )}
-        </div>
-      )}
-
-      {/* What the viewer staked, and how it stands */}
-      {view.status_line && (
-        <div className="px-3 pb-3">
-          <div className="py-2 px-3 bg-backgroundSecondary border border-border rounded-lg flex items-center justify-center gap-2">
-            {pointsIcon('text-textSecondary')}
-            <span className="text-textPrimary text-sm font-medium">{view.status_line}</span>
-          </div>
         </div>
       )}
 
