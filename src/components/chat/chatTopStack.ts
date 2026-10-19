@@ -206,11 +206,49 @@ export function useChatTopStack(column: HTMLElement | null): {
   return { control, maxHeight: layout?.max_height ?? 0 };
 }
 
-/** Reports a card's presence to its stack for as long as it is mounted. */
-export function useStackPresence(stack: StackCardControl | undefined, id: string | null): void {
+/** The space between two cards of the stack (ChatOverlayStack's gap), which a
+ *  leaving card folds away along with its own height. */
+export const STACK_GAP_PX = 4;
+
+// A leaving card gives its slot back when its exit finishes; this bounds the
+// wait if the exit never reports (a stalled frame), so the stack can never keep
+// a slot for a card that is gone.
+const LEAVE_FALLBACK_MS = 1000;
+
+/**
+ * Reports a card's presence to its stack for as long as it is mounted. A card
+ * that appears is reported at once, so its slot opens as it fades in. A card
+ * that was on screen and goes away keeps its slot until its exit has played:
+ * the returned function, for AnimatePresence's onExitComplete, gives it back.
+ * Released at once instead, the cards around it would move (and Rust could
+ * open another) while it is still fading.
+ */
+export function useStackPresence(stack: StackCardControl | undefined, id: string | null): () => void {
   const onPresence = stack?.onPresence;
+  const drawn = id !== null && (stack?.placed ?? false);
+  const idRef = useRef(id);
+  // Whether the last render drew the card, i.e. whether there is an exit to wait for.
+  const drawnRef = useRef(false);
+
   useEffect(() => {
-    onPresence?.(id);
+    idRef.current = id;
+    if (id !== null || !drawnRef.current) {
+      onPresence?.(id);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (idRef.current === null) onPresence?.(null);
+    }, LEAVE_FALLBACK_MS);
+    return () => clearTimeout(timer);
   }, [onPresence, id]);
+  // Declared after the effect above, which reads the previous render's value.
+  useEffect(() => {
+    drawnRef.current = drawn;
+  }, [drawn]);
   useEffect(() => () => onPresence?.(null), [onPresence]);
+
+  return useCallback(() => {
+    // A card that came back while the old one was leaving keeps its slot.
+    if (idRef.current === null) onPresence?.(null);
+  }, [onPresence]);
 }

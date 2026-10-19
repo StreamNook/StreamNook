@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BarChart3, Users, CheckCircle2, Trophy } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
-import { BannerStatus, OverlayBanner, ShareRow } from './chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat/OverlayBanner';
 import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
@@ -83,11 +83,11 @@ const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
 
   // In a stack Rust decides which card is open, and this one reports itself so
   // it gets a slot; on its own it keeps its own fold.
-  useStackPresence(stack, pollId);
+  const released = useStackPresence(stack, pollId);
   const isExpanded = stack ? stack.open : expandedHere;
   const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
 
-  if (!view || (stack && !stack.placed)) return null;
+  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
 
   const pendingChoice = pending?.pollId === view.poll_id ? pending.choiceId : null;
   const canTap = view.can_vote && !pendingChoice;
@@ -112,7 +112,9 @@ const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
   ) : null;
 
   return (
+    <StackCardPresence onLeft={released}>
     <OverlayBanner
+      key="poll"
       icon={<BarChart3 className="w-4 h-4 text-accent-on-surface" />}
       kind="Poll"
       title={view.title}
@@ -176,6 +178,7 @@ const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
         </p>
       </div>
     </OverlayBanner>
+    </StackCardPresence>
   );
 };
 

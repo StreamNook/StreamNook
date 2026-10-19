@@ -1232,7 +1232,7 @@ export const WatchScreen: React.FC = () => {
               <ChatOverlayStack
                 maxHeight={topStack.maxHeight}
                 stackRef={setTopStackEl}
-                className="px-2.5 pt-1.5 pb-1 empty:hidden"
+                className="px-2.5 pt-1.5 pb-1 transition-[padding] duration-200 empty:py-0"
               >
                 {currentStream && streamScoped && !chatOverlay && showPredictions && (
                   <PredictionOverlay
