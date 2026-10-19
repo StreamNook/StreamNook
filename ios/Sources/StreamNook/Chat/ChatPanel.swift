@@ -345,21 +345,9 @@ struct ChatListHost: UIViewRepresentable {
             let (messageID, userID, name) = (message.id, message.userID, message.shownName)
             return ChatListView.PreparedSwipe(slider: slider) { step in
                 Task { @MainActor in
-                    do {
-                        let outcome = try await core.moderate(action: step.action(messageID: messageID), broadcasterID: room,
-                                                              targetUserID: userID, targetName: name,
-                                                              useSavedReason: step.action != "delete")
-                        let undo: (@MainActor () -> Void)? = outcome.undoable ? {
-                            Task {
-                                _ = try? await core.moderate(action: ["kind": "unban", "timeout": step.action == "timeout"],
-                                                             broadcasterID: room, targetUserID: userID, targetName: name,
-                                                             useSavedReason: false)
-                            }
-                        } : nil
-                        onOutcome(ChatModActions.Outcome(text: outcome.message, success: true, undo: undo))
-                    } catch {
-                        onOutcome(ChatModActions.Outcome(text: ChatComposerModel.words(error)))
-                    }
+                    let outcome = await ChatModActions.runSwipe(step, core: core, room: room, messageID: messageID,
+                                                                userID: userID, name: name)
+                    onOutcome(outcome)
                 }
             }
         }
