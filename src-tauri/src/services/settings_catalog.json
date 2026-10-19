@@ -1107,6 +1107,18 @@
   {
    "page": "chat",
    "section": "Mentions & Replies",
+   "title": "Color",
+   "paths": [
+    "chat_design.mention_text_color"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
    "title": "Highlight",
    "paths": [
     "chat_design.mention_color"
@@ -1774,18 +1786,6 @@
     "spam",
     "pyramid"
    ]
-  },
-  {
-   "page": "chat",
-   "section": "Mentions & Replies",
-   "title": "Color",
-   "paths": [
-    "chat_design.mention_text_color"
-   ],
-   "nested": true,
-   "logo": null,
-   "detail": "",
-   "aliases": []
   },
   {
    "page": "chat",
