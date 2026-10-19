@@ -359,7 +359,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   Emotes: { Animation: Sparkle, Size: Maximize2, Spacing: MoveHorizontal },
   'Tab Completion': { Emotes: Keyboard },
   'Repeated Messages': { Mode: Repeat2 },
-  'Swipe to Moderate': { Steps: ListOrdered },
+  'Swipe to Moderate': { Style: Paintbrush, Length: MoveHorizontal, Steps: ListOrdered },
   'Highlight Appearance': { Style: PaintBucket },
   'Settings file': { Export: Share, Import: Download },
   Mentions: {

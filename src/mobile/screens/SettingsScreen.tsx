@@ -11,8 +11,8 @@ import {
   MessageSquare,
   Palette,
   PlayCircle,
-  Shield,
   ShieldCheck,
+  ShieldHalf,
   SlidersHorizontal,
   Sparkles,
 } from 'lucide-react';
@@ -68,7 +68,7 @@ export const SETTINGS_ROWS: {
   {
     id: 'Moderation',
     label: 'Moderation',
-    icon: Shield,
+    icon: ShieldHalf,
     description: 'Swipe to moderate and user card buttons',
   },
   { id: 'Theme', label: 'Theme', icon: Palette, description: 'Color theme, glass, and fonts' },
