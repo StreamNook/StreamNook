@@ -2,8 +2,8 @@
 // for the signed-in account, newest first. Rust owns the entries and their
 // read state; this draws a page of them and sends what the viewer does.
 //
-// Shared by the main window's Mentions overlay and MultiChat's Mentions mode,
-// which differ only in what opening a row does.
+// MultiChat's Mentions mode. The main window shows the same inbox as part of
+// the Dynamic Island's notification history instead.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';

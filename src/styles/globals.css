@@ -636,6 +636,46 @@ body[data-window-blurred="true"] .glaze-inset::after {
   height: 100%;
   object-fit: cover;
 }
+/* A mark in place of a face (a mention's @, a download, a drop) sits at a
+   mark's size on a solid disc. Drawn edge to edge on the see-through surface,
+   overlapped marks ran into one another and the stack read as a smear.
+   The marks' colors are picked for the black island, so on a dark theme the
+   disc is the island's near-black and the mark is lifted a little. */
+.sn-notif-trigger .sn-notif-face:has(> svg) {
+  background: #121214;
+}
+.sn-notif-trigger .sn-notif-face > svg {
+  width: 62%;
+  height: 62%;
+  filter: brightness(1.35);
+}
+/* A light theme gets a light disc instead (a black coin on a pale pill was
+   heavy and foreign), a step whiter than the pill and edged with the pill's
+   own hairline so it still reads as a disc. The marks are darkened to hold
+   their contrast on it: a whisper's pale purple, an update's yellow and a
+   drop's mint all vanish on white at their island strength. */
+html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face:has(> svg) {
+  background: color-mix(in srgb, #fff 85%, var(--color-background-tertiary));
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 14%, transparent),
+    0 0 0 2px var(--color-background);
+}
+html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face > svg {
+  filter: brightness(0.52) saturate(1.4);
+}
+/* The face in front covers this one's left edge (and its ring with it), so
+   the mark sits a little right of centre to stay whole. */
+.sn-notif-trigger .sn-notif-face + .sn-notif-face > svg {
+  transform: translateX(1.5px);
+}
+/* A face for something already read is dimmed, the same rule the rows follow,
+   so the stack at full strength means something new. Only the picture dims:
+   the disc and its ring stay solid, so overlapped faces never show through
+   each other. */
+.sn-notif-trigger .sn-notif-face--read > * {
+  opacity: 0.55;
+}
 /* ===== Notification Center =====
    The panel the trigger opens into. It wears `.chrome-glaze --frosted` in the
    markup, so everything here is what sits INSIDE that: a header that does not
