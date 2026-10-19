@@ -347,6 +347,16 @@ mod tests {
     }
 
     #[test]
+    fn keep_tinted_sits_under_highlight_on_every_phone() {
+        for ios in [false, true] {
+            let hit = search_on("keep tinted", 3, ios, &nothing);
+            assert_eq!(hit[0].title, "Keep tinted");
+            assert_eq!(hit[0].paths, ["chat_design.mention_hold"]);
+            assert_eq!(hit[0].under.as_deref(), Some("Highlight"));
+        }
+    }
+
+    #[test]
     fn keep_screen_on_is_searchable_in_the_chats_tab_section() {
         let hit = search_on("keep screen on", 3, false, &nothing);
         assert_eq!(hit[0].title, "Keep screen on");

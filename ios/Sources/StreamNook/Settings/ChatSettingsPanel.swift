@@ -236,8 +236,9 @@ struct ChatSettingsPanel: View {
             }
             ColorRow(title: "Highlight", path: "chat_design.mention_color", unset: "#ff4444",
                      detail: "The color that marks a message mentioning or replying to you.",
-                     help: "Flash briefly lights the message up as it lands, so you spot it in a fast chat. The color edge stays either way.") {
+                     help: "Flash briefly lights the message up as it lands, so you spot it in a fast chat. Keep tinted holds the color behind the whole message for as long as it is on screen. The color edge stays either way.") {
                 NestedToggle(title: "Flash", path: "chat_design.mention_animation", fallback: true)
+                NestedToggle(title: "Keep tinted", path: "chat_design.mention_hold", fallback: false)
             }
             SettingRow(title: "Vibration", detail: "A short buzz when a message says your name, on top of the highlight.") {
                 Toggle("Vibration", isOn: Binding(get: { mentionHaptic != "off" }, set: { mentionHaptic = $0 ? "on" : "off" }))

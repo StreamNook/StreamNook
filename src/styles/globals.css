@@ -3222,27 +3222,24 @@ html[data-motion="reduced"] .sub-progress-fill {
   animation: highlight-flash 2s ease-in-out;
 }
 
-/* Mention Flash Animation (Red-shift effect) */
+/* Mention Flash Animation (Red-shift effect). Only the wash fades: the row's
+   color edge is its own inline style and stays put, so it never fades out over
+   the last half second and snaps back when the animation ends. */
 @keyframes mention-flash {
   0% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 50%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   25% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 40%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 30%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   75% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 20%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
@@ -3251,19 +3248,16 @@ html[data-motion="reduced"] .sub-progress-fill {
   border-left-width: 4px;
 }
 
-/* Reply Flash Animation */
+/* Reply Flash Animation. As the mention flash, the edge keeps its color. */
 @keyframes reply-flash {
   0% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 30%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 15%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
@@ -3273,25 +3267,23 @@ html[data-motion="reduced"] .sub-progress-fill {
 }
 
 /* User-defined highlight phrase flash. Color flows in via the inline
-   --phrase-flash-color custom property so each phrase animates in its own hue. */
+   --phrase-flash-color custom property so each phrase animates in its own hue.
+   Only the wash fades; the edge is the row's own inline style (drawn unless
+   Highlight Appearance is None), so it stays put through the flash. */
 @keyframes phrase-highlight-flash {
   0% {
     background-color: color-mix(in srgb, var(--phrase-flash-color) 35%, transparent);
-    border-left-color: var(--phrase-flash-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--phrase-flash-color) 18%, transparent);
-    border-left-color: var(--phrase-flash-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
 .animate-phrase-highlight {
   animation: phrase-highlight-flash 2s ease-out;
-  border-left-width: 4px;
 }
 
 /* Iridescent gradient animation for subscription messages */

@@ -72,6 +72,23 @@ struct EntryToggle: View {
     }
 }
 
+/// A highlight rule's Keep tinted (its `hold`): the matched row holds the rule's color while
+/// on screen instead of only flashing.
+struct EntryKeepTinted: View {
+    let listPath: String
+    let id: String
+    let on: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Keep tinted").font(.sn(12)).foregroundStyle(SN.textSecondary)
+            Spacer(minLength: 0)
+            EntryToggle(listPath: listPath, id: id, field: "hold", on: on, label: "Keep tinted")
+        }
+        .frame(minHeight: 32)
+    }
+}
+
 /// A color over one field of a list entry.
 struct EntryColor: View {
     @Environment(SettingsStore.self) private var store
@@ -507,6 +524,9 @@ struct PhraseCard: View {
                     Task { _ = try? await store.edit(listPath, .remove(id: id)) }
                 }
             }
+            if !ignore {
+                EntryKeepTinted(listPath: listPath, id: id, on: phrase["hold"] as? Bool ?? false)
+            }
             if let error {
                 Text(error).font(.sn(12)).foregroundStyle(SN.error)
             }
@@ -544,7 +564,7 @@ struct HighlightPhrasesSettings: View {
 
     var body: some View {
         let phrases = store.list(path)
-        SettingsBlock(title: "Highlight Phrases", detail: "Flash chat messages that match specific words, names, or patterns. Mentions of your own name and replies to you are always highlighted; these are extra.", bare: true) {
+        SettingsBlock(title: "Highlight Phrases", detail: "Highlight chat messages that match specific words, names, or patterns, with a flash or, with Keep tinted, a color that stays. Mentions of your own name and replies to you are always highlighted; these are extra.", bare: true) {
             if phrases.isEmpty {
                 EmptyListCard(text: "No highlight phrases yet.", button: "Add your first phrase") { Task { _ = await store.add(path) } }
             } else {
@@ -627,13 +647,16 @@ struct UserHighlightsSettings: View {
                 ForEach(users.indices, id: \.self) { index in
                     let user = users[index]
                     if let id = user["id"] as? String {
-                        HStack(spacing: 8) {
-                            EntryToggle(listPath: path, id: id, field: "enabled", on: user["enabled"] as? Bool ?? true,
-                                        label: (user["enabled"] as? Bool ?? true) ? "Disable user highlight" : "Enable user highlight")
-                            EntryTextField(listPath: path, id: id, field: "username", value: user["username"] as? String ?? "",
-                                           placeholder: "twitch_login")
-                            EntryColor(listPath: path, id: id, hex: user["color"] as? String ?? "#22d3ee")
-                            EntryDelete(label: "Delete user highlight") { Task { _ = try? await store.edit(path, .remove(id: id)) } }
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                EntryToggle(listPath: path, id: id, field: "enabled", on: user["enabled"] as? Bool ?? true,
+                                            label: (user["enabled"] as? Bool ?? true) ? "Disable user highlight" : "Enable user highlight")
+                                EntryTextField(listPath: path, id: id, field: "username", value: user["username"] as? String ?? "",
+                                               placeholder: "twitch_login")
+                                EntryColor(listPath: path, id: id, hex: user["color"] as? String ?? "#22d3ee")
+                                EntryDelete(label: "Delete user highlight") { Task { _ = try? await store.edit(path, .remove(id: id)) } }
+                            }
+                            EntryKeepTinted(listPath: path, id: id, on: user["hold"] as? Bool ?? false)
                         }
                         .padding(10).snPanel()
                     }
@@ -680,13 +703,16 @@ struct BadgeHighlightsSettings: View {
                 ForEach(badges.indices, id: \.self) { index in
                     let badge = badges[index]
                     if let id = badge["id"] as? String {
-                        HStack(spacing: 8) {
-                            EntryToggle(listPath: path, id: id, field: "enabled", on: badge["enabled"] as? Bool ?? true,
-                                        label: (badge["enabled"] as? Bool ?? true) ? "Disable badge highlight" : "Enable badge highlight")
-                            EntryTextField(listPath: path, id: id, field: "badge_key", value: badge["badge_key"] as? String ?? "",
-                                           placeholder: "moderator/1 or subscriber/*", monospaced: true)
-                            EntryColor(listPath: path, id: id, hex: badge["color"] as? String ?? "#a855f7")
-                            EntryDelete(label: "Delete badge highlight") { Task { _ = try? await store.edit(path, .remove(id: id)) } }
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                EntryToggle(listPath: path, id: id, field: "enabled", on: badge["enabled"] as? Bool ?? true,
+                                            label: (badge["enabled"] as? Bool ?? true) ? "Disable badge highlight" : "Enable badge highlight")
+                                EntryTextField(listPath: path, id: id, field: "badge_key", value: badge["badge_key"] as? String ?? "",
+                                               placeholder: "moderator/1 or subscriber/*", monospaced: true)
+                                EntryColor(listPath: path, id: id, hex: badge["color"] as? String ?? "#a855f7")
+                                EntryDelete(label: "Delete badge highlight") { Task { _ = try? await store.edit(path, .remove(id: id)) } }
+                            }
+                            EntryKeepTinted(listPath: path, id: id, on: badge["hold"] as? Bool ?? false)
                         }
                         .padding(10).snPanel()
                     }

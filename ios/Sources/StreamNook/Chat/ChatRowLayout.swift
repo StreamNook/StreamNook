@@ -45,8 +45,8 @@ struct RowDecor {
     var leadingBar: (color: UIColor, width: CGFloat)?
     var topHairline: UIColor?
     var bottomHairline: UIColor?
-    /// The live flash: from `alpha` of `color` to clear over two seconds.
-    var flash: (color: UIColor, alpha: CGFloat)?
+    /// The flash a live row plays as it lands, under its text, tint and bar (run by the cell).
+    var flash: RowFlash?
     var alpha: CGFloat = 1
     /// The author's StreamNook Atmosphere (or Cologne look), drawn behind the row by the cell.
     var atmosphere: AtmosphereLook?
@@ -58,6 +58,24 @@ struct RowDecor {
     var ring: (color: UIColor, fill: Bool)?
     /// The glint a live row plays over its ring or left bar, run by the cell.
     var glint: RowGlint?
+}
+
+/// The color a live row lights up with as it lands, fading to clear over two seconds: desktop's
+/// keyframes, an opacity step at even times with each step easing out (CSS `ease-out` runs per
+/// keyframe). The cell animates only the opacity of one layer, so nothing redraws per frame.
+struct RowFlash {
+    var color: UIColor
+    /// The strength at even times from the start (0) to the end (clear).
+    var alphas: [CGFloat]
+
+    static let duration: CFTimeInterval = 2
+
+    /// A mention of you: 50, 40, 30, 20 percent, then clear (`mention-flash`).
+    static func mention(_ color: UIColor) -> RowFlash { RowFlash(color: color, alphas: [0.5, 0.4, 0.3, 0.2, 0]) }
+    /// A reply to you: 30, 15 percent, then clear (`reply-flash`).
+    static func reply(_ color: UIColor) -> RowFlash { RowFlash(color: color, alphas: [0.3, 0.15, 0]) }
+    /// A phrase, user or badge highlight: 35, 18 percent, then clear (`phrase-highlight-flash`).
+    static func highlight(_ color: UIColor) -> RowFlash { RowFlash(color: color, alphas: [0.35, 0.18, 0]) }
 }
 
 /// A highlight that crosses a row's ring or left bar when it arrives live, as Core Animation
@@ -265,17 +283,19 @@ struct ChatRowLayoutBuilder {
 
         // Tints and the caption over the row.
         var label: (String, UIColor)?
-        if meta.isMentioned {
-            decor.leadingBar = (ChatTheme.color(style.mentionColor) ?? ChatTheme.error, 4)
-            if style.mentionAnimation && row.live { decor.flash = (ChatTheme.color(style.mentionColor) ?? ChatTheme.error, 0.5) }
-        } else if meta.isReplyToMe {
-            decor.leadingBar = (ChatTheme.color(style.replyColor) ?? ChatTheme.error, 4)
-            if style.mentionAnimation && row.live { decor.flash = (ChatTheme.color(style.replyColor) ?? ChatTheme.error, 0.3) }
+        // A mention or reply to you always wears its color's edge; Flash lights the row as it
+        // lands, and Keep tinted holds the wash behind it at the Highlight Appearance strength.
+        if meta.isMentioned || meta.isReplyToMe {
+            let color = ChatTheme.color(meta.isMentioned ? style.mentionColor : style.replyColor) ?? ChatTheme.error
+            decor.leadingBar = (color, 4)
+            if style.mentionHold { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
+            if style.mentionAnimation && row.live { decor.flash = meta.isMentioned ? .mention(color) : .reply(color) }
         } else if let highlight = meta.highlight, let color = ChatTheme.color(highlight.color) {
-            // Highlight Appearance: standard draws the tint and bar, minimal the bar, none neither.
+            // A rule's match always flashes; Highlight Appearance decides the bar (minimal and
+            // standard draw it, none does not), and the rule's own Keep tinted the held wash.
             if style.highlightShowsBar { decor.leadingBar = (color, 4) }
-            if style.highlightShowsTint { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
-            if row.live { decor.flash = (color, 0.35) }
+            if highlight.hold { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
+            if row.live { decor.flash = .highlight(color) }
         } else if kind == .announcement {
             let color = Self.announcementColor(message.tags["msg-param-color"], mention: style.mentionColor)
             decor.leadingBar = (color, 4)
@@ -548,7 +568,7 @@ struct ChatRowLayoutBuilder {
         let card = CGRect(x: sideInset - 2, y: cardTop, width: width - 2 * sideInset + 4, height: top - cardTop)
         shapes.insert(RowShape(kind: .capsule(fill: amber.withAlphaComponent(0.10), stroke: amber.withAlphaComponent(0.25)), rect: card), at: 0)
         top += inset
-        decor.flash = row.live ? (amber, 0.25) : nil
+        decor.flash = row.live ? RowFlash(color: amber, alphas: [0.25, 0]) : nil
         let words = "\(held.held.label). \(held.held.shownName): \(held.held.text)"
         return ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
                              attachments: attachments, shapes: shapes, taps: taps, decor: decor,
