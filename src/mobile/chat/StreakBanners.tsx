@@ -127,7 +127,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
         take({ streak: null });
       }
       try {
-        const r = await invoke<ResubNotification | null>('get_resub_notification', { channelId });
+        const r = await invoke<ResubNotification | null>('get_resub_notification', { channelLogin: channel });
         take({ resub: r ?? null });
       } catch (err) {
         Logger.debug('[Streaks] resub unavailable:', err);
@@ -137,7 +137,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
     return () => {
       cancelled = true;
     };
-  }, [room, channelId]);
+  }, [room, channel, channelId]);
 
   const dismiss = useCallback(
     (what: string) => {

@@ -198,9 +198,9 @@ pub async fn get_resub_notification(
 
     match resub {
         Some(r) => {
-            debug!(
-                "[Resub] Found resub token! {} months cumulative, {} months streak",
-                r.cumulative_tenure_months, r.streak_tenure_months
+            log::info!(
+                "[Resub] offer: channel={} months={} streak_months={}",
+                channel_login, r.cumulative_tenure_months, r.streak_tenure_months
             );
             Ok(Some(ResubNotification {
                 id: r.id,
@@ -213,7 +213,7 @@ pub async fn get_resub_notification(
             }))
         }
         None => {
-            debug!("[Resub] No resub notification available for this channel");
+            log::info!("[Resub] offer: channel={} none", channel_login);
             Ok(None)
         }
     }

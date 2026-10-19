@@ -532,7 +532,7 @@ final class ChatRooms {
         Task {
             var found = Streaks()
             found.watch = try? await core.invoke("get_watch_streak", args: ["channelId": id], as: WatchStreakMilestone?.self)
-            found.resub = try? await core.invoke("get_resub_notification", args: ["channelId": id], as: ResubNotice?.self)
+            found.resub = try? await core.invoke("get_resub_notification", args: ["channelLogin": tab.login], as: ResubNotice?.self)
             guard sessions[tab.channel] != nil else { return }
             streaks[tab.channel] = found
         }

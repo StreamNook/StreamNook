@@ -243,8 +243,11 @@ pub async fn get_watch_streak(channel_id: String) -> Result<Option<WatchStreakMi
         Some(m) => {
             let streak_val = m.inner_milestone.value.parse::<i32>().unwrap_or(0);
 
-            debug!(
-                "[WatchStreak] Found milestone: streak={}, threshold={}, status={}, bonus={}",
+            // What Twitch offers in this room, in the core log: a missing banner is then either
+            // Twitch's answer or our bug, never a guess.
+            info!(
+                "[WatchStreak] offer: channel={} streak={} threshold={} status={} bonus={}",
+                channel_id,
                 streak_val,
                 m.watch_streak_threshold,
                 m.inner_milestone.share_status,
@@ -261,15 +264,17 @@ pub async fn get_watch_streak(channel_id: String) -> Result<Option<WatchStreakMi
                     copo_bonus: m.watch_streak_copo_bonus,
                 }))
             } else {
-                debug!(
-                    "[WatchStreak] Streak exists but status is '{}', not shareable",
-                    m.inner_milestone.share_status
-                );
                 Ok(None)
             }
         }
+        // No milestone: Twitch has none to offer, or the read itself was refused (GraphQL errors
+        // come back with HTTP 200 and an empty viewer edge, which reads the same).
+        None if response_text.contains("\"errors\"") => {
+            warn!("[WatchStreak] offer check failed: channel={} answer={}", channel_id, response_text);
+            Ok(None)
+        }
         None => {
-            debug!("[WatchStreak] No watch streak milestone available for this channel");
+            info!("[WatchStreak] offer: channel={} none", channel_id);
             Ok(None)
         }
     }
