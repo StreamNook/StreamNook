@@ -600,6 +600,25 @@ struct SupportPanel: View {
         } header: {
             ListHeader(text: "Community")
         }
+        // Which build this is, and the other platforms StreamNook runs on: what the desktop's
+        // About popup says, here since the phone has no title bar. Not in settings search, as on
+        // Android.
+        SettingsBlock(title: "Devices") {
+            // The row's detail line, with the platform's mark leading it as in the desktop's footer.
+            WideRow(title: "This device", icon: "iphone") {
+                HStack(spacing: 6) {
+                    SystemMark(platform: .apple, size: 12)
+                    Text("iPhone · Version \(model.version)")
+                }
+                .font(.sn(12))
+                .foregroundStyle(SN.textSecondary)
+                .padding(.top, 2)
+            }
+            WideRow(title: "Also on your other devices", icon: "laptopcomputer.and.iphone") {
+                OtherPlatformLinks()
+                    .padding(.top, 10)
+            }
+        }
         SettingsBlock(title: "Diagnostics", detail: "How much StreamNook writes to its log file, and where to find that file when someone asks you for it.") {
             ToggleRow(title: "Detailed log", path: "error_reporting_enabled", fallback: true,
                       detail: "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
@@ -720,5 +739,87 @@ struct SupportPanel: View {
         } catch {
             model.toasts.show("Could not get the logs. Try again.")
         }
+    }
+}
+
+/// The other platforms StreamNook runs on, in the downloads page's order, each opening that page
+/// (it has one card per platform and no anchors). The same pills as the desktop's About popup and
+/// Android's Support page: the mark, then the name, on the left of the pill.
+private struct OtherPlatformLinks: View {
+    @Environment(\.openURL) private var openURL
+
+    private static let downloads = URL(string: "https://streamnook.app/downloads")!
+    private struct Entry {
+        let mark: PlatformMark.Platform
+        let name: String
+    }
+
+    private static let platforms = [
+        Entry(mark: .windows, name: "Windows"), Entry(mark: .apple, name: "macOS"),
+        Entry(mark: .linux, name: "Linux"), Entry(mark: .android, name: "Android"),
+    ]
+
+    var body: some View {
+        EqualColumns(spacing: 8) {
+            ForEach(Self.platforms, id: \.name) { platform in
+                Button {
+                    openURL(Self.downloads)
+                } label: {
+                    HStack(spacing: 8) {
+                        SystemMark(platform: platform.mark, size: 15)
+                        Text(platform.name).font(.sn(13, 500)).lineLimit(1)
+                    }
+                    .foregroundStyle(SN.textSecondary)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(PlatformPillPress())
+                .accessibilityLabel("StreamNook for \(platform.name)")
+                .accessibilityHint("Opens streamnook.app/downloads")
+            }
+        }
+    }
+}
+
+/// A platform pill: the row's chip fill, a shade darker while pressed.
+private struct PlatformPillPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background { Capsule().fill(configuration.isPressed ? SN.surfaceActive : SN.surface) }
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// Columns of one width, the widest item's, so four pills split two and two with their marks on
+/// one line, never one left alone on a row.
+private struct EqualColumns: Layout {
+    var columns = 2
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let cell = cellSize(proposal, subviews)
+        let rows = (subviews.count + columns - 1) / columns
+        return CGSize(width: cell.width * CGFloat(columns) + spacing * CGFloat(columns - 1),
+                      height: cell.height * CGFloat(rows) + spacing * CGFloat(max(0, rows - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let cell = cellSize(proposal, subviews)
+        for (i, subview) in subviews.enumerated() {
+            let x = bounds.minX + CGFloat(i % columns) * (cell.width + spacing)
+            let y = bounds.minY + CGFloat(i / columns) * (cell.height + spacing)
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(cell))
+        }
+    }
+
+    /// The widest and tallest item, narrowed when the columns would not fit the width offered.
+    private func cellSize(_ proposal: ProposedViewSize, _ subviews: Subviews) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        var width = sizes.map(\.width).max() ?? 0
+        if let available = proposal.width {
+            width = min(width, (available - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        }
+        return CGSize(width: width, height: sizes.map(\.height).max() ?? 0)
     }
 }

@@ -90,20 +90,7 @@ struct ProviderArt {
             let key = paths.joined()
             if let hit = cache[key] { return hit }
             var p = Path()
-            for data in paths {
-                for step in VectorPath.parse(data) {
-                    switch step {
-                    case .move(let to): p.move(to: CGPoint(x: to.x, y: to.y))
-                    case .line(let to): p.addLine(to: CGPoint(x: to.x, y: to.y))
-                    case .cubic(let c1, let c2, let to):
-                        p.addCurve(to: CGPoint(x: to.x, y: to.y), control1: CGPoint(x: c1.x, y: c1.y),
-                                   control2: CGPoint(x: c2.x, y: c2.y))
-                    case .quad(let c, let to):
-                        p.addQuadCurve(to: CGPoint(x: to.x, y: to.y), control: CGPoint(x: c.x, y: c.y))
-                    case .close: p.closeSubpath()
-                    }
-                }
-            }
+            for data in paths { p.addPath(Path(vector: data)) }
             cache[key] = p
             return p
         }
