@@ -91,12 +91,27 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     crate::services::link_preview_cache::get(&url).await.ok_or_else(|| "No preview".to_string())
 }
 
-/// Whether a link's card is all but certain (`has_dedicated_card`), so a shell
-/// holds the card's room while it loads. Any other link shows a card only once it
-/// has one, so a link with no preview never flashes a placeholder and vanishes.
+/// The card a link's shape all but always gets, so a shell holds that room while
+/// it loads: "media" for a video or clip (drawn 16:9), "card" for the other
+/// dedicated cards, None for a link that may have no card. A shell holds nothing
+/// for those, so a link with no preview never flashes a placeholder and vanishes.
+pub(crate) fn expected_card(url: &str) -> Option<&'static str> {
+    let canonical = canonicalize_x(url);
+    let url = canonical.as_str();
+    if youtube_id(url).is_some() || twitch_clip_id(url).is_some() || twitch_vod_id(url).is_some() {
+        Some("media")
+    } else if has_dedicated_card(url) {
+        Some("card")
+    } else {
+        None
+    }
+}
+
+/// `expected_card` for a link the shell met outside a chat segment (one that
+/// carries it already, `MessageSegment::Link.card`, needs no call).
 #[tauri::command]
-pub fn link_preview_expected(url: String) -> bool {
-    has_dedicated_card(&url)
+pub fn link_preview_expected(url: String) -> Option<String> {
+    expected_card(&url).map(String::from)
 }
 
 /// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
@@ -1979,7 +1994,7 @@ mod tests {
         ] {
             assert!(is_youtube_page(url), "{url}");
             assert!(has_dedicated_card(url), "{url}");
-            assert!(link_preview_expected(url.to_string()), "{url}");
+            assert_eq!(expected_card(url), Some("card"), "{url}");
         }
         for url in [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -1993,6 +2008,16 @@ mod tests {
         assert!(has_dedicated_card("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
         assert!(has_dedicated_card("https://www.youtube.com/@LofiGirl"));
         assert!(!has_dedicated_card("https://example.com/page"));
+    }
+
+    #[test]
+    fn the_expected_card_says_which_room_to_hold() {
+        assert_eq!(expected_card("https://youtu.be/dQw4w9WgXcQ"), Some("media"));
+        assert_eq!(expected_card("https://clips.twitch.tv/AwkwardHelplessSalamanderSwiftRage"), Some("media"));
+        assert_eq!(expected_card("https://www.youtube.com/@LofiGirl"), Some("card"));
+        assert_eq!(expected_card("https://discord.gg/streamnook"), Some("card"));
+        assert_eq!(expected_card("https://example.com/page"), None);
+        assert_eq!(link_preview_expected("https://example.com/page".into()), None);
     }
 
     /// The link that showed as plain text: Reddit's viewer around an i.redd.it jpg.

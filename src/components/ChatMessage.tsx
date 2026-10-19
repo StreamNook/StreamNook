@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, memo, useSyncExternalStore
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
-import { parseMessage, type MessageSegment } from '../services/twitchChat';
+import { parseMessage, type LinkCardShape, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
@@ -1083,6 +1083,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     () => linkPreviewItems.filter((i) => i.trusted).map((i) => i.url),
     [linkPreviewItems],
   );
+  // The card each link's shape gets, as Rust stamped it on the link segment, so
+  // a loading card holds the right room from its first frame (null: maybe none).
+  const linkCards = useMemo(() => {
+    const cards = new Map<string, LinkCardShape | null>();
+    for (const s of parsed.segments ?? []) if (s.type === 'link') cards.set(s.url, s.card ?? null);
+    return cards;
+  }, [parsed.segments]);
 
   // Per-user nickname/color overrides. The original display name + username
   // stay in the click payload (so the profile card still opens to the real
@@ -3828,6 +3835,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               url={it.url}
               trusted={it.trusted}
               showChip={it.trusted && !keepInlineLink}
+              expectedCard={linkCards.has(it.url) ? linkCards.get(it.url) : undefined}
             />
           ))}
         </div>

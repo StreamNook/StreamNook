@@ -4,12 +4,17 @@ import type { ProviderId } from '../types/providers';
 import { kickBadgeImage } from '../utils/kickBadges';
 import type { HeldRowData } from '../stores/automodStore';
 
+/** The room a link's preview card holds while it loads (Rust `expected_card`). */
+export type LinkCardShape = 'media' | 'card';
+
 // Message segment types - matches Rust MessageSegment enum
 export type MessageSegment =
   | { type: 'text'; content: string }
   | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean }
   | { type: 'emoji'; content: string; emoji_url: string }
-  | { type: 'link'; content: string; url: string }
+  // `card`: the preview card this link's shape all but always gets ("media" for a
+  // video or clip, drawn 16:9, else "card"); absent when it may have none.
+  | { type: 'link'; content: string; url: string; card?: LinkCardShape }
   // Cheermote segment for animated bits (e.g., Cheer500)
   | { type: 'cheermote'; content: string; prefix: string; bits: number; tier: string; color: string; cheermote_url: string }
   // Twitch chat GIF (GIPHY-backed). `content` is the bracketed description the

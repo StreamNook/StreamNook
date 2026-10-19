@@ -4489,9 +4489,12 @@ impl IrcService {
             // the link becomes its own text run, so "see test.fr." does not
             // put the full stop inside the href.
             if let Some((link, trailing)) = link_detect::split_link(word) {
+                let url = link_detect::link_url(link);
+                let card = crate::commands::link_preview::expected_card(&url).map(String::from);
                 segments.push(MessageSegment::Link {
                     content: link.to_string(),
-                    url: link_detect::link_url(link),
+                    url,
+                    card,
                 });
                 if !trailing.is_empty() {
                     segments.push(MessageSegment::Text {

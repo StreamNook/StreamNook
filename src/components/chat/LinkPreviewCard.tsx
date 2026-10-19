@@ -20,6 +20,7 @@ import {
   trustableHost,
   type LinkPreview,
 } from '../../services/linkPreviewService';
+import type { LinkCardShape } from '../../services/twitchChat';
 
 // Twitch clips and VODs deep-link into the in-app player (the user's stated
 // preference) rather than opening the browser. start_stream (via playMedia)
@@ -151,12 +152,16 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   showChip = true,
   trusted = true,
   resolved,
+  expectedCard,
 }: {
   url: string;
   showChip?: boolean;
   trusted?: boolean;
   /** An already-fetched preview. The card renders it and fetches nothing. */
   resolved?: LinkPreview;
+  /** The card this link's shape gets, as its chat segment says (null: maybe none);
+   *  undefined when the caller does not know, and the card asks Rust. */
+  expectedCard?: LinkCardShape | null;
 }) {
   // undefined = unresolved, null = no preview, object = card. Nothing is cached
   // (chat links are ephemeral), so every card starts unresolved and fetches once.
@@ -169,10 +174,13 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // click (the click-to-load chip below) so an arbitrary pasted link is never
   // fetched passively — that would reveal the user's IP to the linked host.
   const [loadRequested, setLoadRequested] = useState(trusted);
-  // Whether this link's shape all but always has a card (Rust's answer). Only
-  // then does the loading card hold its room; any other link shows a card once
-  // it has one, so one with no preview never flashes a placeholder and vanishes.
-  const [expected, setExpected] = useState<boolean | undefined>(() => linkPreviewExpectedNow(url));
+  // The card this link's shape all but always gets (Rust's answer, carried on the
+  // chat segment). Only then does the loading card hold that room; any other
+  // link shows a card once it has one, so one with no preview never flashes a
+  // placeholder and vanishes.
+  const [expected, setExpected] = useState<LinkCardShape | null | undefined>(() =>
+    expectedCard !== undefined ? expectedCard : linkPreviewExpectedNow(url),
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requested = useRef(resolved !== undefined);
 
@@ -355,17 +363,29 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   if (preview === undefined) {
     // Clean mode hides the inline link, so a link with no card expected shows
     // its link chip while it loads rather than nothing.
-    if (expected === false && showChip) return <div ref={containerRef}>{fallback}</div>;
+    if (expected === null && showChip) return <div ref={containerRef}>{fallback}</div>;
+    // A video or clip holds its 16:9 picture and the line under it; any other
+    // expected card the generic card's 80px row. No card expected: an empty,
+    // zero-height observe target, so nothing moves when the answer lands.
+    if (!expected) return <div ref={containerRef} className="w-full" style={{ height: 0 }} aria-hidden />;
     return (
       <div
         ref={containerRef}
-        className={expected ? 'glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden' : 'w-full'}
-        style={{ height: expected ? 56 : 1, opacity: expected ? 0.5 : 0 }}
+        className="glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden"
+        style={{ opacity: 0.5 }}
         aria-hidden
       >
-        {expected && (
-          <div className="flex h-full items-center gap-3 px-3">
-            <div className="h-10 w-10 flex-shrink-0 rounded bg-white/5" />
+        {expected === 'media' ? (
+          <>
+            <div className="w-full bg-white/5" style={{ aspectRatio: '16 / 9' }} />
+            <div className="space-y-2 px-3 py-2.5">
+              <div className="h-2.5 w-1/3 rounded bg-white/5" />
+              <div className="h-2.5 w-2/3 rounded bg-white/5" />
+            </div>
+          </>
+        ) : (
+          <div className="flex h-20 items-center gap-3 px-3">
+            <div className="h-14 w-14 flex-shrink-0 rounded bg-white/5" />
             <div className="flex-1 space-y-2">
               <div className="h-2.5 w-1/3 rounded bg-white/5" />
               <div className="h-2.5 w-2/3 rounded bg-white/5" />
