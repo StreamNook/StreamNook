@@ -2176,8 +2176,101 @@
     "alerts",
     "push",
     "notify"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Notify me",
+   "paths": [
+    "live_notifications.show_mention_notifications"
    ],
-   "hidden_on_ios": true
+   "nested": false,
+   "detail": "When someone mentions or replies to you in a chat",
+   "logo": null,
+   "aliases": [
+    "mentions",
+    "replies",
+    "pings",
+    "@",
+    "mention notifications"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Counts as a mention",
+   "paths": [],
+   "nested": false,
+   "detail": "Your @name always counts. These count too, in Mentions and for notifications.",
+   "logo": null,
+   "aliases": [
+    "mention rules",
+    "what counts",
+    "match"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Name without @",
+   "paths": [
+    "mentions.match_bare_login"
+   ],
+   "nested": true,
+   "detail": "Your login written without the @ counts as a mention.",
+   "logo": null,
+   "aliases": [
+    "username",
+    "bare name",
+    "no at sign"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Display name",
+   "paths": [
+    "mentions.match_display_name"
+   ],
+   "nested": true,
+   "detail": "Your display name counts as a mention when it differs from your login.",
+   "logo": null,
+   "aliases": [
+    "nickname",
+    "name"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Highlight words",
+   "paths": [
+    "mentions.highlight_words"
+   ],
+   "nested": true,
+   "detail": "A message matching one of your highlight words notifies you and collects in Mentions.",
+   "logo": null,
+   "aliases": [
+    "highlight phrases",
+    "keywords"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Muted chats",
+   "paths": [
+    "mentions.muted_channels"
+   ],
+   "nested": false,
+   "detail": "Mentions in these chats never notify you or reach the Mentions list.",
+   "logo": null,
+   "aliases": [
+    "mute chat",
+    "silence mentions",
+    "quiet chat"
+   ]
   },
   {
    "page": "notifications",

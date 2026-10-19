@@ -1,7 +1,9 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, BookmarkSimple, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, At, BookmarkSimple, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { useMobileNavStore } from '../navStore';
+import { useMentionsStore } from '../mentions/mentionInbox';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -83,6 +85,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
     return t?.pinnedToStream ? t : null;
   });
   const keep = useChatTabsStore((s) => s.keep);
+  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
 
   // The desktop client's follow logic, ported rather than reimplemented: this
   // hook lives in hooks/ precisely so several surfaces can share it, and it
@@ -212,6 +215,23 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           icon={<ChatsCircle size={ICON} className="text-textSecondary" />}
         >
           Add a chat
+        </GroupRow>
+
+        {/* Every chat's mentions of you, over the player; the stream keeps
+            playing behind it. The dot is the unread mark. */}
+        <GroupRow
+          onClick={() => {
+            onClose();
+            useMobileNavStore.getState().setMentionsOpen(true);
+          }}
+          icon={<At size={ICON} className="text-textSecondary" />}
+          trailing={
+            mentionsUnread > 0 ? (
+              <span className="w-2 h-2 mr-1 rounded-full bg-accent shrink-0" aria-label="Unread mentions" />
+            ) : undefined
+          }
+        >
+          Mentions
         </GroupRow>
 
         <GroupRow

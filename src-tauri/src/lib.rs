@@ -53,7 +53,7 @@ use commands::{
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -643,6 +643,7 @@ pub(crate) fn flush_debounced_stores() {
     let _ = services::universal_cache_service::flush_manifest_now();
     let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
     let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::mention_inbox::flush_now();
     let _ = services::vod_progress_service::flush_now();
     #[cfg(desktop)]
     let _ = commands::popout_window::flush_now();
@@ -871,8 +872,7 @@ pub fn run() {
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
-    #[cfg(desktop)]
-    services::mention_notify::refresh(&settings);
+    services::mention_inbox::refresh(&settings);
     services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
@@ -990,6 +990,9 @@ pub fn run() {
     // services::cast_session.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(cast_plugin::init());
+    // Android mention notifications, posted from Rust while the page sleeps.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_notify::mention_plugin());
     // Linux: tells every page, before its first paint, who draws the window
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
@@ -2322,6 +2325,13 @@ pub fn run() {
             whisper_send,
             whisper_import,
             whisper_refresh,
+            // Mentions inbox
+            get_mention_inbox,
+            mark_mentions_read,
+            remove_mention,
+            clear_mention_inbox,
+            open_mention,
+            set_visible_mention_rooms,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

@@ -649,6 +649,60 @@ export interface ChatBurstSettings {
   vary_repeats?: boolean;
 }
 
+// What counts as a mention of you, and which chats keep them quiet.
+// Mirrored in models/settings.rs (MentionSettings).
+export interface MentionSettings {
+  // Your login as a whole word, without the @. Default true.
+  match_bare_login?: boolean;
+  // Your display name, when it differs from your login. Default true.
+  match_display_name?: boolean;
+  // Highlight phrases count as mentions (inbox and notifications). Default true.
+  highlight_words?: boolean;
+  // Room keys (bare Twitch login, provider:slug otherwise) that never notify
+  // or reach the inbox.
+  muted_channels?: string[];
+}
+
+// One entry in the mentions inbox (services/mention_inbox.rs `MentionEntry`).
+// Rust files, reads and removes them; the pages only draw them.
+export type MentionKind = 'mention' | 'reply' | 'word';
+
+export interface MentionEntry {
+  /** The platform's message id. */
+  id: string;
+  platform: string;
+  /** Chat key: bare Twitch login, `provider:slug` otherwise (lowercased). */
+  room: string;
+  /** What opens this chat (`startStream`): like `room` but keeping the
+   *  channel's own case (a YouTube id is case-sensitive). Older entries lack it. */
+  open_key?: string;
+  /** The channel's own page on its platform (live page or video), for a shell
+   *  that cannot show this platform's chat. Older entries lack it. */
+  watch_url?: string;
+  /** A Twitch login (lowercased), else the slug or id with its own case. */
+  channel_login: string;
+  channel_id?: string | null;
+  sender_id: string;
+  sender_login: string;
+  sender_name: string;
+  sender_color?: string | null;
+  text: string;
+  kind: MentionKind;
+  reply_parent_id?: string | null;
+  at_ms: number;
+  read: boolean;
+  /** A moderator deleted the message after it was filed. */
+  removed: boolean;
+}
+
+/** `get_mention_inbox` (commands/mention_inbox.rs `MentionPage`). */
+export interface MentionPage {
+  /** Newest first. */
+  entries: MentionEntry[];
+  has_more: boolean;
+  unread_total: number;
+}
+
 // Render / perf controls. All optional with defaults preserving prior behavior.
 export interface ChatRenderSettings {
   // Animate the scroll when the user clicks the "Resume" button at the
@@ -1246,6 +1300,7 @@ export interface Settings {
   snippets?: SnippetSettings;
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
+  mentions?: MentionSettings;
   /** The phones' Chats screen keeps the screen on while in front, until 30 min pass with no touch. Default on. */
   chats_keep_screen_on?: boolean;
   live_notifications?: LiveNotificationSettings;

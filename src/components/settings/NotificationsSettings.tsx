@@ -7,9 +7,13 @@ import {
   ToastPosition,
   DEFAULT_TOAST_POSITION,
   DEFAULT_TOAST_EDGE_OFFSET,
+  type MentionSettings,
 } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
-import { Award, Bell, Gift } from 'lucide-react';
+import { Award, Bell, Gift, X } from 'lucide-react';
+import { ProviderLogo } from '../ProviderLogo';
+import { parseKey } from '../../utils/providerKey';
+import { toggleMentionChatMuted } from '../../stores/mentionInboxStore';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { SoundVolume } from './SoundControls';
 import { useSettingReset } from './settingReset';
@@ -162,6 +166,16 @@ const NotificationsSettings = () => {
       },
     });
   };
+
+  // What counts as a mention, and the chats that never notify (Rust's
+  // `MentionSettings`; it reads them on save).
+  const mentions: MentionSettings = settings.mentions ?? {};
+  const updateMentions = (updates: Partial<MentionSettings>) => {
+    updateSettings({ ...settings, mentions: { ...mentions, ...updates } });
+  };
+  const mutedChats = mentions.muted_channels ?? [];
+  // A platform mark only where platforms mix in the list.
+  const mutedMixed = new Set(mutedChats.map((r) => parseKey(r).provider)).size > 1;
 
   // Dev builds only. Gift subs arrive days apart, so there is otherwise no
   // way to look at that row on demand. Prefers a real one off the feed and
@@ -379,20 +393,6 @@ const NotificationsSettings = () => {
                   enabled={liveNotifications.show_whisper_notifications ?? true}
                   onChange={() => updateLiveNotifications({
                     show_whisper_notifications: !(liveNotifications.show_whisper_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Mentions and replies"
-              onReset={resetFor(['live_notifications.show_mention_notifications', true])}
-              description="A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_mention_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_mention_notifications: !(liveNotifications.show_mention_notifications ?? true)
                   })}
                 />
               }
@@ -669,6 +669,99 @@ const NotificationsSettings = () => {
           </SettingsSection>
         </>
       )}
+
+      {/* Outside the master switch: what counts as a mention also decides
+          what reaches the Mentions inbox, notifications or not. */}
+      <SettingsSection
+        label="Mentions and replies"
+        description="Everything that mentions you or replies to you lands in Mentions, beside Whispers in the title bar."
+      >
+        <SettingsRow
+          title="Notify me"
+          disabled={!liveNotifications.enabled}
+          onReset={resetFor(['live_notifications.show_mention_notifications', true])}
+          description="A notification shows when someone mentions you or replies to you while that chat is not on screen, and clicking it opens the chat at that message."
+          control={
+            <Toggle
+              enabled={liveNotifications.show_mention_notifications ?? true}
+              onChange={() => updateLiveNotifications({
+                show_mention_notifications: !(liveNotifications.show_mention_notifications ?? true)
+              })}
+            />
+          }
+        />
+        <SettingsRow
+          title="Counts as a mention"
+          description="Your @name always counts. These count too, in Mentions and for notifications."
+        >
+          <SubControls>
+            <SubControl
+              title="Name without @"
+              onReset={resetFor(['mentions.match_bare_login', true])}
+              control={
+                <Toggle
+                  enabled={mentions.match_bare_login ?? true}
+                  onChange={() => updateMentions({ match_bare_login: !(mentions.match_bare_login ?? true) })}
+                />
+              }
+            />
+            <SubControl
+              title="Display name"
+              onReset={resetFor(['mentions.match_display_name', true])}
+              control={
+                <Toggle
+                  enabled={mentions.match_display_name ?? true}
+                  onChange={() => updateMentions({ match_display_name: !(mentions.match_display_name ?? true) })}
+                />
+              }
+            />
+            <SubControl
+              title="Highlight words"
+              onReset={resetFor(['mentions.highlight_words', true])}
+              control={
+                <Toggle
+                  enabled={mentions.highlight_words ?? true}
+                  onChange={() => updateMentions({ highlight_words: !(mentions.highlight_words ?? true) })}
+                />
+              }
+            />
+          </SubControls>
+        </SettingsRow>
+        <SettingsRow
+          title="Muted chats"
+          onReset={resetFor(['mentions.muted_channels', []])}
+          description={mutedChats.length === 0
+            ? 'None. Mute a chat from its row in Mentions, and nothing said there notifies you or lands in Mentions.'
+            : 'Nothing said in these chats notifies you or lands in Mentions.'}
+        >
+          {mutedChats.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {mutedChats.map((room) => {
+                const { provider, channel } = parseKey(room);
+                return (
+                  <span
+                    key={room}
+                    className="glass-input inline-flex h-7 items-center gap-1.5 rounded-full pl-2.5 pr-1 text-[12.5px] text-textPrimary"
+                  >
+                    {mutedMixed && <ProviderLogo provider={provider} size={12} />}
+                    {channel}
+                    <Tooltip content="Unmute" side="top">
+                      <button
+                        type="button"
+                        aria-label={`Unmute ${channel}`}
+                        onClick={() => void toggleMentionChatMuted(room)}
+                        className="flex h-5 w-5 items-center justify-center rounded-full text-textMuted transition-colors hover:bg-white/10 hover:text-textPrimary"
+                      >
+                        <X size={12} />
+                      </button>
+                    </Tooltip>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </SettingsRow>
+      </SettingsSection>
 
       <SettingsSection label="About" bare>
         <div className="glass-panel p-3 rounded-lg border border-accent/20">

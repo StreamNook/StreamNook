@@ -1,5 +1,5 @@
 import { Window } from '@tauri-apps/api/window';
-import { Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { Settings, Proportions, MessageCircle, AtSign, Pickaxe, Clock, Tv, Download, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal, Package, PuzzlePiece } from 'phosphor-react';
 import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
@@ -31,6 +31,7 @@ import { Tooltip } from './ui/Tooltip';
 import { AutomationPulse, type AutomationTone } from './ui/AutomationPulse';
 import PluginTitleBarButtons from '../plugins-ui/PluginTitleBarButtons';
 import { usePluginUpdates } from '../stores/pluginUpdatesStore';
+import { useMentionInboxStore, useMentionUnreadTotal } from '../stores/mentionInboxStore';
 import { useTitleBarAutoHide, useTitleBarLifted } from '../hooks/useTitleBarAutoHide';
 import { exitPlayerFullscreen, exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { opensPageOverPlayer, pointerAtTopEdge, titleBarTuckMode, titleBarTucked } from '../utils/titleBarTuck';
@@ -74,6 +75,8 @@ const TitleBar = () => {
   const keepOnTop = settings?.keep_on_top_in_compact === true;
   // Count of installed plugins with an update available, for the Marketplace badge.
   const pluginUpdateCount = usePluginUpdates((s) => s.ids.length);
+  const mentionUnread = useMentionUnreadTotal();
+  const setMentionsOpen = useMentionInboxStore((s) => s.setOpen);
   // Update flow: 'idle' → 'installing' (download/extract) → 'installed' (staged;
   // the card shows a brief restart notice, then the app auto-restarts) | 'error'.
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase | 'idle'>('idle');
@@ -1116,6 +1119,22 @@ const TitleBar = () => {
               {/* Import indicator */}
               {whisperImportState.isImporting && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+              )}
+            </button>
+          </Tooltip>
+
+          {/* Mentions: every mention and reply Rust filed, with the unread count. */}
+          <Tooltip content={mentionUnread > 0 ? `Mentions, ${mentionUnread} unread` : 'Mentions'} delay={200}>
+            <button
+              onClick={() => setMentionsOpen(true)}
+              className="titlebar-icon-btn relative"
+              aria-label="Mentions"
+            >
+              <AtSign size={17} />
+              {mentionUnread > 0 && (
+                <span className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none tabular-nums text-[#0b0b0c]">
+                  {mentionUnread > 99 ? '99+' : mentionUnread}
+                </span>
               )}
             </button>
           </Tooltip>

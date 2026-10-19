@@ -10,6 +10,7 @@ import { useTitleBarLifted } from '../hooks/useTitleBarAutoHide';
 import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
 import { requestWallet } from '../utils/walletRequest';
+import { openMentionInMain } from '../stores/mentionJumpStore';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
@@ -643,6 +644,11 @@ const DynamicIsland = () => {
                     if (SETTINGS_TABS_FROM_NOTICES.includes(action.tab as SettingsTab)) {
                         store.openSettings(action.tab as SettingsTab);
                     }
+                    return;
+                case 'mention':
+                    // Marks it read, opens its chat (after boot when the click
+                    // started the app) and leaves the jump for that chat.
+                    void openMentionInMain(action.id, action.channel);
                     return;
             }
         };

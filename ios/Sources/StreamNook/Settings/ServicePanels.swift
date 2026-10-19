@@ -104,6 +104,8 @@ struct MasterCard: View {
     let detail: String
     let path: String
     var fallback = true
+    /// Runs after the switch is flipped (a permission to ask for).
+    var onChange: ((Bool) async -> Void)?
 
     var body: some View {
         HStack(alignment: .settingTitle, spacing: 12) {
@@ -115,7 +117,7 @@ struct MasterCard: View {
                 Text(detail).font(.sn(12)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            SettingToggle(path: path, fallback: fallback, label: title)
+            SettingToggle(path: path, fallback: fallback, label: title, onChange: onChange)
                 .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
         }
         .padding(.horizontal, 16)
@@ -126,85 +128,30 @@ struct MasterCard: View {
 
 // MARK: Notifications
 
+/// Settings > Notifications on the iPhone: only what this iPhone sends. While StreamNook runs it
+/// posts mentions and replies. Live channels, drops, badges and background checking need alerts
+/// while the app is closed, which the iPhone does not send yet, so those rows stay hidden (their
+/// saved values are kept for the other apps).
 struct NotificationsPanel: View {
     @Environment(SettingsStore.self) private var store
     @Environment(\.scenePhase) private var phase
     @State private var status: UNAuthorizationStatus?
-    @State private var channelsOpen = false
 
     var body: some View {
         let on = store.bool("live_notifications.enabled", true)
         VStack(alignment: .leading, spacing: 16) {
             MasterCard(symbol: "bell", title: "Notifications",
                        detail: on ? "StreamNook can alert you about the categories below." : "All StreamNook notifications are off.",
-                       path: "live_notifications.enabled")
-            if on {
-                permissionCard
-                GroupLabel("Notify me about")
-                VStack(spacing: 0) {
-                    line("Live channels", "Alert when a channel you follow starts streaming", "live_notifications.show_live_notifications")
-                    Divider().overlay(SN.borderSubtle)
-                    line("Drops", "Campaign progress and claimable rewards", "live_notifications.show_drops_notifications")
-                    Divider().overlay(SN.borderSubtle)
-                    line("New badges", "When a new global badge becomes available", "live_notifications.show_badge_notifications")
-                    Divider().overlay(SN.borderSubtle)
-                    Button { channelsOpen = true } label: {
-                        let muted = store.strings("live_notifications.muted_live_channels").count
-                        HStack(alignment: .settingTitle, spacing: 16) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Which channels").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
-                                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
-                                Text(muted == 0 ? "Everything you follow" : "Everything you follow except \(muted)")
-                                    .font(.sn(12)).foregroundStyle(SN.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.textMuted)
-                                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .snPanel()
-                GroupLabel("Background checking")
-                VStack(alignment: .leading, spacing: 0) {
-                    line("Instant alerts", "Pushed the moment a channel goes live. When off, alerts arrive on the scheduled check below.",
-                         "live_notifications.push_notifications")
-                    Divider().overlay(SN.borderSubtle)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("How often to check").font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
-                        Text("Checking less often uses less battery. Your iPhone may still wait longer than this.")
-                            .font(.sn(12)).foregroundStyle(SN.textSecondary)
-                        SettingSegmentsBound(path: "live_notifications.background_interval_minutes",
-                                             choices: [Choice("15 min", "15"), Choice("30 min", "30"), Choice("60 min", "60")],
-                                             fallback: "15", accessibility: "How often to check", numeric: true)
-                    }
-                    .padding(14)
-                }
-                .snPanel()
+                       path: "live_notifications.enabled") { turnedOn in
+                if turnedOn, store.bool("live_notifications.show_mention_notifications", true) { await ask() }
             }
+            if on { permissionCard }
+            MentionNotificationSettings(notificationsOn: on, ask: ask)
+                .padding(.top, 12)
             SettingButton(title: "Send a test notification", symbol: "bell.badge") { Task { await test() } }
         }
         .task { await readStatus() }
         .onChange(of: phase) { _, now in if now == .active { Task { await readStatus() } } }
-        .sheet(isPresented: $channelsOpen) { NotifiedChannelsSheet() }
-    }
-
-    private func line(_ title: String, _ detail: String, _ path: String) -> some View {
-        HStack(alignment: .settingTitle, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
-                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
-                Text(detail).font(.sn(12)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            SettingToggle(path: path, fallback: true, label: title)
-                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     @ViewBuilder private var permissionCard: some View {
@@ -214,7 +161,7 @@ struct NotificationsPanel: View {
                  body: "StreamNook can send notifications to this iPhone.", allow: false, settingsLabel: "Sounds and banners in iPhone Settings")
         case .notDetermined:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Allow notifications so alerts reach you when StreamNook is closed.", allow: true, settingsLabel: "Open iPhone Settings")
+                 body: "Allow notifications so mentions and replies can reach you.", allow: true, settingsLabel: "Open iPhone Settings")
         case .denied:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
                  body: "Your iPhone will not ask again, so turn notifications on for StreamNook in Settings.", allow: false,
@@ -249,12 +196,18 @@ struct NotificationsPanel: View {
         .snPanel()
     }
 
+    /// Turning a notification on asks for permission the first time; an answer already given stays.
+    private func ask() async {
+        await MentionAlerts.askIfUndecided()
+        await readStatus()
+    }
+
     private func readStatus() async {
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
     private func test() async {
-        ForegroundBanners.install()
+        NotificationRouter.install()
         let content = UNMutableNotificationContent()
         content.title = "StreamNook"
         content.body = "Notifications are working."
@@ -262,17 +215,87 @@ struct NotificationsPanel: View {
     }
 }
 
-/// Lets a notification posted while StreamNook is in front show as a banner.
-final class ForegroundBanners: NSObject, UNUserNotificationCenterDelegate {
-    @MainActor private static let shared = ForegroundBanners()
+/// Notifications > Mentions and replies: whether a mention notifies, what counts as one (which
+/// also decides what collects in Mentions), and the chats that stay quiet.
+struct MentionNotificationSettings: View {
+    @Environment(SettingsStore.self) private var store
+    let notificationsOn: Bool
+    let ask: () async -> Void
 
-    @MainActor static func install() {
-        if UNUserNotificationCenter.current().delegate == nil { UNUserNotificationCenter.current().delegate = shared }
+    private static let notify = "live_notifications.show_mention_notifications"
+
+    var body: some View {
+        SettingsBlock(title: "Mentions and replies") {
+            ToggleRow(title: "Notify me", path: Self.notify, fallback: true,
+                      detailFor: { on in
+                          guard notificationsOn else { return "Turn on Notifications above to get these." }
+                          return on ? "When someone mentions or replies to you in a chat"
+                                    : "They still collect in Mentions on the You tab."
+                      },
+                      onChange: { on in if on && notificationsOn { await ask() } })
+            // The rules shape Mentions as well as notifications, so they stand on their own.
+            SettingRow(title: "Counts as a mention",
+                       detail: "Your @name always counts. These count too, in Mentions and for notifications.") {
+                EmptyView()
+            } nested: {
+                NestedSettings {
+                    NestedToggle(title: "Name without @", path: "mentions.match_bare_login", fallback: true)
+                    NestedToggle(title: "Display name", path: "mentions.match_display_name", fallback: true)
+                    NestedToggle(title: "Highlight words", path: "mentions.highlight_words", fallback: true)
+                }
+            }
+            MutedChatsRow()
+        }
     }
+}
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
-        -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+/// The chats whose mentions never notify or collect in Mentions (they still highlight in chat),
+/// each with its remove.
+struct MutedChatsRow: View {
+    @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let muted = store.strings("mentions.muted_channels")
+        let mixed = Set(muted.map(MentionText.platform(ofRoom:))).count > 1
+        WideRow(title: "Muted chats",
+                detail: muted.isEmpty ? "None. Mute a chat from its row in Mentions."
+                                      : "Mentions here never notify you or reach the Mentions list.",
+                paths: ["mentions.muted_channels"]) {
+            if !muted.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(muted, id: \.self) { room in
+                        MutedRoomChip(room: room, mark: mixed) {
+                            Task { await model.mentions.unmute(room, store: store) }
+                        }
+                    }
+                }
+                .padding(.top, 10)
+            }
+        }
+    }
+}
+
+/// A muted chat: its name (with its platform's logo where platforms mix) and an x to unmute.
+private struct MutedRoomChip: View {
+    let room: String
+    let mark: Bool
+    let remove: () -> Void
+
+    var body: some View {
+        let channel = MentionText.channel(ofRoom: room)
+        HStack(spacing: 4) {
+            if mark { ProviderLogo(provider: MentionText.platform(ofRoom: room), size: 11, tinted: true) }
+            Text(channel).font(.sn(12)).foregroundStyle(SN.textPrimary)
+            Button(action: remove) {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(SN.textMuted)
+                    .frame(width: 28, height: 28).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Unmute \(channel)")
+        }
+        .padding(.leading, 12)
+        .background { Capsule().fill(SN.surface) }
     }
 }
 

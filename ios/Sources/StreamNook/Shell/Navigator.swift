@@ -8,6 +8,8 @@ enum Route: Hashable {
     case category(TwitchCategory)
     case settings(SettingsSection)
     case cosmetics
+    /// The mentions inbox.
+    case mentions
     /// You › Your clips.
     case myClips
 }
@@ -19,9 +21,8 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The pages the You tab lists. Notifications waits until the iPhone sends alerts: today it
-    /// could only ask for a permission nothing uses.
-    static var listed: [SettingsSection] { allCases.filter { $0 != .notifications } }
+    /// The pages the You tab lists.
+    static var listed: [SettingsSection] { allCases }
 
     var title: String {
         switch self {
@@ -43,7 +44,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .adFree: "How streams are served and which relays are used"
         case .chat: "Chat design and behavior"
         case .theme: "Color theme, glass, and fonts"
-        case .notifications: "System alerts for live channels and drops"
+        case .notifications: "Mentions and replies while StreamNook is open"
         case .cache: "Emote, badge, and metadata caches"
         case .support: "Logs, diagnostics, and feedback"
         case .changed: "Everything you set differently from a fresh install"

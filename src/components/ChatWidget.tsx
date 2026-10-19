@@ -15,12 +15,15 @@ import { registerChatSearchController } from '../keybindings/chatSearchControlle
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
 
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
-import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
+import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor, ensureChannelHistory } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { onWalletRequest, takeWalletRequest } from '../utils/walletRequest';
+import { onMentionJump, requestMentionJump, takeMentionJump, type MentionJump } from '../stores/mentionJumpStore';
+import { useVisibleMentionRooms } from '../stores/mentionInboxStore';
+import { MentionContextCard } from './mentions/MentionContextCard';
 import { isHomeRow, rowProvider } from '../utils/chatAuthority';
 import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
 import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
@@ -142,7 +145,7 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 import { usePinStore } from '../stores/pinStore';
 import { useVodReplayStore, useVodReplaySnapshot, nudgeVodReplay } from '../stores/vodReplayStore';
 import { SegmentedSelect } from './settings/_primitives';
-import type { TwitchStream, HypeTrainData } from '../types';
+import type { TwitchStream, HypeTrainData, MentionEntry } from '../types';
 
 import { Logger } from '../utils/logger';
 
@@ -3025,6 +3028,67 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
   }, [scrollToMessage]);
 
+  // ---- Mentions --------------------------------------------------------------
+  // The rooms this chat shows (the slice keys the paused counter totals, which
+  // are Rust's room keys). The main chat reports them as on screen, and any
+  // chat showing a mention's room takes its jump: scroll to the message and
+  // flash it; if it is not loaded yet, wait for the join history, then ask for
+  // the history once more; if it is older than that, pin the entry on top.
+  const mentionRooms = activeView === 'chat' && !(isVodReplay && chatMode === 'replay') ? pausedCountKeys : '';
+  useVisibleMentionRooms(isMainSurface ? mentionRooms : '');
+  const [mentionCard, setMentionCard] = useState<{ rooms: string; entry: MentionEntry } | null>(null);
+  const mentionChannelId = isTwitch ? currentStream?.user_id : undefined;
+  const mentionScrollRef = useRef(scrollToMessage);
+  useEffect(() => { mentionScrollRef.current = scrollToMessage; }, [scrollToMessage]);
+  useEffect(() => {
+    if (!mentionRooms) return;
+    const rooms = mentionRooms.split('|');
+    let cancelled = false;
+    let inFlight: MentionJump | null = null;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const wait = (ms: number) => new Promise<void>((resolve) => { timers.push(setTimeout(resolve, ms)); });
+    const loaded = (id: string) => messagesRef.current.some((m) => getMessageId(m) === id);
+    const waitFor = async (id: string, ms: number) => {
+      const end = Date.now() + ms;
+      while (!cancelled && Date.now() < end) {
+        if (loaded(id)) return true;
+        await wait(250);
+      }
+      return loaded(id);
+    };
+    const run = async (jump: MentionJump) => {
+      inFlight = jump;
+      let hit = await waitFor(jump.id, 4000);
+      if (!hit && !cancelled && mentionChannelId && !jump.room.includes(':')) {
+        await ensureChannelHistory(jump.room, mentionChannelId);
+        hit = await waitFor(jump.id, 1500);
+      }
+      if (cancelled) return;
+      inFlight = null;
+      if (hit) {
+        setMentionCard(null);
+        mentionScrollRef.current(jump.id, { highlight: true, align: 'center' });
+      } else {
+        setMentionCard(jump.entry ? { rooms: mentionRooms, entry: jump.entry } : null);
+      }
+    };
+    const take = () => {
+      const jump = takeMentionJump(rooms);
+      if (jump) void run(jump);
+    };
+    take();
+    const off = onMentionJump(take);
+    return () => {
+      cancelled = true;
+      off();
+      timers.forEach(clearTimeout);
+      // The rooms changed mid-search (a companion attached): hand the jump
+      // back so the chat's next set of rooms takes it.
+      if (inFlight) requestMentionJump(inFlight);
+    };
+  }, [mentionRooms, mentionChannelId, getMessageId]);
+  const shownMentionCard = mentionCard && mentionCard.rooms === mentionRooms ? mentionCard.entry : null;
+
   // ---- Keyboard moderation controller --------------------------------------
   // Bridges the global keybinding engine to this chat. Only the primary chat
   // (no channelOverride) drives keyboard moderation; popout/MultiNook instances
@@ -5041,6 +5105,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {/* Pinned messages are now rendered in a floating modal outside the header */}
           </div>
         </div>
+
+        {/* A mention older than this chat's history, pinned above the
+            messages (over the pin, which it outranks while it is up). */}
+        {shownMentionCard && activeView === 'chat' && (
+          <div
+            className="absolute left-3 right-3 z-[16] pointer-events-none flex flex-col items-center"
+            style={{ top: pinnedTop }}
+          >
+            <MentionContextCard entry={shownMentionCard} onDismiss={() => setMentionCard(null)} />
+          </div>
+        )}
 
         {/* Free Floating Pinned Message Modal */}
         {pinnedMessages.length > 0 && (

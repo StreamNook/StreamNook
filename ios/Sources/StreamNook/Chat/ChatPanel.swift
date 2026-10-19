@@ -110,7 +110,8 @@ struct ChatPanel: View {
                 // Under the tab strip (or under inline pins), a short fade instead of a hard cut.
                 .mask {
                     let pinned = !overlay && !(rooms?.activePins.isEmpty ?? true)
-                    let cards = votes.map { !$0.slots.isEmpty } ?? false
+                    let mentionCard = !overlay && rooms?.mentionCards[session.channel] != nil
+                    let cards = mentionCard || (votes.map { !$0.slots.isEmpty } ?? false)
                     if pinned || cards || (!overlay && rooms?.showsStrip == true) {
                         VStack(spacing: 0) {
                             Color.clear.frame(height: inlineTop)
@@ -138,6 +139,12 @@ struct ChatPanel: View {
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                                     if !rooms.pinsOpen { pinsBox = height }
                                 }
+                        }
+                        if let rooms, !overlay, let card = rooms.mentionCards[session.channel] {
+                            MentionContextCard(entry: card) { rooms.dismissMentionCard(session.channel) }
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                         // The live poll, prediction and drop as one stack, under the pins; never
                         // over landscape video.

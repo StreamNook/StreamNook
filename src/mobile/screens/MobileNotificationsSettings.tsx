@@ -16,7 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ArrowSquareOut } from 'phosphor-react';
 import { BatteryWarning, BellRing, ChevronRight, Send, TriangleAlert } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { SettingsRow, SettingsSection } from '../../components/settings/_primitives';
+import { SettingsRow, SettingsSection, SettingsSubGroup } from '../../components/settings/_primitives';
 import { thenRun, useSettingReset } from '../../components/settings/settingReset';
 import { GROUP_ICON, GROUP_ICON_STROKE, GroupCard, GroupIcon, GroupRow } from '../ui/GroupedList';
 import { settingIcon } from './settingsIcons';
@@ -39,6 +39,8 @@ import {
 import type { LiveNotificationSettings } from '../../types';
 import { Logger } from '../../utils/logger';
 import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { roomName, roomProvider, setRoomMuted } from '../mentions/mentionInbox';
 
 const TOGGLES: {
   key: keyof LiveNotificationSettings;
@@ -110,6 +112,111 @@ function applyDelivery(next: Partial<LiveNotificationSettings>): void {
     void invoke('push_unregister').catch(() => {});
   }
 }
+
+/** The mention rules, as Rust reads them (services/mention_inbox.rs and the
+ *  chat rules). Each row writes its one field. */
+const MENTION_RULES: { key: 'match_bare_login' | 'match_display_name' | 'highlight_words'; label: string }[] = [
+  { key: 'match_bare_login', label: 'Name without @' },
+  { key: 'match_display_name', label: 'Display name' },
+  { key: 'highlight_words', label: 'Highlight words' },
+];
+
+/**
+ * Mentions and replies: whether one notifies you, what counts as one, and
+ * the chats where they stay quiet. "Notify me" is the live_notifications key
+ * every app shares; the rest is the `mentions` group. Rust decides every
+ * notification and every inbox entry from these. Same rows as desktop and
+ * iPhone.
+ */
+const MentionsSection: React.FC<{ masterOn: boolean; osBlocked: boolean }> = ({ masterOn, osBlocked }) => {
+  const notifyPref = useAppStore((s) => s.settings.live_notifications?.show_mention_notifications);
+  const mentions = useAppStore((s) => s.settings.mentions);
+  const resetFor = useSettingReset();
+  const notifyOn = notifyPref !== false;
+  const muted = mentions?.muted_channels ?? [];
+  const mixed = new Set(muted.map(roomProvider)).size > 1;
+
+  const write = (changes: Record<string, unknown>) =>
+    setSettingsFields(changes).catch((err) => {
+      Logger.warn('[MobileNotificationsSettings] save failed:', err);
+      useAppStore.getState().addToast('Could not save that change.', 'error');
+    });
+
+  return (
+    <SettingsSection label="Mentions and replies">
+      <SettingsRow
+        title="Notify me"
+        description="When someone mentions or replies to you"
+        onReset={resetFor('live_notifications.show_mention_notifications')}
+        control={
+          <Toggle
+            on={notifyOn && masterOn && !osBlocked}
+            disabled={!masterOn || osBlocked}
+            onChange={() => void write(fieldsIn('live_notifications', { show_mention_notifications: !notifyOn }))}
+          />
+        }
+      >
+        {osBlocked && (
+          <button
+            onClick={() => openChannelSettings(NOTIFY_CHANNEL.mentions)}
+            className="-mt-2 text-[13px] text-warning flex items-center gap-1"
+          >
+            Silenced in Android settings
+            <ArrowSquareOut size={12} />
+          </button>
+        )}
+      </SettingsRow>
+
+      {/* What counts, its own row: these also decide what the Mentions list
+          keeps, so they stay live with the notification off. */}
+      <SettingsRow
+        title="Counts as a mention"
+        description="Your @name always counts. These count too, in Mentions and for notifications."
+      />
+      <SettingsSubGroup>
+        {MENTION_RULES.map(({ key, label }) => {
+          const on = mentions?.[key] !== false;
+          return (
+            <SettingsRow
+              key={key}
+              title={label}
+              onReset={resetFor(`mentions.${key}`)}
+              control={<Toggle on={on} onChange={() => void write(fieldsIn('mentions', { [key]: !on }))} />}
+            />
+          );
+        })}
+      </SettingsSubGroup>
+
+      <SettingsRow
+        title="Muted chats"
+        description={
+          muted.length > 0
+            ? 'Mentions here never notify you or reach the Mentions list.'
+            : 'None. Mute a chat from its row in Mentions.'
+        }
+        onReset={resetFor('mentions.muted_channels')}
+      >
+        {muted.length > 0 && (
+          <div className="-mt-1 flex flex-col">
+            {muted.map((room) => (
+              <div key={room} className="flex items-center gap-2 min-h-[40px]">
+                {mixed && <ProviderMark provider={roomProvider(room)} size={14} />}
+                <span className="flex-1 min-w-0 truncate text-[14px] text-textPrimary">{roomName(room)}</span>
+                <button
+                  onClick={() => void setRoomMuted(room, false)}
+                  className="sn-touch -mr-2 px-2 text-[13px] font-medium text-textSecondary active:text-textPrimary"
+                  aria-label={`Unmute ${roomName(room)}`}
+                >
+                  Unmute
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsRow>
+    </SettingsSection>
+  );
+};
 
 const MobileNotificationsSettings: React.FC = () => {
   const settings = useAppStore((s) => s.settings);
@@ -317,6 +424,8 @@ const MobileNotificationsSettings: React.FC = () => {
             </GroupRow>
           </SettingsSection>
 
+          <MentionsSection masterOn osBlocked={blocked.includes(NOTIFY_CHANNEL.mentions)} />
+
           <SettingsSection label="Background checking">
             {/* Battery first, deliberately. Android withholds network from
                 background work entirely once an app it considers unused drops
@@ -378,6 +487,10 @@ const MobileNotificationsSettings: React.FC = () => {
           </SettingsSection>
         </>
       )}
+
+      {/* What counts as a mention also fills the Mentions list, so it stays
+          reachable with every notification switched off. */}
+      {!masterOn && <MentionsSection masterOn={false} osBlocked={false} />}
 
       <GroupCard>
         <GroupRow

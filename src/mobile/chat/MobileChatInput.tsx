@@ -35,6 +35,7 @@ import { MobileEmoteCarousel } from './MobileEmoteCarousel';
 import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
 import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
+import { useMentionsStore } from '../mentions/mentionInbox';
 import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
@@ -197,6 +198,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -875,7 +877,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
               setMenuOpen(true);
             }}
             className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
-            aria-label={typing ? 'Hide keyboard' : 'Chat options'}
+            aria-label={
+              typing ? 'Hide keyboard' : mentionsUnread > 0 ? 'Chat options, unread mentions' : 'Chat options'
+            }
           >
             {/* Both marks in one place, crossfading, so nothing moves. */}
             <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}>
@@ -884,6 +888,13 @@ const MobileChatInputImpl: React.FC<Props> = ({
             <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-100' : 'opacity-0'}`}>
               <KeyboardHideIcon size={20} />
             </span>
+            {/* Unread mentions wait behind this menu's Mentions row; it fades
+                with the menu mark. */}
+            {mentionsUnread > 0 && (
+              <span
+                className={`absolute top-[7px] right-[7px] w-2 h-2 rounded-full bg-accent pointer-events-none transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}
+              />
+            )}
           </button>
         )}
 

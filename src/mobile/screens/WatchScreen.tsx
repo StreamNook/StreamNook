@@ -45,6 +45,8 @@ import {
   useChatTabsVisible,
   useViewingStreamChat,
 } from '../chat/ChatTabStrip';
+import { useMentionsStore } from '../mentions/mentionInbox';
+import { MentionContextCard } from '../mentions/MentionContextCard';
 import { DropProgressBar } from '../watch/DropProgressBar';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -194,6 +196,10 @@ export const WatchScreen: React.FC = () => {
   const pinsStartCollapsed = useAppStore((s) => s.settings.chat_design?.pinned_start_collapsed) ?? true;
   const pinnedStyle = useAppStore((s) => s.settings.chat_design?.pinned_collapsed_style) ?? 'bar';
   const pinsOpen = pinsState && pinsState.channel === chatChannelId ? pinsState.open : !pinsStartCollapsed;
+  // An opened mention older than its chat's history, pinned over that chat.
+  const mentionCard = useMentionsStore((s) => s.contextCard);
+  const activeChatRoom = useChatTabsStore((s) => s.activeChannel);
+  const showMentionCard = !!mentionCard && mentionCard.room === activeChatRoom;
   // The viewer picked the audio-only rendition: there is no picture to float.
   const audioOnly = useAppStore((s) => s.activeQuality === 'audio_only');
   // The landscape chat overlay shares its knobs with the desktop overlay:
@@ -1199,7 +1205,7 @@ export const WatchScreen: React.FC = () => {
                 // The floating landscape column is for reading the room, so
                 // the stream's own banners (pins, hype train) stay out of it;
                 // they are all still one rotation away.
-                !chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0)
+                !chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0 || showMentionCard)
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -1236,6 +1242,8 @@ export const WatchScreen: React.FC = () => {
                 onToggle={() => setPinsState({ channel: chatChannelId, open: !pinsOpen })}
                 collapsedStyle={pinnedStyle}
               />
+              {/* Last in DOM, so first on screen: the mention you just opened. */}
+              {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}
             </div>
 
           <MobileChatPane

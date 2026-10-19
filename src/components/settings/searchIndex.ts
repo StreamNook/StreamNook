@@ -2507,9 +2507,48 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Mentions and replies',
     title: 'Mentions and replies',
-    description: 'A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat.'
+    description: 'Everything that mentions you or replies to you lands in Mentions, beside Whispers in the title bar. Mentions inbox, @ mentions, replies to you, pings.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Notify me',
+    description: 'A notification shows when someone mentions you or replies to you while that chat is not on screen, and clicking it opens the chat at that message. Previously "Mentions and replies" under Notification Types.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Counts as a mention',
+    description: 'Your @name always counts as a mention. Choose what else does, in Mentions and for notifications.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Name without @',
+    parent: 'Counts as a mention',
+    description: 'Your login written as a word, without the @ in front, counts as a mention.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Display name',
+    parent: 'Counts as a mention',
+    description: 'Your display name counts as a mention when it differs from your login.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Highlight words',
+    parent: 'Counts as a mention',
+    description: 'Messages that match one of your highlight phrases land in Mentions and can notify you.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Muted chats',
+    description: 'Chats whose mentions never notify you or land in Mentions. Mute a chat from its row in Mentions; unmute it here. Silence, ignore a channel.'
   },
   {
     tab: 'Notifications',
