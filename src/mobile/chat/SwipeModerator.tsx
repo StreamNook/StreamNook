@@ -84,6 +84,7 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
     const body = (row: HTMLElement) => row.querySelector<HTMLElement>('[data-mod-body]');
     const restore = (row: HTMLElement) => {
       row.style.transform = '';
+      row.style.maskImage = '';
       row.style.transition = 'transform 220ms ease-out';
       const b = body(row);
       if (b) {
@@ -133,7 +134,11 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       if (!s || !press || !rowRect || !listRect) return;
       const b = body(press.row);
       const lit = step != null && !offRow && !resting();
-      if (s.style === 'capsule') press.row.style.transform = `translateX(${slide}px)`;
+      if (s.style === 'capsule') {
+        press.row.style.transform = `translateX(${slide}px)`;
+        // The part slid past the list's edge fades out rather than being cut mid-word.
+        press.row.style.maskImage = `linear-gradient(to left, transparent ${slide}px, #000 ${slide + 24}px)`;
+      }
       if (s.style === 'preview' && b) {
         b.style.opacity = lit ? '0.45' : '';
         b.style.textDecoration = lit ? `line-through 1.5px ${stepTint(s.steps[step!])}` : '';
@@ -276,6 +281,11 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
 /** The list fades its top edge; the chip stays below that. */
 const LIST_TOP_CLEAR = 30;
 const CHIP_RISE = 34;
+const CHIP_HEIGHT = 28;
+/** The chip keeps to the text column's inset, never the screen's edge. */
+const CHIP_INSET = 12;
+/** The Preview track along the row's bottom, which the chip never covers. */
+const TRACK = 3;
 
 function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
   const chipRef = useRef<HTMLDivElement>(null);
@@ -291,10 +301,11 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
   // The ruler starts where the thumb landed.
   const at = (x: number) => slider.start + x;
   const finger = at(view.slide);
-  const chipX = Math.min(Math.max(4, finger - chipWidth / 2), view.width - chipWidth - 4);
+  const chipX = Math.min(Math.max(CHIP_INSET, finger - chipWidth / 2), view.width - chipWidth - CHIP_INSET);
   // Above the row, kept clear of the list's faded top: near the top it comes
-  // down over the row rather than under the finger, where the thumb covers it.
-  const chipTop = Math.max(-CHIP_RISE, LIST_TOP_CLEAR - view.top);
+  // down over the row rather than under the finger, where the thumb covers
+  // it, but never over the track along the row's bottom.
+  const chipTop = Math.min(Math.max(-CHIP_RISE, LIST_TOP_CLEAR - view.top), view.height - TRACK - CHIP_HEIGHT - 4);
   return (
     <div
       className="pointer-events-none absolute z-30"
@@ -304,8 +315,9 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       {slider.style === 'rail' ? (
         <div className="absolute inset-x-1 inset-y-0.5 rounded-[10px] border border-white/[0.08] bg-surface">
           {slider.steps.map((s, i) => {
-            const zoneEnd = i + 1 < slider.starts.length ? slider.starts[i + 1] : slider.end;
-            const center = at((slider.starts[i] + zoneEnd) / 2) - 4;
+            // A legend spread evenly along the rail, so short zones never crowd
+            // their labels together; the lit pill marks the step under the finger.
+            const center = `${((i + 0.5) / slider.steps.length) * 100}%`;
             const on = lit && i === step;
             // glass-exempt: the lit step's tint over the rail, a color cue that must stay translucent.
             const pill = on ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined;
@@ -322,7 +334,13 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
         </div>
       ) : (
         // glass-exempt: the pull's wash over the message, which must keep the message readable through it.
-        <div className="absolute inset-y-0" style={{ left: at(0), width: view.slide, background: `color-mix(in srgb, ${tint} 18%, transparent)` }} />
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{
+            width: finger,
+            background: `linear-gradient(to right, transparent, color-mix(in srgb, ${tint} 18%, transparent) 16px)`,
+          }}
+        />
       )}
       {slider.style === 'preview' && (
         <div className="absolute inset-x-0 bottom-0 h-[3px]">
@@ -341,22 +359,23 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       )}
       <div
         ref={chipRef}
-        className="absolute flex h-7 items-center justify-center whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
+        className="absolute flex h-7 items-center justify-center overflow-hidden whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
         style={{
           left: chipX,
           top: chipTop,
-          maxWidth: view.width - 8,
+          maxWidth: view.width - CHIP_INSET * 2,
           borderColor: view.resting ? 'color-mix(in srgb, var(--color-error) 55%, transparent)' : `color-mix(in srgb, ${tint} 55%, transparent)`,
           color: lit ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
         }}
       >
-        <span className="truncate">{words}</span>
         {view.resting && (
+          // glass-exempt: Ban's rest filling the chip behind its words, which must stay readable through it.
           <span
-            className="absolute bottom-[2px] left-1.5 h-[2px] rounded-full bg-error"
-            style={{ width: 'calc(100% - 12px)', transformOrigin: 'left', animation: `sn-swipe-dwell ${slider.ban_dwell_ms}ms linear forwards` }}
+            className="absolute inset-0 bg-error/20"
+            style={{ transformOrigin: 'left', animation: `sn-swipe-dwell ${slider.ban_dwell_ms}ms linear forwards` }}
           />
         )}
+        <span className="relative truncate">{words}</span>
       </div>
     </div>
   );

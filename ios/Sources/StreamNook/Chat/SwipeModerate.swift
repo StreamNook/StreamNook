@@ -122,6 +122,15 @@ final class SwipeModerator {
         switch slider.style {
         case "capsule":
             cell.transform = CGAffineTransform(translationX: slide, y: 0)
+            let fade = (cell.layer.mask as? CAGradientLayer) ?? CAGradientLayer()
+            fade.frame = cell.bounds
+            fade.startPoint = CGPoint(x: 0, y: 0.5)
+            fade.endPoint = CGPoint(x: 1, y: 0.5)
+            fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor, UIColor.clear.cgColor]
+            let w = max(cell.bounds.width, 1)
+            let edge = max(0, w - slide)
+            fade.locations = [0, NSNumber(value: Double(max(0, edge - 24) / w)), NSNumber(value: Double(edge / w)), 1]
+            cell.layer.mask = fade
         case "preview":
             cell.alpha = live && !resting ? 0.45 : 1
         default:
@@ -145,6 +154,7 @@ final class SwipeModerator {
     func finish() {
         stopBanRest()
         overlay.dismiss()
+        cell.layer.mask = nil
         UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { [cell] in
             cell.transform = .identity
             cell.alpha = 1
@@ -161,7 +171,8 @@ final class SwipeModOverlay: UIView {
     private let visibleTop: CGFloat
     /// The room above the row this overlay keeps for its chip.
     private static let headroom: CGFloat = 60
-    private let wash = CALayer()
+    /// The pull's wash from the row's left edge to the finger, its leading edge faded.
+    private let wash = CAGradientLayer()
     private let track = CALayer()
     private var segments: [CALayer] = []
     private let rail = UIView()
@@ -169,7 +180,11 @@ final class SwipeModOverlay: UIView {
     private let railPill = UIView()
     private let chip = UILabel()
     private let chipBox = UIView()
+    /// Ban's rest filling the chip behind its words.
     private let dwellBar = CALayer()
+    private static let chipHeight: CGFloat = 28
+    /// The chip keeps to the text column's inset, never the screen's edge.
+    private static let chipInset: CGFloat = 12
 
     static func tint(_ step: SwipeStep) -> UIColor {
         guard let tone = step.tone else { return ChatTheme.textSecondary.withAlphaComponent(0.85) }
@@ -205,14 +220,17 @@ final class SwipeModOverlay: UIView {
                 label.font = .systemFont(ofSize: 12, weight: .semibold)
                 label.textColor = Self.tint(step)
                 label.textAlignment = .center
-                let zone = (i + 1 < slider.starts.count ? slider.starts[i + 1] : slider.end) - slider.starts[i]
-                let center = at(slider.starts[i] + zone / 2) - rail.frame.minX
-                label.frame = CGRect(x: center - 30, y: 0, width: 60, height: rail.bounds.height)
+                // A legend spread evenly along the rail, so short zones never crowd their labels
+                // together; the lit pill marks the step under the finger.
+                let slot = rail.bounds.width / CGFloat(max(slider.steps.count, 1))
+                label.frame = CGRect(x: slot * CGFloat(i), y: 0, width: slot, height: rail.bounds.height)
                 rail.addSubview(label)
                 railLabels.append(label)
             }
         } else {
-            wash.frame = CGRect(x: at(0), y: local.minY, width: 0, height: local.height)
+            wash.frame = CGRect(x: 0, y: local.minY, width: 0, height: local.height)
+            wash.startPoint = CGPoint(x: 0, y: 0.5)
+            wash.endPoint = CGPoint(x: 1, y: 0.5)
             layer.addSublayer(wash)
             if slider.style == "preview" {
                 track.frame = CGRect(x: 0, y: local.maxY - 3, width: local.width, height: 3)
@@ -237,11 +255,11 @@ final class SwipeModOverlay: UIView {
         chipBox.layer.cornerRadius = 12
         chipBox.layer.cornerCurve = .continuous
         chipBox.layer.borderWidth = 1
+        chipBox.clipsToBounds = true
+        dwellBar.backgroundColor = ChatTheme.error.withAlphaComponent(0.2).cgColor
+        chipBox.layer.addSublayer(dwellBar)
         chipBox.addSubview(chip)
         addSubview(chipBox)
-        dwellBar.backgroundColor = ChatTheme.error.cgColor
-        dwellBar.cornerRadius = 1
-        chipBox.layer.addSublayer(dwellBar)
         alpha = 0
         UIView.animate(withDuration: 0.12) { self.alpha = 1 }
     }
@@ -253,8 +271,11 @@ final class SwipeModOverlay: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let ink = tint ?? ChatTheme.textSecondary
-        wash.frame.size.width = slide
-        wash.backgroundColor = ink.withAlphaComponent(0.18).cgColor
+        let washWidth = at(Double(slide))
+        wash.frame.size.width = washWidth
+        let lead = NSNumber(value: Double(min(1, 16 / max(washWidth, 1))))
+        wash.colors = [ink.withAlphaComponent(0).cgColor, ink.withAlphaComponent(0.18).cgColor, ink.withAlphaComponent(0.18).cgColor]
+        wash.locations = [0, lead, 1]
         for (i, segment) in segments.enumerated() {
             segment.opacity = slider.starts[i] <= Double(slide) ? 1 : 0.32
         }
@@ -262,37 +283,41 @@ final class SwipeModOverlay: UIView {
         if let step, step < railLabels.count, !quiet {
             railPill.isHidden = false
             railPill.backgroundColor = ink.withAlphaComponent(0.22)
-            railPill.frame = railLabels[step].frame.insetBy(dx: 2, dy: 5)
+            let label = railLabels[step]
+            let pill = label.intrinsicContentSize.width + 16
+            railPill.frame = CGRect(x: label.frame.midX - pill / 2, y: label.frame.minY + 5, width: pill, height: label.frame.height - 10)
         } else {
             railPill.isHidden = true
         }
         chip.text = words
         chip.sizeToFit()
-        let width = min(chip.bounds.width + 22, bounds.width - 8)
+        let inset = Self.chipInset
+        let width = min(chip.bounds.width + 22, bounds.width - inset * 2)
         let finger = at(Double(slide))
-        let x = min(max(4, finger - width / 2), bounds.width - width - 4)
+        let x = min(max(inset, finger - width / 2), bounds.width - width - inset)
         // Above the row, kept inside what the list shows: near the top it comes down over the
         // row instead of going under the finger, where the thumb would cover it. The list fades
         // its top 12 to 30 points, so the chip stays clear of that.
         let listTop = visibleTop - (row.minY - Self.headroom)
-        let y = max(Self.headroom - 34, listTop + 30)
-        chipBox.frame = CGRect(x: x, y: y, width: width, height: 28)
+        // Never over the track along the row's bottom either.
+        let y = min(max(Self.headroom - 34, listTop + 30), Self.headroom + row.height - 3 - Self.chipHeight - 4)
+        chipBox.frame = CGRect(x: x, y: y, width: width, height: Self.chipHeight)
         chip.frame = chipBox.bounds
         chipBox.layer.borderColor = (quiet ? ChatTheme.error.withAlphaComponent(0.55) : ink.withAlphaComponent(0.55)).cgColor
         chip.textColor = tint == nil ? ChatTheme.textSecondary : ChatTheme.textPrimary
     }
 
-    /// Fills a thin red bar under the chip while Ban's rest runs; nil clears it.
+    /// Fills the chip from the left behind its words while Ban's rest runs; nil clears it.
     func dwell(seconds: Double?) {
         dwellBar.removeAllAnimations()
         guard let seconds else {
             dwellBar.frame = .zero
             return
         }
-        let full = max(0, chipBox.bounds.width - 12)
+        let full = chipBox.bounds.width
         dwellBar.anchorPoint = CGPoint(x: 0, y: 0.5)
-        dwellBar.bounds = CGRect(x: 0, y: 0, width: full, height: 2)
-        dwellBar.position = CGPoint(x: 6, y: chipBox.bounds.height - 3)
+        dwellBar.bounds = CGRect(x: 0, y: 0, width: full, height: chipBox.bounds.height)
+        dwellBar.position = CGPoint(x: 0, y: chipBox.bounds.height / 2)
         let grow = CABasicAnimation(keyPath: "bounds.size.width")
         grow.fromValue = 0
         grow.toValue = full

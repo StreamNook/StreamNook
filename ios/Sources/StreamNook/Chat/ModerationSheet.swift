@@ -258,17 +258,6 @@ struct ModerationSheet: View {
     @ViewBuilder
     private var logSection: some View {
         Section {
-            if !model.incoming.isEmpty {
-                Button {
-                    withAnimation(.snappy) { model.showIncoming() }
-                } label: {
-                    Label("\(model.incoming.count) new", systemImage: "arrow.up")
-                        .font(.sn(13, 600))
-                        .foregroundStyle(SN.accent)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderless)
-            }
             if let log = model.log {
                 if log.isEmpty, model.incoming.isEmpty {
                     Text("No moderator actions since you opened this chat.").font(.snRowDetail).foregroundStyle(SN.textMuted)
@@ -297,7 +286,22 @@ struct ModerationSheet: View {
                 }
             }
         } header: {
-            Text("Recent actions")
+            // "N new" sits in the heading, so nothing below moves down when actions arrive.
+            HStack(alignment: .firstTextBaseline) {
+                Text("Recent actions")
+                Spacer()
+                if !model.incoming.isEmpty {
+                    Button {
+                        withAnimation(.snappy) { model.showIncoming() }
+                    } label: {
+                        Label("\(model.incoming.count) new", systemImage: "arrow.up")
+                            .font(.sn(12, 600))
+                            .textCase(nil)
+                            .foregroundStyle(SN.accent)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
         } footer: {
             if let note = model.logNote { ListFooter(text: note) }
         }

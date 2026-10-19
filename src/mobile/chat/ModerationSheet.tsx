@@ -205,7 +205,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
   return (
     <MobileSheet open={open} onClose={onClose} title="Moderation" maxHeightFraction={0.85}>
       <div className="px-3 pb-4">
-        <div className={heading}>{held && held.length > 0 ? `Held by AutoMod · ${held.length}` : 'Held by AutoMod'}</div>
+        <div className={heading}>{heldRows.length > 0 ? `Held by AutoMod · ${heldRows.length}` : 'Held by AutoMod'}</div>
         <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
           {heldRows.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-textMuted">Nothing held right now.</p>
@@ -237,7 +237,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                     type="button"
                     disabled={busy != null}
                     onClick={() => void decide(m, false)}
-                    className="h-[34px] flex-1 rounded-[10px] bg-error/15 text-[14px] font-semibold text-error disabled:opacity-60"
+                    className="h-[34px] flex-1 rounded-[10px] bg-error/15 text-[14px] font-semibold text-[color-mix(in_srgb,var(--color-error)_70%,white)] disabled:opacity-60"
                   >
                     Deny
                   </button>
@@ -249,18 +249,20 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
         </div>
         {heldNote && <p className={note}>{heldNote}</p>}
 
-        <div className={heading}>Recent actions</div>
-        <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
+        <div className={`${heading} flex items-baseline justify-between`}>
+          Recent actions
           {incoming.length > 0 && (
             <button
               type="button"
               onClick={showIncoming}
-              className="flex h-10 w-full items-center justify-center gap-1.5 text-[13px] font-semibold text-accent"
+              className="flex items-center gap-1 text-[12px] font-semibold normal-case tracking-normal text-accent"
             >
-              <ArrowUp size={13} weight="bold" />
+              <ArrowUp size={11} weight="bold" />
               {incoming.length} new
             </button>
           )}
+        </div>
+        <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
           {log == null ? null : log.length === 0 && incoming.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-textMuted">No moderator actions since you opened this chat.</p>
           ) : (
@@ -289,7 +291,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                     <button
                       type="button"
                       onClick={() => setLiftPending(null)}
-                      className="px-1.5 py-1 text-[13px] font-medium text-textSecondary"
+                      className="px-1 py-1 text-[13px] font-medium text-textSecondary"
                     >
                       Cancel
                     </button>
@@ -297,7 +299,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                       type="button"
                       disabled={busy != null}
                       onClick={() => void lift(e)}
-                      className="px-1.5 py-1 text-[13px] font-semibold text-accent disabled:opacity-50"
+                      className="-mr-1 rounded-[8px] bg-accent/15 px-2 py-1 text-[13px] font-semibold text-accent disabled:opacity-50"
                     >
                       {e.action === 'timeout' ? 'Lift timeout' : 'Unban'}
                     </button>
@@ -351,7 +353,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
           </button>
         </div>
         {phraseNote && (
-          <div className="flex items-start gap-2">
+          <div className="flex items-start gap-2 pr-3">
             <p className={`${note} flex-1`}>{phraseNote}</p>
             {blocked && (
               <button
