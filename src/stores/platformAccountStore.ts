@@ -180,7 +180,7 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     applyRoster,
 
     connect: async (provider) => {
-      if (get()[provider].busy) return;
+      if (get()[provider].busy || !get()[provider].canSignIn) return;
       patch(provider, { busy: true, step: 'Waiting for you to sign in…' });
       // Set when the flow already said why it did not finish, so the check
       // after the roster read never says it a second time.
