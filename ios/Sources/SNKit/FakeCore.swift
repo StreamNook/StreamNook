@@ -289,11 +289,14 @@ public final class FakeCore: CoreBridge {
                     "source_label": provider.uppercased(), "source_detail": "Channel",
                 ]
                 if query.isEmpty { row["group"] = provider == "twitch" ? "Global Emotes" : "Channel Emotes" }
+                if let width = emote["width"] { row["width"] = width }
                 rows.append(row)
             }
         }
         let limit = args["limit"] as? Int ?? (search ? 60 : 50)
-        return ["rows": Array(rows.prefix(limit)), "total": rows.count, "ready": true]
+        // Hits per source before the cap, as the core counts them (the fake has no favorites).
+        let counts = Dictionary(grouping: rows) { $0["provider"] as? String ?? "" }.mapValues(\.count)
+        return ["rows": Array(rows.prefix(limit)), "total": rows.count, "ready": true, "counts": counts]
     }
 
     /// A stand-in for the core's picker over the fixture's set: the room's tabs with counts, and

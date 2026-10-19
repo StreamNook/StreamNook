@@ -4,15 +4,17 @@ import SNKit
 
 /// Composer drive steps (see Drive.swift), on the chat stage or the watch layer's room:
 ///
-/// - `chatpicktab:ID` selects a picker tab (`favorites`, `emoji`, `twitch`, `bttv`, `7tv`, `ffz`)
-/// - `chatpicksearch:TEXT` searches the picker
+/// - `chatpicktab:ID` presses a picker tab (`favorites`, `emoji`, `twitch`, `bttv`, `7tv`, `ffz`,
+///   and `all` while searching, when a press narrows the results)
+/// - `chatpicksearch:TEXT` searches the picker (`chatpicksearch:` clears it)
 /// - `chatpickclose` closes the picker
 /// - `chatgate:KIND` shows the room as the core words it when a mode blocks the viewer
 ///   (`subs`, `emote`, `follow`, `slow`, or `off`), by feeding the room a ROOMSTATE frame
 /// - `chatslow` starts the slow-mode countdown as if a message had just gone out
 /// - `chatfail[:WHY]` shows the draft as a message Twitch did not take
 /// - `chatnotice:TEXT` prints a line only the viewer sees
-/// - `chatpickerlog` logs the picker's tabs and sections
+/// - `chatpickerlog` logs the picker's tabs and sections, or while searching its scope, the
+///   tabs' hit counts, the emote rows and grid lines shown, and the emoji
 /// - `chatfocus[:off]` gives the box the keyboard (or takes it away)
 /// - `chatdraft:TEXT` types TEXT into the box (`_` for spaces); `cheerlog` logs the cheer bar's
 ///   state. Send is ChatDrive's `chatsend`, which runs only on FakeCore (`chatlab:core:LOGIN`
@@ -24,7 +26,7 @@ enum ComposerDrive {
         let composer = ComposerRegistry.shared.models[ObjectIdentifier(session)]
         switch name {
         case "chatpicktab":
-            composer?.picker.select(value)
+            composer?.picker.pick(value)
         case "chatpicksearch":
             composer?.picker.query = value
         case "chatpickclose":
@@ -48,7 +50,13 @@ enum ComposerDrive {
             log.notice("cheer draft \(flow?.draft?.total ?? -1) problems \(flow?.draft?.problems.count ?? -1) status \(String(describing: flow?.status.map { "\($0)" }), privacy: .public)")
         case "chatpickerlog":
             guard let picker = composer?.picker else { return true }
-            let tabs = picker.tabs.map { "\($0)=\(picker.count($0).map(String.init) ?? "-")" }.joined(separator: ",")
+            let tabs = picker.visibleTabs.map { "\($0)=\(picker.count($0).map(String.init) ?? "-")" }.joined(separator: ",")
+            if picker.searching {
+                let cells = picker.searchCells
+                let first = cells.prefix(5).map { "\($0.provider):\($0.name)" }.joined(separator: ",")
+                log.notice("picker search \(picker.trimmedQuery, privacy: .public) scope \(picker.scope, privacy: .public) tabs \(tabs, privacy: .public) rows \(cells.count) lines \(SearchGrid.lines(cells).count) emoji \(picker.searchEmoji.count)/\(picker.emojiMatches.count) first \(first, privacy: .public)")
+                return true
+            }
             let sections = picker.sections.map { "\($0.title)(\($0.emotes.count),\($0.columns))" }.joined(separator: ",")
             log.notice("picker tab \(picker.tab, privacy: .public) tabs \(tabs, privacy: .public) sections \(sections, privacy: .public)")
         default:
