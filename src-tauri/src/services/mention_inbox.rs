@@ -67,6 +67,10 @@ pub struct MentionEntry {
     /// channel id is case-sensitive. Older entries lack it; use `room`.
     #[serde(default)]
     pub open_key: String,
+    /// The channel's own page on its platform (its live page, or the video):
+    /// what a shell that cannot show this platform's chat opens instead.
+    #[serde(default)]
+    pub watch_url: String,
     #[serde(default)]
     pub channel_id: Option<String>,
     pub sender_id: String,
@@ -274,10 +278,12 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
     let open = open_key(&msg.provider, &msg.channel);
     let channel_login = open.split_once(':').map(|(_, c)| c.to_string()).unwrap_or_else(|| open.clone());
     let platform = if msg.provider.is_empty() { "twitch".to_string() } else { msg.provider.to_lowercase() };
+    let watch_url = crate::services::providers::watch_urls::watch_url(&platform, &channel_login);
     MentionEntry {
         id: msg.id.clone(),
         room: room_key(&msg.provider, &msg.channel),
         open_key: open,
+        watch_url,
         platform,
         channel_login,
         channel_id: msg.tags.get("room-id").cloned(),
@@ -618,6 +624,7 @@ mod tests {
             room: room.into(),
             channel_login: room.into(),
             open_key: room.into(),
+            watch_url: String::new(),
             channel_id: None,
             sender_id: "1".into(),
             sender_login: "someone".into(),

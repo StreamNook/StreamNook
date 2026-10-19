@@ -17,12 +17,15 @@ extension AppModel {
     }
 
     /// Puts a mention's chat on screen the way the app opens any chat: its tab when it is open,
-    /// a tab beside the stream that is playing, or the channel itself when nothing plays.
+    /// a tab beside the stream that is playing, or the channel itself when nothing plays. A
+    /// platform whose chat the app does not draw (YouTube) opens the channel's own page instead,
+    /// in its app when installed, so the tap always lands somewhere real.
     @discardableResult
     func openChat(for entry: MentionEntry) -> Bool {
         guard entry.platform == "twitch" || entry.platform == "kick" else {
-            let name = entry.platform == "youtube" ? "YouTube" : entry.platform.capitalized
-            toasts.show("\(name) chats do not open on iPhone yet.")
+            if let link = entry.watchURL, !link.isEmpty, let url = URL(string: link) {
+                UIApplication.shared.open(url)
+            }
             return false
         }
         // `room` is the lowercased match key; `chatKey` (the core's `open_key`) opens the chat in

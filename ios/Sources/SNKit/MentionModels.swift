@@ -21,6 +21,9 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
     /// The key that opens the chat: the bare Twitch login, else `provider:channel` in the
     /// channel's own case (YouTube ids are case-sensitive). Nil on entries filed before it.
     public var openKey: String?
+    /// The channel's own page on its platform (its live page, or the video), for a chat this app
+    /// cannot show. Nil on entries filed before it.
+    public var watchURL: String?
     /// The channel as chat addresses it (login or slug).
     public var channelLogin: String
     public var channelID: String?
@@ -38,13 +41,14 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
 
     enum CodingKeys: String, CodingKey {
         case id, platform, room, text, kind, read, removed
-        case openKey = "open_key"
+        case openKey = "open_key", watchURL = "watch_url"
         case channelLogin = "channel_login", channelID = "channel_id"
         case senderID = "sender_id", senderLogin = "sender_login", senderName = "sender_name"
         case senderColor = "sender_color", replyParentID = "reply_parent_id", atMs = "at_ms"
     }
 
-    public init(id: String, platform: String = "twitch", room: String, openKey: String? = nil, channelLogin: String, channelID: String? = nil,
+    public init(id: String, platform: String = "twitch", room: String, openKey: String? = nil, watchURL: String? = nil,
+                channelLogin: String, channelID: String? = nil,
                 senderID: String = "", senderLogin: String, senderName: String, senderColor: String? = nil,
                 text: String, kind: Kind = .mention, replyParentID: String? = nil, atMs: Int64, read: Bool = false,
                 removed: Bool = false) {
@@ -52,6 +56,7 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
         self.platform = platform
         self.room = room
         self.openKey = openKey
+        self.watchURL = watchURL
         self.channelLogin = channelLogin
         self.channelID = channelID
         self.senderID = senderID
@@ -72,6 +77,7 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
         platform = try c.decodeIfPresent(String.self, forKey: .platform) ?? "twitch"
         room = try c.decode(String.self, forKey: .room)
         openKey = try c.decodeIfPresent(String.self, forKey: .openKey)
+        watchURL = try c.decodeIfPresent(String.self, forKey: .watchURL)
         channelLogin = try c.decodeIfPresent(String.self, forKey: .channelLogin) ?? room
         channelID = try c.decodeIfPresent(String.self, forKey: .channelID)
         senderID = try c.decodeIfPresent(String.self, forKey: .senderID) ?? ""

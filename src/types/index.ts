@@ -676,6 +676,9 @@ export interface MentionEntry {
   /** What opens this chat (`startStream`): like `room` but keeping the
    *  channel's own case (a YouTube id is case-sensitive). Older entries lack it. */
   open_key?: string;
+  /** The channel's own page on its platform (live page or video), for a shell
+   *  that cannot show this platform's chat. Older entries lack it. */
+  watch_url?: string;
   /** A Twitch login (lowercased), else the slug or id with its own case. */
   channel_login: string;
   channel_id?: string | null;
