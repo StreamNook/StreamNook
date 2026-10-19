@@ -50,8 +50,17 @@ struct WatchLayer: View {
             .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom ?? 0
     }
 
+    /// In landscape, whether the camera cutout is on the leading (left) edge: the top of the phone
+    /// faces left when the interface is landscape-right.
+    @State private var cutoutLeading = false
+
+    @MainActor private static func cutoutIsLeading() -> Bool {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        return scene?.effectiveGeometry.interfaceOrientation == .landscapeRight
+    }
+
     private var chat: LandscapeChatLayout {
-        LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "overlay"),
+        LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "beside"),
                             side: store.string("fullscreen_chat.side", "auto"),
                             width: store.double("fullscreen_chat.width", 340),
                             opacity: liveOpacity ?? store.double("fullscreen_chat.opacity", 55))
@@ -69,10 +78,12 @@ struct WatchLayer: View {
             let layer = Self.lerp(CGRect(origin: .zero, size: screen), miniRect, progress)
             let chat = chat
             let sideChat = landscape && full && nav.landscapeChat
-            // The landscape column: the chat's width plus the safe inset on its outer edge (the
-            // Dynamic Island side), so its text never sits under the cutout.
-            let outer = chat.leading ? insets.leading : insets.trailing
-            let columnWidth = CGFloat(chat.width(screenWidth: screen.width, live: liveWidth)) + outer
+            // The landscape column runs to the screen edge. Its text keeps clear of the camera
+            // cutout on the edge that has one, and only of the rounded corner on the other.
+            let edgeInset = chat.leading ? insets.leading : insets.trailing
+            let outer = CGFloat(chat.textInset(edgeInset: Double(edgeInset),
+                                               cutoutOnChatSide: cutoutLeading == chat.leading))
+            let columnWidth = CGFloat(chat.width(screenWidth: screen.width, live: liveWidth))
             let beside = sideChat && chat.beside
             let band = beside
                 ? CGRect(x: chat.leading ? columnWidth : 0, y: 0, width: screen.width - columnWidth, height: screen.height)
@@ -141,7 +152,7 @@ struct WatchLayer: View {
 
                 if sideChat {
                     let edge = chat.leading ? columnX + columnWidth : columnX
-                    ChatWidthHandle(chat: chat, width: Double(columnWidth - outer), screenWidth: screen.width,
+                    ChatWidthHandle(chat: chat, width: Double(columnWidth), screenWidth: screen.width,
                                     onDrag: { liveWidth = $0 },
                                     onCommit: commitWidth,
                                     onTap: {
@@ -221,6 +232,15 @@ struct WatchLayer: View {
             }
         }
         .ignoresSafeArea()
+        // Which edge the camera cutout is on: a turn from one landscape to the other keeps the
+        // size, so the scene's orientation is read on every device turn.
+        .onAppear { cutoutLeading = Self.cutoutIsLeading() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                cutoutLeading = Self.cutoutIsLeading()
+            }
+        }
         .task(id: controlsTouch) {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))

@@ -40,10 +40,10 @@ struct ChatSettingsPanel: View {
     private var landscape: some View {
         SettingsBlock(title: "Landscape Chat", detail: "How chat shares the screen when the phone is on its side.") {
             ChoiceRow(title: "Layout", path: "fullscreen_chat.phone_layout",
-                      choices: [Choice("Over the video", "overlay"), Choice("Beside the video", "beside")], fallback: "overlay",
+                      choices: [Choice("Over the video", "overlay"), Choice("Beside the video", "beside")], fallback: "beside",
                       detail: "Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it.",
-                      help: "Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through. Width never goes past half the screen.") {
-                if store.string("fullscreen_chat.phone_layout", "overlay") == "overlay" {
+                      help: "Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through.") {
+                if store.string("fullscreen_chat.phone_layout", "beside") == "overlay" {
                     NestedSlider(title: "Background", path: "fullscreen_chat.opacity", range: 0...100, step: 5, fallback: 55,
                                  readout: { "\(Int($0))%" })
                 }
