@@ -42,6 +42,9 @@ final class LiveVotesModel {
     /// The confirm before any points are spent.
     var confirmOpen = false
     private(set) var predicting = false
+    /// Why the last placement was refused (not enough points, locked), shown as one line in the
+    /// card until the side or the amount changes.
+    private(set) var failure: String?
 
     /// Shows a line from Rust as a toast: true for a success, false for a failure.
     @ObservationIgnored var onToast: ((String, Bool) -> Void)?
@@ -309,6 +312,7 @@ final class LiveVotesModel {
     }
 
     private func resetBet() {
+        failure = nil
         side = nil
         typed = ""
         presetIndex = nil
@@ -324,6 +328,7 @@ final class LiveVotesModel {
 
     func pick(_ outcomeID: String) {
         guard let prediction, let outcome = prediction.outcome(outcomeID), canPick(outcome), side != outcomeID else { return }
+        failure = nil
         side = outcomeID
         askBet()
     }
@@ -332,6 +337,7 @@ final class LiveVotesModel {
         guard let presets = bet?.presets, presets.indices.contains(index) else { return }
         presetIndex = index
         typed = ""
+        failure = nil
         askBet()
     }
 
@@ -339,6 +345,7 @@ final class LiveVotesModel {
         let digits = text.filter(\.isASCII).filter(\.isNumber)
         guard digits != typed else { return }
         typed = digits
+        failure = nil
         if !digits.isEmpty { presetIndex = nil }
         askBet()
     }
@@ -394,16 +401,21 @@ final class LiveVotesModel {
                 "channelId": roomID, "outcomeId": side, "amount": bet.amount,
             ], as: PredictOutcome.self)
             confirmOpen = false
-            onToast?(outcome.message, outcome.success)
+            // Placed: Rust's status line says so in the card, and a toast once. Refused: one line
+            // in the card, beside the button.
             if outcome.success {
+                onToast?(outcome.message, true)
                 Haptics.commit()
                 typed = ""
                 presetIndex = nil
+                failure = nil
+            } else {
+                failure = outcome.message
             }
             if let view = outcome.view { take(prediction: view) }
         } catch {
             confirmOpen = false
-            onToast?("\(error)", false)
+            failure = "\(error)"
         }
     }
 }

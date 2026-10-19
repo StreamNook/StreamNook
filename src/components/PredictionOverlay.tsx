@@ -10,6 +10,7 @@ import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { buildEmoteNameMap, EmoteText } from '../utils/emoteText';
 import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
+import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultView } from '../types';
 
 /**
@@ -62,6 +63,9 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const [betAnswer, setBetAnswer] = useState<{ key: string; bet: BetView | null } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Why the last placement was refused, for the bet it was asked about: it
+  // shows as one line in the card and goes once the side or amount changes.
+  const [failure, setFailure] = useState<{ key: string; line: string } | null>(null);
 
   // Outcome titles are plain text with no emote ranges, so match emote names
   // against the channel's set the same way pinned messages do.
@@ -118,6 +122,10 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const bet = canPredict && betAnswer && betAnswer.key === betKey ? betAnswer.bet : null;
   // The confirm only makes sense while predicting is still offered.
   const showConfirm = confirming && canPredict && bet !== null;
+  const failureKey = `${betKey ?? ''}|${amountInput}`;
+  const failureLine = failure && failure.key === failureKey ? failure.line : null;
+  // The amount the field holds, for marking a preset chip as the one chosen.
+  const typedAmount = Number(amountInput.replace(/\D/g, '')) || null;
 
   // Ask Rust what this bet would say whenever the side, the amount or the card
   // changes (the pool moves the "win up to" line). Asking spends nothing.
@@ -158,13 +166,20 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
         outcomeId: side,
         amount: bet.amount,
       });
-      addToast(outcome.message, outcome.success ? 'success' : 'error');
+      // A placed bet says so in the card (Rust's status line) and once as a
+      // toast; a refusal is one line in the card, beside the button.
+      if (outcome.success) {
+        addToast(outcome.message, 'success');
+        setFailure(null);
+      } else {
+        setFailure({ key: failureKey, line: outcome.message });
+      }
       if (outcome.view && outcome.view.channel_id === currentChannelId) {
         setCard({ channelId: currentChannelId, view: outcome.view });
       }
     } catch (err) {
       Logger.error('[Prediction] predict failed:', err);
-      addToast(String(err), 'error');
+      setFailure({ key: failureKey, line: String(err) });
     } finally {
       // Back to the bet row either way: a refusal's reason shows there.
       setConfirming(false);
@@ -255,9 +270,30 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
         })}
       </div>
 
-      {/* The bet, then a confirm before any points are spent. */}
+      {/* What the viewer staked, and how it stands: above the pinned bet, so a
+          placed prediction says so in view however tight the card is. */}
+      {view.status_line && !(canPredict && side) && (
+        <div className="px-3 pb-2">
+          <div className="py-2 px-3 bg-backgroundSecondary border border-border rounded-lg flex items-center justify-center gap-2">
+            {pointsIcon('text-textSecondary')}
+            <span className="text-textPrimary text-sm font-medium">{view.status_line}</span>
+          </div>
+        </div>
+      )}
+
+      {/* What this bet would win, above the pinned bet so it scrolls with the
+          outcomes it is about. */}
+      {canPredict && side && bet?.ok && !showConfirm && (
+        <p className="px-3 pb-1.5 text-center text-xs text-textSecondary">{bet.win_line}</p>
+      )}
+
+      {/* The bet, then a confirm before any points are spent. It stays pinned
+          to the card's bottom edge while the outcomes scroll above it: under
+          the phones' capped stack the button and the balance used to sit below
+          the fold, with only a faint fade to hint that the card scrolled. Kept
+          to two rows so the outcomes keep their room above it. */}
       {canPredict && side && (
-        <div className="px-3 pb-3">
+        <div className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-2.5 border-t border-borderSubtle/60">
           {showConfirm && bet ? (
             <div className="p-3 bg-backgroundSecondary rounded-lg border border-border text-center">
               <p className="text-sm font-semibold text-textPrimary">{bet.confirm_title}</p>
@@ -274,11 +310,8 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                 <button
                   onClick={handlePredict}
                   disabled={submitting || !bet.ok}
-                  className={`flex-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${
-                    submitting || !bet.ok
-                      ? 'bg-background border border-border text-textSecondary cursor-not-allowed'
-                      : 'bg-accent-on-surface hover:opacity-90 text-background'
-                  }`}
+                  className={`${ACCENT_BUTTON} flex-1 h-8 px-3 !text-xs`}
+                  style={ACCENT_FILL}
                 >
                   {submitting ? '...' : 'Predict'}
                 </button>
@@ -286,7 +319,15 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2 p-2 bg-backgroundSecondary rounded-lg border border-border">
+              {/* Placed: what the viewer staked, kept in view in the pinned
+                  bet while they can still add to it. */}
+              {view.status_line && (
+                <p className="mb-1.5 flex items-center justify-center gap-1.5 truncate text-xs font-medium text-textPrimary">
+                  {pointsIcon('text-textSecondary')}
+                  {view.status_line}
+                </p>
+              )}
+              <div className="flex items-center gap-1.5 p-1.5 min-w-0 bg-backgroundSecondary rounded-lg border border-border">
                 <input
                   type="text"
                   inputMode="numeric"
@@ -296,16 +337,20 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                   onBlur={() => {
                     if (bet) setAmountInput(String(bet.amount));
                   }}
-                  className="w-20 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
+                  className="w-16 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
                   placeholder="Amount"
+                  aria-label="Amount"
                 />
                 <div className="flex gap-1">
                   {(bet?.presets ?? []).map((preset) => (
                     <button
                       key={preset.label}
                       onClick={() => setAmountInput(String(preset.amount))}
-                      className={`px-2 py-1.5 text-xs font-medium rounded transition-colors border ${
-                        bet?.amount === preset.amount
+                      className={`px-1.5 py-1.5 text-xs font-medium rounded transition-colors border ${
+                        // Chosen only while the field holds exactly this
+                        // amount: a typed 500 marks no chip, even before
+                        // Rust's answer for it lands.
+                        bet?.amount === preset.amount && typedAmount === preset.amount
                           ? 'bg-transparent border-accent-on-surface text-accent-on-surface'
                           : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
                       }`}
@@ -314,47 +359,39 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                     </button>
                   ))}
                 </div>
+                {/* What there is to spend, at the end of the amount row. */}
+                {bet?.balance_line && (
+                  <span
+                    className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
+                    title={`Your points: ${bet.balance_line}`}
+                    aria-label={`Your points: ${bet.balance_line}`}
+                  >
+                    {pointsIcon('text-textSecondary')}
+                    {bet.balance_line.split(' ')[0]}
+                  </span>
+                )}
               </div>
-              <div className="mt-2">
+              {failureLine && (
+                <p role="alert" className="mt-1.5 truncate text-center text-xs font-medium text-error">
+                  {failureLine}
+                </p>
+              )}
+              <div className="mt-1.5">
                 {bet?.problem ? (
                   <p className="py-1.5 text-center text-xs font-medium text-textSecondary">{bet.problem}</p>
                 ) : (
                   <button
                     onClick={() => setConfirming(true)}
                     disabled={!bet || !bet.ok}
-                    className={`w-full px-3 py-1.5 rounded text-xs font-bold transition-colors ${
-                      bet && bet.ok
-                        ? 'bg-accent-on-surface hover:opacity-90 text-background'
-                        : 'bg-background border border-border text-textSecondary cursor-not-allowed'
-                    }`}
+                    className={`${ACCENT_BUTTON} w-full h-8 px-3 !text-xs`}
+                    style={ACCENT_FILL}
                   >
                     {bet?.button ?? '...'}
                   </button>
                 )}
               </div>
-              {bet && (
-                <div className="mt-1.5 flex items-center justify-between text-xs text-textSecondary">
-                  <span>{bet.win_line}</span>
-                  {bet.balance_line && (
-                    <span className="flex items-center gap-1">
-                      {pointsIcon('text-textSecondary')}
-                      {bet.balance_line}
-                    </span>
-                  )}
-                </div>
-              )}
             </>
           )}
-        </div>
-      )}
-
-      {/* What the viewer staked, and how it stands */}
-      {view.status_line && (
-        <div className="px-3 pb-3">
-          <div className="py-2 px-3 bg-backgroundSecondary border border-border rounded-lg flex items-center justify-center gap-2">
-            {pointsIcon('text-textSecondary')}
-            <span className="text-textPrimary text-sm font-medium">{view.status_line}</span>
-          </div>
         </div>
       )}
 
