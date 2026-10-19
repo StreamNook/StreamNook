@@ -15,7 +15,8 @@ public enum ChatStyleFeed {
             let task = Task {
                 var last: ChatStyle?
                 func read() async {
-                    guard let json = try? await core.invoke("get_settings", "{}") else { return }
+                    // The core's whole settings object (the command the app's look reads too).
+                    guard let json = try? await core.invoke("load_settings", "{}") else { return }
                     let style = ChatStyle(settingsJSON: Data(json.utf8))
                     guard style != last else { return }
                     last = style

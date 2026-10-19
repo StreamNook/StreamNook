@@ -16,7 +16,7 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
     func lifecycle(_ state: String) {}
 
     func invoke(_ cmd: String, _ argsJSON: String) async throws -> String {
-        guard cmd == "get_settings" else { throw CoreFailure.command(json: #""unknown""#) }
+        guard cmd == "load_settings" else { throw CoreFailure.command(json: #""unknown""#) }
         return String(decoding: snapshot(), as: UTF8.self)
     }
 

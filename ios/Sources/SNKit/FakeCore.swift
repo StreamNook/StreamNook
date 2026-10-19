@@ -107,9 +107,15 @@ public final class FakeCore: CoreBridge {
                                           "game_name": "", "thumbnail_url": "", "is_live": false]] as [String: Any])
         case "stop_stream", "stop_chat", "watch_stop":
             return "null"
-        case "get_settings":
-            let design = chatFixture.flatMap { try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) } ?? [String: Any]()
-            return try Self.json(["chat_design": design])
+        case "load_settings":
+            // The whole settings object, as the core answers it: the fake's saved settings with the
+            // recording's chat look over them, so a fixture room draws as it was recorded.
+            let saved = try fixtures?.answer(cmd, args)
+            var root = saved.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+            if root["chat_design"] == nil, let design = chatFixture.flatMap({ try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) }) {
+                root["chat_design"] = design
+            }
+            return try Self.json(root)
         case "load_channel_history":
             return "[]"
         case "fetch_channel_emotes":
