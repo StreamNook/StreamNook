@@ -41,6 +41,11 @@ public final class FakeMentions: Sendable {
             MentionEntry(id: "fm-6", room: "nookstreamer", channelLogin: "nookstreamer", channelID: "4242", senderID: "1001",
                          senderLogin: "glassowl", senderName: "GlassOwl", senderColor: "#2dd4bf",
                          text: "@nookviewer welcome back!", kind: .mention, atMs: ms - 4 * 24 * 60 * minute, read: true),
+            // A YouTube chat: the iPhone opens the channel's own page for it.
+            MentionEntry(id: "fm-7", platform: "youtube", room: "youtube:@nookcasts", openKey: "youtube:@NookCasts",
+                         watchURL: "https://www.youtube.com/@NookCasts/live", channelLogin: "@NookCasts", senderID: "UCfake7",
+                         senderLogin: "tidepool", senderName: "Tidepool", senderColor: "#60a5fa",
+                         text: "nookviewer is here too!", kind: .mention, atMs: ms - 6 * 24 * 60 * minute, read: true),
         ]
     }
 

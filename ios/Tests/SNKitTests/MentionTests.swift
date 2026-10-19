@@ -139,7 +139,7 @@ import Testing
         #expect(first.entries.count == 2 && first.hasMore && first.unreadTotal == 3)
         let next = try await core.invoke("get_mention_inbox", args: ["beforeMs": first.entries[1].atMs, "limit": 50],
                                          as: MentionPage.self)
-        #expect(next.entries.count == 4 && !next.hasMore)
+        #expect(next.entries.count == 5 && !next.hasMore)
         let opened = try await core.invoke("open_mention", args: ["id": "fm-1"], as: MentionEntry?.self)
         #expect(opened?.read == true)
         var iterator = changes.makeAsyncIterator()
