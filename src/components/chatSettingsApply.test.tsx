@@ -40,6 +40,12 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'ma
 vi.mock('@tauri-apps/api/webviewWindow', () => ({ WebviewWindow: class {}, getCurrentWebviewWindow: () => ({ label: 'main' }) }));
 // The Android app's render path.
 vi.mock('../utils/platform', async (original) => ({ ...(await original<typeof import('../utils/platform')>()), IS_MOBILE: true }));
+// Moderator line steps come from an external store with no server snapshot;
+// they play no part in how rows look here.
+vi.mock('../services/moderation', async (original) => ({
+  ...(await original<typeof import('../services/moderation')>()),
+  useModSliderSteps: () => null,
+}));
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
@@ -83,24 +89,23 @@ function renderRow(design: Partial<ChatDesignSettings>): string {
 function renderList(design: Partial<ChatDesignSettings>, events: Record<string, unknown> = {}): string {
   withSettings(design, events);
   const noop = () => {};
-  return renderToStaticMarkup(
-    createElement(ChatMessageList, {
-      messages: [row('a'), RAID, row('b')] as never,
-      renderToken: 1,
-      isPaused: false,
-      onScroll: noop,
-      onUsernameClick: noop,
-      onReplyClick: noop,
-      onEmoteRightClick: noop,
-      onUsernameRightClick: noop,
-      onBadgeClick: noop,
-      highlightedMessageId: null,
-      deletedMessageIds: new Set(),
-      clearedUserContexts: new Map(),
-      emotes: null,
-      getMessageId: (m: unknown) => (typeof m === 'string' ? null : (m as { id: string }).id),
-    }),
-  );
+  const props = {
+    messages: [row('a'), RAID, row('b')],
+    renderToken: 1,
+    isPaused: false,
+    onScroll: noop,
+    onUsernameClick: noop,
+    onReplyClick: noop,
+    onEmoteRightClick: noop,
+    onUsernameRightClick: noop,
+    onBadgeClick: noop,
+    highlightedMessageId: null,
+    deletedMessageIds: new Set(),
+    clearedUserContexts: new Map(),
+    emotes: null,
+    getMessageId: (m: unknown) => (typeof m === 'string' ? null : (m as { id: string }).id),
+  };
+  return renderToStaticMarkup(createElement(ChatMessageList, props as never));
 }
 
 describe('a Chat settings change is saved', () => {
@@ -115,10 +120,10 @@ describe('a Chat settings change is saved', () => {
     const call = invoke.mock.calls.find(([cmd]) => cmd === 'patch_settings');
     expect(call).toBeDefined();
     const patch = (call![1] as { patch: Record<string, ChatDesignSettings> }).patch;
-    expect(patch.chat_design.show_dividers).toBe(false);
-    expect(patch.chat_design.message_entrance).toBe('rise');
-    expect(useAppStore.getState().settings.chat_design.message_entrance).toBe('rise');
-    expect(useAppStore.getState().settings.chat_design.show_dividers).toBe(false);
+    expect(patch.chat_design?.show_dividers).toBe(false);
+    expect(patch.chat_design?.message_entrance).toBe('rise');
+    expect(useAppStore.getState().settings.chat_design?.message_entrance).toBe('rise');
+    expect(useAppStore.getState().settings.chat_design?.show_dividers).toBe(false);
   });
 });
 
@@ -141,8 +146,11 @@ describe('the chat draws what the Chat page set', () => {
   });
 
   it('Chat events: a hidden kind is left out on its platform', () => {
-    expect(renderList({}, {})).toContain('raiders');
-    expect(renderList({}, { hidden_provider_events: ['twitch:raid'] })).not.toContain('raiders');
-    expect(renderList({}, { hidden_provider_events: ['kick:raid'] })).toContain('raiders');
+    const raidRow = 'data-message-id="raid"';
+    expect(renderList({}, {})).toContain(raidRow);
+    expect(renderList({}, { hidden_provider_events: ['twitch:raid'] })).not.toContain(raidRow);
+    expect(renderList({}, { hidden_provider_events: ['kick:raid'] })).toContain(raidRow);
+    // The ordinary rows around it stay either way.
+    expect(renderList({}, { hidden_provider_events: ['twitch:raid'] })).toContain('data-message-id="b"');
   });
 });
