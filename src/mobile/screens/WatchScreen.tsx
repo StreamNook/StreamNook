@@ -49,6 +49,7 @@ import { useMentionsStore } from '../mentions/mentionInbox';
 import { MentionContextCard } from '../mentions/MentionContextCard';
 import { DropProgressBar } from '../watch/DropProgressBar';
 import { PinnedBanner } from '../watch/PinnedBanner';
+import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
 import PollOverlay from '../../components/PollOverlay';
 import PredictionOverlay from '../../components/PredictionOverlay';
@@ -161,7 +162,7 @@ export const WatchScreen: React.FC = () => {
   const [pip, setPip] = useState(false);
   // A pin opens or folds per channel: each channel starts as Chat > Pinned
   // Messages > Collapsed says, and a tap holds until the chat switches.
-  const [pinsState, setPinsState] = useState<{ channel: string | null; open: boolean } | null>(null);
+  const pins = usePinsOpen();
   // The poll, prediction and drop cards: one stack in the chat column's flow,
   // laid out by Rust against the column's height. Opened together on a short
   // column (a foldable's side-docked chat) they used to leave no room to read
@@ -190,9 +191,6 @@ export const WatchScreen: React.FC = () => {
   // numeric user_id; a Kick id would name an unrelated Twitch channel.
   const streamScoped = viewingStreamChat && isTwitchStream(currentStream);
   const chatChannelId = useActiveChatChannelId();
-  const pinsStartCollapsed = useAppStore((s) => s.settings.chat_design?.pinned_start_collapsed) ?? true;
-  const pinnedStyle = useAppStore((s) => s.settings.chat_design?.pinned_collapsed_style) ?? 'bar';
-  const pinsOpen = pinsState && pinsState.channel === chatChannelId ? pinsState.open : !pinsStartCollapsed;
   // An opened mention older than its chat's history, pinned over that chat.
   const mentionCard = useMentionsStore((s) => s.contextCard);
   const activeChatRoom = useChatTabsStore((s) => s.activeChannel);
@@ -1239,9 +1237,9 @@ export const WatchScreen: React.FC = () => {
               <PinnedBanner
                 pins={pinned}
                 channelId={chatChannelId ?? undefined}
-                expanded={pinsOpen}
-                onToggle={() => setPinsState({ channel: chatChannelId, open: !pinsOpen })}
-                collapsedStyle={pinnedStyle}
+                expanded={pins.open}
+                onToggle={() => pins.setOpen(!pins.open)}
+                collapsedStyle={pins.style}
               />
               {/* Last in DOM, so first on screen: the mention you just opened. */}
               {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}

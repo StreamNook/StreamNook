@@ -38,8 +38,19 @@ final class ChatRooms {
     /// The viewer's relationship to each Twitch room's channel, as the core holds it (read when
     /// the room opened, pushed on every change), so the chat menu opens with it known.
     private(set) var relationships: [String: ChannelRelationship] = [:]
-    /// The pinned banner is unrolled; every room starts it collapsed.
-    var pinsOpen = false
+    /// The pinned banner is unrolled: the room's own tap, else Chat > Pinned Messages > Collapsed.
+    var pinsOpen: Bool {
+        get { pinsChoice ?? !(activeSession?.style.pinnedStartCollapsed ?? true) }
+        set { pinsChoice = newValue }
+    }
+    /// A tap on the banner, held until the room on screen changes.
+    private var pinsChoice: Bool?
+    /// The room on screen has pins and draws them (Style: Hidden draws nothing while folded).
+    var pinsShown: Bool {
+        !activePins.isEmpty && (activeSession?.style ?? ChatStyle()).pinsShown(open: pinsOpen)
+    }
+    /// A pin is folded out of sight by Style: Hidden, so the chat menu offers to open it.
+    var hiddenPinWaiting: Bool { !activePins.isEmpty && !pinsShown }
     @ObservationIgnored private var shownChannel: String?
     /// Watch streak and resub by room, read once when the room opens.
     private(set) var streaks: [String: Streaks] = [:]
@@ -257,7 +268,7 @@ final class ChatRooms {
         for (key, session) in sessions { session.pipeline.setVisible(key == state.activeChannel) }
         if shownChannel != state.activeChannel {
             shownChannel = state.activeChannel
-            pinsOpen = false
+            pinsChoice = nil
         }
     }
 

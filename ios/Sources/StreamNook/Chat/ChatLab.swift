@@ -310,7 +310,7 @@ enum ChatDrive {
                 "\($0.channel)\($0.pinnedToStream ? "*" : "")=\(rooms.sessions[$0.channel]?.rowCount ?? -1)"
             }.joined(separator: ",")
             let streaks = rooms.activeStreaks
-            log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen)")
+            log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen) pinsShown \(rooms.pinsShown) pinMenu \(rooms.hiddenPinWaiting) pinStyle \(rooms.activeSession?.style.pinnedCollapsedStyle ?? "-", privacy: .public)")
         case "chatlifecycle":
             let filter = value.replacingOccurrences(of: "_", with: " ")
             guard let json = try? await model.core.invoke("get_chat_lifecycle_log", "{}"),

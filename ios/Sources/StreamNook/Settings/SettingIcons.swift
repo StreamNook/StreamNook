@@ -42,6 +42,7 @@ enum SettingIcons {
         "show_predictions": "chart.line.uptrend.xyaxis",
         "show_channel_point_redemptions": "gift",
         "chat_events.hidden_provider_events": "bell.badge",
+        "chat_design.pinned_start_collapsed": "pin",
         "chat_design.show_dividers": "line.3.horizontal",
         "chat_design.alternating_backgrounds": "rectangle.split.1x2",
         "chat_design.message_spacing": "arrow.up.and.down.text.horizontal",

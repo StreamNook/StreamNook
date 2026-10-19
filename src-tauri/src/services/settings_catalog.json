@@ -585,9 +585,10 @@
    "logo": null,
    "detail": "Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row.",
    "aliases": [
-    "look"
-   ],
-   "hidden_on_ios": true
+    "look",
+    "hide pinned",
+    "hidden"
+   ]
   },
   {
    "page": "chat",
@@ -676,8 +677,10 @@
    "nested": false,
    "logo": null,
    "detail": "Shows the pinned message as a compact one-line bar when you enter a channel.",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": [
+    "pinned message",
+    "pin"
+   ]
   },
   {
    "page": "chat",

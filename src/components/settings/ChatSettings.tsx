@@ -1408,7 +1408,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Collapsed"
           onReset={resetFor(['chat_design.pinned_start_collapsed', true])}
           description="Shows the pinned message as a compact one-line bar when you enter a channel."
-          help={`${IS_MOBILE ? 'Tap' : 'Click'} the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely.`}
+          help={`${IS_MOBILE ? 'Tap' : 'Click'} the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely: Hidden keeps it out of chat until you open it from ${IS_MOBILE ? 'the chat menu' : 'the pin in the chat header'}.`}
           control={
             <Toggle
               enabled={cd.pinned_start_collapsed ?? true}

@@ -61,6 +61,11 @@ public struct ChatStyle: Sendable, Equatable {
     /// Swipe to moderate is on (`chat_design.mod_slider`).
     public var swipeModerate = true
     public var paintShadows = "all"
+    /// A room opens its pinned banner folded (`chat_design.pinned_start_collapsed`).
+    public var pinnedStartCollapsed = true
+    /// How a folded pin draws: "bar" (its sender and a preview) or "hidden" (nothing over chat;
+    /// the chat menu opens it) (`chat_design.pinned_collapsed_style`).
+    public var pinnedCollapsedStyle = "bar"
 
     /// How highlight matches and built-in event highlights dress their row
     /// (`chat_highlights.appearance.display_style`): "standard" (tint and bar), "minimal" (bar
@@ -193,11 +198,17 @@ public struct ChatStyle: Sendable, Equatable {
         hideSharedChat = bool("hide_shared_chat") ?? hideSharedChat
         holdModButtons = bool("mod_hold_buttons") ?? holdModButtons
         swipeModerate = bool("mod_slider") ?? swipeModerate
+        pinnedStartCollapsed = bool("pinned_start_collapsed") ?? pinnedStartCollapsed
+        pinnedCollapsedStyle = str("pinned_collapsed_style") ?? pinnedCollapsedStyle
     }
 
     /// Emotes animate unless the setting asks for stills; a touch never hovers, so `hover`
     /// draws stills too.
     public var animatesEmotes: Bool { animateEmotes == "always" }
+
+    /// Whether a room's pins draw anything: always while open, and while folded unless Style is
+    /// Hidden.
+    public func pinsShown(open: Bool) -> Bool { open || pinnedCollapsedStyle != "hidden" }
 
     /// The highlight tint's alpha at the row's left edge.
     public var highlightAlpha: Double { highlightOpacity / 100 }
