@@ -27,7 +27,10 @@ struct StreamNookApp: App {
         .onChange(of: phase) { _, phase in
             switch phase {
             case .active: model.lifecycle("foreground")
-            case .background: model.lifecycle("background")
+            case .background:
+                model.lifecycle("background")
+                // Sign-ins rewritten during the session stay out of backups too.
+                Task.detached(priority: .utility) { CoreHost.excludeSealedFromBackup() }
             default: break
             }
         }

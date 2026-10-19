@@ -478,12 +478,67 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
         file.write_all(data)?;
         file.sync_all()?;
         drop(file);
+        // On the temp file, so the flag is already on the credential the rename puts in place.
+        #[cfg(target_os = "ios")]
+        exclude_from_backup(&tmp);
         fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
     })();
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     written
+}
+
+/// Keeps a credential out of iCloud and computer backups: the attribute the
+/// system's own exclude-from-backup flag sets. A sealed sign-in restored onto
+/// another iPhone can never open there (the Keychain key stays on this one), so
+/// it must not travel at all.
+#[cfg(target_os = "ios")]
+fn exclude_from_backup(path: &Path) {
+    use std::ffi::{c_char, c_int, c_void, CString};
+    use std::os::unix::ffi::OsStrExt;
+    extern "C" {
+        fn setxattr(path: *const c_char, name: *const c_char, value: *const c_void, size: usize, position: u32, options: c_int) -> c_int;
+    }
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    let value = b"com.apple.backupd";
+    // SAFETY: both strings are NUL-terminated and outlive the call; `value` is `size` bytes.
+    let done = unsafe {
+        setxattr(
+            c_path.as_ptr(),
+            c"com.apple.metadata:com_apple_backup_excludeItem".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    if done != 0 {
+        warn!("[VAULT] could not keep {} out of backups: {}", path.display(), std::io::Error::last_os_error());
+    }
+}
+
+/// The same for every sealed file already in `dir`, written by a build from
+/// before the flag (and the retired key file, while it is there).
+#[cfg(target_os = "ios")]
+fn exclude_sealed_from_backup(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // The header and a nonce are enough to tell a sealed file; nothing else is read.
+        let mut head = Vec::new();
+        let sealed = fs::File::open(&path)
+            .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 32), &mut head))
+            .map(|_| is_sealed(&head))
+            .unwrap_or(false);
+        if sealed || path.file_name().is_some_and(|n| n == KEY_FILE_NAME) {
+            exclude_from_backup(&path);
+        }
+    }
 }
 
 // ----- migration --------------------------------------------------------------
@@ -511,6 +566,9 @@ fn ensure_migrated() {
     };
 
     migrate_dir(&SystemKeys, &dir);
+
+    #[cfg(target_os = "ios")]
+    exclude_sealed_from_backup(&dir);
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     os_store::system().remove_legacy_entries();

@@ -119,9 +119,10 @@ final class AppModel {
         let core = core
         let clock = ContinuousClock.now
         do {
-            let (dirs, key, codecs) = try CoreHost.startInputs()
+            let (dirs, key, codecs) = try await CoreHost.startInputs()
             try await Task.detached(priority: .userInitiated) {
                 try core.start(dirs: dirs, version: CoreHost.appVersion, vaultKey: key, codecs: codecs)
+                CoreHost.excludeSealedFromBackup()
             }.value
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
