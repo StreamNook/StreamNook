@@ -18,7 +18,7 @@ import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
 import { isBackgrounded } from '../backgroundGate';
 import { isTwitchStream } from '../../utils/streamProvider';
-import { BannerStatus, OverlayBanner } from '../../components/chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence } from '../../components/chat/OverlayBanner';
 import { useStackPresence, type StackCardControl } from '../../components/chat/chatTopStack';
 
 // Accrued minutes only move once a minute, so a faster poll learns nothing.
@@ -112,7 +112,8 @@ export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
   // The campaign is the card's identity: the next drop of the same campaign
   // keeps the viewer's fold, a new campaign starts fresh. Hidden counts as
   // gone, so the stack never keeps a slot for a card it is not drawing.
-  useStackPresence(stack, showing && live ? live.campaign_id : null);
+  // The card fades out when the drop ends and keeps its slot until it has.
+  const released = useStackPresence(stack, showing && live ? live.campaign_id : null);
 
   const claim = async (e: React.MouseEvent) => {
     // A claim stays on the player; only a tap on the card's body jumps to Rewards.
@@ -131,9 +132,11 @@ export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
     }
   };
 
-  if (!showing || !live || !stack.placed) return null;
+  if (!showing || !live || !stack.placed) return <StackCardPresence onLeft={released} />;
   return (
+    <StackCardPresence onLeft={released}>
     <DropCard
+      key="drop"
       live={live}
       open={stack.open}
       order={stack.order}
@@ -142,6 +145,7 @@ export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
       onClaim={(e) => void claim(e)}
       onOpen={() => openDropCampaign(live.campaign_id)}
     />
+    </StackCardPresence>
   );
 };
 

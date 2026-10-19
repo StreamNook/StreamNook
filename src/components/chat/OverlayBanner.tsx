@@ -1,6 +1,24 @@
 import { type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
+import { STACK_GAP_PX } from './chatTopStack';
+
+// How a card leaves the stack: it fades where it is, then folds its height
+// (and the gap after it) away, so the cards below slide up only once it is
+// gone from sight. The curve is the other chat-top cards' ease-out.
+const LEAVE_FADE_S = 0.2;
+const LEAVE_FOLD_S = 0.2;
+const LEAVE_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
+
+/**
+ * Wraps one stack card so it plays its exit instead of vanishing. `onLeft`
+ * is useStackPresence's release: the card's slot goes back to the stack only
+ * once the fade and fold are done. Render it on every path (empty when the
+ * card has nothing to show) so the same instance sees the card go.
+ */
+export function StackCardPresence({ onLeft, children }: { onLeft: () => void; children?: ReactNode }) {
+  return <AnimatePresence onExitComplete={onLeft}>{children}</AnimatePresence>;
+}
 
 /**
  * The card shared by everything at the top of chat (poll, prediction, the
@@ -56,12 +74,33 @@ export function OverlayBanner({
   order,
   children,
 }: OverlayBannerProps) {
+  // A leaving card cannot be tapped while it fades.
+  const present = useIsPresent();
   return (
     <motion.div
       initial={{ opacity: 0, y: -12, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-      className={`flex flex-col min-h-0 ${isExpanded ? 'shrink' : 'shrink-0'}`}
+      // Height and margin are named so a card that comes back mid-leave
+      // unfolds again; instant, so a card that opens right after it appears
+      // is never held at its strip's height.
+      animate={{ opacity: 1, y: 0, scale: 1, height: 'auto', marginBottom: 0 }}
+      transition={{
+        type: 'spring',
+        stiffness: 320,
+        damping: 26,
+        height: { duration: 0 },
+        marginBottom: { duration: 0 },
+      }}
+      exit={{
+        opacity: 0,
+        height: 0,
+        marginBottom: -STACK_GAP_PX,
+        transition: {
+          opacity: { duration: LEAVE_FADE_S, ease: LEAVE_EASE },
+          height: { delay: LEAVE_FADE_S, duration: LEAVE_FOLD_S, ease: LEAVE_EASE },
+          marginBottom: { delay: LEAVE_FADE_S, duration: LEAVE_FOLD_S, ease: LEAVE_EASE },
+        },
+      }}
+      className={`flex flex-col min-h-0 ${isExpanded ? 'shrink' : 'shrink-0'} ${present ? '' : 'pointer-events-none'}`}
       style={order === undefined ? undefined : { order }}
     >
       <div className="relative flex flex-col min-h-0 bg-background rounded-lg border border-border shadow-md shadow-black/25 overflow-hidden">

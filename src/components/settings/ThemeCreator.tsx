@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronRight, Palette, Trash2, Save, X, Wand2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -131,10 +130,10 @@ const ThemeCreator = ({ editingTheme, onClose, onSave, onDelete }: ThemeCreatorP
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['core', 'accent']));
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Apply live preview when palette changes. Rust lifts muted text to the
-  // contrast floor on save, so the preview paints the theme as it will be saved.
+  // Apply live preview when palette changes. It paints at once; applyTheme then
+  // takes Rust's floors (muted and secondary text, the accent on cards), the
+  // same ones saving applies, so the preview is the theme as it will be saved.
   useEffect(() => {
-    let current = true;
     const previewTheme: CustomTheme = {
       id: 'preview',
       name: 'Preview',
@@ -142,15 +141,8 @@ const ThemeCreator = ({ editingTheme, onClose, onSave, onDelete }: ThemeCreatorP
       updatedAt: Date.now(),
       palette,
     };
-    invoke<CustomTheme>('lift_custom_theme', { theme: previewTheme })
-      .catch(() => previewTheme)
-      .then((lifted) => {
-        if (current) applyTheme(customThemeToTheme(lifted));
-      });
+    applyTheme(customThemeToTheme(previewTheme));
     queueMicrotask(() => setHasChanges(true));
-    return () => {
-      current = false;
-    };
   }, [palette]);
 
   // Restore original theme on unmount or cancel

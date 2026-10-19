@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { Trophy, Users, CheckCircle2 } from 'lucide-react';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
-import { BannerStatus, OverlayBanner, ShareRow } from './chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat/OverlayBanner';
 import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useAppStore } from '../stores/AppStore';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
@@ -143,11 +143,11 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
 
   // In a stack Rust decides which card is open, and this one reports itself so
   // it gets a slot; on its own it keeps its own fold.
-  useStackPresence(stack, predictionId);
+  const released = useStackPresence(stack, predictionId);
   const isExpanded = stack ? stack.open : expandedHere;
   const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
 
-  if (!view || (stack && !stack.placed)) return null;
+  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
 
   const handlePredict = async () => {
     if (!currentChannelId || !side || !bet || submitting) return;
@@ -186,7 +186,9 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   ) : null;
 
   return (
+    <StackCardPresence onLeft={released}>
     <OverlayBanner
+      key="prediction"
       icon={<Trophy className="w-4 h-4 text-accent-on-surface" />}
       kind="Prediction"
       title={view.title}
@@ -369,6 +371,7 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
         {view.totals_line}
       </p>
     </OverlayBanner>
+    </StackCardPresence>
   );
 };
 
