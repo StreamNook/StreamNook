@@ -20,6 +20,7 @@ beforeEach(() => {
   h.invoke.mockReset();
   vi.stubGlobal('document', {
     documentElement: {
+      dataset: {} as Record<string, string>,
       style: {
         setProperty: (name: string, value: string) => vars.set(name, value),
         getPropertyValue: (name: string) => vars.get(name) ?? '',
