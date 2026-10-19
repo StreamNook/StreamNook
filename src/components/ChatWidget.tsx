@@ -1597,6 +1597,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       void matchEmotes(emoteMatchTarget, query, 'search', {
         twitchFirst: source === 'colon',
         limit: query ? 150 : 200,
+        typing: source === 'colon',
       }).then((res) => {
         if (!emoteListSeq.isCurrent(n)) return;
         setEmoteList((prev) =>
@@ -5788,7 +5789,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       onSelectedIndexChange={setMentionSelectedIndex}
                     />
                   )}
-                  {/* Emote list (":" plus two letters, or Tab) */}
+                  {/* Emote list (":" plus a letter or digit, or Tab) */}
                   <AnimatePresence>
                     {emoteList &&
                       // A colon list stays out of the way until something matches;
