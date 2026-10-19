@@ -656,6 +656,32 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       ...settings,
       chat_input: { ...settings.chat_input, ...patch },
     });
+  // Beside the name on the desktop; full width under it on the phone, like the
+  // phone's other choices, so it lines up with the Show gains line under it.
+  const walletChoice = (
+    <SegmentedSelect<'always' | 'hover' | 'hidden'>
+      fullWidth={IS_MOBILE}
+      value={walletMode}
+      onChange={(mode) =>
+        setInput({
+          hide_points_balance: mode === 'hidden',
+          show_points_balance_inline: mode === 'always',
+        })
+      }
+      options={
+        IS_MOBILE
+          ? [
+              { value: 'always', label: 'Always' },
+              { value: 'hidden', label: 'Hidden' },
+            ]
+          : [
+              { value: 'always', label: 'Always' },
+              { value: 'hover', label: 'On hover' },
+              { value: 'hidden', label: 'Hidden' },
+            ]
+      }
+    />
+  );
 
   const setBlend = (patch: Partial<NonNullable<typeof settings.chat_blend>>) =>
     updateSettings({
@@ -2659,30 +2685,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ? 'The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers.'
               : 'The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers. Hover the button for your exact balances.'
           }
-          control={
-            <SegmentedSelect<'always' | 'hover' | 'hidden'>
-              value={walletMode}
-              onChange={(mode) =>
-                setInput({
-                  hide_points_balance: mode === 'hidden',
-                  show_points_balance_inline: mode === 'always',
-                })
-              }
-              options={
-                IS_MOBILE
-                  ? [
-                      { value: 'always', label: 'Always' },
-                      { value: 'hidden', label: 'Hidden' },
-                    ]
-                  : [
-                      { value: 'always', label: 'Always' },
-                      { value: 'hover', label: 'On hover' },
-                      { value: 'hidden', label: 'Hidden' },
-                    ]
-              }
-            />
-          }
+          control={IS_MOBILE ? undefined : walletChoice}
         >
+          {IS_MOBILE && walletChoice}
           {/* The phone's wallet button never goes away, so its gains always play. */}
           {(IS_MOBILE || !settings.chat_input?.hide_points_balance) && (
             <SubControls>
