@@ -14,6 +14,8 @@ import { playTwitchMediaInMain } from '../../utils/playTwitchMediaInMain';
 import { openExternal } from '../../utils/openExternal';
 import {
   fetchLinkPreview,
+  linkPreviewExpected,
+  linkPreviewExpectedNow,
   prettyUrlLabel,
   trustableHost,
   type LinkPreview,
@@ -167,8 +169,23 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // click (the click-to-load chip below) so an arbitrary pasted link is never
   // fetched passively — that would reveal the user's IP to the linked host.
   const [loadRequested, setLoadRequested] = useState(trusted);
+  // Whether this link's shape all but always has a card (Rust's answer). Only
+  // then does the loading card hold its room; any other link shows a card once
+  // it has one, so one with no preview never flashes a placeholder and vanishes.
+  const [expected, setExpected] = useState<boolean | undefined>(() => linkPreviewExpectedNow(url));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requested = useRef(resolved !== undefined);
+
+  useEffect(() => {
+    if (resolved !== undefined || expected !== undefined) return;
+    let cancelled = false;
+    void linkPreviewExpected(url).then((answer) => {
+      if (!cancelled) setExpected(answer);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, resolved, expected]);
 
   useEffect(() => {
     // Untrusted links don't auto-fetch; loadPreview() drives them on click.
@@ -332,22 +349,29 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     );
   }
 
-  // Not resolved yet: a low-profile skeleton that doubles as the observe target.
+  // Not resolved yet. A link whose card is all but certain shows a low-profile
+  // skeleton holding the card's room; any other link only an invisible line. The
+  // same element either way, so it stays the observe target.
   if (preview === undefined) {
+    // Clean mode hides the inline link, so a link with no card expected shows
+    // its link chip while it loads rather than nothing.
+    if (expected === false && showChip) return <div ref={containerRef}>{fallback}</div>;
     return (
       <div
         ref={containerRef}
-        className="glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden"
-        style={{ height: 56, opacity: 0.5 }}
+        className={expected ? 'glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden' : 'w-full'}
+        style={{ height: expected ? 56 : 1, opacity: expected ? 0.5 : 0 }}
         aria-hidden
       >
-        <div className="flex h-full items-center gap-3 px-3">
-          <div className="h-10 w-10 flex-shrink-0 rounded bg-white/5" />
-          <div className="flex-1 space-y-2">
-            <div className="h-2.5 w-1/3 rounded bg-white/5" />
-            <div className="h-2.5 w-2/3 rounded bg-white/5" />
+        {expected && (
+          <div className="flex h-full items-center gap-3 px-3">
+            <div className="h-10 w-10 flex-shrink-0 rounded bg-white/5" />
+            <div className="flex-1 space-y-2">
+              <div className="h-2.5 w-1/3 rounded bg-white/5" />
+              <div className="h-2.5 w-2/3 rounded bg-white/5" />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }

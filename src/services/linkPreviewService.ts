@@ -222,3 +222,30 @@ export function fetchLinkPreview(url: string): Promise<LinkPreview | null> {
   inflight.set(url, promise);
   return promise;
 }
+
+/** Rust's answer to "is a card all but certain for this link's shape", kept per URL. */
+const expectedCards = new Map<string, boolean>();
+
+/** What is known already, so a card that was seen before draws its room at once. */
+export function linkPreviewExpectedNow(url: string): boolean | undefined {
+  return expectedCards.get(url);
+}
+
+/**
+ * Whether this link's card is all but certain (a video, a clip, a Discord invite;
+ * Rust's `link_preview_expected`). Only those hold a card's room while loading,
+ * so a link that turns out to have no preview never flashes a placeholder and
+ * then vanishes. The iPhone reserves room by the same rule. Never throws.
+ */
+export async function linkPreviewExpected(url: string): Promise<boolean> {
+  const known = expectedCards.get(url);
+  if (known !== undefined) return known;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const expected = await invoke<boolean>('link_preview_expected', { url });
+    expectedCards.set(url, expected);
+    return expected;
+  } catch {
+    return false;
+  }
+}

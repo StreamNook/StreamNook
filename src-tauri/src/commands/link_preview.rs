@@ -91,6 +91,14 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     crate::services::link_preview_cache::get(&url).await.ok_or_else(|| "No preview".to_string())
 }
 
+/// Whether a link's card is all but certain (`has_dedicated_card`), so a shell
+/// holds the card's room while it loads. Any other link shows a card only once it
+/// has one, so a link with no preview never flashes a placeholder and vanishes.
+#[tauri::command]
+pub fn link_preview_expected(url: String) -> bool {
+    has_dedicated_card(&url)
+}
+
 /// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
 /// invite, a YouTube channel or video, an X profile or post, an Instagram
 /// profile, a Steam app, Spotify, a Twitch clip or VOD) rather than the generic
@@ -102,6 +110,7 @@ pub(crate) fn has_dedicated_card(url: &str) -> bool {
     let url = canonical.as_str();
     youtube_id(url).is_some()
         || is_youtube_channel(url)
+        || is_youtube_page(url)
         || tweet_ref(url).is_some()
         || x_profile_handle(url).is_some()
         || twitch_clip_id(url).is_some()
@@ -123,6 +132,9 @@ pub(crate) async fn build_preview(url: &str) -> Result<LinkPreview, String> {
     }
     if is_youtube_channel(url) {
         return youtube_channel_preview(url).await;
+    }
+    if is_youtube_page(url) {
+        return youtube_page_preview(url).await;
     }
     if let Some((handle, id)) = tweet_ref(url) {
         return tweet_preview(url, handle.as_deref(), &id).await;
@@ -265,6 +277,56 @@ fn is_youtube_channel(url: &str) -> bool {
     url.contains("youtube.com") && YT_CHANNEL_RE.is_match(url)
 }
 
+/// An accepted-consent cookie (the modern SOCS and legacy CONSENT forms): without
+/// it Google answers some clients with a consent page that carries no OG tags.
+const YT_CONSENT: &str = "SOCS=CAISNQgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+";
+
+/// Any other page on YouTube: a playlist, a clip, a community post. Not a video
+/// (`youtube_id`) or a channel, which have their own cards.
+fn is_youtube_page(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else { return false };
+    let Some(host) = parsed.host_str() else { return false };
+    let host = host.trim_start_matches("www.").trim_start_matches("m.").trim_start_matches("music.");
+    (host == "youtube.com" || host == "youtu.be")
+        && parsed.path() != "/"
+        && youtube_id(url).is_none()
+        && !is_youtube_channel(url)
+}
+
+/// A YouTube page that is not a video or a channel. oEmbed answers some of them
+/// (a public playlist); every one carries its OG tags far into a large head
+/// (about 820 KB in), past the generic scrape's ceiling, so they are read with
+/// the channel pages' ceiling and the consent cookie. Before this they came back
+/// as "no preview", and the card that was loading vanished.
+async fn youtube_page_preview(url: &str) -> Result<LinkPreview, String> {
+    if let Ok(resp) = CLIENT
+        .get("https://www.youtube.com/oembed")
+        .query(&[("url", url), ("format", "json")])
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let text = |key: &str, max: usize| json.get(key).and_then(|v| v.as_str()).map(|s| truncate(s, max));
+                if let Some(title) = text("title", 300) {
+                    return Ok(LinkPreview {
+                        url: url.to_string(),
+                        kind: "generic".to_string(),
+                        title: Some(title),
+                        image: text("thumbnail_url", 2048),
+                        site_name: Some("YouTube".to_string()),
+                        author: text("author_name", 120),
+                        ..LinkPreview::default()
+                    });
+                }
+            }
+        }
+    }
+    let mut preview = fetch_generic_with_cookie(url, Some(YT_CONSENT), YT_CHANNEL_SCAN_CAP).await?;
+    preview.site_name = Some("YouTube".to_string());
+    Ok(preview)
+}
+
 /// A YouTube channel page serves the channel name (og:title), the square avatar
 /// (og:image, e.g. a 900x900 `yt3.googleusercontent.com` image), and the channel
 /// description (og:description) to a normal browser UA, so a plain OG scrape is
@@ -277,12 +339,7 @@ async fn youtube_channel_preview(url: &str) -> Result<LinkPreview, String> {
     // without a consent cookie, so a plain scrape returns "no preview metadata".
     // Sending an accepted-consent cookie (both the modern SOCS and legacy CONSENT
     // forms) skips it and yields the real channel page.
-    let mut preview = fetch_generic_with_cookie(
-        url,
-        Some("SOCS=CAISNQgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+"),
-        YT_CHANNEL_SCAN_CAP,
-    )
-    .await?;
+    let mut preview = fetch_generic_with_cookie(url, Some(YT_CONSENT), YT_CHANNEL_SCAN_CAP).await?;
     preview.kind = "youtube_channel".to_string();
     preview.author_avatar = preview.image.take();
     preview.site_name = Some("YouTube".to_string());
@@ -1907,6 +1964,36 @@ fn truncate(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_youtube_link_has_a_card_path() {
+        // Pages that are neither a video nor a channel used to fall to the generic
+        // scrape, whose ceiling ends before YouTube's OG tags: no preview, and the
+        // loading card vanished.
+        for url in [
+            "https://www.youtube.com/playlist?list=PL123",
+            "https://music.youtube.com/playlist?list=PL123",
+            "https://www.youtube.com/clip/Ugkx123",
+            "https://www.youtube.com/post/Ugkx123",
+            "https://m.youtube.com/feed/trending",
+        ] {
+            assert!(is_youtube_page(url), "{url}");
+            assert!(has_dedicated_card(url), "{url}");
+            assert!(link_preview_expected(url.to_string()), "{url}");
+        }
+        for url in [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://www.youtube.com/@LofiGirl",
+            "https://www.youtube.com/",
+            "https://notyoutube.com/playlist?list=PL123",
+        ] {
+            assert!(!is_youtube_page(url), "{url}");
+        }
+        assert!(has_dedicated_card("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(has_dedicated_card("https://www.youtube.com/@LofiGirl"));
+        assert!(!has_dedicated_card("https://example.com/page"));
+    }
 
     /// The link that showed as plain text: Reddit's viewer around an i.redd.it jpg.
     const REDDIT_VIEWER: &str =
