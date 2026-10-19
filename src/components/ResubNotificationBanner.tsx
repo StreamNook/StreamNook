@@ -1,5 +1,6 @@
 import React from 'react';
 import { Check, Star, X } from 'phosphor-react';
+import { CheckCircle2 } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
 import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 
@@ -23,6 +24,8 @@ interface ResubNotificationBannerProps {
   onDismiss: () => void;
   onToggleStreak: () => void;
   onCancelShare: () => void;
+  /** Twitch's answer to the last share. */
+  feedback?: 'shared' | 'failed' | null;
 }
 
 // The streak banners' family, like the watch streak above the composer: the
@@ -33,6 +36,21 @@ interface ResubNotificationBannerProps {
 const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5`;
 const quiet =
   'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
+
+/** Twitch took the share: said once, then the banner goes. */
+const SharedRow = ({ title }: { title: string }) => (
+  <div className={surface} style={BANNER_STYLE} role="status">
+    <CheckCircle2 size={15} className="flex-shrink-0 text-success" />
+    <span className="min-w-0 flex-1 truncate py-1 text-[13px] font-semibold text-textPrimary">{title}</span>
+  </div>
+);
+
+/** Twitch did not take it: one line under the banner's own words. */
+const FailedLine = () => (
+  <span role="alert" className="truncate text-[11.5px] font-medium text-error">
+    That didn't go through. Try again.
+  </span>
+);
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -45,6 +63,7 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   onDismiss,
   onToggleStreak,
   onCancelShare,
+  feedback = null,
 }) => {
   const months = resubNotification.cumulative_tenure_months;
   const streakMonths = resubNotification.streak_tenure_months;
@@ -54,6 +73,8 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   const hasStreak = streakMonths > 1;
   const detail = isGift ? (gifter ? `from ${gifter}` : null) : plural(months, 'month');
   const star = <Star size={14} weight="fill" className="flex-shrink-0 text-accent" />;
+
+  if (feedback === 'shared') return <SharedRow title={`Your ${isGift ? 'gift sub' : 'resub'} is shared`} />;
 
   // Armed: the next message sent carries the resub.
   if (isResubMode) {
@@ -103,6 +124,7 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
             Include the {streakMonths}-month streak
           </button>
         )}
+        {feedback === 'failed' && <FailedLine />}
       </span>
       <button
         onClick={onActivateShare}

@@ -296,6 +296,9 @@ interface ChatMessagesPanelProps {
 /** How many consecutive untagged messages end the shared-chat indicator. */
 const SHARED_CHAT_END_STREAK = 10;
 
+/** How long a share banner says "shared" before it goes. */
+const SHARE_SHOWN_MS = 2500;
+
 const ChatMessagesPanel = ({
   channelKey,
   provider,
@@ -1710,6 +1713,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [watchStreak, setWatchStreak] = useState<WatchStreakMilestone | null>(null);
   const [isWatchStreakMode, setIsWatchStreakMode] = useState(false);
   const [watchStreakDismissed, setWatchStreakDismissed] = useState(false);
+  // Twitch's answer to the last share, shown in its banner: a brief "shared"
+  // before the banner goes, or one line saying it did not go through.
+  const [streakFeedback, setStreakFeedback] = useState<'shared' | 'failed' | null>(null);
+  const [resubFeedback, setResubFeedback] = useState<'shared' | 'failed' | null>(null);
 
   // Drops automation state
   const [dropsCampaign, setDropsCampaign] = useState<{ id: string; name: string; game_name: string } | null>(null);
@@ -3460,15 +3467,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             tokenId: resubNotification.id,
           });
           if (success) {
-            setResubNotification(null); // Token consumed
-            setResubDismissed(true);
+            // Token consumed: said in the banner, which then goes.
+            setResubFeedback('shared');
+            setTimeout(() => {
+              setResubNotification(null);
+              setResubDismissed(true);
+              setResubFeedback(null);
+            }, SHARE_SHOWN_MS);
           } else {
-            useAppStore.getState().addToast('Failed to share resub notification', 'error');
+            setResubFeedback('failed');
             setMessageInput(messageToSend);
           }
         } catch (err) {
-          Logger.error('[ChatWidget] Failed to use resub token:', err);
-          useAppStore.getState().addToast('Failed to share resub notification', 'error');
+          Logger.warn('[ChatWidget] Resub share did not go through:', err);
+          setResubFeedback('failed');
           setMessageInput(messageToSend);
         }
         return;
@@ -3484,16 +3496,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             message: messageToSend || null,
           });
           if (success) {
-            setWatchStreak(null); // Milestone consumed
-            setWatchStreakDismissed(true);
-            useAppStore.getState().addToast('Watch streak shared!', 'success');
+            // Milestone consumed: said in the banner, which then goes.
+            setStreakFeedback('shared');
+            setTimeout(() => {
+              setWatchStreak(null);
+              setWatchStreakDismissed(true);
+              setStreakFeedback(null);
+            }, SHARE_SHOWN_MS);
           } else {
-            useAppStore.getState().addToast('Failed to share watch streak', 'error');
+            setStreakFeedback('failed');
             setMessageInput(messageToSend);
           }
         } catch (err) {
-          Logger.error('[ChatWidget] Failed to share watch streak:', err);
-          useAppStore.getState().addToast('Failed to share watch streak', 'error');
+          Logger.warn('[ChatWidget] Watch streak share did not go through:', err);
+          setStreakFeedback('failed');
           setMessageInput(messageToSend);
         }
         return;
@@ -5648,8 +5664,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   resubNotification={resubNotification}
                   channelLogin={currentStream.user_login}
                   isResubMode={isResubMode}
+                  feedback={resubFeedback}
                   includeStreak={includeStreak}
                   onActivateShare={() => {
+                    setResubFeedback(null);
                     setIsResubMode(true);
                     setReplyingTo(null); // Clear reply mode if active
                     inputRef.current?.focus({ preventScroll: true });
@@ -5670,7 +5688,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 <WatchStreakBanner
                   milestone={watchStreak}
                   isStreakMode={isWatchStreakMode}
+                  feedback={streakFeedback}
                   onActivateShare={() => {
+                    setStreakFeedback(null);
                     setIsWatchStreakMode(true);
                     setIsResubMode(false); // Can't be in both modes
                     setReplyingTo(null);

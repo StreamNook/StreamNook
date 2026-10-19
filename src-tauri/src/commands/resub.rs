@@ -228,9 +228,11 @@ pub async fn use_resub_token(
     include_streak: bool,
     token_id: Option<String>,
 ) -> Result<bool, String> {
-    debug!(
-        "[Resub] Using resub token for channel: {}, message: {:?}, includeStreak: {}",
-        channel_login, message, include_streak
+    log::info!(
+        "[Resub] share start: channel={} with_message={} include_streak={}",
+        channel_login,
+        message.as_deref().is_some_and(|m| !m.is_empty()),
+        include_streak
     );
 
     // Get auth token
@@ -303,9 +305,9 @@ pub async fn use_resub_token(
         .unwrap_or(false);
 
     if is_success {
-        debug!("[Resub] Resub notification sent successfully!");
+        log::info!("[Resub] share sent: channel={}", channel_login);
     } else {
-        debug!("[Resub] Failed to send resub notification");
+        log::warn!("[Resub] share refused: channel={} answer={}", channel_login, response_text);
     }
 
     Ok(is_success)

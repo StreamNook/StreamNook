@@ -1,5 +1,5 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { CheckCircle2, X } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
 import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 import { WatchStreakFlame } from './icons/WatchStreakFlame';
@@ -19,6 +19,8 @@ interface WatchStreakBannerProps {
   onActivateShare: () => void;
   onDismiss: () => void;
   onCancelShare: () => void;
+  /** Twitch's answer to the last share. */
+  feedback?: 'shared' | 'failed' | null;
 }
 
 // The phones' streak banner on the desktop: the chat header capsules' glaze
@@ -30,14 +32,32 @@ const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1
 const quiet =
   'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
 
+/** Twitch took the share: said once, then the banner goes. */
+const SharedRow = ({ title }: { title: string }) => (
+  <div className={surface} style={BANNER_STYLE} role="status">
+    <CheckCircle2 size={15} className="flex-shrink-0 text-success" />
+    <span className="min-w-0 flex-1 truncate py-1 text-[13px] font-semibold text-textPrimary">{title}</span>
+  </div>
+);
+
+/** Twitch did not take it: one line under the banner's own words. */
+const FailedLine = () => (
+  <span role="alert" className="truncate text-[11.5px] font-medium text-error">
+    That didn't go through. Try again.
+  </span>
+);
+
 const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   milestone,
   isStreakMode,
   onActivateShare,
   onDismiss,
   onCancelShare,
+  feedback = null,
 }) => {
   const streakCount = milestone.streak_count;
+
+  if (feedback === 'shared') return <SharedRow title="Your watch streak is shared" />;
   const copoBonus = milestone.copo_bonus;
 
   // Armed: the next message sent carries the streak.
@@ -71,10 +91,14 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
             </span>
           )}
         </span>
-        {copoBonus > 0 && (
-          <span className="truncate text-[11.5px] text-textMuted">
-            +{copoBonus.toLocaleString()} points for sharing
-          </span>
+        {feedback === 'failed' ? (
+          <FailedLine />
+        ) : (
+          copoBonus > 0 && (
+            <span className="truncate text-[11.5px] text-textMuted">
+              +{copoBonus.toLocaleString()} points for sharing
+            </span>
+          )
         )}
       </span>
       <button

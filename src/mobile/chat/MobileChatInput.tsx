@@ -39,7 +39,7 @@ import { useMentionsStore } from '../mentions/mentionInbox';
 import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
-import { StreakBanners } from './StreakBanners';
+import { StreakBanners, type ArmedShare } from './StreakBanners';
 import type { ChatWarningView, RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
 import { WarningBox } from './WarningBox';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
@@ -202,6 +202,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // A streak share the banner armed: the next send goes to it instead of to
+  // chat, with whatever is typed (nothing typed is fine).
+  const armedShare = useRef<ArmedShare | null>(null);
+  const [shareArmed, setShareArmed] = useState(false);
   // Whether the field has the keyboard: while it does, the commands button is
   // the way to put the keyboard away (scrolling the chat never does).
   const [typing, setTyping] = useState(false);
@@ -285,9 +289,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const flash = points.gain;
   const clearFlash = points.clearGain;
 
-  const canSend = !!text.trim();
+  const canSend = !!text.trim() || shareArmed;
 
   const send = async () => {
+    if (armedShare.current) {
+      const key = roomKey;
+      const shared = await armedShare.current(text.trim());
+      // Shared: the text went with it. Not: it stays for another try.
+      if (shared) setDraftFor(key, '');
+      return;
+    }
     const message = text.trim();
     if (!message || !channel || sending || slowWait > 0) return;
     // Captured now: the answer lands in this room even if you switch tabs.
@@ -517,8 +528,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
       <StreakBanners
         channel={channel}
         channelId={channelId}
-        message={text}
-        onShared={() => setText('')}
+        armedRef={armedShare}
+        onArmedChange={setShareArmed}
+        focusComposer={() => inputRef.current?.focus()}
       />
       {/* No warning line here, deliberately. It rendered `gating.reason`, which
           is the exact string the disabled field's placeholder already shows, in
