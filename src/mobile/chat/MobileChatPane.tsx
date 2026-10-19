@@ -39,7 +39,7 @@ import { useMentionJump } from '../mentions/useMentionJump';
 import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 import { SwipeModerator } from './SwipeModerator';
-import type { SwipeTarget, TouchSlider } from './swipeSteps';
+import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type SwipeTarget, type TouchSlider } from './swipeSteps';
 import { invoke } from '@tauri-apps/api/core';
 
 // How long a pause/resume transition is protected from being reversed. Matches
@@ -616,8 +616,16 @@ export const MobileChatPane: React.FC<{
   // press, from where the thumb landed and with the chatter's name in its
   // words; the saved steps, Length and Style are read there.
   const sliderFor = useCallback(
-    (rowWidth: number, startX: number, targetName: string) =>
-      invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth, startX, targetName }).catch((err) => {
+    (rowWidth: number, startX: number, target: SwipeTarget) =>
+      invoke<TouchSlider>('get_touch_mod_slider', {
+        provider: 'twitch',
+        rowWidth,
+        startX,
+        targetName: target.name,
+        targetId: target.userId,
+        targetBadges: target.badges,
+        channel: activeTab?.login ?? activeChannel,
+      }).catch((err) => {
         Logger.debug('[Swipe] slider unavailable:', err);
         return null;
       }),
@@ -652,10 +660,17 @@ export const MobileChatPane: React.FC<{
     }
   }, []);
 
-  /** The chatter behind a row a moderator may swipe: never another moderator,
-   *  the broadcaster or staff (your own rows carry your badge too). */
-  const swipeTargetFor = useCallback(
-    (messageId: string): SwipeTarget | null => {
+  // The viewer's standing here, for what Twitch allows on each message.
+  const viewerRole: 'broadcaster' | 'moderator' | null = !modToolsArmed
+    ? null
+    : !!broadcasterId && currentUser?.user_id === broadcasterId
+      ? 'broadcaster'
+      : 'moderator';
+
+  /** The chatter behind a row and what Twitch allows on it (`messageReach`):
+   *  Delete alone on the viewer's own message, nothing on the broadcaster's. */
+  const reachOf = useCallback(
+    (messageId: string): { target: SwipeTarget; reach: MessageReach } | null => {
       if (isHeldRowId(messageId)) return null;
       for (const message of messages) {
         if (getMessageId(message) !== messageId) continue;
@@ -665,16 +680,23 @@ export const MobileChatPane: React.FC<{
           if (!userId || parsed.username === 'System') return null;
           // Subs, raids and other event rows are the room's, not a chatter's line.
           if (parsed.tags.get('system-msg')) return null;
-          const badges = parsed.tags.get('badges') ?? '';
-          if (/(?:^|,)(?:moderator|broadcaster|staff|admin|global_mod|lead_moderator)\//.test(badges)) return null;
-          return { userId, name: parsed.tags.get('display-name') || parsed.username || '' };
+          const badges = (parsed.tags.get('badges') ?? '').split(',').filter(Boolean);
+          const target = { userId, name: parsed.tags.get('display-name') || parsed.username || '', badges };
+          return { target, reach: messageReach(viewerRole, currentUser?.user_id ?? '', userId, badges) };
         } catch {
           return null;
         }
       }
       return null;
     },
-    [messages, getMessageId],
+    [messages, getMessageId, viewerRole, currentUser?.user_id],
+  );
+  const swipeTargetFor = useCallback(
+    (messageId: string): SwipeTarget | null => {
+      const found = reachOf(messageId);
+      return found && found.reach !== 'nothing' ? found.target : null;
+    },
+    [reachOf],
   );
 
   // What the fan leaves out: by platform and the read-only overlay, and the mod
@@ -687,8 +709,15 @@ export const MobileChatPane: React.FC<{
       : readOnly
         ? OTHER_PLATFORM_READ_ONLY_HIDES
         : OTHER_PLATFORM_HIDES;
-    return holdModButtons ? base : [...(base ?? []), ...MOD_TILES];
-  }, [isTwitchRoom, readOnly, holdModButtons]);
+    if (!holdModButtons) return [...(base ?? []), ...MOD_TILES];
+    // Only what Twitch allows on the held message: Delete alone on your own.
+    const reach = fanTarget ? (reachOf(fanTarget.messageId)?.reach ?? 'nothing') : 'all';
+    const refused: FanAction[] = [
+      ...(reachCanDelete(reach) ? [] : (['delete'] as FanAction[])),
+      ...(reachCanTimeout(reach) ? [] : (['timeout', 'ban'] as FanAction[])),
+    ];
+    return refused.length ? [...(base ?? []), ...refused] : base;
+  }, [isTwitchRoom, readOnly, holdModButtons, fanTarget, reachOf]);
 
   // Out of sight, nothing of this room stays up: the fan and the sheets draw
   // outside the pane, so hiding the pane would not hide them.

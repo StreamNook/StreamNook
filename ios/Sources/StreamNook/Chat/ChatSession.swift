@@ -47,6 +47,10 @@ final class ChatSession {
     var moderatorTools = false
     /// The viewer moderates here (their moderator or broadcaster badge in this room).
     private(set) var isModerator = false
+    /// The viewer owns this room.
+    private(set) var isBroadcaster = false
+    /// The signed-in viewer's Twitch user id, once known.
+    private(set) var viewerID = ""
     /// The open rooms this one belongs to, for the chat menu's tab actions.
     @ObservationIgnored weak var rooms: ChatRooms?
 
@@ -195,6 +199,11 @@ final class ChatSession {
                   let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
                   let role = budget["role"] as? String, let self else { return }
             self.isModerator = role == "moderator" || role == "broadcaster"
+            self.isBroadcaster = role == "broadcaster"
+            if let userJSON = try? await core.invoke("get_user_info", "{}"),
+               let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) {
+                self.viewerID = user.id
+            }
             // On by default; turned off for this room earlier this session, it stays off.
             self.moderatorTools = self.isModerator && !(self.rooms?.modToolsOff.contains(self.channel) ?? false)
         }
@@ -312,4 +321,12 @@ final class ChatSession {
 /// A weak reference a Sendable closure can hold.
 final class WeakBox<T: AnyObject>: @unchecked Sendable {
     weak var value: T?
+}
+
+extension ChatSession {
+    /// What Twitch lets the viewer do to `message` here (the core's `message_reach`).
+    func reach(for message: ChatMessage) -> MessageReach {
+        MessageReach.of(viewerModerates: isModerator, viewerIsBroadcaster: isBroadcaster, viewerID: viewerID,
+                        targetID: message.userID, badges: message.badges.map { "\($0.name)/\($0.version)" })
+    }
 }

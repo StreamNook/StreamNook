@@ -37,7 +37,36 @@ export interface TouchSlider {
 export interface SwipeTarget {
   userId: string;
   name: string;
+  /** The sender's badges as Twitch tags them ("moderator/1"). */
+  badges: string[];
 }
+
+/** What the viewer may do to one message, by Twitch's rules: the core's
+ *  `moderation::message_reach`, mirrored because the hold menu decides while
+ *  the finger rests. Helix refuses deleting the broadcaster's messages or
+ *  another moderator's, and banning or timing out the broadcaster, yourself,
+ *  or (unless the broadcaster does it) a moderator. */
+export type MessageReach = 'all' | 'delete_only' | 'no_delete' | 'nothing';
+
+export function messageReach(
+  viewer: 'broadcaster' | 'moderator' | null,
+  viewerId: string,
+  targetId: string,
+  badges: string[],
+): MessageReach {
+  if (!viewer || !targetId) return 'nothing';
+  const has = (name: string) => badges.some((b) => b === name || b.startsWith(`${name}/`));
+  const own = !!viewerId && targetId === viewerId;
+  if (has('broadcaster') || (own && viewer === 'broadcaster') || has('staff') || has('admin') || has('global_mod')) {
+    return 'nothing';
+  }
+  if (own) return 'delete_only';
+  if (has('moderator') || has('lead_moderator')) return viewer === 'broadcaster' ? 'no_delete' : 'nothing';
+  return 'all';
+}
+
+export const reachCanDelete = (r: MessageReach) => r === 'all' || r === 'delete_only';
+export const reachCanTimeout = (r: MessageReach) => r === 'all' || r === 'no_delete';
 
 /** The step under a pull of `slide` px, null in the cancel zone (Rust `step_at`). */
 export function stepAt(s: TouchSlider, slide: number): number | null {

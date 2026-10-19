@@ -310,9 +310,13 @@ struct ChatListHost: UIViewRepresentable {
             if twitch { buckets.append(.profile) }
             buckets.append(.copy)
             if session.moderatorTools, twitch, session.roomID != nil {
-                // Delete, Timeout and Ban only while Hold menu buttons is on (Settings > Moderation);
-                // with it off they stay on the user card's Moderate row and the swipe.
-                if session.style.holdModButtons { buckets += [.delete, .timeout, .ban] }
+                // Delete, Timeout and Ban only while Hold menu buttons is on (Settings > Moderation),
+                // and only those Twitch allows on this message: Delete alone on the viewer's own.
+                if session.style.holdModButtons {
+                    let reach = session.reach(for: message)
+                    if reach.canDelete { buckets.append(.delete) }
+                    if reach.canTimeout { buckets += [.timeout, .ban] }
+                }
                 buckets.append(.pin)
             }
             let color = ChatTheme.color(message.metadata.view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
@@ -333,9 +337,9 @@ struct ChatListHost: UIViewRepresentable {
                   let message = session.pipeline.message(layout.id), message.provider == "twitch", !message.isSystem,
                   message.tags["system-msg"] == nil
             else { return false }
-            // Never another moderator, the broadcaster or staff (the viewer's own rows carry their badge too).
-            let protected: Set<String> = ["moderator", "broadcaster", "staff", "admin", "global_mod", "lead_moderator"]
-            return !message.badges.contains { protected.contains($0.name) }
+            // Only where Twitch allows something on this message: the viewer's own in a room they
+            // moderate (Delete), never the broadcaster's (the core decides the steps).
+            return session.reach(for: message) != .nothing
         }
         // A press on a moderatable row: the core's slider for where the thumb landed, and the
         // chatter captured now, so a release acts on the person pressed even if their message
@@ -345,7 +349,10 @@ struct ChatListHost: UIViewRepresentable {
             let core = session.core
             let slider: SwipeSlider
             do {
-                slider = try await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName)
+                slider = try await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName,
+                                                    targetID: message.userID,
+                                                    badges: message.badges.map { "\($0.name)/\($0.version)" },
+                                                    channel: session.channel)
             } catch {
                 chatLog.notice("[swipe] slider failed: \(String(describing: error), privacy: .public)")
                 return nil
