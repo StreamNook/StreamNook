@@ -2398,6 +2398,9 @@ pub fn run() {
             // Main-window watch session
             watch_start,
             watch_stop,
+            sleep_timer_start,
+            sleep_timer_cancel,
+            sleep_timer_state,
             watch_open_room,
             watch_session_start,
             watch_session_stop,

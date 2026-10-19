@@ -103,6 +103,7 @@ room-mod-log
 seventv-connected
 seventv-connected-account
 seventv-profile-pictures
+sleep-timer://state
 sn-registry-changed
 stream-manager-state
 streamer-mode-changed
