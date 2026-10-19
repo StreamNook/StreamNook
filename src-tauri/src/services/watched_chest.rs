@@ -21,7 +21,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 
-use log::{debug, warn};
+use log::{info, warn};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -100,7 +100,7 @@ pub fn offer(app: &AppHandle, channel_id: String, claim_id: String) {
         }
         let name = login.unwrap_or_default();
         match claim(&app, &channel_id, &name, &claim_id).await {
-            Ok(r) => debug!("[WatchedChest] collected {} on {channel_id}", r.points_earned),
+            Ok(r) => info!("[WatchedChest] collected {} on {channel_id}", r.points_earned),
             Err(e) => warn!("[WatchedChest] claim on {channel_id} failed: {e}"),
         }
     });

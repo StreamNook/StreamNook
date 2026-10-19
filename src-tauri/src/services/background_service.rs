@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -165,11 +165,15 @@ impl BackgroundService {
 
         let token = match DropsAuthService::get_token().await {
             Ok(t) => t,
-            // No drops credential: the realtime socket can't authenticate. The
-            // chest still surfaces via the frontend's 60s poll; nothing breaks.
-            Err(_) => return,
+            // No drops credential: the realtime socket can't authenticate, and
+            // the watch earns nothing either (the heartbeat needs it too).
+            Err(_) => {
+                info!("[Points] socket not started for {login}: no drops sign-in");
+                return;
+            }
         };
         let Some(user_id) = Self::fetch_user_id(&token).await else {
+            info!("[Points] socket not started for {login}: the drops account's user id did not resolve");
             return;
         };
 
@@ -185,6 +189,8 @@ impl BackgroundService {
             .await
         {
             error!("Failed to connect watched-channel socket: {}", e);
+        } else {
+            info!("[Points] socket follows {login}");
         }
         ws.register_active_channel(&channel_id).await;
     }

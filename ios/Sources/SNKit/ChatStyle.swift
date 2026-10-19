@@ -88,6 +88,9 @@ public struct ChatStyle: Sendable, Equatable {
     public var hidePointsBalance = false
     /// Wallet balance is Always (chat_input.show_points_balance_inline).
     public var pointsBalanceInline = false
+    /// Show gains is Bonus chest only (chat_input.wallet_gains == "chest"): the "+N" floats only
+    /// for a chest.
+    public var walletGainsChestOnly = false
 
     public init() {}
 
@@ -115,6 +118,7 @@ public struct ChatStyle: Sendable, Equatable {
             suggestionsEnabled = i["emote_tab_complete_enabled"] as? Bool ?? suggestionsEnabled
             hidePointsBalance = i["hide_points_balance"] as? Bool ?? hidePointsBalance
             pointsBalanceInline = i["show_points_balance_inline"] as? Bool ?? pointsBalanceInline
+            if let gains = i["wallet_gains"] as? String { walletGainsChestOnly = gains == "chest" }
         }
         if let e = root["chat_events"] as? [String: Any], let hidden = e["hidden_provider_events"] as? [Any] {
             hiddenEvents = Set(hidden.compactMap { $0 as? String })

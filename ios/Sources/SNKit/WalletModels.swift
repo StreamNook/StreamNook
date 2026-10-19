@@ -12,6 +12,9 @@ public struct WalletGain: Decodable, Sendable, Equatable {
     public var reason: String?
     /// A bonus chest.
     public var chest: Bool
+
+    /// Whether this gain plays the "+N" under Show gains: every gain, or the chest alone.
+    public func floats(chestOnly: Bool) -> Bool { !chestOnly || chest }
 }
 
 /// Channel points on the watched channel.

@@ -529,6 +529,10 @@ private struct WalletBalanceRow: View {
                 }
             }
             .padding(.top, 12)
+        } nested: {
+            // The phone's wallet button never goes away, so its gains always play.
+            NestedChoice(title: "Show gains", path: "chat_input.wallet_gains",
+                         choices: [Choice("Every gain", "all"), Choice("Bonus chest only", "chest")], fallback: "all")
         }
     }
 }
