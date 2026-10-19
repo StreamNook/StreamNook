@@ -20,6 +20,7 @@ import { mentionHoldBackground } from '../chat/mentionHold';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
+import { chatBodyWeight } from '../../utils/chatBodyWeight';
 import { mentionBoxClass, mentionBoxStyle, mentionTextStyle, type MentionLook } from '../chat/mentionStyle';
 import { ScrollbarMarks } from '../chat/ScrollbarMarks';
 import { collectMarks } from '../chat/scrollbarMarkLayout';
@@ -189,7 +190,7 @@ const PreviewLine = ({
           accentColor={design.username_accent_source === 'theme' ? 'var(--color-accent)' : color}
         />
         <span
-          style={action ? { color, fontWeight: 300 } : { fontWeight: 'var(--chat-body-weight, 300)' }}
+          style={action ? { color, fontWeight: chatBodyWeight(design.font_weight) } : { fontWeight: chatBodyWeight(design.font_weight) }}
           className={action ? 'italic break-words' : 'text-textPrimary break-words'}
         >
           <span style={moderation && deletedStyle ? deletedBodyStyle(deletedStyle) : undefined}>
