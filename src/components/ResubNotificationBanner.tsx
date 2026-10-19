@@ -1,6 +1,7 @@
 import React from 'react';
 import { Check, Star, X } from 'phosphor-react';
 import { Tooltip } from './ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 
 // Types
 export interface ResubNotification {
@@ -25,11 +26,11 @@ interface ResubNotificationBannerProps {
 }
 
 // The streak banners' family, like the watch streak above the composer: the
-// pinned banners' static popover (solid at Glassiness 0), the accent star,
+// chat header capsules' glaze (solid at Glassiness 0), the accent star,
 // what it is in bold with the detail quieter beside it, the streak choice on
 // its own line, one Share and a quieter dismiss. Share arms the composer: the
 // next message sent carries the resub (with the streak when it is ticked).
-const surface = 'sn-popover sn-popover--static mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5';
+const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5`;
 const quiet =
   'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
 
@@ -57,7 +58,7 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   // Armed: the next message sent carries the resub.
   if (isResubMode) {
     return (
-      <div className={surface} role="status">
+      <div className={surface} style={BANNER_STYLE} role="status">
         {star}
         <span className="min-w-0 flex-1 flex flex-col">
           <span className="truncate text-[13px] font-semibold text-textPrimary">
@@ -79,7 +80,7 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   }
 
   return (
-    <div className={surface}>
+    <div className={surface} style={BANNER_STYLE}>
       {star}
       <span className="min-w-0 flex-1 flex flex-col">
         <span className="truncate text-[13px]">
@@ -105,7 +106,8 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
       </span>
       <button
         onClick={onActivateShare}
-        className="flex-shrink-0 h-7 px-3 rounded-full bg-accent/15 hover:bg-accent/25 text-accent text-[12px] font-semibold transition-colors active:scale-95"
+        className={`${ACCENT_BUTTON} flex-shrink-0 h-7 px-3.5 !text-[12px]`}
+        style={ACCENT_FILL}
       >
         Share
       </button>

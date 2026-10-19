@@ -1,6 +1,7 @@
 import React from 'react';
 import { X } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
 // Types
@@ -20,12 +21,12 @@ interface WatchStreakBannerProps {
   onCancelShare: () => void;
 }
 
-// The phones' streak banner on the desktop: the static popover surface the
-// pinned banners use (solid at Glassiness 0), Twitch's streak flame in the
-// theme's orange, what it is in bold with the detail quieter beside it, then
-// one action and a quieter dismiss. Share arms the composer: the next message
+// The phones' streak banner on the desktop: the chat header capsules' glaze
+// (solid at Glassiness 0), Twitch's streak flame in the theme's orange, what
+// it is in bold with the detail quieter beside it, then the one glazed accent
+// action and a quieter dismiss. Share arms the composer: the next message
 // sent carries the streak, and the banner says so until then or a cancel.
-const surface = 'sn-popover sn-popover--static mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5';
+const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5`;
 const quiet =
   'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
 
@@ -42,7 +43,7 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   // Armed: the next message sent carries the streak.
   if (isStreakMode) {
     return (
-      <div className={surface} role="status">
+      <div className={surface} style={BANNER_STYLE} role="status">
         <WatchStreakFlame size={15} className="flex-shrink-0 text-highlight-orange" />
         <span className="min-w-0 flex-1 flex flex-col">
           <span className="truncate text-[13px] font-semibold text-textPrimary">Sharing your watch streak</span>
@@ -58,7 +59,7 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   }
 
   return (
-    <div className={surface}>
+    <div className={surface} style={BANNER_STYLE}>
       <WatchStreakFlame size={15} className="flex-shrink-0 text-highlight-orange" />
       <span className="min-w-0 flex-1 flex flex-col">
         <span className="truncate text-[13px]">
@@ -78,7 +79,8 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
       </span>
       <button
         onClick={onActivateShare}
-        className="flex-shrink-0 h-7 px-3 rounded-full bg-accent/15 hover:bg-accent/25 text-accent text-[12px] font-semibold transition-colors active:scale-95"
+        className={`${ACCENT_BUTTON} flex-shrink-0 h-7 px-3.5 !text-[12px]`}
+        style={ACCENT_FILL}
       >
         Share
       </button>

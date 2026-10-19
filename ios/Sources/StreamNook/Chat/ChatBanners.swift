@@ -181,9 +181,10 @@ struct PaintedName: View {
 /// resub first (it is rarer and expires). Sharing posts the composer's text with it, consumes
 /// the token and hides the banner; dismissals hold for the session.
 ///
-/// They are the pinned banner's kin: the same static popover, a 12 point glyph in the leading
-/// column, what it is in bold with the detail quieter beside it, then the one action (Share, in
-/// the theme's accent) and a quieter dismiss. They rise out of the composer's edge and fold back.
+/// They wear the glass the rooms strip's capsules wear (solid at Glassiness 0), a 12 point glyph
+/// in the leading column, what it is in bold with the detail quieter beside it, then the one
+/// glazed accent action (Share) and a quieter dismiss. They rise out of the composer's edge and
+/// fold back.
 struct StreakBanners: View {
     let rooms: ChatRooms
     let session: ChatSession
@@ -253,7 +254,7 @@ struct StreakBanners: View {
         .padding(.leading, 10)
         .padding(.trailing, 4)
         .padding(.vertical, 4)
-        .modifier(StaticPopover())
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func watchBanner(_ milestone: WatchStreakMilestone) -> some View {
@@ -278,23 +279,20 @@ struct StreakBanners: View {
         .padding(.leading, 10)
         .padding(.trailing, 4)
         .padding(.vertical, 4)
-        .modifier(StaticPopover())
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    /// The banner's one action: Share, in the theme's accent on a soft accent capsule.
+    /// The banner's one action: Share, the glazed accent button.
     private func shareButton(_ action: @escaping () async -> Void) -> some View {
         Button {
             Task { await action() }
         } label: {
             Text("Share")
                 .font(.sn(12, 600))
-                .foregroundStyle(SN.accent)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .frame(height: 28)
-                .background(Capsule().fill(SN.accent.opacity(0.15)))
-                .contentShape(Capsule())
         }
-        .buttonStyle(ShrinkPress())
+        .buttonStyle(GlazeAccentButton())
         .disabled(rooms.sharing)
         .opacity(rooms.sharing ? 0.5 : 1)
     }
@@ -317,14 +315,5 @@ struct StreakBanners: View {
         if resub.isGift { return resub.gifter.map { "from \($0)" } }
         let n = resub.cumulativeMonths
         return "\(n) month\(n == 1 ? "" : "s")"
-    }
-}
-
-/// A chip that scales to 0.95 while pressed.
-private struct ShrinkPress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

@@ -85,6 +85,9 @@ enum SN {
     static var highlightPurple: Color { p.highlightPurple.color }
     static var highlightBlue: Color { p.highlightBlue.color }
     static var highlightOrange: Color { p.highlightOrange.color }
+    /// The accent mixed into black, dark enough for white text on every theme, including the ones
+    /// whose accent is pale: the glazed accent button's fill (the desktop's ACCENT_FILL).
+    static var accentFill: Color { p.accent.color.mix(with: .black, by: 0.45) }
 
     static var live: Color { FixedColor.live.color }
     static var twitch: Color { FixedColor.twitch.color }
