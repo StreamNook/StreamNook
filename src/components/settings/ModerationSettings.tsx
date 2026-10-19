@@ -7,10 +7,8 @@ import { MOD_LOG_CATEGORIES, MOD_LOG_STYLES, highlightContainerStyle } from '../
 import { Tooltip } from '../ui/Tooltip';
 import { connectModRoomConsent, clearModeratedCache, loadModeratedChannelIds } from '../../services/modRoomService';
 import { useSettingDefault, useSettingReset } from './settingReset';
-import { Dropdown } from '../ui/Dropdown';
-import { ModLinePreview, ModSliderPreview, ModTilesPreview } from './ChatPreview';
+import { ModHoverPreview, ModLinePreview, ModSliderPreview } from './ChatPreview';
 import { HoverTimeoutsEditor, ModSliderStepsEditor } from './ModSliderSteps';
-import { DEFAULT_BUCKET_TIMEOUT_SECS, TIMEOUT_LENGTH_CHOICES } from '../../services/moderation';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -28,23 +26,21 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
 );
 
 /** What sits at the left edge of a message a moderator can act on. */
-type ModEdge = 'slider' | 'tiles' | 'buttons' | 'off';
+type ModEdge = 'slider' | 'buttons' | 'off';
 
-/** The edge the stored keys draw: the line buttons win, then the slider, then
- *  drag to tiles (which only shows while both are off), as ChatMessage does. */
-function edgeOf(slider: unknown, line: unknown, style: unknown): ModEdge {
+/** The edge the stored keys draw: the line buttons win, then the slider, as
+ *  ChatMessage does. */
+function edgeOf(slider: unknown, line: unknown): ModEdge {
   if (line === true) return 'buttons';
-  if (slider !== false) return 'slider';
-  return style === 'drag' || style === 'both' ? 'tiles' : 'off';
+  return slider !== false ? 'slider' : 'off';
 }
 
-const hoverOf = (style: unknown) => style === 'buttons' || style === 'both';
+const hoverOf = (style: unknown) => style !== 'none';
 
 /** One plain sentence per edge, so the row says what the picked one does. */
 const EDGE_DESCRIPTION: Record<ModEdge, string> = {
-  slider: 'Press the dotted handle on a message\'s left edge and drag right through Delete, timeouts and Ban. Let go to apply, drag back to cancel.',
-  tiles: 'Press the dotted handle on a message\'s left edge and drag it onto a Delete, Timeout or Ban tile.',
-  buttons: 'Delete, a timeout and Ban as small buttons at the start of every message, one click each.',
+  slider: 'Press the dotted handle on a message\'s left edge and drag right: Delete, then longer timeouts, then Ban, which waits for a short pause. Let go to apply. Drag back, move off the message or press Esc to cancel.',
+  buttons: 'Delete, a timeout and Ban as small buttons at the start of a message, one click each. Scroll over the timeout to make it longer or shorter.',
   off: 'Nothing on the left edge. Use the hover buttons below, or the keyboard.',
 };
 
@@ -90,16 +86,14 @@ const ModerationSettings = () => {
     updateSettings({ ...settings, moderation: { ...mod, ...patch } });
 
   // How a moderator acts on a message, as two choices. Message edge is what
-  // sits at a message's left edge: the slider, drag to tiles, the line buttons
-  // or nothing. Hover buttons are Ban, Delete and a timeout in the corner of
-  // the hovered message. They are stored as three older keys (mod_slider,
-  // mod_line_buttons and mod_action_style, which holds both the hover buttons
-  // and drag to tiles); every write sets all three, so the two rows always say
+  // sits at a message's left edge: the slider, the line buttons or nothing.
+  // Hover buttons are Ban, Delete and a timeout in the corner of the hovered
+  // message. They are stored as three keys (mod_slider, mod_line_buttons and
+  // mod_action_style); every write sets all three, so the two rows always say
   // what chat does. Lives in chat_design because chat reads it per row.
   const cd = settings.chat_design;
-  const storedStyle = cd?.mod_action_style ?? (cd?.drag_moderation_enabled === false ? 'buttons' : 'both');
-  const modEdge = edgeOf(cd?.mod_slider, cd?.mod_line_buttons, storedStyle);
-  const hoverButtons = hoverOf(storedStyle);
+  const modEdge = edgeOf(cd?.mod_slider, cd?.mod_line_buttons);
+  const hoverButtons = hoverOf(cd?.mod_action_style);
   const writeModGestures = (edge: ModEdge, hover: boolean) =>
     updateSettings({
       ...settings,
@@ -107,7 +101,7 @@ const ModerationSettings = () => {
         ...settings.chat_design!,
         mod_slider: edge === 'slider',
         mod_line_buttons: edge === 'buttons',
-        mod_action_style: hover ? (edge === 'tiles' ? 'both' : 'buttons') : edge === 'tiles' ? 'drag' : 'none',
+        mod_action_style: hover ? 'buttons' : 'none',
       },
     });
   // The rows' arrows compare what they show with a fresh install's.
@@ -115,24 +109,9 @@ const ModerationSettings = () => {
   const defaultEdge = edgeOf(
     useSettingDefault('chat_design.mod_slider'),
     useSettingDefault('chat_design.mod_line_buttons'),
-    defaultStyle,
   );
   const defaultHover = hoverOf(defaultStyle);
   const defaultsLoaded = defaultStyle !== undefined;
-  // Legacy 'slider' value (mode removed) resolves to the beside-chat column.
-  const modDragLayout: 'column' | 'bar' = cd?.mod_drag_layout === 'bar' ? 'bar' : 'column';
-  const setModDragLayout = (v: 'column' | 'bar') =>
-    updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_drag_layout: v } });
-  // The inline Pin button is always on for mods; this only toggles the extra
-  // drag-gesture Pin tile. Legacy 'drag' maps to 'both' (button + drag tile).
-  const modPinStyle: 'inline' | 'both' = cd?.mod_pin_style === 'inline' ? 'inline' : 'both';
-  const setModPinStyle = (v: 'inline' | 'both') =>
-    updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_pin_style: v } });
-  // Compared as shown: the legacy 'drag' reads On, the same as the default.
-  const defaultPinStyle = useSettingDefault('chat_design.mod_pin_style') === 'inline' ? 'inline' : 'both';
-  const bucketTimeout = cd?.mod_bucket_timeout ?? DEFAULT_BUCKET_TIMEOUT_SECS;
-  const setBucketTimeout = (v: number) =>
-    updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_bucket_timeout: v } });
 
   return (
     <div className="space-y-8">
@@ -168,14 +147,13 @@ const ModerationSettings = () => {
             defaultsLoaded && modEdge !== defaultEdge ? () => writeModGestures(defaultEdge, hoverButtons) : undefined
           }
           description={EDGE_DESCRIPTION[modEdge]}
-          help="The slider, the tile handle and the line buttons appear on messages from other chatters. On your own messages, the channel owner's, and other moderators' (unless it is your channel) there is nothing to ban or time out: the slider and line buttons stay away, and the tiles offer only Delete and Pin. Chat holds still while your pointer is on a message you can act on, so it cannot scroll away mid-aim; it catches up when you move off. Timeouts follow each platform: Kick rounds up to whole minutes and stops at a week, YouTube has one 5 minute timeout."
+          help="The slider and the line buttons appear on messages from other chatters. On your own messages, the channel owner's, and other moderators' (unless it is your channel) there is nothing to ban or time out, so they stay away. Each slider step is the same distance at every chat width, set by Length; a narrow chat squeezes them to fit. Every timeout and ban has an Undo in its notice. Chat holds still while your pointer is on a message you can act on, so it cannot scroll away mid-aim; it catches up when you move off. Timeouts follow each platform: Kick rounds up to whole minutes and stops at a week, YouTube has one 5 minute timeout."
           control={
             <SegmentedSelect<ModEdge>
               value={modEdge}
               onChange={(edge) => writeModGestures(edge, hoverButtons)}
               options={[
                 { value: 'slider', label: 'Slider' },
-                { value: 'tiles', label: 'Tiles' },
                 { value: 'buttons', label: 'Line buttons' },
                 { value: 'off', label: 'Off' },
               ]}
@@ -186,6 +164,23 @@ const ModerationSettings = () => {
             <>
               <ModSliderPreview stored={cd} />
               <SubControls>
+                <SubControl
+                  title="Style"
+                  onReset={resetFor('chat_design.mod_slider_style')}
+                  control={
+                    <SegmentedSelect<'preview' | 'rail' | 'capsule'>
+                      value={cd?.mod_slider_style ?? 'preview'}
+                      onChange={(v) =>
+                        updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_slider_style: v } })
+                      }
+                      options={[
+                        { value: 'preview', label: 'Preview' },
+                        { value: 'rail', label: 'Rail' },
+                        { value: 'capsule', label: 'Capsule' },
+                      ]}
+                    />
+                  }
+                />
                 <SubControl
                   title="Length"
                   onReset={resetFor('chat_design.mod_slider_length')}
@@ -212,59 +207,26 @@ const ModerationSettings = () => {
               </SubControls>
             </>
           )}
-          {modEdge === 'tiles' && (
-            <>
-              <ModTilesPreview stored={cd} />
-              <SubControls>
-                <SubControl
-                  title="Tile position"
-                  onReset={resetFor('chat_design.mod_drag_layout')}
-                  control={
-                    <SegmentedSelect<'column' | 'bar'>
-                      value={modDragLayout}
-                      onChange={setModDragLayout}
-                      options={[
-                        { value: 'column', label: 'Beside chat' },
-                        { value: 'bar', label: 'Above chat' },
-                      ]}
-                    />
-                  }
-                />
-                <SubControl
-                  title="Timeout length"
-                  onReset={resetFor('chat_design.mod_bucket_timeout')}
-                  control={
-                    <Dropdown<number>
-                      value={bucketTimeout}
-                      options={TIMEOUT_LENGTH_CHOICES}
-                      onChange={setBucketTimeout}
-                      ariaLabel="Timeout tile length"
-                    />
-                  }
-                />
-                <SubControl
-                  title="Pin tile"
-                  onReset={
-                    defaultsLoaded && modPinStyle !== defaultPinStyle ? () => setModPinStyle(defaultPinStyle) : undefined
-                  }
-                  control={
-                    <SegmentedSelect<'inline' | 'both'>
-                      value={modPinStyle}
-                      onChange={setModPinStyle}
-                      options={[
-                        { value: 'both', label: 'On' },
-                        { value: 'inline', label: 'Off' },
-                      ]}
-                    />
-                  }
-                />
-              </SubControls>
-            </>
-          )}
           {modEdge === 'buttons' && (
             <>
               <ModLinePreview stored={cd} />
               <SubControls>
+                <SubControl
+                  title="Show"
+                  onReset={resetFor('chat_design.mod_line_show')}
+                  control={
+                    <SegmentedSelect<'hover' | 'always'>
+                      value={cd?.mod_line_show === 'always' ? 'always' : 'hover'}
+                      onChange={(v) =>
+                        updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_line_show: v } })
+                      }
+                      options={[
+                        { value: 'hover', label: 'On hover' },
+                        { value: 'always', label: 'Always' },
+                      ]}
+                    />
+                  }
+                />
                 <SubControl
                   title="Buttons"
                   stacked
@@ -284,14 +246,17 @@ const ModerationSettings = () => {
           control={<Toggle enabled={hoverButtons} onChange={() => writeModGestures(modEdge, !hoverButtons)} />}
         >
           {hoverButtons && (
-            <SubControls>
-              <SubControl
-                title="Timeout lengths"
-                stacked
-                onReset={resetFor('moderation.timeout_presets')}
-                control={<HoverTimeoutsEditor />}
-              />
-            </SubControls>
+            <>
+              <ModHoverPreview stored={cd} />
+              <SubControls>
+                <SubControl
+                  title="Timeout lengths"
+                  stacked
+                  onReset={resetFor('moderation.timeout_presets')}
+                  control={<HoverTimeoutsEditor />}
+                />
+              </SubControls>
+            </>
           )}
         </SettingsRow>
       </SettingsSection>

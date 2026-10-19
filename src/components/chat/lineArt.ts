@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
-import type { ModRequest } from '../../services/moderation';
+import type { ModRequest, ModStep } from '../../services/moderation';
 import {
   LINE_GEOMETRY,
   LINE_STRIP_ATTR,
+  lineButtons,
   lineHit,
   lineLayout,
   lineRequest,
+  nextLength,
+  scrolledTimeout,
+  withLengths,
   type LineButton,
   type LineLayout,
 } from './modLine';
@@ -14,7 +18,8 @@ import {
 // The line buttons' picture, and reading the pointer back from it.
 //
 // Every strip is one empty element showing the same picture: the buttons at
-// rest on its first row, then one row per button with that button lit. The
+// rest as set on its first row, then at rest with any scrolled length (the
+// line under the pointer), then one row per button with that button lit. The
 // picture is drawn once per list (buttons, text size, theme, font, screen
 // density) on a canvas, in the app's font and the theme's colors, so it looks
 // like the CSS buttons it replaced. Hover moves the hovered strip's picture to
@@ -22,8 +27,11 @@ import {
 
 export interface LineArt {
   layout: LineLayout;
-  /** Rows in the picture: rest, then one per button. */
+  /** Rows in the picture: rest as set, rest as scrolled, then one per
+   *  button. */
   rows: number;
+  /** The picture itself, as a data URL. */
+  url: string;
   /** The variables the strips draw with; set on the list. */
   vars: CSSProperties;
 }
@@ -54,7 +62,7 @@ function canvasColor(ctx: CanvasRenderingContext2D, css: string, fallback: strin
   return parsed === '#010203' ? fallback : parsed;
 }
 
-function drawLineArt(buttons: LineButton[], fontPx: number): LineArt | null {
+function drawLineArt(buttons: LineButton[], fontPx: number, fitLabels: string[], setButtons: LineButton[]): LineArt | null {
   if (buttons.length === 0 || typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -64,8 +72,8 @@ function drawLineArt(buttons: LineButton[], fontPx: number): LineArt | null {
   // 600, not bold: a bold label outweighed the icons beside it.
   const labelFont = `600 ${g.label * fontPx}px ${family}`;
   ctx.font = labelFont;
-  const layout = lineLayout(buttons, fontPx, (label) => ctx.measureText(label).width);
-  const rows = buttons.length + 1;
+  const layout = lineLayout(buttons, fontPx, (label) => ctx.measureText(label).width, fitLabels);
+  const rows = buttons.length + 2;
   // Whole-number density, so every edge lands on a device pixel at 1x and 2x.
   const scale = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
   canvas.width = Math.max(1, Math.ceil(layout.width * scale));
@@ -111,9 +119,11 @@ function drawLineArt(buttons: LineButton[], fontPx: number): LineArt | null {
   const snap = (v: number) => Math.round(v * scale) / scale + strokeOffset;
   for (let row = 0; row < rows; row++) {
     const top = row * layout.height;
-    buttons.forEach((b, i) => {
+    // The first row is every other line: the lengths as set, never a length
+    // scrolled on the line under the pointer.
+    (row === 0 && setButtons.length === buttons.length ? setButtons : buttons).forEach((b, i) => {
       const box = layout.boxes[i];
-      const lit = row === i + 1;
+      const lit = row === i + 2;
       const paint = paints[i];
       ctx.fillStyle = lit ? paint.litFill : rest;
       ctx.beginPath();
@@ -141,11 +151,13 @@ function drawLineArt(buttons: LineButton[], fontPx: number): LineArt | null {
     });
   }
 
+  const url = canvas.toDataURL('image/png');
   return {
     layout,
     rows,
+    url,
     vars: {
-      '--sn-line-art': `url(${canvas.toDataURL('image/png')})`,
+      '--sn-line-art': `url(${url})`,
       '--sn-line-w': `${layout.width}px`,
       '--sn-line-h': `${layout.height}px`,
       '--sn-line-bh': `${layout.height * rows}px`,
@@ -157,8 +169,15 @@ function drawLineArt(buttons: LineButton[], fontPx: number): LineArt | null {
  * The picture for `buttons` at `fontPx`, redrawn when the theme or the app
  * font changes (both are written onto :root), when a font finishes loading,
  * and when the window moves to a screen of another density. Null while off.
+ * Timeouts are as wide as the widest of `fitLabels` (the lengths a scroll can
+ * reach), so a scroll never resizes the strip.
  */
-export function useLineArt(buttons: LineButton[] | null, fontPx: number): LineArt | null {
+export function useLineArt(
+  buttons: LineButton[] | null,
+  fontPx: number,
+  fitLabels: string[] = [],
+  setButtons: LineButton[] | null = null,
+): LineArt | null {
   const [epoch, setEpoch] = useState(0);
   const active = buttons !== null;
   useEffect(() => {
@@ -175,9 +194,91 @@ export function useLineArt(buttons: LineButton[] | null, fontPx: number): LineAr
       density.removeEventListener('change', redraw);
     };
   }, [active]);
-  // `epoch` stands for what the drawing reads from the page.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => (buttons ? drawLineArt(buttons, fontPx) : null), [buttons, fontPx, epoch]);
+  const fitKey = fitLabels.join('|');
+  // `epoch` stands for what the drawing reads from the page; `fitKey` for
+  // the labels.
+  const drawn = useMemo(
+    () => (buttons ? drawLineArt(buttons, fontPx, fitLabels, setButtons ?? buttons) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [buttons, fontPx, epoch, fitKey, setButtons],
+  );
+  // A new picture is decoded before it replaces the old one: swapped in
+  // undecoded, every strip went blank for a frame on each scroll step.
+  const [shown, setShown] = useState<LineArt | null>(null);
+  useEffect(() => {
+    if (!drawn) return;
+    let live = true;
+    const img = new Image();
+    img.src = drawn.url;
+    img
+      .decode()
+      .catch(() => undefined)
+      .then(() => {
+        if (live) setShown(drawn);
+      });
+    return () => {
+      live = false;
+    };
+  }, [drawn]);
+  return drawn ? shown : null;
+}
+
+/**
+ * The line's buttons from Rust's steps, with any timeout whose length was
+ * scrolled. `ladder` is the slider's timeouts (its Steps, as Rust applies
+ * them): a scroll walks a timeout up or down that list. `nudge` takes the
+ * button under the pointer and a direction and says whether the line has a
+ * timeout to scroll (a null direction only asks); `reset` puts every
+ * length back.
+ */
+export function useLineButtons(steps: ModStep[] | null, ladder: ModStep[]) {
+  const [overrides, setOverrides] = useState<Record<number, number>>({});
+  const buttons = useMemo(
+    () => (steps && steps.length > 0 ? lineButtons(withLengths(steps, overrides, ladder)) : null),
+    [steps, overrides, ladder],
+  );
+  const nudge = useCallback(
+    (index: number, dir: 1 | -1 | null): boolean => {
+      if (!steps) return false;
+      const t = scrolledTimeout(steps, index);
+      if (t < 0) return false;
+      if (dir === null) return true;
+      setOverrides((o) => {
+        const current = o[t] ?? steps[t].seconds ?? 0;
+        const next = nextLength(
+          current,
+          ladder.map((s) => s.seconds ?? 0).filter((s) => s > 0),
+          dir,
+        );
+        return next == null ? o : { ...o, [t]: next };
+      });
+      return true;
+    },
+    [steps, ladder],
+  );
+  const reset = useCallback(() => setOverrides((o) => (Object.keys(o).length > 0 ? {} : o)), []);
+  // What a scroll would do from here: the timeout it changes, and the
+  // lengths one step up and one step down (null at either end).
+  const around = useCallback(
+    (index: number): ScrollHint | null => {
+      if (!steps) return null;
+      const t = scrolledTimeout(steps, index);
+      if (t < 0) return null;
+      const current = overrides[t] ?? steps[t].seconds ?? 0;
+      const seconds = ladder.map((s) => s.seconds ?? 0).filter((s) => s > 0);
+      const labelOf = (s: number | null) => (s == null ? null : ladder.find((l) => l.seconds === s)?.label ?? null);
+      return { timeout: t, up: labelOf(nextLength(current, seconds, 1)), down: labelOf(nextLength(current, seconds, -1)) };
+    },
+    [steps, ladder, overrides],
+  );
+  return { buttons, nudge, reset, around };
+}
+
+/** The timeout a scroll changes and the lengths one step either way. */
+export interface ScrollHint {
+  timeout: number;
+  up: string | null;
+  down: string | null;
 }
 
 /** The strip a pointer event landed on, or null. */
@@ -200,8 +301,172 @@ function buttonUnder(strip: HTMLElement, clientX: number, art: LineArt): number 
 
 /** Show `strip`'s lit row for button `index`, or its rest row for -1. */
 function light(strip: HTMLElement, index: number, art: LineArt | null): void {
-  if (index < 0 || !art) strip.style.removeProperty('background-position');
-  else strip.style.backgroundPosition = `0 ${-(index + 1) * art.layout.height}px`;
+  if (index >= 0 && art) strip.style.backgroundPosition = `0 ${-(index + 2) * art.layout.height}px`;
+  // The line whose length was scrolled keeps showing that length.
+  else if (strip.dataset.scrolled) strip.style.backgroundPosition = `0 ${-strip.offsetHeight}px`;
+  else strip.style.removeProperty('background-position');
+}
+
+/** A wheel event this big is one notch of a mouse wheel, one step whatever
+ *  the display scaling (Chromium reports 100 per notch at 100%, 50 at 200%).
+ *  Smaller ones are a trackpad, added up until they reach WHEEL_STEP. */
+const WHEEL_NOTCH = 40;
+const WHEEL_STEP = 100;
+
+const CARET_UP =
+  '<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><path d="M1.5 5.5 4 3l2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CARET_DOWN =
+  '<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/**
+ * Scrolling over a strip walks its timeout's length: up for longer, down for
+ * shorter (`onNudge`, with the button under the pointer). The wheel is then
+ * the strip's alone (chat does not scroll and keeps holding still). Leaving
+ * the line puts the lengths back (`onReset`).
+ *
+ * While the pointer is on a strip, two small notes sit just above and below
+ * its timeout: the length a scroll up reaches and the one a scroll down
+ * reaches (`around`), like the next rungs of a picker wheel, so the scroll
+ * is found without reading anything. Labels only, never buttons. One pair
+ * for the whole page, fixed to the screen. Returns the cleanup.
+ */
+export function bindLineWheel(
+  el: HTMLElement,
+  getArt: () => { art: LineArt; buttons: LineButton[] } | null,
+  onNudge: (index: number, dir: 1 | -1 | null) => boolean,
+  onReset: () => void,
+  around: (index: number) => ScrollHint | null,
+): () => void {
+  const hint = document.createElement('div');
+  hint.className = 'sn-line-hint';
+  hint.setAttribute('aria-hidden', 'true');
+  const upNote = document.createElement('span');
+  upNote.className = 'sn-line-hint-note is-up';
+  const downNote = document.createElement('span');
+  downNote.className = 'sn-line-hint-note is-down';
+  hint.append(upNote, downNote);
+  document.body.appendChild(hint);
+  let aim: { strip: HTMLElement; index: number } | null = null;
+  const hideHint = () => {
+    aim = null;
+    hint.classList.remove('is-on');
+  };
+  const showHint = () => {
+    const current = getArt();
+    const a = aim ? around(aim.index) : null;
+    if (!aim || !current || !a || (!a.up && !a.down) || !aim.strip.isConnected) {
+      hint.classList.remove('is-on');
+      return;
+    }
+    const rect = aim.strip.getBoundingClientRect();
+    const box = current.art.layout.boxes[a.timeout];
+    if (!box || rect.width === 0) {
+      hint.classList.remove('is-on');
+      return;
+    }
+    const scale = rect.width / (current.art.layout.width || 1);
+    const cx = rect.left + (box.x + box.w / 2) * scale;
+    upNote.innerHTML = a.up ? `${CARET_UP}<span>${a.up}</span>` : '';
+    downNote.innerHTML = a.down ? `${CARET_DOWN}<span>${a.down}</span>` : '';
+    upNote.hidden = !a.up;
+    downNote.hidden = !a.down;
+    upNote.style.transform = `translate(${cx}px, ${rect.top - 2}px) translate(-50%, -100%)`;
+    downNote.style.transform = `translate(${cx}px, ${rect.bottom + 2}px) translateX(-50%)`;
+    hint.classList.add('is-on');
+  };
+  // After a scroll the page draws the new length first; read it after that.
+  const showHintSoon = () => requestAnimationFrame(() => requestAnimationFrame(showHint));
+  const onMove = (e: PointerEvent) => {
+    const strip = stripAt(e.target);
+    const current = getArt();
+    if (!strip || !current || e.pointerType === 'touch') {
+      if (aim) hideHint();
+      return;
+    }
+    const index = buttonUnder(strip, e.clientX, current.art);
+    if (aim && aim.strip === strip && aim.index === index) return;
+    aim = { strip, index };
+    showHint();
+  };
+  const onOut = (e: PointerEvent) => {
+    if (aim && stripAt(e.target) && stripAt(e.target) !== stripAt(e.relatedTarget)) hideHint();
+  };
+  // Acting (a click) or the chat moving takes the notes away.
+  const onDownHide = () => hideHint();
+  const onScrollHide = () => hideHint();
+  let acc = 0;
+  let accAt = 0;
+  let scrolledRow: Element | null = null;
+  let scrolledStrip: HTMLElement | null = null;
+  const clear = () => {
+    if (scrolledStrip) {
+      delete scrolledStrip.dataset.scrolled;
+      scrolledStrip.style.removeProperty('background-position');
+    }
+    scrolledStrip = null;
+    scrolledRow = null;
+    onReset();
+  };
+  const rowOf = (strip: HTMLElement) => strip.closest('.chat-message-row') ?? strip.parentElement;
+  const onWheel = (e: WheelEvent) => {
+    const strip = stripAt(e.target);
+    const current = getArt();
+    if (!strip || !current || e.deltaY === 0) return;
+    const index = buttonUnder(strip, e.clientX, current.art);
+    let handled = false;
+    if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= WHEEL_NOTCH) {
+      // A mouse notch: one step.
+      acc = 0;
+      handled = onNudge(index, e.deltaY < 0 ? 1 : -1);
+    } else {
+      // A trackpad: small deltas add up.
+      if (e.timeStamp - accAt > 250) acc = 0;
+      accAt = e.timeStamp;
+      acc += e.deltaY;
+      while (Math.abs(acc) >= WHEEL_STEP) {
+        const dir: 1 | -1 = acc < 0 ? 1 : -1;
+        acc += dir * WHEEL_STEP;
+        handled = onNudge(index, dir) || handled;
+      }
+    }
+    // Mid-gesture (below a whole step) the strip still owns the wheel, as
+    // long as the line has a timeout to scroll.
+    if (!handled && !onNudge(index, null)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (handled) {
+      if (scrolledStrip && scrolledStrip !== strip) clear();
+      scrolledStrip = strip;
+      strip.dataset.scrolled = 'true';
+      scrolledRow = rowOf(strip);
+      aim = { strip, index };
+      showHintSoon();
+    }
+  };
+  const onOver = (e: PointerEvent) => {
+    if (!scrolledRow || (e.target instanceof Node && scrolledRow.contains(e.target))) return;
+    clear();
+  };
+  const onLeave = () => {
+    if (scrolledRow) clear();
+  };
+  el.addEventListener('wheel', onWheel, { passive: false });
+  el.addEventListener('pointerover', onOver);
+  el.addEventListener('pointerleave', onLeave);
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerout', onOut);
+  el.addEventListener('pointerdown', onDownHide);
+  el.addEventListener('scroll', onScrollHide, { passive: true });
+  return () => {
+    el.removeEventListener('wheel', onWheel);
+    el.removeEventListener('pointerover', onOver);
+    el.removeEventListener('pointerleave', onLeave);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerout', onOut);
+    el.removeEventListener('pointerdown', onDownHide);
+    el.removeEventListener('scroll', onScrollHide);
+    hint.remove();
+  };
 }
 
 /**

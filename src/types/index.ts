@@ -370,25 +370,10 @@ export interface ChatDesignSettings {
   link_color?: string;
   // Underline links. Default true.
   link_underline?: boolean;
-  // Two switches in one field: the hover buttons (delete/timeout/ban in the
-  // corner of the hovered message) and drag to tiles (the left-edge handle
-  // lifts the chatter onto action tiles, only while the slider and the line
-  // buttons are off). 'buttons' = hover only, 'drag' = tiles only, 'both',
-  // 'none'. Settings shows them as Message edge and Hover buttons.
-  mod_action_style?: 'buttons' | 'drag' | 'both' | 'none';
-  // Where the grab cursor shows while drag is on: 'row' = anywhere on the
-  // message, 'edge' = only the accent strip at its left edge. A press anywhere
-  // lifts the chatter either way. Default 'row'.
-  mod_drag_cursor?: 'row' | 'edge';
-  // Style of the drag-to-moderate controls: 'column' = vertical bucket column
-  // docked beside chat; 'bar' = horizontal bucket row above the chat. Default
-  // 'column'. (A legacy 'slider' value may persist from older builds; it is
-  // treated as 'column'.)
-  mod_drag_layout?: 'column' | 'bar';
-  // Where the moderator Pin action appears: 'inline' = a quick button next to
-  // Copy on the message, 'drag' = a drop target in the drag-to-moderate gesture,
-  // 'both' = both places. Mod-only either way. Default 'both'.
-  mod_pin_style?: 'inline' | 'drag' | 'both';
+  // The hover buttons (delete/timeout/ban in the corner of the hovered
+  // message): 'buttons' or 'none'. Default 'buttons'. Rust moves the values
+  // left from drag to tiles ('both', 'drag') on load.
+  mod_action_style?: 'buttons' | 'none';
   // The slider on a message's left edge: drag right through the timeout steps
   // to Ban, release to apply. Moderators only. Default true.
   mod_slider?: boolean;
@@ -398,9 +383,14 @@ export interface ChatDesignSettings {
   mod_slider_delete?: boolean;
   mod_slider_timeouts?: number[];
   mod_slider_ban?: boolean;
-  // How much of the message width the slider's steps spread over: half,
-  // four fifths (default) or all of it. Steps stay evenly spaced.
+  // How far the slider's steps sit apart: 18, 22 (default) or 28 px each, the
+  // same at every chat width (a narrow chat squeezes them to fit).
   mod_slider_length?: 'short' | 'medium' | 'long';
+  // How the slider draws a pull: 'preview' (default; the message stays put,
+  // struck through in the step's color, a chip names the step), 'rail' (every
+  // step laid out on a rail over the message) or 'capsule' (the message
+  // slides aside for a capsule that names the step).
+  mod_slider_style?: 'preview' | 'rail' | 'capsule';
   // Line buttons: one-click action buttons at the start of every line a
   // moderator can act on. They take the left edge, so the slider grip is not
   // drawn while they are on. Default false.
@@ -410,11 +400,9 @@ export interface ChatDesignSettings {
   mod_line_delete?: boolean;
   mod_line_timeouts?: number[];
   mod_line_ban?: boolean;
-  // Seconds a drop on the drag-to-moderate Timeout tile times out for.
-  // Default 600.
-  mod_bucket_timeout?: number;
-  // Deprecated: superseded by mod_action_style ('buttons' when this was false).
-  drag_moderation_enabled?: boolean;
+  // When the line buttons show: 'hover' (default; only on the line under the
+  // pointer, pushing its text over) or 'always' (on every line).
+  mod_line_show?: 'hover' | 'always';
 }
 
 export interface HighlightPhrase {

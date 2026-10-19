@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModStep } from '../../services/moderation';
-import { lineAction, lineButtons, lineHit, lineLayout, lineRequest, lineTargetAttrs } from './modLine';
+import { lineAction, lineButtons, lineHit, lineLayout, lineRequest, lineTargetAttrs, nextLength, scrolledTimeout, withLengths } from './modLine';
 
 const STEPS: ModStep[] = [
   { action: 'delete', seconds: null, label: 'Delete' },
@@ -75,5 +75,49 @@ describe('line buttons', () => {
     expect(lineRequest(buttons, 0, d)?.request.action).toEqual({ kind: 'delete', messageId: 'msg-9' });
     expect(lineRequest(buttons, 0, d)?.request.useSavedReason).toBe(false);
     expect(lineRequest(buttons, -1, d)).toBeNull();
+  });
+});
+
+describe('scrolling a line timeout', () => {
+  const LADDER: ModStep[] = [60, 300, 600, 1800, 3600, 86400, 604800].map((s) => ({
+    action: 'timeout' as const,
+    seconds: s,
+    label: `${s}s`,
+  }));
+  const ladder = LADDER.map((s) => s.seconds as number);
+
+  it('walks up and down the ladder and stops at either end', () => {
+    expect(nextLength(600, ladder, 1)).toBe(1800);
+    expect(nextLength(600, ladder, -1)).toBe(300);
+    expect(nextLength(604800, ladder, 1)).toBeNull();
+    expect(nextLength(60, ladder, -1)).toBeNull();
+  });
+
+  it('moves a length between two rungs to the nearer one that way', () => {
+    expect(nextLength(900, ladder, 1)).toBe(1800);
+    expect(nextLength(900, ladder, -1)).toBe(600);
+  });
+
+  it('scrolls the timeout under the pointer, else the first one', () => {
+    expect(scrolledTimeout(STEPS, 1)).toBe(1);
+    expect(scrolledTimeout(STEPS, 0)).toBe(1);
+    expect(scrolledTimeout(STEPS, 2)).toBe(1);
+    expect(scrolledTimeout([STEPS[0], STEPS[2]], 0)).toBe(-1);
+  });
+
+  it('swaps only overridden timeouts, with the ladder label', () => {
+    const out = withLengths(STEPS, { 1: 3600 }, LADDER);
+    expect(out.map((s) => s.seconds)).toEqual([null, 3600, null]);
+    expect(out[1].label).toBe('3600s');
+    expect(withLengths(STEPS, { 1: 42 }, LADDER)[1]).toBe(STEPS[1]);
+    expect(withLengths(STEPS, { 0: 3600 }, LADDER)[0]).toBe(STEPS[0]);
+  });
+
+  it('keeps the strip one width whatever length it shows', () => {
+    const measure = (label: string) => label.length * 7;
+    const fit = ['10m', '30m', '1h', '1w'];
+    const a = lineLayout(lineButtons(STEPS), 14, measure, fit);
+    const b = lineLayout(lineButtons(withLengths(STEPS, { 1: 3600 }, [{ action: 'timeout', seconds: 3600, label: '1h' }])), 14, measure, fit);
+    expect(a.width).toBe(b.width);
   });
 });

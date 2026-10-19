@@ -1,9 +1,7 @@
 // Continuous timeout duration from a drag distance.
 //
-// Lifted out of ModerationDragLayer so the mobile fan-out dials timeouts on the
-// exact same curve as the desktop drag layer. Two implementations of this would
-// drift, and "how long did that drag actually time them out for" is not a thing
-// to be approximate about.
+// The phone fan-out dials timeouts on this curve; formatDuration is shared
+// with the chat's moderation labels.
 
 /** Twitch timeout range: 1s up to the 14-day max; longer is a ban. */
 export const MAX_TIMEOUT_SECS = 1209600;

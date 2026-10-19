@@ -49,6 +49,36 @@ export function lineButtons(steps: ModStep[]): LineButton[] {
   }));
 }
 
+// ---- Scrolling a timeout's length -------------------------------------------
+
+/** The line's steps with each overridden timeout (by its index in `steps`)
+ *  swapped for the step of that length in `ladder` (the slider's timeouts,
+ *  as Rust labels them). An override the ladder does not hold is ignored. */
+export function withLengths(steps: ModStep[], overrides: Record<number, number>, ladder: ModStep[]): ModStep[] {
+  return steps.map((step, i) => {
+    const seconds = overrides[i];
+    if (seconds === undefined || step.action !== 'timeout') return step;
+    return ladder.find((s) => s.seconds === seconds) ?? step;
+  });
+}
+
+/** The timeout a scroll over button `index` changes: that button when it is
+ *  a timeout, otherwise the line's first timeout; -1 when it has none. */
+export function scrolledTimeout(steps: ModStep[], index: number): number {
+  if (steps[index]?.action === 'timeout') return index;
+  return steps.findIndex((s) => s.action === 'timeout');
+}
+
+/** The next length up (`dir` 1) or down (-1) from `current` on the ladder's
+ *  seconds, or null at either end. A length between two rungs moves to the
+ *  nearer one in that direction. */
+export function nextLength(current: number, ladder: number[], dir: 1 | -1): number | null {
+  const sorted = [...new Set(ladder)].sort((a, b) => a - b);
+  if (dir > 0) return sorted.find((s) => s > current) ?? null;
+  for (let i = sorted.length - 1; i >= 0; i--) if (sorted[i] < current) return sorted[i];
+  return null;
+}
+
 /** The action a button key stands for; Delete needs the message. */
 export function lineAction(key: string, messageId: string | undefined): ModAction | null {
   if (key === 'd') return messageId ? { kind: 'delete', messageId } : null;
@@ -97,15 +127,23 @@ export interface LineLayout {
   height: number;
 }
 
-/** Where each button sits for `fontPx` text; `measure` gives a label's width. */
-export function lineLayout(buttons: LineButton[], fontPx: number, measure: (label: string) => number): LineLayout {
+/** Where each button sits for `fontPx` text; `measure` gives a label's width.
+ *  A timeout is as wide as the widest of `fitLabels` too, so scrolling its
+ *  length never changes the strip's width (or moves the line's text). */
+export function lineLayout(
+  buttons: LineButton[],
+  fontPx: number,
+  measure: (label: string) => number,
+  fitLabels: string[] = [],
+): LineLayout {
   const g = LINE_GEOMETRY;
+  const widestFit = fitLabels.reduce((w, label) => Math.max(w, measure(label)), 0);
   const boxes: { x: number; w: number }[] = [];
   let x = 0;
   for (const b of buttons) {
     const w =
       b.kind === 'timeout'
-        ? Math.max(g.iconWidth * fontPx, measure(b.label) + 2 * g.pad * fontPx)
+        ? Math.max(g.iconWidth * fontPx, Math.max(measure(b.label), widestFit) + 2 * g.pad * fontPx)
         : g.iconWidth * fontPx;
     const rounded = Math.round(w);
     boxes.push({ x, w: rounded });

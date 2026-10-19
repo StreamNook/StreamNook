@@ -480,7 +480,7 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
               toast.action?.onClick();
               removeToast(toast.id);
             }}
-            className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs font-medium rounded transition-colors"
+            className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-background text-xs font-medium rounded transition-colors"
           >
             {toast.action.label}
           </button>

@@ -5109,9 +5109,14 @@ html[data-watching] .drops-progress-inline {
   }
 }
 
-/* Mod slider (components/chat/ModSlider.tsx). While a moderator drags a row's
-   left edge, everything in the row slides right by --mod-slide except the
-   track, which stays put and fills the gap with the chosen step. */
+/* Mod slider (components/chat/ModSlider.tsx). The slider drives its row
+   through attributes and variables on the row element: data-mod-slide (the
+   style while a drag runs or springs back), data-mod-phase (drag | return),
+   data-mod-armed / data-mod-applied (the step's action), --mod-slide (the
+   pull), --mod-slide-n (the same, unitless), --mod-origin (where the press
+   landed), --mod-tint (the step's color). Everything that follows the
+   pointer moves by transform, so a drag frame costs no layout and no paint.
+   Every piece the slider adds to the row carries .sn-mod-layer. */
 .sn-mod-grip {
   position: absolute;
   inset-block: 0;
@@ -5127,10 +5132,9 @@ html[data-watching] .drops-progress-inline {
 .sn-mod-grip.is-active {
   cursor: grabbing;
 }
-/* The grip itself: a small capsule with six dots, the drag handle people
-   already know, at the row's left edge while the row is hovered. Centered on
-   the row, so a long message keeps it in reach. The slider's grip and the
-   Tiles handle (ChatMessage) share it. */
+/* The grip itself: a small tab with six dots, the drag handle people already
+   know, at the row's left edge while the row is hovered. Centered on the
+   row, so a long message keeps it in reach. */
 .sn-mod-grip-bar {
   position: absolute;
   top: 50%;
@@ -5148,7 +5152,8 @@ html[data-watching] .drops-progress-inline {
      dark one. The first line is the fallback. */
   --sn-grip-ink: rgba(0, 0, 0, 0.6);
   --sn-grip-ink: oklch(from var(--color-accent) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.8);
-  transition: opacity 150ms ease, scale 150ms ease, background-color 100ms ease;
+  transition: opacity 150ms ease, scale 150ms ease, background-color 100ms ease, border-radius 100ms ease,
+    box-shadow 150ms ease;
 }
 .group:hover > .sn-mod-grip .sn-mod-grip-bar,
 .sn-mod-grip.is-hinted .sn-mod-grip-bar {
@@ -5158,12 +5163,6 @@ html[data-watching] .drops-progress-inline {
 .sn-mod-grip.is-active .sn-mod-grip-bar {
   opacity: 1;
   scale: 1.15;
-}
-/* While a step is armed the grip takes a light tint of that step, so it reads
-   as part of the track rather than a stray tab. */
-.sn-mod-grip.is-armed .sn-mod-grip-bar {
-  background: color-mix(in srgb, var(--mod-tint) 45%, #fff);
-  box-shadow: none;
 }
 /* Six dots, two columns of three, so the edge reads as something to take
    hold of. Each 3 x 4 px tile carries one dot at its center. */
@@ -5176,147 +5175,54 @@ html[data-watching] .drops-progress-inline {
   height: 12px;
   background: radial-gradient(circle, var(--sn-grip-ink) 0.85px, transparent 1.2px) 0 0 / 3px 4px repeat;
 }
-.sn-mod-sliding {
-  overflow: hidden;
-  /* Text pushed past the right edge fades out instead of a hard cut. */
-  -webkit-mask-image: linear-gradient(to left, transparent, #000 24px);
-  mask-image: linear-gradient(to left, transparent, #000 24px);
+
+/* While a drag runs the row sits above its neighbors, so a chip that reaches
+   over the next or the previous line is never covered, and the hover dock
+   steps aside. */
+[data-mod-slide],
+[data-mod-hint] {
+  z-index: 5;
 }
-.sn-mod-sliding > :not(.sn-mod-track) {
-  transform: translateX(var(--mod-slide, 0px));
-  /* Its own layer for the drag: the text moves without repainting. */
-  will-change: transform;
-}
-.sn-mod-sliding > [data-row-dock] {
+[data-mod-slide] > [data-row-dock] {
   visibility: hidden;
 }
-.sn-mod-returning > :not(.sn-mod-track) {
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+/* Chat rows paint inside content-visibility: auto, which clips to the row's
+   box, and the newest rows hold their entrance animation, which makes each a
+   stacking context of its own. The chip reaches over the next line, so the
+   wrapper of a row being dragged paints unclipped and above its neighbors
+   (their dividers included) until it settles. */
+.chat-message-row:has([data-mod-slide], [data-mod-applied], [data-mod-hint]) {
+  content-visibility: visible !important;
+  position: relative;
+  z-index: 6;
 }
-/* The track spans the row; each layer in it follows the pull by transform
-   alone (scale for the fill, translate for the rest), so a drag frame costs no
-   layout and no paint. --mod-ratio is the pull as a share of the row width. */
-.sn-mod-track {
+/* Ink on a step's color: near black on light steps (the amber timeouts),
+   white on dark ones (Delete, Ban). White is the fallback. */
+[data-mod-slide] {
+  --mod-ink: #fff;
+  --mod-ink: oklch(from var(--mod-tint, #888) clamp(0.15, (0.655 - l) * 1000, 1) 0 0);
+  /* A solid step fill: the colors that take white ink (Delete, Ban) a touch
+     darker so the ink reads, the amber ones untouched. */
+  --mod-fill: var(--mod-tint);
+  --mod-fill: oklch(from var(--mod-tint, #888) calc(l - 0.07 * clamp(0, (0.655 - l) * 1000, 1)) c h);
+}
+/* Solid fills. Neither frosts what is behind it: a backdrop filter inside a
+   content-visibility chat row leaves stale copies behind in WebView2 (see
+   LinkPreviewCard), and the chip moves every frame. Without a blur any tint
+   below 100% shows the text behind it crisp, so both paint fully opaque. */
+.sn-mod-rail,
+.sn-mod-chip-in {
+  background-color: var(--color-background-tertiary);
+}
+/* The ban dwell: Ban arms only after a short rest in its zone; meanwhile a
+   red line fills under it. */
+.sn-mod-dwell {
   position: absolute;
-  inset: 0;
-  z-index: 10;
-  overflow: hidden;
-  pointer-events: none;
-}
-.sn-mod-track-fill {
-  position: absolute;
-  inset: 0;
-  transform-origin: left;
-  transform: scaleX(var(--mod-ratio, 0));
-  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-  transition: background-color 100ms ease;
-  will-change: transform;
-}
-.sn-mod-track.is-armed .sn-mod-track-fill {
-  background: color-mix(in srgb, var(--mod-tint) 85%, transparent);
-}
-.sn-mod-track-window {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
-  will-change: transform;
-}
-.sn-mod-track-window-inner {
-  position: absolute;
-  inset: 0;
-  transform: translateX(calc(100% - var(--mod-slide, 0px)));
-  will-change: transform;
-}
-/* Ruler notches at the top and bottom edge where each step starts; never
-   behind the label's text. */
-.sn-mod-tick {
-  --sn-tick: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
-  position: absolute;
-  inset-block: 0;
-  width: 1px;
-  background: linear-gradient(
-    to bottom,
-    var(--sn-tick) 0 5px,
-    transparent 5px calc(100% - 5px),
-    var(--sn-tick) calc(100% - 5px)
-  );
-}
-.sn-mod-track.is-armed .sn-mod-tick {
-  --sn-tick: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.3);
-}
-.sn-mod-track.is-armed .sn-mod-tick.is-passed {
-  --sn-tick: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0 / 0.55);
-}
-.sn-mod-track-cancel {
-  position: absolute;
-  inset-block: 0;
-  left: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: 8px;
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-.sn-mod-track-edge {
-  position: absolute;
-  inset-block: 0;
-  left: 0;
-  width: 10px;
-  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
-  background: linear-gradient(to left, rgba(0, 0, 0, 0.22), transparent);
-  will-change: transform;
-}
-.sn-mod-returning .sn-mod-track-fill {
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), background-color 100ms ease;
-}
-.sn-mod-returning :is(.sn-mod-track-window, .sn-mod-track-window-inner, .sn-mod-track-edge) {
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-/* The label rides back with the row and fades, so it is never cut letter by
-   letter at the left edge. */
-.sn-mod-returning .sn-mod-track-label {
-  opacity: 0;
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 90ms ease-out;
-}
-/* Each step arms with a soft pop (the label is keyed by step). */
-@keyframes sn-mod-label-in {
-  from {
-    opacity: 0;
-    translate: -4px 0;
-    scale: 0.92;
-  }
-}
-.sn-mod-track-label {
-  position: absolute;
-  inset-block: 0;
-  left: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding-inline: 4px 7px;
-  transform: translateX(calc(var(--mod-slide, 0px) - 100%));
-  transform-origin: right center;
-  will-change: transform;
-  /* Ink picked from the tint: near black on light steps (amber timeouts),
-     white on dark ones (Delete, Ban). White stays as the fallback. */
-  color: #fff;
-  color: oklch(from var(--mod-tint) clamp(0.15, (0.655 - l) * 1000, 1) 0 0);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-  animation: sn-mod-label-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-/* Ban arms only after a short rest in its zone: meanwhile red fills the
-   track from the left, under the label of the step a release applies now. */
-.sn-mod-track-arming {
-  position: absolute;
-  inset: 0;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
   background: var(--color-error);
   transform-origin: left;
   animation: sn-mod-ban-fill 350ms linear forwards;
@@ -5327,6 +5233,402 @@ html[data-watching] .drops-progress-inline {
   }
   to {
     transform: scaleX(1);
+  }
+}
+@keyframes sn-mod-pop {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+
+/* --- Preview: the message stays put and shows what is about to happen. --- */
+/* The wash runs from the row's edge to the pointer behind the text, its
+   leading edge soft. */
+.sn-mod-wash {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  z-index: -1;
+  width: 100%;
+  pointer-events: none;
+  transform: translateX(calc(var(--mod-slide, 0px) + var(--mod-origin, 0px) + 12px - 100%));
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--mod-tint) 18%, transparent) calc(100% - 24px),
+    transparent
+  );
+  will-change: transform;
+}
+/* The grip follows the pointer as a small lit handle. */
+[data-mod-slide='preview'] .sn-mod-grip-bar {
+  border-radius: 4px;
+  background: var(--mod-tint);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--mod-tint) 24%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.45);
+  transform: translateX(calc(var(--mod-slide, 0px) + var(--mod-origin, 0px) - 4px));
+  will-change: transform;
+}
+/* No hover scale here: scale applies on top of the translate and would run
+   the handle ahead of the pointer. The lit handle is sized directly. */
+[data-mod-slide='preview'] .sn-mod-grip .sn-mod-grip-bar {
+  scale: 1;
+  width: 9px;
+  height: min(25px, calc(100% - 6px));
+  transform: translateX(calc(var(--mod-slide, 0px) + var(--mod-origin, 0px) - 4.5px));
+}
+[data-mod-slide='preview'] .sn-mod-grip-bar::after {
+  opacity: 0;
+}
+[data-mod-slide='preview'][data-mod-phase='return'] .sn-mod-grip-bar {
+  box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.45);
+}
+/* The text shows the outcome: struck through in the step's color and
+   quieter. It stays for a moment after a release, until the platform's own
+   removal draws the row. */
+:is([data-mod-slide='preview'][data-mod-armed], [data-mod-applied]) [data-mod-body] {
+  opacity: 0.45;
+  text-decoration-line: line-through;
+  text-decoration-color: var(--mod-tint);
+  text-decoration-thickness: 1.5px;
+  transition: opacity 120ms ease;
+}
+/* The chip names the step just over the pointer (under it near the top of
+   the list), at the height of the press, so a tall message keeps it close.
+   Its box has no width; the inside centers on the pointer and stays in the
+   row. */
+.sn-mod-chip {
+  position: absolute;
+  top: calc(var(--mod-press-y, 0px) - 34px);
+  left: 0;
+  z-index: 40;
+  width: 0;
+  pointer-events: none;
+  transform: translateX(
+    clamp(
+      calc(var(--mod-chip-half, 30px) + 4px),
+      calc(var(--mod-slide, 0px) + var(--mod-origin, 0px)),
+      calc(var(--mod-row-w, 100vw) - var(--mod-chip-half, 30px) - 4px)
+    )
+  );
+  will-change: transform;
+}
+.sn-mod-chip.is-below {
+  top: calc(var(--mod-press-y, 0px) + 14px);
+}
+.sn-mod-chip-in {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding-inline: 8px 9px;
+  translate: -50% 0;
+  border-radius: 9999px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px color-mix(in srgb, var(--mod-tint) 35%, transparent),
+    var(--hairline-contour),
+    var(--elev-2);
+  color: color-mix(in srgb, var(--mod-tint) 72%, var(--color-text-primary));
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: box-shadow 100ms ease, color 100ms ease;
+}
+.sn-mod-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  animation: sn-mod-pop 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* The preview's track along the row's bottom edge, from the first step to
+   where the pull stops: one segment per step in its own color, faint ahead
+   of the pointer and lit behind it, and a cap at the end. The lit copy is
+   seen through a window that opens with the pull, by transform alone. */
+.sn-mod-track {
+  position: absolute;
+  bottom: 1px;
+  z-index: 2;
+  height: 3px;
+  pointer-events: none;
+  animation: sn-mod-track-in 140ms ease-out;
+}
+@keyframes sn-mod-track-in {
+  from {
+    opacity: 0;
+  }
+}
+/* The stop: a cap taller than the track. */
+.sn-mod-track::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  bottom: -2px;
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-text-secondary) 70%, transparent);
+}
+.sn-mod-track-base,
+.sn-mod-track-lit,
+.sn-mod-track-lit-in {
+  position: absolute;
+  inset: 0;
+}
+.sn-mod-track-base {
+  opacity: 0.32;
+}
+.sn-mod-track-lit {
+  overflow: hidden;
+  transform: translateX(
+    calc(clamp(0px, var(--mod-slide, 0px) - var(--mod-track-from, 0px), var(--mod-track-len, 0px)) - 100%)
+  );
+  will-change: transform;
+}
+.sn-mod-track-lit-in {
+  transform: translateX(
+    calc(100% - clamp(0px, var(--mod-slide, 0px) - var(--mod-track-from, 0px), var(--mod-track-len, 0px)))
+  );
+  will-change: transform;
+}
+.sn-mod-track-seg {
+  position: absolute;
+  inset-block: 0;
+  border-radius: 1.5px;
+}
+[data-mod-phase='return'] .sn-mod-track {
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+[data-mod-phase='return'] :is(.sn-mod-wash, .sn-mod-chip, .sn-mod-grip-bar) {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease-out, box-shadow 140ms ease-out;
+}
+[data-mod-phase='return'] :is(.sn-mod-wash, .sn-mod-chip) {
+  opacity: 0;
+}
+
+/* --- Rail: every step laid out where it sits, over the message. --- */
+.sn-mod-rail {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 0 9px 9px 0;
+  /* Lit from above and a touch lighter than the row it covers. */
+  background-image: linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08), var(--hairline-contour);
+  animation: sn-mod-rail-in 120ms ease-out;
+}
+@keyframes sn-mod-rail-in {
+  from {
+    opacity: 0;
+  }
+}
+[data-mod-phase='return'] .sn-mod-rail {
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+/* The rail and the capsule take over from the grip while they show. */
+:is([data-mod-slide='rail'], [data-mod-slide='capsule']) .sn-mod-grip-bar {
+  visibility: hidden;
+}
+/* Each mark is a zero-width box at its step's middle; its content centers
+   on it. */
+.sn-mod-rail-mark {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.sn-mod-rail-mark {
+  color: color-mix(in srgb, var(--color-text-secondary) 80%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sn-mod-rail-mark {
+  gap: 3px;
+  transition: color 100ms ease, opacity 100ms ease;
+}
+/* The box has no width, so its contents must not shrink into it. */
+.sn-mod-rail-mark > * {
+  flex-shrink: 0;
+}
+.sn-mod-rail-mark.is-passed {
+  color: var(--color-text-secondary);
+}
+/* The pill carries the armed step's name, so the mark under it steps back. */
+.sn-mod-rail-mark.is-on {
+  opacity: 0;
+}
+.sn-mod-rail-mark .sn-mod-dwell {
+  top: calc(50% + 8px);
+  bottom: auto;
+  left: -16px;
+  right: auto;
+  width: 32px;
+}
+.sn-mod-rail-dot {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sn-mod-rail-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0;
+  display: flex;
+  justify-content: center;
+  transition: transform 130ms cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+.sn-mod-rail-thumb-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  min-width: 22px;
+  flex-shrink: 0;
+  justify-content: center;
+  padding-inline: 6px;
+  translate: 0 -50%;
+  border-radius: 9999px;
+  background: var(--mod-fill);
+  color: var(--mod-ink);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.sn-mod-rail-needle {
+  position: absolute;
+  inset-block: 3px;
+  left: -1px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-text-primary);
+  opacity: 0.45;
+  /* Ticks above and below the label row, never through a label. */
+  -webkit-mask-image: linear-gradient(#000 calc(50% - 12px), transparent calc(50% - 12px) calc(50% + 12px), #000 calc(50% + 12px));
+  mask-image: linear-gradient(#000 calc(50% - 12px), transparent calc(50% - 12px) calc(50% + 12px), #000 calc(50% + 12px));
+  transform: translateX(calc(var(--mod-slide, 0px) + var(--mod-origin, 0px)));
+  will-change: transform;
+}
+[data-mod-phase='return'] .sn-mod-rail-needle {
+  opacity: 0;
+}
+
+/* --- Capsule: the message slides aside for a capsule. --- */
+/* Text pushed past the right edge is cut there, while the chip may still
+   reach over the line above or below (so a clip, not overflow: hidden). No
+   fade mask: WebView2 masked the chip outside the row too, even with
+   mask-clip: no-clip, leaving it faded under the line's divider. */
+[data-mod-slide='capsule'] {
+  clip-path: inset(-48px 0 -48px 0);
+}
+[data-mod-slide='capsule'] > :not(.sn-mod-layer) {
+  transform: translateX(var(--mod-slide, 0px));
+  /* Its own layer for the drag: the text moves without repainting. */
+  will-change: transform;
+}
+/* The capsule is a full-width pill whose right end follows the pull, seen
+   through a window that rounds its left end. */
+.sn-mod-cap-clip {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  right: 0;
+  z-index: 10;
+  height: 22px;
+  margin-top: -11px;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 9999px 0 0 9999px;
+}
+.sn-mod-cap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  transform: translateX(calc(var(--mod-slide, 0px) - 7px - 100%));
+  background: color-mix(in srgb, var(--color-accent) 45%, var(--color-background-tertiary));
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18), var(--hairline-contour);
+  will-change: transform;
+}
+/* A tinted body with a lit head where the name sits; only Ban is solid. */
+[data-mod-slide='capsule'][data-mod-armed] .sn-mod-cap {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--mod-fill) 30%, var(--color-background-tertiary)) calc(100% - 128px),
+    var(--mod-fill) calc(100% - 64px)
+  );
+}
+[data-mod-slide='capsule'][data-mod-armed='ban'] .sn-mod-cap {
+  background: var(--mod-fill);
+}
+.sn-mod-cap-dwell {
+  position: absolute;
+  inset: 0;
+  background: oklch(from var(--color-error) calc(l - 0.07) c h);
+  transform-origin: left;
+  animation: sn-mod-ban-fill 350ms linear forwards;
+}
+/* The step name, at the capsule's right end, rolls a line per step. It fades
+   in once the capsule is long enough to hold it. */
+.sn-mod-odo {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  height: 14px;
+  margin-top: -7px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  opacity: clamp(0, calc((var(--mod-slide-n, 0) - 26) / 12), 1);
+}
+[data-mod-slide='capsule'][data-mod-armed] .sn-mod-odo {
+  color: var(--mod-ink);
+}
+.sn-mod-odo-stack {
+  display: grid;
+  transition: transform 190ms cubic-bezier(0.3, 1.35, 0.5, 1);
+}
+.sn-mod-odo-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 14px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 14px;
+  white-space: nowrap;
+}
+/* Springs back with a little overshoot. */
+[data-mod-slide='capsule'][data-mod-phase='return'] > :not(.sn-mod-layer),
+[data-mod-phase='return'] .sn-mod-cap {
+  transition: transform 240ms cubic-bezier(0.3, 1.25, 0.5, 1), background-color 110ms ease;
+}
+[data-mod-phase='return'] .sn-mod-odo {
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.sn-mod-chip-label, .sn-mod-rail-thumb-in, .sn-mod-rail) {
+    animation: none;
+  }
+  :is(.sn-mod-rail-thumb, .sn-mod-odo-stack) {
+    transition-duration: 1ms;
   }
 }
 /* Line buttons (components/chat/ModLineButtons.tsx, chat/lineArt.ts): one
@@ -5348,6 +5650,67 @@ html[data-watching] .drops-progress-inline {
   user-select: none;
   -webkit-user-select: none;
 }
+/* Show: On hover. Only the line under the pointer shows its buttons, and
+   they push its text over; every other line keeps no room for them. The
+   strip keeps its height either way, so a line never changes height. */
+[data-line-show='hover'] .chat-message-row:not(:hover) .sn-mod-line {
+  width: 0;
+  margin-right: 0;
+}
+[data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+  animation: sn-line-in 120ms ease-out;
+}
+@keyframes sn-line-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+    animation: none;
+  }
+}
+/* The line buttons' scroll notes (chat/lineArt.ts bindLineWheel): while the
+   pointer is on a line's buttons, the length a scroll up reaches sits just
+   above the timeout and the one a scroll down reaches just below, like the
+   next rungs of a picker wheel. Labels, not buttons: they take no pointer.
+   One pair for the page, fixed to the screen and placed by transform. */
+.sn-line-hint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 70;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease-out;
+}
+.sn-line-hint.is-on {
+  opacity: 1;
+}
+.sn-line-hint-note {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding-inline: 5px 6px;
+  border-radius: 9999px;
+  background-color: var(--color-background-tertiary);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle), var(--elev-2);
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  will-change: transform;
+}
+/* An explicit rule: a class's display would otherwise win over [hidden]. */
+.sn-line-hint-note[hidden] {
+  display: none;
+}
+
 /* The step chips compress in place rather than wrap (fitHeaderDensity). */
 .sn-steps:is([data-density='1'], [data-density='2']) {
   gap: 4px;
@@ -5364,17 +5727,6 @@ html[data-watching] .drops-progress-inline {
 }
 .sn-steps[data-density='2'] .sn-step-toggle {
   padding-inline: 8px;
-}
-
-/* Held-in-drag sweep: a light band crosses the message, then sits fully
-   off-screen so the loop reset is never visible. */
-@keyframes sn-held-sweep {
-  0% {
-    transform: translateX(-130%);
-  }
-  100% {
-    transform: translateX(130%);
-  }
 }
 
 /* Shimmer text effect for subtle hints */
