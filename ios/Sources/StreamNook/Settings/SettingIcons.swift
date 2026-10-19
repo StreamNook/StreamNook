@@ -111,6 +111,7 @@ enum SettingIcons {
         "chat_highlights.badges": "checkmark.seal.fill",
         "chat_commands.user_commands": "terminal",
         "chat_design.mod_slider": "hand.draw",
+        "chat_design.mod_hold_buttons": "hand.tap",
         "chat_design.mod_slider_delete": "list.number",
         "moderation.timeout_presets": "timer",
         "moderation.card_actions": "hand.raised",

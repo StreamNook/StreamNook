@@ -55,6 +55,9 @@ const READ_ONLY_HIDES: FanAction[] = ['reply'];
 /** A non-Twitch room has no profile the phone can show: the sheet is Helix-backed. */
 const OTHER_PLATFORM_HIDES: FanAction[] = ['profile'];
 const OTHER_PLATFORM_READ_ONLY_HIDES: FanAction[] = ['reply', 'profile'];
+/** What Hold menu buttons off takes out of the fan (Settings > Moderation); the
+ *  user card's Moderate row and the swipe keep them. */
+const MOD_TILES: FanAction[] = ['delete', 'timeout', 'ban'];
 
 /** The mention that buzzed last. The watch layer keeps its pane mounted under
  *  the mini player while the Chats screen shows another, so one mention reaches
@@ -593,7 +596,9 @@ export const MobileChatPane: React.FC<{
 
   // Swiping a row to moderate it is on where moderator tools are, never in
   // the read-only overlay.
-  const swipeOn = modToolsArmed && !!broadcasterId && !readOnly;
+  const swipeSetting = useAppStore((s) => s.settings.chat_design?.mod_slider ?? true);
+  const holdModButtons = useAppStore((s) => s.settings.chat_design?.mod_hold_buttons ?? true);
+  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !readOnly;
   const press = useLongPressDrag({
     resolve: resolveRow,
     onArm: onArmFan,
@@ -671,6 +676,19 @@ export const MobileChatPane: React.FC<{
     },
     [messages, getMessageId],
   );
+
+  // What the fan leaves out: by platform and the read-only overlay, and the mod
+  // tiles while Hold menu buttons is off.
+  const fanHides = useMemo(() => {
+    const base = isTwitchRoom
+      ? readOnly
+        ? READ_ONLY_HIDES
+        : undefined
+      : readOnly
+        ? OTHER_PLATFORM_READ_ONLY_HIDES
+        : OTHER_PLATFORM_HIDES;
+    return holdModButtons ? base : [...(base ?? []), ...MOD_TILES];
+  }, [isTwitchRoom, readOnly, holdModButtons]);
 
   // Out of sight, nothing of this room stays up: the fan and the sheets draw
   // outside the pane, so hiding the pane would not hide them.
@@ -896,15 +914,7 @@ export const MobileChatPane: React.FC<{
         target={fanTarget}
         isModerator={modToolsArmed}
         canPin={modToolsArmed && !!broadcasterId}
-        hide={
-          isTwitchRoom
-            ? readOnly
-              ? READ_ONLY_HIDES
-              : undefined
-            : readOnly
-              ? OTHER_PLATFORM_READ_ONLY_HIDES
-              : OTHER_PLATFORM_HIDES
-        }
+        hide={fanHides}
         onCommit={runFanAction}
         quickSeconds={quickSeconds}
         onCancel={closeFan}

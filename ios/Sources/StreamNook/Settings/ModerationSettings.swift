@@ -74,12 +74,12 @@ struct ModerationSettings: View {
             }
     }
 
-    // MARK: Swipe to moderate
+    // MARK: Moderating messages: the swipe and the hold menu, each on or off
 
     private var swipeBlock: some View {
-        SettingsBlock(title: "Swipe to Moderate", detail: "Swipe right on a message in a channel you moderate to delete it, time its sender out or ban them.") {
+        SettingsBlock(title: "Moderating Messages", detail: "Two ways to delete, time out or ban from a message in a channel you moderate. With both off, the user card’s Moderate row still has every action.") {
             ToggleRow(title: "Swipe to moderate", path: "chat_design.mod_slider", fallback: true,
-                      detail: "Pull further for a longer timeout. Ban is at the end and needs a short hold; let go early to cancel.") {
+                      detail: "Swipe right on a message. Pull further for a longer timeout; Ban is at the end and needs a short hold, and letting go early cancels.") {
                 NestedChoice(title: "Style", path: "chat_design.mod_slider_style",
                              choices: [Choice("Preview", "preview"), Choice("Rail", "rail"), Choice("Capsule", "capsule")],
                              fallback: "preview")
@@ -87,6 +87,7 @@ struct ModerationSettings: View {
                              choices: [Choice("Short", "short"), Choice("Medium", "medium"), Choice("Long", "long")],
                              fallback: "medium")
             }
+            if store.bool("chat_design.mod_slider", true) {
             WideRow(title: "Steps", detail: "What the swipe offers, mildest first. Tap a length to take it out.",
                     paths: ["chat_design.mod_slider_delete", "chat_design.mod_slider_timeouts", "chat_design.mod_slider_ban"]) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -124,6 +125,9 @@ struct ModerationSettings: View {
                 }
                 .padding(.top, 10)
             }
+            }
+            ToggleRow(title: "Hold menu buttons", path: "chat_design.mod_hold_buttons", fallback: true,
+                      detail: "Delete, Timeout and Ban in the menu that opens when you press and hold a message.")
         }
     }
 

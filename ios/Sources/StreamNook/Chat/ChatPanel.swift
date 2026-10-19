@@ -155,7 +155,7 @@ struct ChatPanel: View {
                                 .padding(.top, rooms?.activePins.isEmpty ?? true ? topGap : 0)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { votesBox = $0 }
                         }
-                        if !overlay, session.moderatorTools, session.roomID != nil, !hintLearned {
+                        if !overlay, session.moderatorTools, session.style.swipeModerate, session.roomID != nil, !hintLearned {
                             SwipeHint { hintLearned = true }
                                 .padding(.top, 8)
                         }
@@ -310,7 +310,10 @@ struct ChatListHost: UIViewRepresentable {
             if twitch { buckets.append(.profile) }
             buckets.append(.copy)
             if session.moderatorTools, twitch, session.roomID != nil {
-                buckets += [.delete, .timeout, .ban, .pin]
+                // Delete, Timeout and Ban only while Hold menu buttons is on (Settings > Moderation);
+                // with it off they stay on the user card's Moderate row and the swipe.
+                if session.style.holdModButtons { buckets += [.delete, .timeout, .ban] }
+                buckets.append(.pin)
             }
             let color = ChatTheme.color(message.metadata.view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
             return (buckets, message.shownName, color)

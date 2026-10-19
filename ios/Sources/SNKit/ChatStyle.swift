@@ -55,6 +55,11 @@ public struct ChatStyle: Sendable, Equatable {
     public var showChatGifs = true
     public var gifScale: Double = 1
     public var hideSharedChat = false
+    /// The press-and-hold menu offers Delete, Timeout and Ban where the viewer moderates
+    /// (`chat_design.mod_hold_buttons`).
+    public var holdModButtons = true
+    /// Swipe to moderate is on (`chat_design.mod_slider`).
+    public var swipeModerate = true
     public var paintShadows = "all"
 
     /// How highlight matches and built-in event highlights dress their row
@@ -186,6 +191,8 @@ public struct ChatStyle: Sendable, Equatable {
         showChatGifs = bool("show_chat_gifs") ?? showChatGifs
         gifScale = num("gif_scale").map { min(max($0, 0.5), 2) } ?? gifScale
         hideSharedChat = bool("hide_shared_chat") ?? hideSharedChat
+        holdModButtons = bool("mod_hold_buttons") ?? holdModButtons
+        swipeModerate = bool("mod_slider") ?? swipeModerate
     }
 
     /// Emotes animate unless the setting asks for stills; a touch never hovers, so `hover`

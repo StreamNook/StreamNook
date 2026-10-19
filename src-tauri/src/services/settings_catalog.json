@@ -2512,7 +2512,7 @@
   },
   {
    "page": "moderation",
-   "section": "Swipe to Moderate",
+   "section": "Moderating Messages",
    "title": "Swipe to moderate",
    "paths": [
     "chat_design.mod_slider"
@@ -2530,7 +2530,7 @@
   },
   {
    "page": "moderation",
-   "section": "Swipe to Moderate",
+   "section": "Moderating Messages",
    "title": "Style",
    "paths": [
     "chat_design.mod_slider_style"
@@ -2546,7 +2546,7 @@
   },
   {
    "page": "moderation",
-   "section": "Swipe to Moderate",
+   "section": "Moderating Messages",
    "title": "Length",
    "paths": [
     "chat_design.mod_slider_length"
@@ -2561,7 +2561,7 @@
   },
   {
    "page": "moderation",
-   "section": "Swipe to Moderate",
+   "section": "Moderating Messages",
    "title": "Steps",
    "paths": [
     "chat_design.mod_slider_delete",
@@ -2576,6 +2576,24 @@
     "swipe lengths",
     "delete",
     "ban"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "Moderating Messages",
+   "title": "Hold menu buttons",
+   "paths": [
+    "chat_design.mod_hold_buttons"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Delete, Timeout and Ban in the menu that opens when you press and hold a message.",
+   "aliases": [
+    "hold menu",
+    "press and hold",
+    "long press",
+    "mod tiles",
+    "fan"
    ]
   },
   {
