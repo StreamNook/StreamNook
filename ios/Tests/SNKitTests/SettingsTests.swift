@@ -100,3 +100,54 @@ private final class SettingsCore: CoreBridge, @unchecked Sendable {
         }
     }
 }
+
+/// FakeCore answers the settings pages' reads and writes, so a fixture drive can open a page,
+/// change a setting and see its reset arrow, without the real core.
+@Suite struct FakeSettingsTests {
+    @MainActor @Test func aSettingsPageReadsAndWritesThroughTheFake() async throws {
+        let core = FakeCore(fixtures: FakeFixtures(signedIn: true))
+        try core.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "t",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        let store = SettingsStore(core: core)
+        var errors: [String] = []
+        store.onError = { errors.append($0) }
+
+        await store.refresh()
+        #expect(store.loaded)
+        #expect(store.string("theme") == "winters-glass")
+        #expect(!store.isChanged(["chat_design.mod_slider"]))
+
+        await store.set("chat_design.mod_slider", false)
+        #expect(!store.bool("chat_design.mod_slider", true))
+        #expect(store.isChanged(["chat_design.mod_slider"]))
+        #expect(store.string("theme") == "winters-glass", "a write keeps the rest of the settings")
+
+        await store.reset(["chat_design.mod_slider"])
+        #expect(store.bool("chat_design.mod_slider", true))
+        #expect(!store.isChanged(["chat_design.mod_slider"]))
+
+        let path = "moderation.card_actions"
+        try await store.edit(path, .add())
+        await store.refresh()
+        let id = try #require(store.list(path).first?["id"] as? String)
+        try await store.edit(path, .update(id: id, ["label": "Spoilers", "kind": "timeout"]))
+        await store.refresh()
+        #expect(store.list(path).first?["label"] as? String == "Spoilers")
+        #expect(store.isChanged([path]))
+        try await store.edit(path, .remove(id: id))
+        await store.refresh()
+        #expect(store.list(path).isEmpty)
+        #expect(errors.isEmpty, "\(errors)")
+    }
+
+    @Test func listEditsFollowTheCoresOps() {
+        let rows: [Any] = [["id": "a"], ["id": "b"], ["id": "c"]]
+        let moved = FakeFixtures.edited(rows, ["op": "move", "id": "c", "to": 0])
+        #expect(moved.compactMap { ($0 as? [String: Any])?["id"] as? String } == ["c", "a", "b"])
+        let toggled = FakeFixtures.edited(["x"], ["op": "toggle", "value": "y"])
+        #expect(toggled as? [String] == ["x", "y"])
+        #expect(FakeFixtures.edited(toggled, ["op": "toggle", "value": "x"]) as? [String] == ["y"])
+        #expect(FakeFixtures.edited(["x", "y"], ["op": "remove", "value": "x"]) as? [String] == ["y"])
+        #expect(FakeFixtures.edited(rows, ["op": "remove", "index": 1]).count == 2)
+    }
+}
