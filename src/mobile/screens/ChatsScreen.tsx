@@ -133,6 +133,27 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   // a drag there is always a scroll.
   const exitChats = useMobileNavStore((s) => s.exitChats);
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  // Where the composer (and any streak banner over it) starts, for the mini
+  // player's rest: it follows the banners in and out and the keyboard.
+  const setChatsFloor = useMobileNavStore((s) => s.setChatsFloor);
+  const hasRooms = tabs.length > 0;
+  useEffect(() => {
+    const el = shown && hasRooms ? sheetRef.current?.querySelector<HTMLElement>('[data-chat-composer]') : null;
+    if (!el) {
+      setChatsFloor(null);
+      return;
+    }
+    const read = () => setChatsFloor(Math.round(window.innerHeight - el.getBoundingClientRect().top));
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    window.addEventListener('resize', read);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', read);
+      setChatsFloor(null);
+    };
+  }, [shown, hasRooms, activeChannel, setChatsFloor]);
   const drag = useRef<{
     id: number;
     x: number;

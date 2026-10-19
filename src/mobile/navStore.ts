@@ -43,6 +43,11 @@ interface MobileNavState {
   /** The tab Chats was opened from: Chats is a full-screen surface with no
    *  tab bar, and leaving it (the grabber, a slide down, back) returns here. */
   chatsReturnTab: MobileTab;
+  /** How far above the bottom edge the Chats composer (and any banner over
+   *  it) starts while a chat shows there, in CSS px; null elsewhere. Chats has
+   *  no tab bar, so the mini player rests above this instead. */
+  chatsFloor: number | null;
+  setChatsFloor: (px: number | null) => void;
   /** Leaves Chats for the tab it was opened from. */
   exitChats: () => void;
   setTab: (tab: MobileTab) => void;
@@ -79,6 +84,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   playerMode: 'full',
   focusDropCampaignId: null,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
+  chatsFloor: null,
+  setChatsFloor: (px) => set((s) => (s.chatsFloor === px ? s : { chatsFloor: px })),
 
   setTab: (tab) =>
     set((s) =>

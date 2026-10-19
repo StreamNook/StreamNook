@@ -159,7 +159,12 @@ struct ChatPanel: View {
                     }
                 }
             if !overlay {
+                // The line between the rows and what belongs to the composer: the streak banners
+                // sit under it, directly over the field, since sharing sends what is typed there.
                 VStack(spacing: 0) {
+                    Rectangle()
+                        .fill(SN.borderSubtle)
+                        .frame(height: 1)
                     if let rooms {
                         StreakBanners(rooms: rooms, session: session)
                     }
