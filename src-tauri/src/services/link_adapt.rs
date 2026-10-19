@@ -550,6 +550,14 @@ pub fn snapshot() -> Option<(String, f64)> {
     Some((s.gov.ladder()[s.gov.current()].name.clone(), s.gov.cushion()))
 }
 
+/// The codec family of the rung playing now (`hvc1`, `av01`, `avc1`), so a
+/// player that cannot decode it can say which one failed.
+pub fn playing_family() -> Option<String> {
+    let guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let s = guard.as_ref()?;
+    Some(s.gov.ladder().get(s.gov.current())?.family.clone())
+}
+
 /// Extra seconds behind the live edge to keep (0 with no session).
 pub fn extra_cushion() -> f64 {
     SESSION

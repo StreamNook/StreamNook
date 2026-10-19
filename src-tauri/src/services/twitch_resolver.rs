@@ -30,15 +30,70 @@ use std::time::{Duration, Instant};
 /// returns a codec outside this list, and H.264 is always kept in it.
 static CODEC_PREF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Codec families the player failed to decode this session although the probe
+/// said it could. Kept out of `CODEC_PREF` across re-reports, so a settings
+/// save never brings a failing codec back.
+static FAILED_CODECS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Set the allowed/decodable video codec families ("av1" | "hevc" | "h264"),
 /// most-preferred first. H.264 is always appended so an undecodable codec can never
 /// be the only eligible option. Called from the `set_codec_preference` command.
-pub fn set_codec_preference(mut prefs: Vec<String>) {
-    prefs.retain(|s| matches!(s.as_str(), "av1" | "hevc" | "h264"));
+pub fn set_codec_preference(prefs: Vec<String>) {
+    let failed = FAILED_CODECS.lock().unwrap().clone();
+    *CODEC_PREF.lock().unwrap() = allowed_codecs(prefs, &failed);
+}
+
+/// `prefs` limited to known families and stripped of every `failed` one, with
+/// H.264 always present.
+fn allowed_codecs(mut prefs: Vec<String>, failed: &[String]) -> Vec<String> {
+    prefs.retain(|s| matches!(s.as_str(), "av1" | "hevc" | "h264") && !failed.contains(s));
     if !prefs.iter().any(|s| s == "h264") {
         prefs.push("h264".to_string());
     }
-    *CODEC_PREF.lock().unwrap() = prefs;
+    prefs
+}
+
+/// The video codec family named in a CODECS list or a MIME type that selection
+/// can step away from: AV1 or HEVC. None for H.264, audio or nothing known,
+/// since H.264 is the floor every tier falls back to.
+pub fn avoidable_codec_family(codecs: &str) -> Option<&'static str> {
+    let list = codecs.split_once("codecs=").map_or(codecs, |(_, c)| c);
+    list.split(',')
+        .map(|c| c.trim().trim_matches(|ch| ch == '"' || ch == '\''))
+        .find_map(|c| match codec_family(Some(c)) {
+            family @ ("av1" | "hevc") => Some(family),
+            _ => None,
+        })
+}
+
+/// A player could not decode what it was given: the failed SourceBuffer type
+/// when it got that far (`mime_type`), else the codecs it was serving. The
+/// family named there leaves selection for the session; returned so the caller
+/// can decide whether a restart gets away from it. None for H.264, audio or
+/// nothing known: there is nothing better to fall back to.
+pub fn fail_codec(mime_type: Option<&str>, serving: Option<&str>) -> Option<&'static str> {
+    let family = match mime_type {
+        Some(mime) => avoidable_codec_family(mime),
+        None => serving.and_then(avoidable_codec_family),
+    }?;
+    avoid_codec_family(family);
+    Some(family)
+}
+
+/// Stop selecting `family` for the rest of the session: the player could not
+/// decode it here. H.264 is never dropped.
+pub fn avoid_codec_family(family: &str) {
+    if family == "h264" {
+        return;
+    }
+    let mut failed = FAILED_CODECS.lock().unwrap();
+    if !failed.iter().any(|f| f == family) {
+        failed.push(family.to_string());
+        log::warn!("[Resolver] {family} failed to decode here; not selecting it again this session");
+    }
+    let mut pref = CODEC_PREF.lock().unwrap();
+    let kept = allowed_codecs(pref.clone(), &failed);
+    *pref = kept;
 }
 
 /// A selection preference from the codecs a phone decodes in hardware, as its
@@ -83,9 +138,27 @@ pub fn refresh_device_codecs(settings: &crate::models::settings::Settings) {
 }
 
 /// Whether a variant can play here: audio, or video in an allowed codec.
-#[cfg(target_os = "ios")]
 fn decodable(v: &Variant, pref: &[String]) -> bool {
     v.height.is_none() || codec_rank(v, pref) != usize::MAX
+}
+
+/// The renditions of `master` this device may play: audio, and video in a
+/// codec it decodes and the AV1 & h265 setting allows. StreamNook serves one
+/// rendition with no player-side fallback, so a tier outside that list is a
+/// black picture; it never reaches `best`, a quality pick or the quality menu.
+/// Twitch serves its 1440p tier in HEVC, so a device without an HEVC decoder
+/// plays the 1080p H.264 tier as `best` instead of failing on 1440p.
+pub fn playable_variants(master: &str) -> Vec<Variant> {
+    retain_playable(parse_master(master), &effective_codec_pref())
+}
+
+/// `variants` without the video tiers `pref` rules out. A master with no
+/// playable video at all is kept whole: trying it beats serving audio only.
+fn retain_playable(variants: Vec<Variant>, pref: &[String]) -> Vec<Variant> {
+    if !variants.iter().any(|v| v.height.is_some() && decodable(v, pref)) {
+        return variants;
+    }
+    variants.into_iter().filter(|v| decodable(v, pref)).collect()
 }
 
 /// The effective preference (never empty: defaults to H.264-only before the
@@ -477,10 +550,9 @@ fn source_index(variants: &[Variant]) -> Option<usize> {
 /// "best" = the source quality, but in the most-preferred DECODABLE codec offered at
 /// that same resolution. This is the `enhanced_codecs` win: AV1/HEVC are more
 /// efficient at equal resolution and ship as CMAF, so picking them also routes the
-/// stream through the low-latency origin. It never trades resolution for codec, and
-/// when no allowed codec is offered at the source resolution it returns the source
-/// rendition unchanged (so behavior is identical to before until the frontend
-/// reports AV1/HEVC as decodable).
+/// stream through the low-latency origin. It never trades resolution for codec.
+/// The resolver hands it `playable_variants`, so a source tier in a codec this
+/// device cannot play is already gone and the tallest playable tier is the source.
 fn best_index(variants: &[Variant]) -> Option<usize> {
     best_index_with(variants, &effective_codec_pref())
 }
@@ -743,7 +815,7 @@ fn build(
     status: PlaybackStatus,
     quality: &str,
 ) -> Result<ResolvedLive> {
-    let variants = parse_master(&master);
+    let variants = playable_variants(&master);
     if variants.is_empty() {
         // Log enough to tell apart the failure modes (empty body, error page,
         // unrecognized master shape) without dumping the whole playlist.
@@ -906,7 +978,7 @@ pub async fn resolve_vod(
     quality: &str,
 ) -> Result<ResolvedMedia> {
     let master = fetch_vod_master(vod_id, oauth_token).await?;
-    let variants = parse_master(&master);
+    let variants = playable_variants(&master);
     if variants.is_empty() {
         return Err(anyhow!("VOD {}: master playlist had no variants", vod_id));
     }
@@ -1447,6 +1519,80 @@ https://x/av1-720.m3u8\n",
         assert!(prefer_codec_at(&v, Some(720), Some(60.0), &with_hevc).is_some());
         let no_hevc = vec!["h264".to_string()];
         assert!(prefer_codec_at(&v, Some(720), Some(60.0), &no_hevc).is_none());
+    }
+
+    /// A geo-blocked viewer's master after the region unlock: their own H.264
+    /// tiers, with the region relay's 1440p HEVC source tier grafted on. The
+    /// 1080p tier is a transcode, so the grafted tier is the only source.
+    const MASTER_REGION_UNLOCKED: &str = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",IVS-NAME=\"audio_only\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/audio.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS=\"avc1.4D402A,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/1080.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=3400000,RESOLUTION=1280x720,CODECS=\"avc1.4D401F,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"720p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/720.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=2560x1440,CODECS=\"hev1.1.6.L150.90,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1440p60\",IVS-VARIANT-SOURCE=\"source\"\n\
+https://relay.example/quality-media?region=weur&u=1440\n";
+
+    #[test]
+    fn a_source_tier_this_device_cannot_decode_never_plays() {
+        let pref = s(&["av1", "h264"]); // no HEVC decoder
+        let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &pref);
+        let i = best_index_with(&v, &pref).unwrap();
+        assert_eq!(v[i].name, "1080p60", "best plays the tallest H.264 tier");
+        let menu = quality_names(&v);
+        assert!(!menu.iter().any(|q| q == "1440p60"), "the menu does not offer it: {menu:?}");
+        let (j, label) = select_variant(&v, "1440p60").unwrap();
+        assert_eq!((v[j].height, label.as_str()), (Some(1080), "1080p60"), "a saved 1440p pick lands on 1080p");
+    }
+
+    #[test]
+    fn a_source_tier_this_device_decodes_stays_best() {
+        let pref = s(&["hevc", "h264"]);
+        let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &pref);
+        let i = best_index_with(&v, &pref).unwrap();
+        assert_eq!(v[i].name, "1440p60");
+        assert!(quality_names(&v).iter().any(|q| q == "1440p60"));
+    }
+
+    #[test]
+    fn a_master_with_no_playable_video_is_kept_whole() {
+        let only_hevc = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",IVS-NAME=\"audio_only\"\n\
+https://x/audio.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=2560x1440,CODECS=\"hev1.1.6.L150.90,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1440p60\",IVS-VARIANT-SOURCE=\"source\"\n\
+https://x/1440.m3u8\n";
+        let pref = s(&["h264"]);
+        let v = retain_playable(parse_master(only_hevc), &pref);
+        assert_eq!(v.len(), 2, "trying HEVC beats serving audio only");
+        let (i, _) = select_variant(&v, "best").unwrap();
+        assert_eq!(v[i].height, Some(1440));
+    }
+
+    #[test]
+    fn a_failed_codec_stays_off_the_list_and_h264_never_leaves() {
+        let failed = s(&["hevc"]);
+        assert_eq!(allowed_codecs(s(&["av1", "hevc", "h264"]), &failed), ["av1", "h264"]);
+        assert_eq!(allowed_codecs(s(&["hevc"]), &failed), ["h264"]);
+        assert_eq!(allowed_codecs(s(&["av1", "h264"]), &s(&["h264"])), ["av1", "h264"]);
+    }
+
+    #[test]
+    fn the_failed_family_is_read_from_a_mime_type_or_a_codecs_list() {
+        assert_eq!(avoidable_codec_family("video/mp4;codecs=hvc1.1.6.L150.90"), Some("hevc"));
+        assert_eq!(avoidable_codec_family("video/mp4; codecs=\"av01.0.08M.08\""), Some("av1"));
+        assert_eq!(avoidable_codec_family("hev1.1.6.L150.90,mp4a.40.2"), Some("hevc"));
+        assert_eq!(avoidable_codec_family("mp4a.40.2,hev1.1.6.L150.90"), Some("hevc"));
+        assert_eq!(avoidable_codec_family("video/mp4;codecs=avc1.4D402A"), None, "H.264 is the floor");
+        assert_eq!(avoidable_codec_family("audio/mp4;codecs=mp4a.40.2"), None);
+        assert_eq!(avoidable_codec_family(""), None);
+    }
+
+    #[test]
+    fn a_failure_on_h264_or_nothing_known_drops_no_codec() {
+        assert_eq!(fail_codec(Some("video/mp4;codecs=avc1.64002A"), Some("hvc1")), None, "the failed type wins");
+        assert_eq!(fail_codec(None, Some("avc1")), None);
+        assert_eq!(fail_codec(None, None), None);
     }
 
     #[test]

@@ -572,6 +572,11 @@ pub fn set_solo_session(channel: Option<String>) {
     *SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = channel;
 }
 
+/// The live channel the solo relay serves, if any.
+pub fn solo_channel() -> Option<String> {
+    SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// True while the solo relay is serving a live channel (the precondition for
 /// a plugin to swap its upstream).
 pub fn solo_session_active() -> bool {

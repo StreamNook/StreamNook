@@ -1900,6 +1900,7 @@ pub fn run() {
             get_relay_live_distance,
             set_experimental_low_latency,
             set_codec_preference,
+            report_solo_codec_failure,
             // Allowed only by mobile-commands.toml (a phone caps its rendition
             // height to what the panel can show); registering it on desktop
             // would just be a command the ACL denies.

@@ -35,6 +35,7 @@ import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
+import { isCodecFailure } from '../../utils/codecFailure';
 import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
 
 // The earning gate (drops progress, channel points, watch time) is Rust's
@@ -114,6 +115,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     let lowLatency = false;
     let fellBack = false;
     let reloads = 0;
+    // Whether the core was already told this URL's codec failed to decode:
+    // once per URL, so a fallback or a rebuild never asks again.
+    let codecReported = false;
     // Still asking the core which route this stream is on; nothing built yet.
     let probing = true;
     // A restart or quality switch is cycling the relay (isRestartingStream).
@@ -373,14 +377,49 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       };
       armStartGiveUp();
 
+      // A codec the probe passed can still fail on this phone. The core then
+      // drops it from selection and says whether restarting gets away from it,
+      // so the stream comes back on a tier the phone plays instead of reloading
+      // the same one into an error. hls.js names the failed type only in the
+      // non-fatal add-codec error just before the fatal one.
+      let failedCodecMime: string | null = null;
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!live()) return;
-        if (!data.fatal) return;
+        if (!data.fatal) {
+          if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
+            failedCodecMime = data.mimeType ?? null;
+          }
+          return;
+        }
         if (recoverFromSequenceMismatch(hls, data)) {
           Logger.warn('[MobilePlayer] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
           return;
         }
         Logger.warn('[MobilePlayer] fatal hls error:', data.type, data.details);
+        if (
+          data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+          !codecReported &&
+          video &&
+          isCodecFailure(data.details, video, firstFrame)
+        ) {
+          codecReported = true;
+          invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })
+            .catch(() => false)
+            .then((restart) => {
+              if (!live()) return;
+              if (!restart) {
+                fail('media');
+                return;
+              }
+              Logger.warn('[MobilePlayer] codec failed to decode; restarting on a tier this phone plays');
+              void useAppStore
+                .getState()
+                .restartStream({ quiet: true })
+                .then(() => useAppStore.getState().addToast('Switched to a quality this phone can play', 'info'));
+            });
+          return;
+        }
         fail(
           data.type === Hls.ErrorTypes.NETWORK_ERROR
             ? 'network'
