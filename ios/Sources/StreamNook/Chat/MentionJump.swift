@@ -62,13 +62,13 @@ extension ChatRooms {
 
     private func bringIntoView(_ entry: MentionEntry) async {
         // The core's tab change, then the room's join: a few seconds at most.
-        guard let session = await waitFor(seconds: 10, { [self] in
+        guard let session = await waitFor(seconds: 10, { [self] () -> ChatSession? in
             // Sessions name their room in lowercase, whatever case the tab key has.
             guard let active = state.activeChannel, let session = sessions[active], session.channel == entry.room else { return nil }
             return session
         }) else { return }
         // The join's history is where an earlier mention usually is.
-        _ = await waitFor(seconds: 10, { session.historyLoaded ? true : nil })
+        _ = await waitFor(seconds: 10, { () -> Bool? in session.historyLoaded ? true : nil })
         if await jump(to: entry.id, in: session) { return }
         guard !Task.isCancelled else { return }
         await session.backfill(around: entry.atMs)
