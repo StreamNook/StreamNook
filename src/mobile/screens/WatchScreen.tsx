@@ -81,9 +81,6 @@ const MINI_GUTTER = 16;
 // Clearance so the resting mini player never sits under the floating pill bar
 // (56 px, icons only, riding 14 px above the gesture strip).
 const BOTTOM_GAP = 104;
-// Chats has no tab bar: its composer sits at the bottom edge instead, lower
-// than the bar, so the box rests that much lower to keep the same gap above it.
-const CHATS_COMPOSER_GAP = 0;
 
 // Where the mini player is ALLOWED to be.
 //
@@ -459,6 +456,10 @@ export const WatchScreen: React.FC = () => {
   // Shown higher over the Chats tab while a chat is open there, so the box
   // never covers its composer; the stored spot is kept for the other tabs.
   const overChatsComposer = useMobileNavStore((s) => s.activeTab === 'chats') && chatTabsOpen;
+  // Chats has no tab bar: the box rests its usual edge gap above the composer
+  // and any streak banner over it, as Chats measures them.
+  const chatsFloor = useMobileNavStore((s) => s.chatsFloor);
+  const miniFloor = overChatsComposer && chatsFloor != null ? chatsFloor + EDGE_GAP : BOTTOM_GAP;
   const miniClamped = useMemo(
     () =>
       clampMini(
@@ -467,9 +468,9 @@ export const WatchScreen: React.FC = () => {
         viewport.w,
         viewport.h,
         readInsets(),
-        overChatsComposer ? BOTTOM_GAP + CHATS_COMPOSER_GAP : BOTTOM_GAP,
+        miniFloor,
       ),
-    [miniPos.x, miniPos.y, viewport.w, viewport.h, overChatsComposer],
+    [miniPos.x, miniPos.y, viewport.w, viewport.h, miniFloor],
   );
 
   // System PiP strip-down flag from MainActivity. Also mirrored onto <html> so

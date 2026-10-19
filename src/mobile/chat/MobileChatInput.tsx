@@ -496,6 +496,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
     // lift above the keyboard is kb + safe-b (max left the input clipped by
     // exactly the gesture-bar height).
     <div
+      data-chat-composer=""
       className="shrink-0 border-t border-borderSubtle"
       style={{
         paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',

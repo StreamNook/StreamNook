@@ -84,6 +84,7 @@ enum SN {
     static var info: Color { p.info.color }
     static var highlightPurple: Color { p.highlightPurple.color }
     static var highlightBlue: Color { p.highlightBlue.color }
+    static var highlightOrange: Color { p.highlightOrange.color }
 
     static var live: Color { FixedColor.live.color }
     static var twitch: Color { FixedColor.twitch.color }
