@@ -126,7 +126,8 @@ mod tests {
         };
         let n = notice_for(&msg, MentionKind::Mention, None);
         assert_eq!(n.title, "Kicker mentioned you in someslug");
-        assert_eq!(n.action, Some(NoticeAction::Mention { id: "k-1".into(), channel: "kick:someslug".into() }));
+        // The click opens the chat by its own case; the room key stays lowercase.
+        assert_eq!(n.action, Some(NoticeAction::Mention { id: "k-1".into(), channel: "kick:SomeSlug".into() }));
         assert_eq!(n.reply, None);
     }
 }
