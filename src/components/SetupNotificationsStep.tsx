@@ -118,7 +118,7 @@ const SetupNotificationsStep = ({ types, choices, onChoose }: Props) => {
             {IS_MAC && (
                 <div
                     aria-hidden={!refused}
-                    className={`absolute inset-x-0 top-full mt-5 flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/5 py-2.5 pl-4 pr-3 text-left [@media(max-height:700px)]:static [@media(max-height:700px)]:mt-3 [@media(max-height:700px)]:py-2 ${refused ? '' : 'invisible'}`}
+                    className={`absolute inset-x-0 top-full mt-5 flex items-center gap-3 rounded-lg border border-warning/30 bg-glass-raised/95 py-2.5 pl-4 pr-3 text-left [@media(max-height:700px)]:static [@media(max-height:700px)]:mt-3 [@media(max-height:700px)]:py-2 ${refused ? '' : 'invisible'}`}
                 >
                     <p className="text-[12px] leading-relaxed text-textSecondary [@media(max-height:700px)]:leading-snug">
                         Notifications are turned off for StreamNook in macOS settings, so these alerts will not reach you
