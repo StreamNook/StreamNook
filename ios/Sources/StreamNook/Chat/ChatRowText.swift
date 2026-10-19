@@ -129,12 +129,21 @@ struct RowText {
         inline(.shape(.dot(color)), width: d, height: d, centerAboveBaseline: middle(fontSize), marginRight: (0.4 * fontSize).rounded())
     }
 
+    /// Whether a paint can be drawn into the bitmap now. An image paint (a 7TV paint made of art)
+    /// draws once its art is loaded; the pipeline loads it and lays the row out again, so until
+    /// then the name keeps its own color rather than an empty fill. A paint from an older core
+    /// (one fill, no layers) has no image path.
+    static func drawable(_ paint: ChatPaint) -> Bool {
+        if paint.layers.isEmpty { return paint.kind != "image" }
+        return PaintPainter.imageURLs(paint).allSatisfy { ImagePipeline.shared.cachedAnySize($0) != nil }
+    }
+
     /// The author's name: bold, in their colour or 7TV paint, a tap that opens their profile.
     mutating func name(_ text: String, font: UIFont, color: UIColor, paint: ChatPaint?, chip: UIColor?) {
         let tapIndex = taps.count
         taps.append(.name)
         var extra: [NSAttributedString.Key: Any] = [ChatRowLayoutBuilder.tapKey: tapIndex]
-        if let paint, paint.kind != "image" { extra[ChatRowLayoutBuilder.paintKey] = PaintBox(paint) }
+        if let paint, Self.drawable(paint) { extra[ChatRowLayoutBuilder.paintKey] = PaintBox(paint) }
         if let chip { extra[ChatRowLayoutBuilder.capsuleKey] = chip }
         append(text, font, color, extra: extra)
     }
@@ -165,7 +174,7 @@ struct RowText {
         let body = builder.font(size, weight, italic: italic)
         var common: [NSAttributedString.Key: Any] = [:]
         if strike { common[ChatRowLayoutBuilder.strikeKey] = true }
-        if let paint, paint.kind != "image" { common[ChatRowLayoutBuilder.paintKey] = PaintBox(paint) }
+        if let paint, Self.drawable(paint) { common[ChatRowLayoutBuilder.paintKey] = PaintBox(paint) }
         let margin = builder.emoteMargin
         for span in spans {
             switch span {
