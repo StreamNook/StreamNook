@@ -163,6 +163,26 @@ const PhoneSettingsRow = ({
   // description, and a second tap closes it.
   const [helpOpen, setHelpOpen] = useState(false);
   const glyph = icon ?? phoneSettingGlyph(section, typeof title === 'string' ? title : '');
+  // A control wider than about half the text column (a pair of buttons) would
+  // crush the name and its description into a sliver, so it goes under them,
+  // on the right. Measured before paint and again whenever the row resizes.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const controlRef = useRef<HTMLSpanElement>(null);
+  const [controlUnder, setControlUnder] = useState(false);
+  const hasControl = control != null && control !== false;
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!hasControl || !grid) return;
+    const fit = () => {
+      const part = controlRef.current;
+      if (part) setControlUnder(part.scrollWidth > (grid.clientWidth - 36) * 0.45);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(grid);
+    return () => ro.disconnect();
+  }, [hasControl]);
+  const controlBeside = hasControl && !controlUnder;
   return (
     <div
       className={`settings-row ${frame} py-2.5 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
@@ -174,7 +194,8 @@ const PhoneSettingsRow = ({
           line's midline even when the control is taller than the name, and
           the lines under the name keep to its column. */}
       <div
-        className={`grid ${control ? 'grid-cols-[1.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[1.5rem_minmax(0,1fr)]'} items-center gap-x-3`}
+        ref={gridRef}
+        className={`grid ${controlBeside ? 'grid-cols-[1.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[1.5rem_minmax(0,1fr)]'} items-center gap-x-3`}
       >
         <GroupIcon className="col-start-1 row-start-1 text-textSecondary">
           {/* An element, not a JSX tag: the glyph is looked up per row, and a
@@ -204,12 +225,21 @@ const PhoneSettingsRow = ({
           )}
           {onReset && <ResetArrow onReset={onReset} />}
         </div>
-        {control && <div className="col-start-3 row-start-1 shrink-0">{control}</div>}
+        {controlBeside && (
+          <div className="col-start-3 row-start-1 shrink-0">
+            <span ref={controlRef} className="inline-flex">{control}</span>
+          </div>
+        )}
         {description && (
           <p className="col-start-2 mt-0.5 text-[12px] leading-4 text-textSecondary">{description}</p>
         )}
         {help && helpOpen && <p className="col-start-2 mt-1 text-[12px] leading-4 text-textMuted">{help}</p>}
-        {children && <div className={`col-start-2 mt-3 ${control ? 'col-span-2' : ''}`}>{children}</div>}
+        {hasControl && controlUnder && (
+          <div className="col-start-2 mt-2 flex min-w-0 justify-end">
+            <span ref={controlRef} className="inline-flex max-w-full flex-wrap justify-end gap-2">{control}</span>
+          </div>
+        )}
+        {children && <div className={`col-start-2 mt-3 ${controlBeside ? 'col-span-2' : ''}`}>{children}</div>}
       </div>
     </div>
   );
@@ -399,7 +429,7 @@ export const SegmentedSelect = <T extends string>({
             onClick={() => onChange(opt.value)}
             onMouseEnter={onPreview ? () => onPreview(opt.value) : undefined}
             onFocus={onPreview ? () => onPreview(opt.value) : undefined}
-            className={`${fullWidth ? 'flex-1' : ''} relative z-[1] px-3 py-1 text-[13px] font-medium rounded-md transition-colors ${
+            className={`${fullWidth ? 'flex-1 px-2' : 'px-3'} relative z-[1] whitespace-nowrap py-1 text-[13px] font-medium rounded-md transition-colors ${
               isActive ? 'text-textPrimary' : 'text-textMuted hover:text-textSecondary'
             }`}
           >
