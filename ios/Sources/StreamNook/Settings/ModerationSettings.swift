@@ -79,7 +79,7 @@ struct ModerationSettings: View {
     private var swipeBlock: some View {
         SettingsBlock(title: "Moderating Messages", detail: "Two ways to delete, time out or ban from a message in a channel you moderate. With both off, the user card’s Moderate row still has every action.") {
             ToggleRow(title: "Swipe to moderate", path: "chat_design.mod_slider", fallback: true,
-                      detail: "Swipe right on a message. Pull further for a longer timeout; Ban is at the end and needs a short hold, and letting go early cancels.") {
+                      detail: "Swipe right on a message; pull further for a longer timeout. Ban needs a short hold.") {
                 NestedChoice(title: "Style", path: "chat_design.mod_slider_style",
                              choices: [Choice("Preview", "preview"), Choice("Rail", "rail"), Choice("Capsule", "capsule")],
                              fallback: "preview")
@@ -127,7 +127,7 @@ struct ModerationSettings: View {
             }
             }
             ToggleRow(title: "Hold menu buttons", path: "chat_design.mod_hold_buttons", fallback: true,
-                      detail: "Delete, Timeout and Ban in the menu that opens when you press and hold a message.")
+                      detail: "Delete, Timeout and Ban in the press-and-hold menu.")
         }
     }
 

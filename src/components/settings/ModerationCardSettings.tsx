@@ -163,7 +163,7 @@ function SwipeModerateSettings() {
     >
       <SettingsRow
         title="Swipe to moderate"
-        description="Swipe right on a message. Pull further for a longer timeout; Ban is at the end and needs a short hold, and letting go early cancels."
+        description="Swipe right on a message; pull further for a longer timeout. Ban needs a short hold."
         control={<Toggle enabled={on} onChange={() => void setFields({ 'chat_design.mod_slider': !on })} />}
         onReset={resetFor(['chat_design.mod_slider', true])}
       />
@@ -262,7 +262,7 @@ function SwipeModerateSettings() {
       )}
       <SettingsRow
         title="Hold menu buttons"
-        description="Delete, Timeout and Ban in the menu that opens when you press and hold a message."
+        description="Delete, Timeout and Ban in the press-and-hold menu."
         control={<Toggle enabled={hold} onChange={() => void setFields({ 'chat_design.mod_hold_buttons': !hold })} />}
         onReset={resetFor(['chat_design.mod_hold_buttons', true])}
       />

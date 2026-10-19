@@ -2587,7 +2587,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Delete, Timeout and Ban in the menu that opens when you press and hold a message.",
+   "detail": "Delete, Timeout and Ban in the press-and-hold menu.",
    "aliases": [
     "hold menu",
     "press and hold",
