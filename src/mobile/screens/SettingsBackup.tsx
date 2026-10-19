@@ -5,6 +5,7 @@
 // settings broadcast like any other write.
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { CalendarDays } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsRow, SettingsSection } from '../../components/settings/_primitives';
 import { Logger } from '../../utils/logger';
@@ -92,15 +93,17 @@ const SettingsBackup: React.FC = () => {
         description="StreamNook keeps a copy of your settings each day you use it, for the last 7 days. If your settings ever fail to load, the newest copy is put back on its own."
       >
         {backups === null ? (
-          <p className="py-3 text-[12px] text-textMuted">Loading…</p>
+          <p className="py-3 text-[13px] text-textMuted">Loading…</p>
         ) : backups.length === 0 ? (
-          <p className="py-3 text-[12px] text-textMuted">The first copy is saved the next time a setting changes.</p>
+          <p className="py-3 text-[13px] text-textMuted">The first copy is saved the next time a setting changes.</p>
         ) : (
           backups.map((backup) => {
             const isArmed = armed === backup.id;
             return (
               <SettingsRow
                 key={backup.id}
+                // A day's name is no setting the glyph table could know.
+                icon={CalendarDays}
                 title={dayLabel(backup.id)}
                 description={
                   restored === backup.id ? 'Restored. Your settings now match this day.' : sizeLabel(backup.bytes)

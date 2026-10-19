@@ -18,6 +18,12 @@ import {
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { findSettingRow, flashSettingRow } from '../../components/settings/settingsNavigation';
+import { setPhoneSettingGlyphs } from '../../components/settings/phoneGlyphs';
+import { settingIcon } from './settingsIcons';
+
+// The shared settings rows lead with a glyph on the phone; the table they read
+// it from is handed over here, with the phone shell, before any page draws.
+setPhoneSettingGlyphs(settingIcon);
 
 const PANELS: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   Player: lazy(() => import('../../components/settings/PlayerSettings')),
