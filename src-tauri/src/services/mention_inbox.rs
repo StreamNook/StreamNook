@@ -33,7 +33,8 @@ pub const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Message text kept per entry, in characters.
 const MAX_TEXT: usize = 500;
 pub const CHANGED_EVENT: &str = "mention-inbox-changed";
-/// Phones: an entry to show as a notification now (the payload is the entry).
+/// An entry to show as a notification now (the payload is the entry): the
+/// phones' notification and the desktop island's preview.
 pub const NOTIFY_EVENT: &str = "mention-notify";
 /// One chat notifies at most this often, so a chat that keeps @-ing you is
 /// one notification, not a stack.
@@ -523,9 +524,11 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     if !fire {
         return;
     }
+    // Desktop: the system notification (or MultiChat's card) for when the
+    // main window is not in use. Every app: the entry, for the page to show
+    // (the phones' notification, the desktop island's preview).
     #[cfg(desktop)]
     crate::services::mention_notify::deliver(msg, kind);
-    #[cfg(mobile)]
     if let Some(app) = crate::services::providers::app_handle() {
         let _ = app.emit(NOTIFY_EVENT, &entry);
     }

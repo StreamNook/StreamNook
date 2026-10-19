@@ -1,45 +1,15 @@
 // The desktop's view of the mentions inbox. Rust owns the inbox (entries,
-// read state, what counts); this keeps only what the page draws from it: the
-// unread total for the title bar, whether the Mentions screen is open, and
-// which chats this window has on screen.
+// read state, what counts); the main window shows it in the Dynamic Island's
+// notification history and MultiChat in its Mentions mode. This keeps only the
+// event names, the mute toggle, and which chats this window has on screen.
 
 import { useEffect } from 'react';
-import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import type { MentionPage } from '../types';
 import { Logger } from '../utils/logger';
 
 export const MENTION_INBOX_CHANGED_EVENT = 'mention-inbox-changed';
-
-interface MentionInboxUi {
-  open: boolean;
-  unreadTotal: number;
-  setOpen: (open: boolean) => void;
-}
-
-export const useMentionInboxStore = create<MentionInboxUi>((set) => ({
-  open: false,
-  unreadTotal: 0,
-  setOpen: (open) => set({ open }),
-}));
-
-let unreadStarted = false;
-
-/** The unread total, kept current from Rust's `mention-inbox-changed`. */
-export function useMentionUnreadTotal(): number {
-  useEffect(() => {
-    if (unreadStarted) return;
-    unreadStarted = true;
-    void listen<{ unread_total: number }>(MENTION_INBOX_CHANGED_EVENT, (e) => {
-      useMentionInboxStore.setState({ unreadTotal: e.payload?.unread_total ?? 0 });
-    });
-    invoke<MentionPage>('get_mention_inbox', { limit: 1 })
-      .then((p) => useMentionInboxStore.setState({ unreadTotal: p.unread_total }))
-      .catch((e) => Logger.debug('[Mentions] unread fetch failed:', e));
-  }, []);
-  return useMentionInboxStore((s) => s.unreadTotal);
-}
+/** Rust decided to announce this entry now (the payload is the entry). */
+export const MENTION_NOTIFY_EVENT = 'mention-notify';
 
 /** Mute or unmute one chat's mentions (`mentions.muted_channels`). Rust owns
  *  the list: this is one toggle edit it applies to the stored set, and every
