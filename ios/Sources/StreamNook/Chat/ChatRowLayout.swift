@@ -191,7 +191,6 @@ struct ChatRowLayoutBuilder {
         let view = meta.view
         let hidden = row.moderation != nil && style.deletedMessageStyle == "hidden"
             || (style.hideSharedChat && meta.isFromSharedChat)
-            || ChatEventCategory.isHidden(message, style.hiddenEvents)
         if hidden {
             return ChatRowLayout(id: row.id, revision: row.revision, width: width, height: 0, lines: [], attachments: [],
                                  shapes: [], taps: [], decor: RowDecor(), accessibilityText: "",

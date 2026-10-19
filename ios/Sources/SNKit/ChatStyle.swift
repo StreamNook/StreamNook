@@ -53,8 +53,6 @@ public struct ChatStyle: Sendable, Equatable {
     public var gifScale: Double = 1
     public var hideSharedChat = false
     public var paintShadows = "all"
-    /// Event kinds the viewer hid, "provider:category" (`chat_events.hidden_provider_events`).
-    public var hiddenEvents: [String] = []
 
     /// Rows a room keeps, 50 to 300 on a phone.
     public var bufferCap = 100
@@ -86,9 +84,6 @@ public struct ChatStyle: Sendable, Equatable {
 
     public mutating func apply(_ root: [String: Any]) {
         if let d = root["chat_design"] as? [String: Any] { applyDesign(d) }
-        if let e = root["chat_events"] as? [String: Any], let hidden = e["hidden_provider_events"] as? [String] {
-            hiddenEvents = hidden
-        }
         if let r = root["chat_render"] as? [String: Any] {
             if let cap = (r["message_buffer_cap"] as? NSNumber)?.intValue {
                 bufferCap = min(max(cap, 50), 300)
