@@ -290,6 +290,9 @@ Scope: the eight settings rows on the You tab and every panel they open; the Cha
 
 - [x] Hidden on the phone: "Log folder" / "Open logs folder"; shown instead: "Log export" (d:components/settings/SupportSettings.tsx:L290-L330)
 - [x] The panel shows no app version; the running version appears in What's New (system.md) and in the You tab update row (accounts-signin.md) (d:components/settings/SupportSettings.tsx:L112-L237)
+
+> [!CORRECTION] 2026-10-19
+> Superseded: the phones' Support panel now names the build in a "Devices" section (§ 10.1a, desktop commit b193dd2e).
 - [x] Layout: a centred column, max 400 px wide, vertically centred when it fits and top-aligned and scrollable when it does not; 24 px vertical padding (d:components/settings/SupportSettings.tsx:L113-L117) (iPhone: `ScrollView` with a max-width `VStack`)
 
 ### 10.1 Community
@@ -301,6 +304,12 @@ Scope: the eight settings rows on the You tab and every panel they open; the Cha
 - [x] Counts row when both are known: a pulsing green dot with "{online} Online" and a muted dot with "{members} Members", numbers locale-formatted and semibold (d:components/settings/SupportSettings.tsx:L198-L221) (iPhone: `Text(n, format: .number)`; these are Discord's own counts, not a StreamNook user total) (pref: no-total-user-count-public.md)
 - [x] Server data comes from `https://discord.com/api/v10/invites/2xvuF9TES7?with_counts=true` on open and every 60 s while the panel is open; a failed fetch keeps the fallback card (d:components/settings/SupportSettings.tsx:L59-L76) (iPhone: fetched in Rust, see rust-moves)
 - [~] "Join the Discord" button (full width, Discord glyph 17 px, 13 px semibold white on the Discord join colour) opens `https://discord.gg/2xvuF9TES7` externally (d:components/settings/SupportSettings.tsx:L88-L96) (d:components/settings/SupportSettings.tsx:L223-L229) (iPhone: `UIApplication.shared.open` / `Link`, which hands off to the Discord app when installed) (iPhone A7: built; not tapped on the phone)
+
+### 10.1a Devices (phones only, between Community and Diagnostics)
+
+- [~] Section "Devices", no description, not in settings search (d:components/settings/SupportSettings.tsx `DevicesSection`) (iPhone: `SettingsBlock(title: "Devices")` in `ServicePanels.swift`) (iPhone: built on `ios/about-devices` 79705780; device shot pending)
+- [~] Row "This device": the platform's mark, then "{platform} · Version {version}" (d:components/settings/SupportSettings.tsx `DevicesSection`) (iPhone: SF Symbol `iphone` row icon; the detail line is the Apple mark at 12 pt, then "iPhone · Version {CFBundleShortVersionString}")
+- [~] Row "Also on your other devices": one pill per platform this build is not, in the downloads page's order (Windows, macOS, Linux, Android on the iPhone), two equal columns, each the platform's one-color mark (15) and its name (13 medium, `textSecondary`) on the left, opening `https://streamnook.app/downloads` (d:components/OtherPlatformLinks.tsx) (d:components/ui/PlatformLogo.tsx: Simple Icons paths, Windows x0.77, Tux x1.15, Apple raised 0.12 of its size) (iPhone: `OtherPlatformLinks`, marks in `PlatformMark`/`SystemMark`, `SN.surface` capsules)
 
 ### 10.2 Diagnostics
 
