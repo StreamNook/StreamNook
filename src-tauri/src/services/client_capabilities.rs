@@ -21,6 +21,9 @@ pub struct ClientCapabilities {
     /// Marks on the chat scrollbar for highlights and mentions. A touch list
     /// draws no scrollbar to mark.
     pub scrollbar_marks: bool,
+    /// Words taught to the chat spellchecker. A phone spells with its keyboard,
+    /// which never reads them.
+    pub spell_dictionary: bool,
 }
 
 /// This build's answer.
@@ -30,6 +33,7 @@ pub fn current() -> ClientCapabilities {
         combined_chat: desktop,
         chat_dock: desktop,
         scrollbar_marks: desktop,
+        spell_dictionary: desktop,
     }
 }
 
@@ -42,6 +46,7 @@ pub fn has(name: &str) -> bool {
         "combined_chat" => caps.combined_chat,
         "chat_dock" => caps.chat_dock,
         "scrollbar_marks" => caps.scrollbar_marks,
+        "spell_dictionary" => caps.spell_dictionary,
         _ => false,
     }
 }
@@ -59,7 +64,7 @@ mod tests {
     #[test]
     fn desktop_surfaces_follow_the_build() {
         let caps = current();
-        for on in [caps.combined_chat, caps.chat_dock, caps.scrollbar_marks] {
+        for on in [caps.combined_chat, caps.chat_dock, caps.scrollbar_marks, caps.spell_dictionary] {
             assert_eq!(on, cfg!(desktop));
         }
         assert_eq!(has("combined_chat"), cfg!(desktop));
@@ -70,9 +75,9 @@ mod tests {
     #[test]
     fn serializes_snake_case_fields() {
         let json = serde_json::to_value(current()).unwrap();
-        for key in ["combined_chat", "chat_dock", "scrollbar_marks"] {
+        for key in ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary"] {
             assert_eq!(json[key], cfg!(desktop), "{key}");
         }
-        assert_eq!(json.as_object().unwrap().len(), 3);
+        assert_eq!(json.as_object().unwrap().len(), 4);
     }
 }

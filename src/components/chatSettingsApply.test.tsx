@@ -133,6 +133,12 @@ describe('the chat draws what the Chat page set', () => {
     expect(renderRow({ show_dividers: false })).not.toContain('border-t border-borderSubtle');
   });
 
+  it("Text weight: moves the body from the font's own chat weight, Normal leaves it", () => {
+    expect(renderRow({ font_weight: 400 })).toContain('calc(var(--chat-body-weight, 300) + 0)');
+    expect(renderRow({ font_weight: 700 })).toContain('calc(var(--chat-body-weight, 300) + 300)');
+    expect(renderRow({ font_weight: 300 })).toContain('calc(var(--chat-body-weight, 300) - 100)');
+  });
+
   it('Message animation: the list carries the chosen arrival, and none when None', () => {
     for (const entrance of ['fade', 'slide', 'rise'] as const) {
       expect(renderList({ message_entrance: entrance })).toContain(`data-entrance="${entrance}"`);

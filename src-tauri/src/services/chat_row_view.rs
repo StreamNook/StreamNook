@@ -279,6 +279,12 @@ struct BadgeIndex {
 
 static TWITCH_BADGES: RwLock<Option<BadgeIndex>> = RwLock::new(None);
 
+/// Whether a channel's own badge set (its subscriber and bits art) has been
+/// noted. Until it is, its rows draw Twitch's default art for those badges.
+pub(crate) fn has_room_badges(room_id: &str) -> bool {
+    TWITCH_BADGES.read().ok().is_some_and(|g| g.as_ref().is_some_and(|i| i.rooms.contains_key(room_id)))
+}
+
 /// Records Twitch badge art from a Helix badge answer: the global sets when
 /// `room_id` is None, else that channel's own. Items are
 /// `(set_id, version_id, image_url_2x, title)`.
@@ -1325,11 +1331,17 @@ pub fn event_key(msg: &ChatMessage) -> Option<String> {
     let msg_type = msg.metadata.msg_type.as_deref().or_else(|| msg.tags.get("msg-id").map(String::as_str));
     let mut category = msg_type.and_then(event_category);
     if category.is_none() && provider == "twitch" {
+        // A channel points redemption row names its reward in `sn-reward-title`
+        // (the overlay counts it the same way); a reward redeemed with text is
+        // that viewer's own message, not an event.
+        if msg.tags.get("sn-reward-title").is_some_and(|t| !t.is_empty()) {
+            category = Some("redemption");
+        }
         let bits = msg
             .metadata
             .bits_amount
             .unwrap_or_else(|| msg.tags.get("bits").and_then(|b| b.parse().ok()).unwrap_or(0));
-        if bits > 0 {
+        if category.is_none() && bits > 0 {
             category = Some("cheer");
         }
     }
@@ -1366,6 +1378,11 @@ mod tests {
         assert_eq!(event_key(&notice("twitch", None, &[], None)), None);
         assert_eq!(event_key(&notice("kick", None, &[], Some(5))), None);
         assert_eq!(event_key(&notice("twitch", Some("highlighted-message"), &[], None)), None);
+        // A channel points redemption row is one; a reward redeemed with text is not.
+        let redeemed = notice("twitch", None, &[("custom-reward-id", "r1"), ("sn-reward-title", "Hydrate")], None);
+        assert_eq!(event_key(&redeemed).as_deref(), Some("twitch:redemption"));
+        assert_eq!(event_key(&notice("twitch", None, &[("custom-reward-id", "r1")], None)), None);
+        assert_eq!(event_key(&notice("kick", None, &[("sn-reward-title", "Hydrate")], None)), None);
     }
 
     #[test]
@@ -1556,6 +1573,16 @@ mod tests {
         assert_eq!(twitch_badge_art(Some("42"), "subscriber", "12").unwrap().0, "https://c/sub12/2");
         assert_eq!(twitch_badge_art(Some("42"), "moderator", "1").unwrap().0, "https://g/mod/2");
         assert!(twitch_badge_art(Some("7"), "subscriber", "12").is_none());
+    }
+
+    #[test]
+    fn a_room_counts_as_dressed_only_once_its_own_set_is_noted() {
+        // History reads a room's set itself while this is false: its rows would
+        // otherwise wear Twitch's default subscriber art.
+        assert!(!has_room_badges("5150"));
+        note_twitch_badges(Some("5150"), [("subscriber", "0", "https://c/sub0/2", "Subscriber")]);
+        assert!(has_room_badges("5150"));
+        assert_eq!(twitch_badge_art(Some("5150"), "subscriber", "0").unwrap().0, "https://c/sub0/2");
     }
 
     #[test]

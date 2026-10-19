@@ -47,8 +47,12 @@ export function eventKeyOf(message: EventLikeMessage): string | null {
   const msgType = message.metadata?.msg_type ?? tagOf(message.tags, 'msg-id');
   let category = categoryOf(msgType);
   if (!category && provider === 'twitch') {
+    // A channel points redemption row (Rust names its reward in
+    // `sn-reward-title`, which the overlay also counts as one). A reward
+    // redeemed with text is that viewer's own message, not an event.
+    if (tagOf(message.tags, 'sn-reward-title')) category = 'redemption';
     const bits = message.metadata?.bits_amount ?? Number(tagOf(message.tags, 'bits') ?? 0);
-    if (bits > 0) category = 'cheer';
+    if (!category && bits > 0) category = 'cheer';
   }
   return category ? `${provider}:${category}` : null;
 }

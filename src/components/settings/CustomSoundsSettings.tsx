@@ -12,6 +12,7 @@ import { FolderOpen, Play, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { playSound } from '../../utils/notificationSound';
 import { Logger } from '../../utils/logger';
+import { IS_MOBILE } from '../../utils/platform';
 import { SettingsSection } from './_primitives';
 import { Tooltip } from '../ui/Tooltip';
 import type { CustomSound } from '../../types';
@@ -103,7 +104,9 @@ const CustomSoundsSettings = () => {
         <button
           type="button"
           onClick={() => void add()}
-          className="glass-button inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-textPrimary"
+          className={`glass-button inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-textPrimary ${
+            IS_MOBILE ? 'sn-touch w-full justify-center' : ''
+          }`}
         >
           <FolderOpen size={14} />
           Add sound file

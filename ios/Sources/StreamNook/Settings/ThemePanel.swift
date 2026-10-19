@@ -32,6 +32,8 @@ struct ThemePanel: View {
                 .task(id: "\(store.string("oled_accent"))|\((store.value("custom_themes") as? [Any])?.count ?? 0)") { await load() }
             GlassinessCard()
             FontCard()
+            // While OLED is picked its accent sits with the theme rows, where the catalog files it.
+            if let catalog, current == catalog.oledID { OledAccentCard(accents: catalog.accents) }
         } header: {
             ListHeader(text: "Theme")
         }
@@ -42,18 +44,10 @@ struct ThemePanel: View {
             }
             ForEach(catalog.categories, id: \.id) { cat in
                 category(name: cat.name, description: cat.description,
-                         cards: catalog.themes.filter { $0.category == cat.id }, current: current,
-                         oledAccents: cat.id == "signature" && current == catalog.oledID ? catalog.accents : nil)
+                         cards: catalog.themes.filter { $0.category == cat.id }, current: current)
             }
         } else {
             Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20) }
-        }
-        Section {
-            Label {
-                Text("Create a custom theme to match your setup exactly.").font(.sn(12.5)).foregroundStyle(SN.textSecondary)
-            } icon: {
-                Image(systemName: "sparkles")
-            }
         }
     }
 
@@ -77,9 +71,8 @@ struct ThemePanel: View {
         }
     }
 
-    /// A category: its swatch grid on the card, its line under it, and the OLED accent beside the OLED theme.
-    private func category(name: String, description: String, cards: [Card], current: String,
-                          oledAccents: [(name: String, value: String)]? = nil) -> some View {
+    /// A category: its swatch grid on the card and its line under it.
+    private func category(name: String, description: String, cards: [Card], current: String) -> some View {
         Section {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(cards) { card in
@@ -92,7 +85,6 @@ struct ThemePanel: View {
                 }
             }
             .padding(.vertical, 6)
-            if let oledAccents { OledAccentCard(accents: oledAccents) }
         } header: {
             ListHeader(text: name)
         } footer: {
@@ -228,7 +220,8 @@ private struct GlassinessCard: View {
     }
 }
 
-/// Font: a tile per face, each name drawn in it where the iPhone has the face.
+/// Font: a tile per face, each name drawn in it where the iPhone has the face, and Custom: any
+/// family from Google Fonts, typed or picked from the suggestions, kept on the phone once read.
 private struct FontCard: View {
     @Environment(SettingsStore.self) private var store
     @Environment(AppModel.self) private var model
@@ -236,42 +229,114 @@ private struct FontCard: View {
     static let fonts = [("Satoshi", "satoshi"), ("Twitch", "twitch"), ("Geist", "geist"), ("Manrope", "manrope"), ("Outfit", "outfit"),
                         ("Space Grotesk", "space-grotesk"), ("Serif", "serif"), ("System", "system")]
 
+    /// The Custom family as typed, saved a moment after the last keystroke.
+    @State private var draft: String?
+    @State private var saving: Task<Void, Never>?
+
     var body: some View {
         let picked = store.string("font", "satoshi").isEmpty ? "satoshi" : store.string("font", "satoshi")
+        let custom = draft ?? store.string("font_custom")
         Label {
             VStack(alignment: .leading, spacing: 10) {
                 SettingTitle(title: "Font", paths: ["font"], helpOpen: .constant(false))
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                     ForEach(Self.fonts, id: \.1) { name, id in
-                        let on = id == picked
-                        Button {
-                            Task {
-                                await store.set("font", id)
-                                await model.loadSettings()
-                            }
-                        } label: {
-                            HStack {
-                                Text(name)
-                                    .font(Typeface.font(15, 400, face: id))
-                                    .foregroundStyle(SN.textPrimary).lineLimit(1)
-                                Spacer(minLength: 4)
-                                if on { Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.accent) }
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .frame(minHeight: 44)
-                            .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? SN.accent.opacity(0.1) : .clear) }
-                            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? SN.accent : SN.borderSubtle, lineWidth: 1) }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(on ? .isSelected : [])
+                        tile(name, face: id, on: id == picked) { await pick(id) }
                     }
+                    // Once a family is typed, the tile names it, in its own face when found.
+                    let named = CustomFont.sanitize(custom)
+                    tile(picked == "custom" && !named.isEmpty ? named : "Custom", face: "custom", on: picked == "custom") {
+                        await pick("custom")
+                    }
+                }
+                if picked == "custom" {
+                    customFields(custom)
                 }
             }
         } icon: {
             Image(systemName: SettingIcons.symbol(paths: ["font"], title: "Font"))
         }
         .padding(.vertical, 4)
+    }
+
+    private func tile(_ name: String, face: String, on: Bool, action: @escaping () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            HStack {
+                Text(name)
+                    .font(Typeface.font(15, 400, face: face))
+                    .foregroundStyle(SN.textPrimary).lineLimit(1)
+                Spacer(minLength: 4)
+                if on { Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.accent) }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(minHeight: 44)
+            .background { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? SN.accent.opacity(0.1) : .clear) }
+            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? SN.accent : SN.borderSubtle, lineWidth: 1) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// The family's name, the suggestions as one-tap fills, and where fonts come from.
+    private func customFields(_ custom: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("e.g. Poppins", text: Binding(get: { custom }, set: { type($0) }))
+                .font(.sn(15))
+                .foregroundStyle(SN.textPrimary)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .onSubmit { save(custom, after: .zero) }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(SN.borderSubtle, lineWidth: 1) }
+                .accessibilityLabel("Custom font name")
+            FlowLayout(spacing: 6) {
+                ForEach(CustomFont.suggested, id: \.self) { name in
+                    let on = CustomFont.sanitize(custom) == name
+                    Button {
+                        draft = name
+                        save(name, after: .zero)
+                    } label: {
+                        Text(name)
+                            .font(.sn(13))
+                            .foregroundStyle(on ? SN.accent : SN.textSecondary)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .overlay { Capsule().stroke(on ? SN.accent : SN.borderSubtle, lineWidth: 1) }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Any free font from fonts.google.com works, just type its exact name. It is kept on this phone after the first time.")
+                .font(.sn(12)).foregroundStyle(SN.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func pick(_ id: String) async {
+        saving?.cancel()
+        await store.set("font", id)
+        await model.loadSettings()
+    }
+
+    private func type(_ text: String) {
+        draft = text
+        save(text, after: .milliseconds(700))
+    }
+
+    /// Saves the family (and Custom as the font) once typing pauses; the font follows the save.
+    private func save(_ text: String, after delay: Duration) {
+        saving?.cancel()
+        let family = CustomFont.sanitize(text)
+        saving = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await store.set(["font": "custom", "font_custom": family])
+            await model.loadSettings()
+        }
     }
 }
 

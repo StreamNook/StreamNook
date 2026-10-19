@@ -34,12 +34,15 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
 import { CosmeticsScreen } from './screens/CosmeticsScreen';
+import { MentionsScreen } from './screens/MentionsScreen';
+import { installMentionInbox } from './mentions/mentionInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
+import { useMentionPing } from '../hooks/useMentionPing';
 
 const TAB_ORDER = ['following', 'browse', 'chats', 'rewards', 'you'] as const;
 
@@ -59,6 +62,9 @@ const MobileApp: React.FC = () => {
   // The chats outside any one screen: the stream tab, the saved chats, and
   // leaving the rooms after a while in the background.
   useChatsLifecycle();
+  // Plays the mention and reply sounds Rust picks (Chat > Mentions & Replies),
+  // as the desktop's main window does.
+  useMentionPing();
 
   const isBooting = useAppStore((s) => s.isBooting);
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);
@@ -130,6 +136,8 @@ const MobileApp: React.FC = () => {
 
   useEffect(() => installBackHandler(), []);
   useEffect(() => installLifecycle(), []);
+  // The mentions unread count (the You row and the chat menu read it).
+  useEffect(() => installMentionInbox(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
   useEffect(() => installVideoCap(), []);
   useEffect(() => {
@@ -200,6 +208,8 @@ const MobileApp: React.FC = () => {
           <WatchScreen />
           <CosmeticsScreen />
           <SettingsScreen />
+          {/* Over settings and the watch layer: the chat menu opens it too. */}
+          <MentionsScreen />
           {/* Consumes the same `clipModal` store field the desktop <ClipModal />
               does. Without a mobile consumer, tapping a clip in chat flipped
               that state and rendered nothing. Portals to z-[9000] via

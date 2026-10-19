@@ -39,6 +39,8 @@ final class AppModel {
     let rewards: RewardsStore
     /// Your Kick account: its sign-in and your Kick follows.
     let kick = KickAccount()
+    /// The mentions inbox: its rows, the unread count, and the notifications the core asks for.
+    let mentions: MentionsStore
 
     private(set) var phase = Phase.booting
     /// A clip link from chat, open in the clip sheet.
@@ -66,6 +68,7 @@ final class AppModel {
         settingsStore = SettingsStore(core: core)
         chat = ChatRooms(core: core)
         rewards = RewardsStore(core: core)
+        mentions = MentionsStore(core: core)
         let watch = watch
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }
@@ -100,6 +103,7 @@ final class AppModel {
         }
         chat.toasts = toasts
         chat.kick = kick
+        chat.mentions = mentions
         let home = home
         chat.followedLive = { home.lists.followingLive }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
@@ -142,12 +146,19 @@ final class AppModel {
         cosmetics.start(core: core)
         kick.start(core: core, toasts: toasts)
         chat.start()
+        mentions.onNotify = { entry in Task { await MentionAlerts.post(entry) } }
+        mentions.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
         #endif
         let boot = try? await core.invoke("get_boot_state", args: [:], as: BootState.self)
         let needsSetup = boot?.needsSetup ?? (settings?.setupComplete == false)
         phase = needsSetup && !setupClosed ? .setup : .main
+        // A mention tapped while the app started opens once the tabs are up.
+        NotificationRouter.handle { [weak self] id in
+            guard let self else { return }
+            Task { await self.openMention(id) }
+        }
     }
 
     /// Reads the settings, applies the look and hands the player its saved choices. A failed read
@@ -158,6 +169,8 @@ final class AppModel {
             let json = try await core.invoke("load_settings", args: [:])
             let settings = try JSONDecoder().decode(SettingsLook.self, from: Data(json.utf8))
             look.apply(settings)
+            let core = core
+            Task { await Typeface.loadCustom(fontID: settings.font, family: settings.fontCustom, core: core) }
             await loadTheme()
             if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
                 watch.savedQuality = prefs.quality

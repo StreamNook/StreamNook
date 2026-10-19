@@ -88,7 +88,13 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const keepOn = useAppStore((s) => s.settings.chats_keep_screen_on ?? true);
   const startStream = useAppStore((s) => s.startStream);
   const [addOpen, setAddOpen] = useState(false);
-  const [pinsOpen, setPinsOpen] = useState(false);
+  // A pin opens or folds per channel: each channel starts as Chat > Pinned
+  // Messages > Collapsed says, and a tap holds until the chat switches.
+  const chatChannelId = useActiveChatChannelId();
+  const pinsStartCollapsed = useAppStore((s) => s.settings.chat_design?.pinned_start_collapsed) ?? true;
+  const pinnedStyle = useAppStore((s) => s.settings.chat_design?.pinned_collapsed_style) ?? 'bar';
+  const [pinsState, setPinsState] = useState<{ channel: string | null; open: boolean } | null>(null);
+  const pinsOpen = pinsState && pinsState.channel === chatChannelId ? pinsState.open : !pinsStartCollapsed;
   // The closed banner's height: the list starts under it. Opened, the banner
   // floats over the rows, so nothing below it moves.
   const pinsRef = useRef<HTMLDivElement | null>(null);
@@ -117,7 +123,6 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     observer.observe(el);
     return () => observer.disconnect();
   }, [hasPins, pinsOpen]);
-  const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
   const canWatch = !!active && active.live === true && !active.pinnedToStream;
@@ -133,6 +138,27 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   // a drag there is always a scroll.
   const exitChats = useMobileNavStore((s) => s.exitChats);
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  // Where the composer (and any streak banner over it) starts, for the mini
+  // player's rest: it follows the banners in and out and the keyboard.
+  const setChatsFloor = useMobileNavStore((s) => s.setChatsFloor);
+  const hasRooms = tabs.length > 0;
+  useEffect(() => {
+    const el = shown && hasRooms ? sheetRef.current?.querySelector<HTMLElement>('[data-chat-composer]') : null;
+    if (!el) {
+      setChatsFloor(null);
+      return;
+    }
+    const read = () => setChatsFloor(Math.round(window.innerHeight - el.getBoundingClientRect().top));
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    window.addEventListener('resize', read);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', read);
+      setChatsFloor(null);
+    };
+  }, [shown, hasRooms, activeChannel, setChatsFloor]);
   const drag = useRef<{
     id: number;
     x: number;
@@ -212,15 +238,23 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     },
   };
 
-  // The handle: a compact grabber at the top center, which also closes on a
-  // tap. The rooms below get the air (CHATS_STRIP_H), not the grabber row.
+  // The handle: the whole band from the top of the screen (through the status
+  // bar's inset) down to the rooms, so it is easy to catch. A tap closes, a
+  // slide down leaves, and the pill lights up while it is held. It takes no
+  // more layout room than its 16 px row: the rooms below get the air
+  // (CHATS_STRIP_H), and the band reaches up into the inset instead.
   const grabber = (
     <button
       onClick={exitChats}
       aria-label="Close chats"
-      className="mx-auto flex h-4 w-16 shrink-0 items-start justify-center pt-1.5"
+      className="group w-full shrink-0 flex items-start justify-center"
+      style={{
+        marginTop: 'calc(-1 * var(--sn-safe-t, 0px))',
+        paddingTop: 'calc(var(--sn-safe-t, 0px) + 6px)',
+        height: 'max(calc(var(--sn-safe-t, 0px) + 16px), 44px)',
+      }}
     >
-      <span className="block h-[5px] w-9 rounded-full bg-textMuted/45" />
+      <span className="block h-[5px] w-10 rounded-full bg-textMuted/60 transition-[width,background-color] duration-150 group-active:w-12 group-active:bg-textSecondary" />
     </button>
   );
 
@@ -303,8 +337,10 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-1 [scrollbar-width:none] sn-fade-top">
-          <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
+        // The search field stays put and fully drawn; only the lists under it
+        // scroll and fade.
+        <div className="flex-1 min-h-0 flex flex-col px-2 pt-1">
+          <ChatPicker scrolls bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
         </div>
       ) : (
         <>
@@ -319,7 +355,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
                   pins={pinned}
                   channelId={chatChannelId ?? undefined}
                   expanded={pinsOpen}
-                  onToggle={() => setPinsOpen((v) => !v)}
+                  onToggle={() => setPinsState({ channel: chatChannelId, open: !pinsOpen })}
+                  collapsedStyle={pinnedStyle}
                 />
               </div>
             )}

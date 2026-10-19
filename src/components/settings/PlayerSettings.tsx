@@ -52,6 +52,14 @@ const OVERLAY_BUTTONS: { id: string; label: string }[] = [
   { id: 'close', label: 'Close Stream' },
 ];
 
+/** Rebuilds Home's Continue Watching row after a resume setting changes. The
+ *  phones draw no such row, and a VOD opened there pulls its own synced place
+ *  as it opens, so on a phone there is nothing to rebuild. */
+const refreshContinueWatching = () => {
+  if (IS_MOBILE) return;
+  void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+};
+
 const PlayerSettings = () => {
   const { settings, updateSettings } = useAppStore();
   const resetFor = useSettingReset();
@@ -83,6 +91,8 @@ const PlayerSettings = () => {
   const middleClickMultiNook = videoPlayer?.middle_click_multinook ?? true;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
   const syncVodProgress = videoPlayer?.sync_vod_progress ?? true;
+  const targetLatencyLabel =
+    videoPlayer?.ll_target_latency == null ? 'Auto' : `${videoPlayer.ll_target_latency.toFixed(1)}s`;
   const wheelVolumeStep = videoPlayer?.wheel_volume_step ?? 0.05;
   // Both gestures want the wheel, so with both on the reveal moves to Shift.
   // The row description says so rather than leaving it to be discovered.
@@ -137,7 +147,8 @@ const PlayerSettings = () => {
   };
 
   return (
-    <div className="space-y-8">
+    // The phones share one section gap; the desktop keeps its wider one.
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       <p className="text-sm text-textSecondary px-1">
         Most player controls (volume, quality, playback speed) are available directly in the video player.
         These settings control advanced streaming behavior.
@@ -253,8 +264,16 @@ const PlayerSettings = () => {
           onReset={thenRun(resetFor(['streamlink.enhanced_codecs', true]), (n) =>
             reportCodecPreference(n.streamlink?.enhanced_codecs ?? true),
           )}
-          description="Asks Twitch for AV1 and h265 (HEVC) versions of the stream alongside h264, which some channels offer at better quality for the same bandwidth."
-          help="Turn this off if you see decode errors or a black picture on older hardware. The change applies the next time a stream loads, no restart needed."
+          description={
+            IS_MOBILE
+              ? 'Asks Twitch for AV1 and h265 (HEVC) versions of a stream alongside h264.'
+              : 'Asks Twitch for AV1 and h265 (HEVC) versions of the stream alongside h264, which some channels offer at better quality for the same bandwidth.'
+          }
+          help={
+            IS_MOBILE
+              ? 'Some channels offer them at better quality for the same bandwidth. Turn this off if you see decode errors or a black picture on older hardware. The change applies the next time a stream loads, no restart needed.'
+              : 'Turn this off if you see decode errors or a black picture on older hardware. The change applies the next time a stream loads, no restart needed.'
+          }
           control={
             <Toggle
               enabled={streamlink.enhanced_codecs ?? true}
@@ -520,11 +539,18 @@ const PlayerSettings = () => {
 
         <SettingsRow
           title="Resume VODs"
-          onReset={thenRun(resetFor(['video_player.resume_vod_playback', true]), () => {
-            void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-          })}
-          description="Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row."
-          help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
+          onReset={thenRun(resetFor(['video_player.resume_vod_playback', true]), refreshContinueWatching)}
+          // The phones have no Continue Watching row, so their words leave it out.
+          description={
+            IS_MOBILE
+              ? 'Reopening a past broadcast picks up where you left off.'
+              : 'Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row.'
+          }
+          help={
+            IS_MOBILE
+              ? "Off starts every VOD from the beginning. Only past broadcasts you open yourself are remembered, never a live stream you were watching. Device sync keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account for Twitch's own apps."
+              : "Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
+          }
           control={
             <Toggle
               enabled={resumeVodPlayback}
@@ -533,7 +559,7 @@ const PlayerSettings = () => {
                 // The row is gated on this setting, and Home is mounted behind
                 // this dialog, so ask Rust to rebuild it rather than waiting
                 // for a remount.
-                void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                refreshContinueWatching();
               }}
             />
           }
@@ -542,9 +568,7 @@ const PlayerSettings = () => {
             <SubControls>
               <SubControl
                 title="Device sync"
-                onReset={thenRun(resetFor(['video_player.sync_vod_progress', true]), () => {
-                  void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-                })}
+                onReset={thenRun(resetFor(['video_player.sync_vod_progress', true]), refreshContinueWatching)}
                 control={
                   <Toggle
                     enabled={syncVodProgress}
@@ -552,7 +576,7 @@ const PlayerSettings = () => {
                       setVideoPlayer({ sync_vod_progress: !syncVodProgress });
                       // Turning it on pulls the positions saved elsewhere into
                       // the row behind this dialog straight away.
-                      void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                      refreshContinueWatching();
                     }}
                   />
                 }
@@ -568,10 +592,15 @@ const PlayerSettings = () => {
         description="How close to live the player rides, and how much it keeps loaded ahead."
       >
         <SettingsRow
-          title="Target latency"
+          // The phone carries the value in the title, as the iPhone does.
+          title={IS_MOBILE ? `Target latency: ${targetLatencyLabel}` : 'Target latency'}
           onReset={resetFor('video_player.ll_target_latency')}
-          description="How close to live the player stays: how far behind the live edge it rides; lower is closer to live. Auto picks a gap that suits each channel (reopen the stream to apply)."
-          help={`Auto rides ${AUTO_GAP.ll.toFixed(1)}s behind on channels the low-latency engine serves, ${AUTO_GAP.promotion.toFixed(1)}s on other low-latency broadcasts and ${AUTO_GAP.plain.toFixed(1)}s on normal-latency ones. Set your own number to override all three; the lowest gaps need a solid connection to stay smooth.`}
+          description={
+            IS_MOBILE
+              ? 'How far behind the live edge the player rides; lower is closer to live. Auto picks a gap per channel.'
+              : 'How close to live the player stays: how far behind the live edge it rides; lower is closer to live. Auto picks a gap that suits each channel (reopen the stream to apply).'
+          }
+          help={`${IS_MOBILE ? 'Reopen the stream to apply a change. ' : ''}Auto rides ${AUTO_GAP.ll.toFixed(1)}s behind on channels the low-latency engine serves, ${AUTO_GAP.promotion.toFixed(1)}s on other low-latency broadcasts and ${AUTO_GAP.plain.toFixed(1)}s on normal-latency ones. Set your own number to override all three; the lowest gaps need a solid connection to stay smooth.`}
         >
           <div className="flex items-center gap-3">
             <input
@@ -588,9 +617,11 @@ const PlayerSettings = () => {
               }
               className="w-full accent-accent cursor-pointer"
             />
-            <span className="text-[12px] font-medium text-textPrimary tabular-nums flex-shrink-0">
-              {videoPlayer?.ll_target_latency == null ? 'Auto' : `${videoPlayer.ll_target_latency.toFixed(1)}s`}
-            </span>
+            {!IS_MOBILE && (
+              <span className="text-[12px] font-medium text-textPrimary tabular-nums flex-shrink-0">
+                {targetLatencyLabel}
+              </span>
+            )}
           </div>
         </SettingsRow>
 
@@ -871,7 +902,7 @@ const PlayerSettings = () => {
       {/* Phone-only: the phones have no Interface page, so the one Languages
           setting the desktop draws under Interface > Discover lives here. */}
       {IS_MOBILE && (
-        <SettingsSection label="Discover">
+        <SettingsSection label="Discover" description="What Discover and Kick browse show you.">
           <SettingsRow
             title="Languages"
             description="Streams in Discover and Kick browse. Your device language until you pick some."

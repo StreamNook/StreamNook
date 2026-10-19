@@ -5,6 +5,7 @@ import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { Dropdown } from '../ui/Dropdown';
 import { useSettingReset } from './settingReset';
 import type { BuiltInHighlightSettings, BuiltInHighlightRule } from '../../types';
+import { IS_MOBILE } from '../../utils/platform';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -27,13 +28,16 @@ const ROWS: Array<{
   key: RuleKey;
   label: string;
   hint: string;
+  /** The phone's words, where they differ (the iPhone page's). */
+  phoneHint?: string;
   defaultColor: string;
   defaultEnabled: boolean;
 }> = [
   {
     key: 'first_time_chatter',
     label: 'First-time chatters',
-    hint: "Highlight a user's first ever message in this channel (Twitch first-msg tag). Already on by default with the purple gradient — toggle off or re-color from here.",
+    hint: "Highlight a user's first ever message in this channel (Twitch first-msg tag). Already on by default with the purple gradient; toggle off or re-color from here.",
+    phoneHint: "Highlight a user's first ever message in this channel.",
     defaultColor: '#a855f7',
     defaultEnabled: true,
   },
@@ -41,6 +45,7 @@ const ROWS: Array<{
     key: 'returning_chatter',
     label: 'Returning chatters',
     hint: 'Highlight users coming back after a long absence (Twitch returning-chatter tag).',
+    phoneHint: 'Highlight users coming back after a long absence.',
     defaultColor: '#22d3ee',
     defaultEnabled: false,
   },
@@ -101,7 +106,7 @@ const BuiltInHighlightsSettings = () => {
             <SettingsRow
               title={row.label}
               onReset={resetFor([`${path}.color`, row.defaultColor], [`${path}.enabled`, row.defaultEnabled])}
-              description={row.hint}
+              description={IS_MOBILE ? (row.phoneHint ?? row.hint) : row.hint}
               help={
                 row.key === 'first_time_chatter'
                   ? 'Style is a tinted wash with a bar down the left, or a ring around the message; Ring fill adds a faint color-matched fill inside it. Glint is a short highlight as the row lands (a sheen, a pulse, or a spark around the edge), and Loop keeps it going.'

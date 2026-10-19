@@ -1977,6 +1977,7 @@ impl IrcService {
 
         *get_own_identity().lock().await = Some((user_info.login.clone(), user_info.id.clone()));
         ChatRules::set_own_identity(&user_info.login, &user_info.id);
+        ChatRules::set_own_display_name(&user_info.display_name);
 
         // Bring up (or reuse) the local WS bridge that fans parsed messages to
         // the frontend. Extracted into ensure_local_ws_bridge so non-Twitch
@@ -2683,18 +2684,9 @@ impl IrcService {
                 let rules = ChatRules::snapshot();
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
                 if !verdict.drop {
-                    crate::services::mention_ping::on_live_message(
-                        &chat_msg,
-                        verdict.mentioned,
-                        verdict.reply_to_me,
-                    );
+                    // Inbox, mention sound and notification, all from one call.
+                    crate::services::mention_inbox::on_verdict(&chat_msg, &verdict);
                     crate::services::chat_row_view::stamp(&mut chat_msg);
-                    #[cfg(desktop)]
-                    crate::services::mention_notify::on_live_message(
-                        &chat_msg,
-                        verdict.mentioned,
-                        verdict.reply_to_me,
-                    );
                 }
 
                 // Deliver to the frontend FIRST (wire order is the only order
@@ -2926,6 +2918,7 @@ impl IrcService {
                     ChatLoggerService::log_deleted_message(ch, &clear.login, clear.text.as_deref());
                     ChatHistory::mark_deleted(ch, &clear.target_msg_id);
                 }
+                crate::services::mention_inbox::on_message_deleted(&clear.target_msg_id);
                 // Send deletion event to frontend, tagged with channel for routing
                 send_to_bridge(BridgeFrame::maybe_channel(clear.channel.as_deref(), clear.frame().to_string()), false).await;
             }
@@ -5382,9 +5375,13 @@ impl IrcService {
 
                 // Same rules as live rows: a hidden user's backfill is hidden
                 // too, and highlights are stamped so the row needs no matcher.
-                if ChatRules::evaluate(&mut chat_msg, &rules).drop {
+                let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
+                if verdict.drop {
                     continue;
                 }
+                // A mention from before you opened the chat still reaches the
+                // inbox (once: it dedupes by id), with no sound or notice.
+                crate::services::mention_inbox::on_backfill(&chat_msg, &verdict);
                 chat_msg.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut chat_msg);
                 results.push(chat_msg);

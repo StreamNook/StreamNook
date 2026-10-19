@@ -5,6 +5,7 @@ import streamnookLogo from '../../assets/streamnook-logo.png';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
+import { GroupLabel } from '../../mobile/ui/GroupedList';
 import { useSettingReset } from './settingReset';
 
 import { Logger } from '../../utils/logger';
@@ -93,11 +94,20 @@ const SupportSettings = () => {
     const cutoutBorder = { borderColor: 'var(--color-background-tertiary)' } as CSSProperties;
 
     return (
-        <div className="flex min-h-full flex-col items-center py-6">
+        // The phone reads as its other settings pages: sections down the page,
+        // one gap between them. The desktop centers the invite in its pane.
+        <div className={IS_MOBILE ? 'space-y-6' : 'flex min-h-full flex-col items-center py-6'}>
             {/* my-auto centers the card group vertically when there's room, and degrades
                 to top-aligned + scrollable when the card is taller than the pane — unlike
                 justify-center, which clips the top of an overflowing card out of reach. */}
-            <div className="my-auto flex w-full max-w-[400px] flex-col items-center">
+            <div className={`flex w-full flex-col items-center ${IS_MOBILE ? '' : 'my-auto max-w-[400px]'}`}>
+                {/* The phone names the card's section like every other one on
+                    its settings pages, as the iPhone page does. */}
+                {IS_MOBILE && (
+                    <GroupLabel as="h3" className="self-stretch px-4 pb-2" data-settings-section="Community">
+                        Community
+                    </GroupLabel>
+                )}
                 {/* Intro — anchors the tab so the page reads as a deliberate, centered
                     invite screen rather than one stray bar across a wide empty page. */}
                 <div className="mb-5 flex max-w-[340px] flex-col items-center text-center">
@@ -346,7 +356,12 @@ const DataRecordedSection = () => (
         />
         <SettingsRow
             title="VOD positions"
-            description="With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices."
+            description={
+                // The phones have no Continue Watching row.
+                IS_MOBILE
+                    ? 'With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.'
+                    : 'With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices.'
+            }
             help="Only past broadcasts you open yourself, never live watching. Kept for 90 days. Turn off Device sync under Player > Resume VODs and nothing more is sent."
         />
     </SettingsSection>

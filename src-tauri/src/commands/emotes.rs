@@ -127,8 +127,12 @@ pub async fn match_emote_tokens(
     tier: Option<String>,
     limit: Option<usize>,
     picker: Option<bool>,
+    typing: Option<bool>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteMatchResult, String> {
+    // Asked as the viewer types (the phones' strip, the desktop colon list),
+    // not on Tab: a one-character word then finds only an exact emote name.
+    let typing = typing.unwrap_or(false);
     let profile = match profile.as_deref() {
         Some("search") => Profile::Search,
         _ => Profile::Cycle,
@@ -165,7 +169,8 @@ pub async fn match_emote_tokens(
         },
     )
     // The emote menu shows FFZ subscriber effects locked instead of hiding them.
-    .include_locked(picker.unwrap_or(false));
+    .include_locked(picker.unwrap_or(false))
+    .typing(typing);
 
     let ready = match provider.as_deref().unwrap_or("twitch") {
         "twitch" => {
@@ -268,7 +273,8 @@ pub async fn match_emote_tokens(
 
     // The cycle and the phone strip offer the room's recent chatters after
     // the emotes (provider `user`).
-    if profile == Profile::Cycle {
+    // A one-character word typed in passing names no chatter either.
+    if profile == Profile::Cycle && !(typing && emote_match::is_short_word(&query)) {
         let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
         let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);
         rows.extend(chatters);

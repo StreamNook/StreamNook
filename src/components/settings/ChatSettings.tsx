@@ -194,6 +194,20 @@ const HOVER_SIZE_OPTIONS = [
 
 type HoverSizeKey = (typeof HOVER_SIZE_OPTIONS)[number]['value'];
 
+// What a phone row shows and resets to when the key is absent: the phone's
+// first-run look (models/settings.rs ChatDesignSettings::first_run), so a fresh
+// phone reads the value Rust gave it and draws no reset arrow.
+const ENTRANCE_FALLBACK = IS_MOBILE ? 'slide' : 'none';
+const DELETED_FALLBACK = IS_MOBILE ? 'italic' : 'strikethrough';
+
+const DELETED_STYLE_OPTIONS: { value: DeletedMessageStyle; label: string }[] = [
+  { value: 'strikethrough', label: 'Strikethrough' },
+  { value: 'dimmed', label: 'Dimmed' },
+  { value: 'italic', label: 'Italic' },
+  { value: 'keep', label: 'Keep' },
+  { value: 'hidden', label: 'Hidden' },
+];
+
 // A widely-recognized 7TV emote used purely as the live sample so the preview
 // renders a real emote with proper upscaling at any size.
 const SAMPLE_EMOTE_ID = '01GA29CZ2R000C36HNE7Z0DQXD';
@@ -491,6 +505,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
   const [pictureSourceHover, setPictureSourceHover] = useState<ProfilePictureSource | null>(null);
   const pictureSource = profilePictureSource(settings.cosmetics?.profile_picture_source);
+  const savedPictureAnimation = (settings.cosmetics?.profile_picture_animation ??
+    DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation;
+  // A saved On hover draws still on a touch screen, so the phone shows it as Still.
+  const pictureAnimation: ProfilePictureAnimation =
+    IS_MOBILE && savedPictureAnimation === 'hover' ? 'never' : savedPictureAnimation;
   const [commandDraft, setCommandDraft] = useState('');
   const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
   const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
@@ -533,7 +552,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     backfill_opacity: stored?.backfill_opacity ?? 100,
     emote_margin: stored?.emote_margin ?? 0.125,
     emote_hover_size: stored?.emote_hover_size ?? 96,
-    deleted_message_style: stored?.deleted_message_style ?? 'strikethrough',
+    deleted_message_style: stored?.deleted_message_style ?? DELETED_FALLBACK,
     hide_shared_chat: stored?.hide_shared_chat ?? false,
     paint_mentions_in_body: stored?.paint_mentions_in_body ?? true,
     compact_emote_tooltips: stored?.compact_emote_tooltips ?? false,
@@ -555,7 +574,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
-    message_entrance: (stored?.message_entrance ?? 'none') as 'none' | 'fade' | 'slide' | 'rise',
+    message_entrance: (stored?.message_entrance ?? ENTRANCE_FALLBACK) as 'none' | 'fade' | 'slide' | 'rise',
     emoji_style: (stored?.emoji_style ?? 'apple') as 'system' | 'apple' | 'google' | 'twitter' | 'facebook',
     show_personal_emotes: stored?.show_personal_emotes ?? true,
     giant_emote_align: (stored?.giant_emote_align ?? 'center') as 'left' | 'center' | 'right' | 'inline',
@@ -693,7 +712,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   };
 
   return (
-    <div className="space-y-8">
+    // The phones share one section gap; the desktop keeps its wider one.
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       {/* Desktop only. This positions the MAIN app's chat panel (left / right /
           bottom / hidden) plus the hover-reveal that goes with it. The phone
           shell stacks the player over chat and has no edge to tuck against. */}
@@ -856,12 +876,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <SettingsRow
             title="Layout"
-            onReset={resetFor(['fullscreen_chat.phone_layout', 'overlay'])}
+            onReset={resetFor(['fullscreen_chat.phone_layout', 'beside'])}
             description="Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it."
-            help="Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through. Width never goes past half the screen."
+            help="Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through."
           >
             <SegmentedSelect<'overlay' | 'beside'>
-              value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}
+              fullWidth
+              value={settings.fullscreen_chat?.phone_layout ?? 'beside'}
               onChange={(phone_layout) =>
                 updateSettings({
                   ...settings,
@@ -874,7 +895,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ]}
             />
             <SubControls>
-              {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
+              {(settings.fullscreen_chat?.phone_layout ?? 'beside') === 'overlay' && (
                 <SubControl
                   title="Background"
                   onReset={resetFor(['fullscreen_chat.opacity', 55])}
@@ -930,25 +951,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               />
             </SubControls>
           </SettingsRow>
-        </SettingsSection>
-      )}
-
-      {/* The phone's Chats tab: your chats with no stream playing. */}
-      {IS_MOBILE && (
-        <SettingsSection label="Chats Tab" description="Reading your chats with no stream playing.">
-          <SettingsRow
-            title="Keep screen on"
-            onReset={resetFor(['chats_keep_screen_on', true])}
-            description="The screen stays on while the Chats tab is open, until 30 minutes pass without a touch."
-            control={
-              <Toggle
-                enabled={settings.chats_keep_screen_on ?? true}
-                onChange={() =>
-                  updateSettings({ ...settings, chats_keep_screen_on: !(settings.chats_keep_screen_on ?? true) })
-                }
-              />
-            }
-          />
         </SettingsSection>
       )}
 
@@ -1142,6 +1144,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
       </SettingsSection>
 
+      {/* The phone's Chats tab: your chats with no stream playing. Right after
+          Polls & Predictions, in the iPhone page's order. */}
+      {IS_MOBILE && (
+        <SettingsSection label="Chats Tab" description="Reading your chats with no stream playing.">
+          <SettingsRow
+            title="Keep screen on"
+            onReset={resetFor(['chats_keep_screen_on', true])}
+            description="The screen stays on while the Chats tab is open, until 30 minutes pass without a touch."
+            control={
+              <Toggle
+                enabled={settings.chats_keep_screen_on ?? true}
+                onChange={() =>
+                  updateSettings({ ...settings, chats_keep_screen_on: !(settings.chats_keep_screen_on ?? true) })
+                }
+              />
+            }
+          />
+        </SettingsSection>
+      )}
+
       <SettingsSection
         id="settings-section-chat-events"
         label="Chat Events"
@@ -1180,20 +1202,24 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
 
-        <SettingsRow
-          title="Clip chat replay"
-          onReset={resetFor(['clip_chat_replay', true])}
-          description="Shows the chat that was live while a clip was recorded, beside the clip."
-          help="Needs the original broadcast to still be up, so older clips may have no replay."
-          control={
-            <Toggle
-              enabled={settings.clip_chat_replay ?? true}
-              onChange={() =>
-                updateSettings({ ...settings, clip_chat_replay: !(settings.clip_chat_replay ?? true) })
-              }
-            />
-          }
-        />
+        {/* Desktop only: the phone's clip sheet plays the clip with no chat
+            replay beside it, so the switch would change nothing there. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Clip chat replay"
+            onReset={resetFor(['clip_chat_replay', true])}
+            description="Shows the chat that was live while a clip was recorded, beside the clip."
+            help="Needs the original broadcast to still be up, so older clips may have no replay."
+            control={
+              <Toggle
+                enabled={settings.clip_chat_replay ?? true}
+                onChange={() =>
+                  updateSettings({ ...settings, clip_chat_replay: !(settings.clip_chat_replay ?? true) })
+                }
+              />
+            }
+          />
+        )}
 
         <SettingsRow
           title="Style"
@@ -1203,6 +1229,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <div className="space-y-3">
             <SegmentedSelect<'cards' | 'outline' | 'plain'>
+              fullWidth={IS_MOBILE}
               value={chatEvents.event_style ?? 'cards'}
               onChange={(event_style) => setEvents({ event_style })}
               onPreview={setEventStyleHover}
@@ -1279,6 +1306,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description="Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline."
         >
           <SegmentedSelect<'card' | 'message'>
+            fullWidth={IS_MOBILE}
             value={chatEvents.cheer_display ?? 'card'}
             onChange={(cheer_display) => setEvents({ cheer_display })}
             options={[
@@ -1358,7 +1386,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Collapsed"
           onReset={resetFor(['chat_design.pinned_start_collapsed', true])}
           description="Shows the pinned message as a compact one-line bar when you enter a channel."
-          help="Click the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely."
+          help={`${IS_MOBILE ? 'Tap' : 'Click'} the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely.`}
           control={
             <Toggle
               enabled={cd.pinned_start_collapsed ?? true}
@@ -1436,7 +1464,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title={`Text size: ${cd.font_size ?? 14}px`}
           onReset={resetFor(['chat_design.font_size', 14])}
-          description="Size of message text, with room to go large when MultiChat fills a whole monitor."
+          description={
+            IS_MOBILE
+              ? 'Size of message text.'
+              : 'Size of message text, with room to go large when MultiChat fills a whole monitor.'
+          }
         >
           <input
             type="range"
@@ -1492,10 +1524,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Message animation"
-          onReset={resetFor(['chat_design.message_entrance', 'none'])}
+          onReset={resetFor(['chat_design.message_entrance', ENTRANCE_FALLBACK])}
           description="How a new message arrives: a short fade or slide as each one lands. History loaded on join never animates, and it is skipped when motion is reduced."
         >
           <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
+            fullWidth={IS_MOBILE}
             value={cd.message_entrance}
             onChange={(message_entrance) => setDesign({ message_entrance })}
             onPreview={setEntranceHover}
@@ -1520,7 +1553,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             step={5}
             value={cd.backfill_opacity ?? 100}
             onChange={(e) => setDesign({ backfill_opacity: Number(e.target.value) })}
-            className="w-40 accent-accent"
+            // Full width under the row on the phone, as its other sliders run.
+            className={IS_MOBILE ? 'w-full accent-accent' : 'w-40 accent-accent'}
           />
         </SettingsRow>
 
@@ -1641,7 +1675,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Readable colors"
           onReset={resetFor(['chat_design.name_color_adjustment', 'hsl_loop'])}
-          description="Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them."
+          description={
+            IS_MOBILE
+              ? "Nudges a chatter's color lighter or darker until it stands out from your theme."
+              : "Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them."
+          }
+          help={
+            IS_MOBILE
+              ? 'Lighter on a dark theme, darker on a light one. The hue stays theirs. Off shows colors exactly as they set them.'
+              : undefined
+          }
           control={
             <Toggle
               enabled={(cd.name_color_adjustment ?? 'hsl_loop') !== 'off'}
@@ -1657,7 +1700,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Badges"
           onReset={resetFor(['chat_design.show_badges', true])}
-          description="The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ."
+          description={
+            IS_MOBILE
+              ? "The platform's own badges next to names: moderator, subscriber, VIP and the rest."
+              : "The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ."
+          }
           help="A channel that uploads its own moderator and VIP badges to FrankerFaceZ shows them in its chat instead of the standard ones. Who is a moderator or VIP still comes from Twitch. Turn it off to see the standard badges everywhere."
           control={<Toggle enabled={cd.show_badges} onChange={() => setDesign({ show_badges: !cd.show_badges })} />}
         >
@@ -1682,21 +1729,41 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           onReset={resetFor(['chat_design.badge_scale', 1])}
           description="How big badges draw, relative to the text."
           control={
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={0.5}
-                max={2.5}
-                step={0.05}
-                value={cd.badge_scale}
-                disabled={!cd.show_badges && !cd.show_third_party_badges}
-                onChange={(e) => setDesign({ badge_scale: Number(e.target.value) })}
-                className="w-32 accent-accent disabled:opacity-40"
-              />
-              <span className="text-[12px] text-textMuted tabular-nums w-10 text-right">{cd.badge_scale.toFixed(2)}x</span>
-            </div>
+            // The phone keeps the readout on the title line and runs the
+            // slider full width under the row, as the iPhone does.
+            IS_MOBILE ? (
+              <span className="text-[12px] text-textMuted tabular-nums">{cd.badge_scale.toFixed(2)}x</span>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.5}
+                  step={0.05}
+                  value={cd.badge_scale}
+                  disabled={!cd.show_badges && !cd.show_third_party_badges}
+                  onChange={(e) => setDesign({ badge_scale: Number(e.target.value) })}
+                  className="w-32 accent-accent disabled:opacity-40"
+                />
+                <span className="text-[12px] text-textMuted tabular-nums w-10 text-right">{cd.badge_scale.toFixed(2)}x</span>
+              </div>
+            )
           }
-        />
+        >
+          {IS_MOBILE && (
+            <input
+              type="range"
+              min={0.5}
+              max={2.5}
+              step={0.05}
+              value={cd.badge_scale}
+              disabled={!cd.show_badges && !cd.show_third_party_badges}
+              aria-label="Badge size"
+              onChange={(e) => setDesign({ badge_scale: Number(e.target.value) })}
+              className="w-full accent-accent disabled:opacity-40"
+            />
+          )}
+        </SettingsRow>
 
         <SettingsRow
           title="Add-on badges"
@@ -1754,6 +1821,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <div className="space-y-3">
             <SegmentedSelect<ProfilePictureSource>
+              fullWidth={IS_MOBILE}
               value={pictureSource}
               onChange={(value) => setCosmetics({ profile_picture_source: value })}
               onPreview={setPictureSourceHover}
@@ -1764,10 +1832,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
             <ProfilePicturePreview
               source={pictureSourceHover ?? pictureSource}
-              animation={
-                pictureAnimationHover ??
-                ((settings.cosmetics?.profile_picture_animation ?? DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation)
-              }
+              animation={pictureAnimationHover ?? pictureAnimation}
             />
           </div>
           {pictureSource === 'seventv' && (
@@ -1777,14 +1842,23 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 onReset={resetFor(['cosmetics.profile_picture_animation', DEFAULT_PROFILE_PICTURE_ANIMATION])}
                 control={
                   <SegmentedSelect<ProfilePictureAnimation>
-                    value={(settings.cosmetics?.profile_picture_animation ?? DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation}
+                    value={pictureAnimation}
                     onChange={(value) => setCosmetics({ profile_picture_animation: value })}
                     onPreview={setPictureAnimationHover}
-                    options={[
-                      { value: 'always', label: 'Always' },
-                      { value: 'hover', label: 'On hover' },
-                      { value: 'never', label: 'Never' },
-                    ]}
+                    // Touch has no hover: the phone offers Animated or Still,
+                    // and a saved On hover shows as Still until one is picked.
+                    options={
+                      IS_MOBILE
+                        ? [
+                            { value: 'always', label: 'Animated' },
+                            { value: 'never', label: 'Still' },
+                          ]
+                        : [
+                            { value: 'always', label: 'Always' },
+                            { value: 'hover', label: 'On hover' },
+                            { value: 'never', label: 'Never' },
+                          ]
+                    }
                   />
                 }
               />
@@ -1814,6 +1888,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description="Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy."
         >
           <SegmentedSelect<'all' | 'one' | 'none'>
+            fullWidth={IS_MOBILE}
             value={(settings.cosmetics?.paint_shadows ?? 'all') as 'all' | 'one' | 'none'}
             onChange={(value) => setCosmetics({ paint_shadows: value })}
             options={[
@@ -1907,7 +1982,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="@name style"
-          description="How an @mention reads in chat. Hover an option to see it in the preview."
+          description={
+            IS_MOBILE ? 'How an @mention reads in chat.' : 'How an @mention reads in chat. Hover an option to see it in the preview.'
+          }
           help="A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright."
         >
           <SubControls>
@@ -1958,11 +2035,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 />
               }
             />
+            {/* On the phone it goes under its name at full width, like the
+                choices above it, so the group never mixes the two layouts. */}
             <SubControl
               title="Color"
+              stacked={IS_MOBILE}
               onReset={resetFor(['chat_design.mention_text_color', ''])}
               control={
-                <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-2 ${IS_MOBILE ? 'w-full' : ''}`}>
                   {cd.mention_text_color && (
                     <ColorSwatch
                       value={cd.mention_text_color}
@@ -1971,6 +2051,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                     />
                   )}
                   <SegmentedSelect<'name' | 'fixed'>
+                    fullWidth={IS_MOBILE}
                     value={cd.mention_text_color ? 'fixed' : 'name'}
                     onChange={(mode) => setDesign({ mention_text_color: mode === 'fixed' ? cd.mention_text_color || '#bf94ff' : '' })}
                     options={[
@@ -2068,6 +2149,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description="How a reply shows the message it answers: a context line above it, an @name at the start, or nothing."
         >
           <SegmentedSelect<'full' | 'mention' | 'off'>
+            fullWidth={IS_MOBILE}
             value={cd.reply_style}
             onChange={(reply_style) => setDesign({ reply_style })}
             options={[
@@ -2087,9 +2169,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Style"
           onReset={resetFor(['chat_design.link_previews', true], ['chat_design.link_preview_keep_link', false])}
           description="Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card."
-          help="In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box."
+          help={
+            // The phone has the Load preview button too, so its words keep it,
+            // with a tap where the desktop hovers.
+            IS_MOBILE
+              ? 'In Clean, tap the card to open where it goes. StreamNook fetches the page from your phone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield beside it trusts the site from chat. Popular sites are trusted out of the box.'
+              : 'In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.'
+          }
         >
           <SegmentedSelect<'off' | 'with_link' | 'clean'>
+            fullWidth={IS_MOBILE}
             value={
               !cd.link_previews ? 'off' : cd.link_preview_keep_link ? 'with_link' : 'clean'
             }
@@ -2123,7 +2212,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Short links"
           onReset={resetFor(['chat_design.shorten_links', true])}
           description="Shows each link as a compact label, the site plus a short path, instead of the full raw URL."
-          help="The full link still opens on click and shows on hover."
+          help={
+            IS_MOBILE
+              ? 'The full link still opens on tap and shows when you press and hold.'
+              : 'The full link still opens on click and shows on hover.'
+          }
           control={
             <Toggle
               enabled={cd.shorten_links ?? true}
@@ -2154,7 +2247,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       <SettingsSection
         label="Emotes"
-        description="How big emotes are, how they animate, and how much they grow when you hover one."
+        description={
+          IS_MOBILE
+            ? 'How big emotes are, how they animate, and how much they grow when you press and hold one.'
+            : 'How big emotes are, how they animate, and how much they grow when you hover one.'
+        }
       >
         <SettingsRow
           title="Emoji style"
@@ -2202,6 +2299,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               Never there (ChatMessage skips touch pointers), so the phone shows
               it as Never and only writes when the viewer picks something. */}
           <SegmentedSelect<'always' | 'hover' | 'never'>
+            fullWidth={IS_MOBILE}
             value={IS_MOBILE && cd.animate_emotes === 'hover' ? 'never' : (cd.animate_emotes ?? 'always')}
             onChange={(animate_emotes) => setDesign({ animate_emotes })}
             options={
@@ -2222,7 +2320,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="GIFs"
           onReset={resetFor(['chat_design.show_chat_gifs', true])}
-          description="Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal."
+          description={`Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can ${IS_MOBILE ? 'tap' : 'click'} to reveal.`}
           help={
             IS_MOBILE
               ? 'GIFs also follow Animation: Never shows the chip instead.'
@@ -2446,8 +2544,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Spellcheck"
           onReset={resetFor(['chat_input.spellcheck_enabled', true])}
-          description="Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone."
-          help="Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click."
+          description={
+            // The phone's spelling comes from its keyboard, which does not
+            // know emotes or chatter names, so its line promises only the
+            // underline and the tap.
+            IS_MOBILE
+              ? 'Underlines misspelled words as you type and offers corrections when you tap one.'
+              : 'Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone.'
+          }
+          help={
+            IS_MOBILE
+              ? undefined
+              : 'Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click.'
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.spellcheck_enabled ?? true}
@@ -2455,7 +2564,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         >
-          {(settings.chat_input?.spellcheck_enabled ?? true) && (
+          {/* A phone's keyboard checks spelling and never reads these words,
+              so the Dictionary is the desktop's alone. */}
+          {caps.spell_dictionary && (settings.chat_input?.spellcheck_enabled ?? true) && (
             <SubControls>
               <SubControl title="Dictionary" stacked control={<SpellcheckDictionary />} />
             </SubControls>
@@ -2464,8 +2575,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Chat modes"
           onReset={resetFor(['chat_input.show_room_modes', true])}
-          description="Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
-          help="When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover or tap it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          description={
+            IS_MOBILE
+              ? 'Shows when a channel limits who can chat, like emote-only or slow mode.'
+              : "Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
+          }
+          help={`When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; ${IS_MOBILE ? 'tap' : 'hover or tap'} it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.`}
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
@@ -2512,8 +2627,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Hide emote button"
           onReset={resetFor(['chat_input.hide_emote_button', false])}
-          description="Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work."
-          help="The smiley opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box."
+          description={
+            // On this phone the suggestions strip inserts an emote but does
+            // not open the picker, so its words promise only the strip.
+            IS_MOBILE
+              ? 'Removes the smiley from inside the message box, and with it the emote picker. Emote suggestions still show as you type.'
+              : 'Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work.'
+          }
+          help={
+            IS_MOBILE
+              ? undefined
+              : 'The smiley opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box.'
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.hide_emote_button ?? false}
@@ -2598,6 +2723,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           the desktop copy here would silently desync three files. */}
       <SettingsSection
         label="Tab Completion"
+        // A phone has no Tab key: it shows the iPhone page's name, while
+        // search and the glyph table still find the section by its label.
+        shownLabel={IS_MOBILE ? 'Suggestions' : undefined}
         description={
           IS_MOBILE
             ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
@@ -2732,22 +2860,28 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       >
         <SettingsRow
           title="Deleted messages"
-          onReset={resetFor(['chat_design.deleted_message_style', 'strikethrough'])}
+          onReset={resetFor(['chat_design.deleted_message_style', DELETED_FALLBACK])}
           description="How a message looks once a moderator deletes it or times out or bans its sender."
         >
           <div className="space-y-3">
-            <SegmentedSelect<DeletedMessageStyle>
-              value={cd.deleted_message_style as DeletedMessageStyle}
-              onChange={(value) => setDesign({ deleted_message_style: value })}
-              onPreview={setDeletedHover}
-              options={[
-                { value: 'strikethrough', label: 'Strikethrough' },
-                { value: 'dimmed', label: 'Dimmed' },
-                { value: 'italic', label: 'Italic' },
-                { value: 'keep', label: 'Keep' },
-                { value: 'hidden', label: 'Hidden' },
-              ]}
-            />
+            {/* Five segments do not fit a phone's width, so the phone picks
+                from a menu, as the iPhone does; the preview stays. */}
+            {IS_MOBILE ? (
+              <Dropdown<DeletedMessageStyle>
+                value={cd.deleted_message_style as DeletedMessageStyle}
+                onChange={(value) => setDesign({ deleted_message_style: value })}
+                className="w-full"
+                ariaLabel="Deleted messages"
+                options={DELETED_STYLE_OPTIONS}
+              />
+            ) : (
+              <SegmentedSelect<DeletedMessageStyle>
+                value={cd.deleted_message_style as DeletedMessageStyle}
+                onChange={(value) => setDesign({ deleted_message_style: value })}
+                onPreview={setDeletedHover}
+                options={DELETED_STYLE_OPTIONS}
+              />
+            )}
             <DeletedMessagePreview
               design={cd}
               style={deletedHover ?? (cd.deleted_message_style as DeletedMessageStyle)}
@@ -2770,7 +2904,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Smooth resume"
           onReset={resetFor(['chat_render.smooth_scroll_on_resume', true])}
-          description="Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant."
+          description={`Animates the scroll back to the bottom when you ${IS_MOBILE ? 'tap' : 'click'} Resume; auto-scroll for new messages stays instant.`}
           control={
             <Toggle
               enabled={settings.chat_render?.smooth_scroll_on_resume ?? true}
@@ -2842,6 +2976,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           help={'Match: "Nearly the same" ignores capitals, extra spaces and trailing punctuation, so "LULW!!" joins "lulw". Minimum is how many copies it takes before the counter appears. Window is how long a run stays open; after that the next copy starts a fresh run. Counter color is the little x12. Mod & VIP exemption keeps mods, VIPs and the streamer on their own rows. Moderated channels turns folding off wherever you are a mod, so a hidden copy is never a message you needed to action.'}
         >
           <SegmentedSelect<RepeatDisplayMode>
+            fullWidth={IS_MOBILE}
             value={repeatMode}
             onChange={(mode) => setRepeat({ mode })}
             options={[

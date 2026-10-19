@@ -46,14 +46,14 @@ use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
     badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
-    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, shared_chat::*, hype_train::*, identity::*, justlog::*, layout::*,
+    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, shared_chat::*, fonts::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -643,6 +643,7 @@ pub(crate) fn flush_debounced_stores() {
     let _ = services::universal_cache_service::flush_manifest_now();
     let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
     let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::mention_inbox::flush_now();
     let _ = services::vod_progress_service::flush_now();
     #[cfg(desktop)]
     let _ = commands::popout_window::flush_now();
@@ -871,8 +872,7 @@ pub fn run() {
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
-    #[cfg(desktop)]
-    services::mention_notify::refresh(&settings);
+    services::mention_inbox::refresh(&settings);
     services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
@@ -990,6 +990,9 @@ pub fn run() {
     // services::cast_session.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(cast_plugin::init());
+    // Android mention notifications, posted from Rust while the page sleeps.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_notify::mention_plugin());
     // Linux: tells every page, before its first paint, who draws the window
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
@@ -1058,6 +1061,11 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(dir) = app.path().app_data_dir() {
                 services::app_paths::set_base(dir);
+                // Before anything else writes there: what this launch found
+                // tells an update from a restore (services::install_marker).
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    services::install_marker::observe(&data);
+                }
             }
             // iOS backs up Application Support, so every cache goes under the
             // shell's Library/Caches instead; caches an older build left in
@@ -1097,7 +1105,16 @@ pub fn run() {
             // settings.json now that the path resolves and push the values into
             // the stores that were constructed from the defaults.
             #[cfg(mobile)]
-            if let Ok(loaded) = load_settings_from_file() {
+            if let Ok(mut loaded) = load_settings_from_file() {
+                // Settings restored from another install (a backup, a phone
+                // transfer) run the setup again rather than skip it.
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    if services::install_marker::reconcile(&data, &mut loaded) {
+                        if let Err(e) = commands::settings::write_settings_to_disk_sync(&loaded) {
+                            log::warn!("[Setup] could not save the install's setup state: {e}");
+                        }
+                    }
+                }
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
@@ -1671,6 +1688,10 @@ pub fn run() {
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "android")]
+            share_settings_file,
+            #[cfg(target_os = "android")]
+            import_settings_text,
             #[cfg(target_os = "ios")]
             services::ios_sheet::open_drops_sheet,
             #[cfg(target_os = "ios")]
@@ -1836,6 +1857,7 @@ pub fn run() {
             get_user_by_id,
             get_user_by_login,
             get_shared_chat_source,
+            get_custom_font,
             get_channel_moderators,
             get_channel_vips,
             follow_channel,
@@ -2317,6 +2339,13 @@ pub fn run() {
             whisper_send,
             whisper_import,
             whisper_refresh,
+            // Mentions inbox
+            get_mention_inbox,
+            mark_mentions_read,
+            remove_mention,
+            clear_mention_inbox,
+            open_mention,
+            set_visible_mention_rooms,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

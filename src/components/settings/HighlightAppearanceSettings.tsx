@@ -18,6 +18,12 @@ const STYLE_HINTS: Record<HighlightDisplayStyle, string> = {
   none: 'Nothing drawn. The sound and title flash still play.',
 };
 
+// A phone has no window title to flash, so its None says only what the row shows.
+const PHONE_STYLE_HINTS: Record<HighlightDisplayStyle, string> = {
+  ...STYLE_HINTS,
+  none: 'Nothing drawn on the row.',
+};
+
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
     onClick={onChange}
@@ -88,10 +94,11 @@ const HighlightAppearanceSettings = () => {
       <SettingsRow
         title="Style"
         onReset={resetFor(['chat_highlights.appearance.display_style', 'standard'])}
-        description={STYLE_HINTS[displayStyle]}
+        description={(IS_MOBILE ? PHONE_STYLE_HINTS : STYLE_HINTS)[displayStyle]}
         help="Opacity is how bright the row tint appears, in the Standard style only. 20% matches the original look."
       >
         <SegmentedSelect<HighlightDisplayStyle>
+          fullWidth={IS_MOBILE}
           value={displayStyle}
           onChange={(value) => writeAppearance({ display_style: value })}
           options={[

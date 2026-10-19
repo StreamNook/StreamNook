@@ -1126,6 +1126,12 @@ pub struct Settings {
     pub glass_blur: bool,
     #[serde(default)]
     pub setup_complete: bool,
+    /// These settings were written on an install that keeps the install
+    /// marker (`services::install_marker`). Backed up with the settings, so a
+    /// restore that finds it without the marker knows it came from elsewhere.
+    /// Backend-owned: a frontend save never writes it.
+    #[serde(default)]
+    pub install_marked: bool,
     /// Set once this install has been moved onto the first-run chat look (see
     /// `adopt_first_run_look_once`). Backend-owned: a frontend save never
     /// writes it, so a later choice of the old look is never flipped again.
@@ -1200,6 +1206,10 @@ pub struct Settings {
     /// are varied. Typed because the Rust runner reads it.
     #[serde(default)]
     pub chat_burst: ChatBurstSettings,
+    /// What counts as a mention of you, and which chats keep them quiet.
+    /// Typed because the chat rules and the mentions inbox read it.
+    #[serde(default)]
+    pub mentions: MentionSettings,
     /// The phones' Chats screen keeps the screen on while it is in front, until
     /// `chat_tabs::KEEP_AWAKE_IDLE_SECS` pass with no touch.
     #[serde(default = "default_true")]
@@ -1427,6 +1437,39 @@ impl Default for ChatBurstSettings {
     }
 }
 
+/// What counts as someone mentioning you, and where mentions stay quiet.
+/// Read by the chat rules (services/mention_match.rs) and the mentions inbox.
+/// Mirrors the frontend `MentionSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct MentionSettings {
+    /// Your login as a whole word, without the `@`.
+    pub match_bare_login: bool,
+    /// Your display name, when it differs from your login.
+    pub match_display_name: bool,
+    /// Your highlight phrases count as mentions too: they file into the
+    /// inbox and notify.
+    pub highlight_words: bool,
+    /// Chats whose mentions still highlight but never notify or reach the
+    /// inbox, by room key (bare Twitch login, `provider:slug` otherwise).
+    pub muted_channels: Vec<String>,
+    /// Keys the frontend adds to this group before this struct names them.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for MentionSettings {
+    fn default() -> Self {
+        Self {
+            match_bare_login: true,
+            match_display_name: true,
+            highlight_words: true,
+            muted_channels: Vec::new(),
+            extra: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct SnippetSettings {
@@ -1582,6 +1625,7 @@ impl Default for Settings {
             cosmetics: CosmeticsSettings::default(),
             chat_input: ChatInputSettings::default(),
             chat_burst: ChatBurstSettings::default(),
+            mentions: MentionSettings::default(),
             chats_keep_screen_on: true,
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
@@ -1593,6 +1637,7 @@ impl Default for Settings {
             glass_transparency: None,
             glass_blur: default_glass_blur(),
             setup_complete: false, // New users need to complete setup
+            install_marked: false,
             first_run_look_adopted: true, // already starts with that look
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
@@ -1736,6 +1781,7 @@ impl Settings {
         self.drops = authoritative.drops.clone();
         self.channel_links = authoritative.channel_links.clone();
         self.first_run_look_adopted = authoritative.first_run_look_adopted;
+        self.install_marked = authoritative.install_marked;
     }
 
     /// One-time move of an existing install onto the first-run chat look,

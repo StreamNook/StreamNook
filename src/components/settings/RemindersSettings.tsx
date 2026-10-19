@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SegmentedSelect } from './_primitives';
+import { IS_MOBILE } from '../../utils/platform';
 import {
   useChannelSearch,
   type ChannelItem,
@@ -315,21 +316,29 @@ const RemindersSettings = () => {
     }
   };
 
+  const referenceToggle = (
+    <button
+      onClick={() => setShowDocs((v) => !v)}
+      className={`inline-flex items-center gap-1.5 px-2 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0 ${
+        IS_MOBILE ? 'min-h-8' : 'py-1'
+      }`}
+    >
+      <BookOpen size={12} />
+      <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
+    </button>
+  );
+
   return (
-    <SettingsSection label="Reminders" id="reminders" bare>
-      <div className="flex items-start justify-between gap-3">
+    // The phone puts Show reference on the heading's line, as Custom Commands
+    // does, and sets the words in from the card's edge like a footer.
+    <SettingsSection label="Reminders" id="reminders" bare accessory={IS_MOBILE ? referenceToggle : undefined}>
+      <div className={`flex items-start justify-between gap-3 ${IS_MOBILE ? 'px-4' : ''}`}>
         <p className="text-xs text-textSecondary flex-1">
           Post a message into a streamer&apos;s chat on your behalf to nudge them about something: on a
           repeating timer, after a delay, at a set time, once the stream hits an uptime, or when a keyword shows up
           in chat. You can also fire one off instantly with <Tag>/remind now &lt;message&gt;</Tag>.
         </p>
-        <button
-          onClick={() => setShowDocs((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0"
-        >
-          <BookOpen size={12} />
-          <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
-        </button>
+        {!IS_MOBILE && referenceToggle}
       </div>
 
       {showDocs && (
@@ -485,6 +494,7 @@ const RemindersSettings = () => {
 
             {/* Trigger picker */}
             <SegmentedSelect
+              fullWidth={IS_MOBILE}
               value={reminder.trigger}
               options={TRIGGER_OPTIONS}
               onChange={(v) => updateReminder(reminder.id, { trigger: v })}

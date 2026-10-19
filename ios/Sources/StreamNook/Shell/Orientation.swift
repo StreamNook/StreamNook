@@ -6,6 +6,14 @@ import UIKit
 final class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientations: UIInterfaceOrientationMask = .portrait
 
+    /// The notification delegate goes in before launch ends, so a tapped mention that opened the
+    /// app reaches it. Installing it asks for nothing.
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        NotificationRouter.install()
+        return true
+    }
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.orientations
     }

@@ -37,7 +37,9 @@ export type NoticeAction =
   /** Open this channel with its rewards showing. */
   | { type: 'rewards'; channel: string }
   /** Open Settings on this tab. */
-  | { type: 'settings'; tab: string };
+  | { type: 'settings'; tab: string }
+  /** Open this mention: `channel` is its room key (a `startStream` key). */
+  | { type: 'mention'; id: string; channel: string };
 
 /** Where a reply typed into a Windows notification goes (`NoticeReply`). */
 export type NoticeReply =

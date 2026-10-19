@@ -55,6 +55,8 @@ pub mod version_report;
 pub mod twitch_recap;
 pub mod pronouns;
 pub mod mention_ping;
+pub mod mention_match;
+pub mod mention_inbox;
 pub mod stream_manager;
 pub mod streamer_mode;
 pub mod suspicious_users;
@@ -129,6 +131,7 @@ pub mod link_adapt;
 pub mod ll_origin;
 pub mod theme_palette;
 pub mod settings_backups;
+pub mod install_marker;
 pub mod settings_catalog;
 pub mod client_capabilities;
 #[cfg(test)]
@@ -209,6 +212,8 @@ pub mod collaboration;
 pub mod shared_chat;
 pub mod link_preview_cache;
 pub mod shared_chat_source;
+// The Custom interface font's files on the phones.
+pub mod custom_font;
 pub mod share_link;
 pub mod slash_commands;
 pub mod chat_top_stack;

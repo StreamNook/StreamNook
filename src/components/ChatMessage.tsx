@@ -38,6 +38,7 @@ import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
 import { EmoteCreditLine } from './chat/EmoteCreditLine';
 import { canCredit } from '../services/emoteCredit';
 import { openEmoteCard, useEmoteCardStore } from '../stores/emoteCardStore';
+import { chatBodyWeight } from '../utils/chatBodyWeight';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
 import { getAtmosphere } from '../services/atmospheres';
@@ -3679,7 +3680,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             {isAction ? (
               // ACTION messages: entire content in username color
-              <span style={{ ...usernameStyle, fontWeight: 300 }} className="break-words italic">
+              <span style={{ ...usernameStyle, fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="break-words italic">
                 <Tooltip content="Right-click to reply" side="top">
                   <span
                     style={{ fontWeight: 700 }}
@@ -3771,7 +3772,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   }
                   tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
                 />
-                <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
+                <span style={{ fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="text-textPrimary break-words">
                   <span style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
                     {' '}{isRewardEventRow && <span className="text-textSecondary">redeemed </span>}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>

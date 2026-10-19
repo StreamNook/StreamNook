@@ -61,9 +61,12 @@ struct PlayerPanel: View {
                       step: 0.01, fallback: 1, detail: "The volume every stream opens at before you adjust it.",
                       integer: false, accessibility: "Start volume")
             ToggleRow(title: "Resume VODs", path: "video_player.resume_vod_playback", fallback: true,
-                      detail: "Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row.",
-                      help: "Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps.") {
-                NestedToggle(title: "Device sync", path: "video_player.sync_vod_progress", fallback: true)
+                      // The phones have no Continue Watching row, so their words leave it out.
+                      detail: "Reopening a past broadcast picks up where you left off.",
+                      help: "Off starts every VOD from the beginning. Only past broadcasts you open yourself are remembered, never a live stream you were watching. Device sync keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account for Twitch's own apps.") {
+                if store.bool("video_player.resume_vod_playback", true) {
+                    NestedToggle(title: "Device sync", path: "video_player.sync_vod_progress", fallback: true)
+                }
             }
         }
 

@@ -27,6 +27,20 @@ public final class FakeCore: CoreBridge {
 
     public init(fixtures: FakeFixtures? = nil) {
         self.fixtures = fixtures
+        let events = events
+        fixtures?.mentions.onChange.withLock { change in
+            change = { total in
+                events.emit(name: "mention-inbox-changed", payloadJSON: #"{"unread_total":\#(total)}"#, target: nil)
+            }
+        }
+    }
+
+    /// Files a mention in the fixture inbox and asks for its notification, as the core does when
+    /// a live message mentions you in a chat that is not on screen.
+    public func simulateMention(_ entry: MentionEntry) {
+        fixtures?.mentions.file(entry)
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        events.emit(name: "mention-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
     }
 
     /// The commands invoked so far, oldest first.
@@ -238,14 +252,20 @@ public final class FakeCore: CoreBridge {
     /// the picker.
     static func emoteMatches(_ emotesJSON: Data?, args: [String: Any]) -> [String: Any] {
         let set = emotesJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] } ?? [:]
-        let query = (args["query"] as? String ?? "").lowercased()
+        let typed = args["query"] as? String ?? ""
         let search = args["profile"] as? String == "search"
+        // As the core does: a colon trigger is set aside, and a one-character word typed in
+        // passing matches only an emote of exactly that name.
+        let bare = typed.hasPrefix(":") ? String(typed.dropFirst()) : typed
+        let exactOnly = args["typing"] as? Bool == true && !bare.isEmpty && bare.count < 2
+        let query = (search || !typed.hasPrefix(":") ? typed : bare).lowercased()
         var rows: [[String: Any]] = []
         for provider in ["7tv", "bttv", "ffz", "twitch"] {
             for emote in set[provider] ?? [] {
                 guard let name = emote["name"] as? String, let url = emote["url"] as? String else { continue }
                 let lower = name.lowercased()
-                let hit = query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
+                let hit = exactOnly ? name == bare
+                    : query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
                 guard hit else { continue }
                 var row: [String: Any] = [
                     "id": emote["id"] as? String ?? name, "name": name, "url": url, "provider": provider,

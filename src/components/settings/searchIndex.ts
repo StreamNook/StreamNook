@@ -1,3 +1,4 @@
+import { IS_MOBILE } from '../../utils/platform';
 export interface SettingsIndexEntry {
   tab: string;
   section: string;
@@ -369,7 +370,10 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Font',
     sectionId: 'settings-section-font',
     title: 'Custom font',
-    description: 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically, or type the name of a font already installed on this PC.'
+    // A phone draws only fonts the app downloads; a PC also has its installed ones.
+    description: IS_MOBILE
+      ? 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically.'
+      : 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically, or type the name of a font already installed on this PC.'
   },
   // === Chat ===
   {
@@ -2503,9 +2507,48 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Mentions and replies',
     title: 'Mentions and replies',
-    description: 'A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat.'
+    description: 'Everything that mentions you or replies to you lands in Mentions, beside Whispers in the title bar. Mentions inbox, @ mentions, replies to you, pings.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Notify me',
+    description: 'A notification shows when someone mentions you or replies to you while that chat is not on screen, and clicking it opens the chat at that message. Previously "Mentions and replies" under Notification Types.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Counts as a mention',
+    description: 'Your @name always counts as a mention. Choose what else does, in Mentions and for notifications.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Name without @',
+    parent: 'Counts as a mention',
+    description: 'Your login written as a word, without the @ in front, counts as a mention.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Display name',
+    parent: 'Counts as a mention',
+    description: 'Your display name counts as a mention when it differs from your login.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Highlight words',
+    parent: 'Counts as a mention',
+    description: 'Messages that match one of your highlight phrases land in Mentions and can notify you.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions and replies',
+    title: 'Muted chats',
+    description: 'Chats whose mentions never notify you or land in Mentions. Mute a chat from its row in Mentions; unmute it here. Silence, ignore a channel.'
   },
   {
     tab: 'Notifications',
@@ -2639,7 +2682,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Cache',
     section: 'Cache',
     title: 'Disk cache',
-    description: 'Stores a copy on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again. Previously "Load emotes and badges from disk".'
+    description: 'Stores a copy on this device after the first download so later channel loads are near instant. Off means every launch fetches them again. Previously "Load emotes and badges from disk".'
   },
   {
     tab: 'Cache',
@@ -2752,7 +2795,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Support',
     section: 'Diagnostics',
     title: 'Detailed log',
-    description: 'Records connection, playback, and chat activity to streamnook.log on this PC so a problem can be traced after the fact. Previously "Keep a detailed log for bug reports".'
+    description: 'Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact. Previously "Keep a detailed log for bug reports".'
   },
   {
     tab: 'Support',
@@ -2807,7 +2850,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Backup',
     section: 'Settings File',
     title: 'Location',
-    description: 'The folder on this PC that holds your settings file. Previously "Where your settings file lives".'
+    description: 'The folder on this device that holds your settings file. Previously "Where your settings file lives".'
   },
   {
     tab: 'Chat',

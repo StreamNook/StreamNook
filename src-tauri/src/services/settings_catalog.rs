@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn every_need_names_a_real_capability() {
-        let known = ["combined_chat", "chat_dock", "scrollbar_marks"];
+        let known = ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary"];
         for row in rows() {
             for need in row.needs.iter().flat_map(|n| n.split('|')) {
                 let ok = known.contains(&need) || matches!(need, "watch:youtube" | "watch:tiktok" | "watch:twitch" | "watch:kick");

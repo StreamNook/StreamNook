@@ -29,6 +29,9 @@ interface SettingsSectionProps {
   /** The words drawn when the logo already names the brand ("Chat" beside
    *  YouTube's mark). `label` stays the section's name for anchors and search. */
   shownLabel?: string;
+  /** The phone's small action on the heading's line (Custom Commands' Show
+   *  reference), as the iPhone places it. The desktop does not draw it. */
+  accessory?: ReactNode;
 }
 
 export { sectionIdFromLabel };
@@ -44,16 +47,22 @@ const PhoneSettingsSection = ({
   bare = false,
   logo,
   shownLabel,
+  accessory,
 }: SettingsSectionProps) => (
   <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
-    <GroupLabel
-      as="h3"
-      className={`px-4 pb-2 ${logo ? 'flex items-center gap-1.5' : ''}`}
-      aria-label={shownLabel ? label : undefined}
-    >
-      {logo}
-      {shownLabel ?? label}
-    </GroupLabel>
+    {/* An accessory sits on the heading's line, centered on it. */}
+    <div className={accessory ? 'flex items-center justify-between gap-3 pr-2' : undefined}>
+      <GroupLabel
+        as="h3"
+        className={`px-4 ${accessory ? '' : 'pb-2'} ${logo ? 'flex items-center gap-1.5' : ''}`}
+        aria-label={shownLabel ? label : undefined}
+      >
+        {logo}
+        {shownLabel ?? label}
+      </GroupLabel>
+      {accessory}
+    </div>
+    {accessory && <div className="h-2" />}
     <SectionNameContext.Provider value={label}>
       {bare ? <div className="space-y-3">{children}</div> : <GroupCard>{children}</GroupCard>}
     </SectionNameContext.Provider>
@@ -163,6 +172,26 @@ const PhoneSettingsRow = ({
   // description, and a second tap closes it.
   const [helpOpen, setHelpOpen] = useState(false);
   const glyph = icon ?? phoneSettingGlyph(section, typeof title === 'string' ? title : '');
+  // A control wider than about half the text column (a pair of buttons) would
+  // crush the name and its description into a sliver, so it goes under them,
+  // on the right. Measured before paint and again whenever the row resizes.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const controlRef = useRef<HTMLSpanElement>(null);
+  const [controlUnder, setControlUnder] = useState(false);
+  const hasControl = control != null && control !== false;
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!hasControl || !grid) return;
+    const fit = () => {
+      const part = controlRef.current;
+      if (part) setControlUnder(part.scrollWidth > (grid.clientWidth - 36) * 0.45);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(grid);
+    return () => ro.disconnect();
+  }, [hasControl]);
+  const controlBeside = hasControl && !controlUnder;
   return (
     <div
       className={`settings-row ${frame} py-2.5 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
@@ -174,14 +203,15 @@ const PhoneSettingsRow = ({
           line's midline even when the control is taller than the name, and
           the lines under the name keep to its column. */}
       <div
-        className={`grid ${control ? 'grid-cols-[1.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[1.5rem_minmax(0,1fr)]'} items-center gap-x-3`}
+        ref={gridRef}
+        className={`grid ${controlBeside ? 'grid-cols-[1.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[1.5rem_minmax(0,1fr)]'} items-center gap-x-3`}
       >
         <GroupIcon className="col-start-1 row-start-1 text-textSecondary">
           {/* An element, not a JSX tag: the glyph is looked up per row, and a
               looked-up tag reads to the compiler as a component made in render. */}
           {createElement(glyph, { size: GROUP_ICON, strokeWidth: GROUP_ICON_STROKE })}
         </GroupIcon>
-        <div className="col-start-2 row-start-1 min-w-0 text-[15px] leading-6 text-textPrimary">
+        <div className="col-start-2 row-start-1 min-w-0 text-[14px] leading-6 text-textPrimary">
           {/* Dropped 2px under the baseline so a 14px mark centers on the
               title's capitals rather than riding above them. */}
           {logo && (
@@ -204,12 +234,21 @@ const PhoneSettingsRow = ({
           )}
           {onReset && <ResetArrow onReset={onReset} />}
         </div>
-        {control && <div className="col-start-3 row-start-1 shrink-0">{control}</div>}
-        {description && (
-          <p className="col-start-2 mt-0.5 text-[13px] leading-[18px] text-textSecondary">{description}</p>
+        {controlBeside && (
+          <div className="col-start-3 row-start-1 shrink-0">
+            <span ref={controlRef} className="inline-flex">{control}</span>
+          </div>
         )}
-        {help && helpOpen && <p className="col-start-2 mt-1 text-[13px] leading-[18px] text-textMuted">{help}</p>}
-        {children && <div className={`col-start-2 mt-3 ${control ? 'col-span-2' : ''}`}>{children}</div>}
+        {description && (
+          <p className="col-start-2 mt-0.5 text-[12px] leading-4 text-textSecondary">{description}</p>
+        )}
+        {help && helpOpen && <p className="col-start-2 mt-1 text-[12px] leading-4 text-textMuted">{help}</p>}
+        {hasControl && controlUnder && (
+          <div className="col-start-2 mt-2 flex min-w-0 justify-end">
+            <span ref={controlRef} className="inline-flex max-w-full flex-wrap justify-end gap-2">{control}</span>
+          </div>
+        )}
+        {children && <div className={`col-start-2 mt-3 ${controlBeside ? 'col-span-2' : ''}`}>{children}</div>}
       </div>
     </div>
   );
@@ -399,7 +438,7 @@ export const SegmentedSelect = <T extends string>({
             onClick={() => onChange(opt.value)}
             onMouseEnter={onPreview ? () => onPreview(opt.value) : undefined}
             onFocus={onPreview ? () => onPreview(opt.value) : undefined}
-            className={`${fullWidth ? 'flex-1' : ''} relative z-[1] px-3 py-1 text-[13px] font-medium rounded-md transition-colors ${
+            className={`${fullWidth ? 'flex-1 px-2' : 'px-3'} relative z-[1] whitespace-nowrap py-1 text-[13px] font-medium rounded-md transition-colors ${
               isActive ? 'text-textPrimary' : 'text-textMuted hover:text-textSecondary'
             }`}
           >

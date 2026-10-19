@@ -1,8 +1,8 @@
 import Foundation
 
-/// The chat settings a row and the list read (the `chat_design`, `chat_render` and
-/// `chat_input` blocks of the core's settings), with a phone's first-run values for anything
-/// absent.
+/// The chat settings a row and the list read (the `chat_design`, `chat_render`, `chat_input`
+/// and `chat_highlights` blocks of the core's settings), with a phone's first-run values for
+/// anything absent.
 public struct ChatStyle: Sendable, Equatable {
     public var fontSize: Double = 14
     public var fontWeight: Int = 400
@@ -35,9 +35,9 @@ public struct ChatStyle: Sendable, Equatable {
     public var mentionColor = "#ff4444"
     public var replyColor = "#ff6b6b"
     public var mentionAnimation = true
-    /// "normal" | "medium" | "semibold" | "bold"
+    /// "regular" | "medium" | "bold" (older saves may hold "normal" or "semibold")
     public var mentionWeight = "medium"
-    /// "inherit" | "italic" | "normal"
+    /// "inherit" | "never" | "always" (older saves may hold "normal" or "italic")
     public var mentionItalic = "inherit"
     /// "plain" | "pill"
     public var mentionStyle = "plain"
@@ -53,6 +53,22 @@ public struct ChatStyle: Sendable, Equatable {
     public var gifScale: Double = 1
     public var hideSharedChat = false
     public var paintShadows = "all"
+
+    /// How highlight matches and built-in event highlights dress their row
+    /// (`chat_highlights.appearance.display_style`): "standard" (tint and bar), "minimal" (bar
+    /// only) or "none".
+    public var highlightDisplay = "standard"
+    /// The tint's strength at its left edge, 0 to 100 (`chat_highlights.appearance.opacity`).
+    public var highlightOpacity: Double = 20
+    /// A first-time chatter's row (`chat_highlights.built_in.first_time_chatter`): "wash" (the
+    /// tint and bar) or "ring" (an outline of the row instead).
+    public var firstTimeStyle = "wash"
+    /// A faint fill inside the ring.
+    public var firstTimeFill = false
+    /// The glint a live first-time row plays: "none" | "sheen" | "pulse" | "chase".
+    public var firstTimeAnimation = "none"
+    /// Whether the glint keeps cycling instead of playing once.
+    public var firstTimeAnimateRepeat = false
 
     /// Rows a room keeps, 50 to 300 on a phone.
     public var bufferCap = 100
@@ -110,6 +126,20 @@ public struct ChatStyle: Sendable, Equatable {
         if let c = root["cosmetics"] as? [String: Any], let shadows = c["paint_shadows"] as? String {
             paintShadows = shadows
         }
+        if let h = root["chat_highlights"] as? [String: Any] { applyHighlights(h) }
+    }
+
+    public mutating func applyHighlights(_ h: [String: Any]) {
+        if let a = h["appearance"] as? [String: Any] {
+            highlightDisplay = a["display_style"] as? String ?? highlightDisplay
+            highlightOpacity = (a["opacity"] as? NSNumber).map { min(max($0.doubleValue, 0), 100) } ?? highlightOpacity
+        }
+        if let b = h["built_in"] as? [String: Any], let f = b["first_time_chatter"] as? [String: Any] {
+            firstTimeStyle = f["style"] as? String ?? firstTimeStyle
+            firstTimeFill = f["fill"] as? Bool ?? firstTimeFill
+            firstTimeAnimation = f["animation"] as? String ?? firstTimeAnimation
+            firstTimeAnimateRepeat = f["animate_repeat"] as? Bool ?? firstTimeAnimateRepeat
+        }
     }
 
     public mutating func applyDesign(_ d: [String: Any]) {
@@ -157,6 +187,33 @@ public struct ChatStyle: Sendable, Equatable {
     /// Emotes animate unless the setting asks for stills; a touch never hovers, so `hover`
     /// draws stills too.
     public var animatesEmotes: Bool { animateEmotes == "always" }
+
+    /// The highlight tint's alpha at the row's left edge.
+    public var highlightAlpha: Double { highlightOpacity / 100 }
+    public var highlightShowsTint: Bool { highlightDisplay == "standard" }
+    public var highlightShowsBar: Bool { highlightDisplay != "none" }
+
+    /// How heavy an @name draws: `body` is the message text's own weight.
+    public enum MentionWeight: Sendable, Equatable { case body, medium, semibold, bold }
+
+    public var mentionWeightChoice: MentionWeight {
+        switch mentionWeight {
+        case "regular", "normal": .body
+        case "semibold": .semibold
+        case "bold": .bold
+        default: .medium
+        }
+    }
+
+    /// Whether an @name slants. Inherit follows the message (a /me row is italic as a whole);
+    /// never keeps it upright even there.
+    public func mentionSlants(inItalicMessage italic: Bool) -> Bool {
+        switch mentionItalic {
+        case "always", "italic": true
+        case "never", "normal": false
+        default: italic
+        }
+    }
 
     /// The wallet button carries the short balance beside its icon: Wallet balance is Always. A
     /// touch has no hover, so a saved desktop On hover reads as Hidden here: just the icon.

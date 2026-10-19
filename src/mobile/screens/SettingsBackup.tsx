@@ -87,7 +87,7 @@ const SettingsBackup: React.FC = () => {
   };
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-6">
       <SettingsSection
         label="Daily copies"
         description="StreamNook keeps a copy of your settings each day you use it, for the last 7 days. If your settings ever fail to load, the newest copy is put back on its own."
@@ -130,7 +130,88 @@ const SettingsBackup: React.FC = () => {
           })
         )}
       </SettingsSection>
+
+      <SettingsFile />
     </div>
+  );
+};
+
+/** Every setting in one file (accounts left out), saved or sent on, and one
+ *  brought back. Rust writes the file into the app cache and hands it to
+ *  Downloads or the share sheet (`share_settings_file`); an import reads the
+ *  picked file here, since a picker gives the page its text and never a path
+ *  (`import_settings_text`), and Rust's settings broadcast refreshes the app. */
+const SettingsFile: React.FC = () => {
+  const addToast = useAppStore((s) => s.addToast);
+  const picker = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<'downloads' | 'share' | 'import' | null>(null);
+  // Success toasts are hidden on the phone, so each row says what happened.
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+
+  const exportTo = async (to: 'downloads' | 'share') => {
+    setBusy(to);
+    try {
+      const result = await invoke<string>('share_settings_file', { to });
+      if (result === 'saved') setExportNote('Saved to Downloads.');
+    } catch (e) {
+      Logger.warn('[SettingsBackup] share_settings_file failed:', e);
+      addToast(String(e), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importFile = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy('import');
+    try {
+      await invoke('import_settings_text', { json: await file.text() });
+      setImportNote(`Imported ${file.name}.`);
+    } catch (e) {
+      Logger.warn('[SettingsBackup] import_settings_text failed:', e);
+      addToast(String(e), 'error');
+    } finally {
+      setBusy(null);
+      if (picker.current) picker.current.value = '';
+    }
+  };
+
+  const button = 'glass-button sn-touch flex-1 text-[13.5px] font-semibold text-textPrimary disabled:opacity-50';
+  return (
+    <SettingsSection
+      label="Settings file"
+      description="Save every setting to one file (your accounts stay out of it), or bring one back on this phone or another device."
+    >
+      <input
+        ref={picker}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(e) => void importFile(e.target.files?.[0])}
+      />
+      <SettingsRow
+        title="Export"
+        description={exportNote ?? 'Saves the file to Downloads, or sends it straight to an app.'}
+      >
+        <div className="flex gap-2">
+          <button className={button} disabled={busy !== null} onClick={() => void exportTo('downloads')}>
+            {busy === 'downloads' ? 'Saving…' : 'Save to Downloads'}
+          </button>
+          <button className={button} disabled={busy !== null} onClick={() => void exportTo('share')}>
+            Share
+          </button>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        title="Import"
+        description={importNote ?? 'Replaces your settings with the ones in the file. Your accounts stay signed in.'}
+      >
+        <button className={`${button} w-full`} disabled={busy !== null} onClick={() => picker.current?.click()}>
+          {busy === 'import' ? 'Importing…' : 'Import a file'}
+        </button>
+      </SettingsRow>
+    </SettingsSection>
   );
 };
 

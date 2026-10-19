@@ -13,12 +13,16 @@
 //
 // Both are one-shot: sharing consumes the token, so each strip disappears
 // afterwards rather than lingering as a dead control.
+//
+// They wear the chat header capsules' glaze (solid at Glassiness 0, as on the
+// desktop), a 12 px glyph in the leading column, what it is in bold with the
+// detail quieter beside it, then the one glazed accent action and a quiet
+// dismiss.
 import React, { useCallback, useEffect, useState } from 'react';
-// lucide Flame with stroke-[2.5], not the phosphor one: this is the same glyph
-// the desktop WatchStreakBanner and the mobile StreakBadge on stream cards both
-// use, and a watch streak should look like a watch streak everywhere.
-import { Flame } from 'lucide-react';
-import { Star, X } from 'phosphor-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Check, Star, X } from 'phosphor-react';
+import { WatchStreakFlame } from '../../components/icons/WatchStreakFlame';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from '../../components/ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
@@ -46,6 +50,14 @@ interface Props {
   /** Clears the composer once a share consumes the message. */
   onShared: () => void;
 }
+
+/** In and out: height and opacity together, on the app's glide curve. */
+const FOLD = {
+  initial: { height: 0, opacity: 0 },
+  animate: { height: 'auto', opacity: 1 },
+  exit: { height: 0, opacity: 0 },
+  transition: { duration: 0.2, ease: [0.2, 0.8, 0.2, 1] },
+} as const;
 
 /** What one room's fetch found, stamped with the room it describes. */
 interface Found {
@@ -171,81 +183,89 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
 
   const showStreak = !!streak && !isDismissed('watch');
   const showResub = !!resub && !isDismissed('resub');
-  if (!showStreak && !showResub) return null;
 
-  const chip =
-    'shrink-0 px-2.5 py-1 rounded-full text-[11.5px] font-semibold disabled:opacity-50';
+  // One action, in the theme's accent; the dismiss is a step quieter.
+  const share = `${ACCENT_BUTTON} shrink-0 h-7 px-3.5 !text-[12px]`;
+  const close =
+    'shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted active:text-textSecondary';
+  const surface = `${GLAZE_BANNER} flex items-center gap-2 pl-2.5 pr-1 py-1`;
 
   return (
-    <div className="flex flex-col gap-1 px-2.5 pt-1.5">
+    // They rise out of the composer's edge and fold back into it, so the chat
+    // above moves once, smoothly, instead of jumping.
+    <AnimatePresence initial={false}>
       {/* Resub sits above the watch streak: it is the rarer event and expires,
           so it should be the one you see first. */}
       {showResub && resub && (
-        <div className="sn-popover flex items-center gap-2 px-2.5 py-1.5">
-          <Star size={13} weight="fill" className="text-accent shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] text-textPrimary truncate">
-              {resub.is_gift_subscription && resub.gifter_display_name
-                ? `Gift sub from ${resub.gifter_display_name}`
-                : `${resub.cumulative_tenure_months} month${resub.cumulative_tenure_months === 1 ? '' : 's'} subscribed`}
-            </div>
-            {resub.streak_tenure_months > 1 && (
-              <button
-                onClick={() => setIncludeStreak((v) => !v)}
-                className="text-[10.5px] text-textMuted active:opacity-70"
-              >
-                {includeStreak ? '✓ ' : ''}
-                Include {resub.streak_tenure_months}-month streak
+        <motion.div key="resub" {...FOLD} className="overflow-hidden">
+          <div className="px-2.5 pt-1.5">
+            <div className={surface} style={BANNER_STYLE}>
+              <Star size={12} weight="fill" className="text-accent shrink-0" />
+              <div className="min-w-0 flex-1 py-0.5">
+                <div className="text-[12px] truncate">
+                  <span className="font-semibold text-textPrimary">
+                    {resub.is_gift_subscription ? 'Gift sub' : 'Resub'}
+                  </span>
+                  <span className="text-textSecondary">
+                    {' · '}
+                    {resub.is_gift_subscription && resub.gifter_display_name
+                      ? `from ${resub.gifter_display_name}`
+                      : `${resub.cumulative_tenure_months} month${resub.cumulative_tenure_months === 1 ? '' : 's'}`}
+                  </span>
+                </div>
+                {resub.streak_tenure_months > 1 && (
+                  <button
+                    onClick={() => setIncludeStreak((v) => !v)}
+                    aria-pressed={includeStreak}
+                    className="mt-0.5 flex items-center gap-1 text-[11px] text-textMuted active:opacity-70"
+                  >
+                    <span
+                      className={`w-3 h-3 rounded-[3px] border flex items-center justify-center ${
+                        includeStreak ? 'bg-accent border-accent' : 'border-textMuted'
+                      }`}
+                    >
+                      {includeStreak && <Check size={8} weight="bold" className="text-background" />}
+                    </span>
+                    Include the {resub.streak_tenure_months}-month streak
+                  </button>
+                )}
+              </div>
+              <button onClick={() => void shareResub()} disabled={busy} className={share} style={ACCENT_FILL}>
+                Share
               </button>
-            )}
+              <button onClick={() => dismiss('resub')} className={close} aria-label="Dismiss resub">
+                <X size={11} />
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => void shareResub()}
-            disabled={busy}
-            className={`${chip} bg-accent/20 text-accent`}
-          >
-            Share
-          </button>
-          <button
-            onClick={() => dismiss('resub')}
-            className="shrink-0 p-1 text-textMuted active:text-textPrimary"
-            aria-label="Dismiss resub"
-          >
-            <X size={12} weight="bold" />
-          </button>
-        </div>
+        </motion.div>
       )}
 
-      {/* Amber, exactly as the desktop banner and the card StreakBadge do it:
-          amber-500/5 ground, amber-500/20 border, the flame in its own amber
-          chip with the warning-token glow, and a solid amber share button. */}
       {showStreak && streak && (
-        /* glass-exempt: a tint banner on the chat column's own ground. */
-        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/20 backdrop-blur-md">
-          <div className="flex items-center justify-center w-6 h-6 rounded bg-amber-500/10 shrink-0 shadow-[0_0_8px_color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
-            <Flame size={13} className="text-amber-400 stroke-[2.5]" />
+        <motion.div key="watch" {...FOLD} className="overflow-hidden">
+          <div className="px-2.5 pt-1.5">
+            <div className={surface} style={BANNER_STYLE}>
+              {/* Twitch's streak flame, in the color the chat's streak rows use. */}
+              <WatchStreakFlame size={14} className="shrink-0 text-highlight-orange" />
+              <span className="min-w-0 flex-1 py-1 text-[12px] truncate">
+                <span className="font-semibold text-textPrimary">Watch streak</span>
+                {!!streak.streak_count && (
+                  <span className="text-textSecondary">
+                    {' · '}
+                    {streak.streak_count} stream{streak.streak_count === 1 ? '' : 's'}
+                  </span>
+                )}
+              </span>
+              <button onClick={() => void shareWatchStreak()} disabled={busy} className={share} style={ACCENT_FILL}>
+                Share
+              </button>
+              <button onClick={() => dismiss('watch')} className={close} aria-label="Dismiss watch streak">
+                <X size={11} />
+              </button>
+            </div>
           </div>
-          <span className="text-[12px] text-textPrimary truncate flex-1 min-w-0">
-            {streak.streak_count
-              ? `${streak.streak_count} stream watch streak`
-              : 'Watch streak milestone'}
-          </span>
-          <button
-            onClick={() => void shareWatchStreak()}
-            disabled={busy}
-            className={`${chip} bg-amber-500 text-black shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_20%,transparent)] active:scale-95 transition-transform`}
-          >
-            Share
-          </button>
-          <button
-            onClick={() => dismiss('watch')}
-            className="shrink-0 p-1 text-amber-400/60 active:text-amber-400"
-            aria-label="Dismiss watch streak"
-          >
-            <X size={12} weight="bold" />
-          </button>
-        </div>
+        </motion.div>
       )}
-    </div>
+    </AnimatePresence>
   );
 };

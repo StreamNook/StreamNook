@@ -15,6 +15,7 @@ import {
   BadgePlus,
   Banknote,
   Bell,
+  BellOff,
   BellRing,
   Blend,
   Bold,
@@ -37,6 +38,7 @@ import {
   CornerDownLeft,
   Crosshair,
   Database,
+  Download,
   Droplet,
   Droplets,
   Ear,
@@ -353,6 +355,15 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   'Tab Completion': { Emotes: Keyboard },
   'Repeated Messages': { Mode: Repeat2 },
   'Highlight Appearance': { Style: PaintBucket },
+  'Settings file': { Export: Share, Import: Download },
+  'Mentions and replies': {
+    'Notify me': AtSign,
+    'Counts as a mention': ListChecks,
+    'Name without @': AtSign,
+    'Display name': UserCheck,
+    'Highlight words': Highlighter,
+    'Muted chats': BellOff,
+  },
 };
 
 /** The glyph for a row that has none of its own. */

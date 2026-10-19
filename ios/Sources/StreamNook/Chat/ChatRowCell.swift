@@ -10,6 +10,11 @@ final class ChatRowCell: UIView {
     private var imageLayers: [AnimatedImageLayer] = []
     private var groupLayers: [CALayer] = []
     private var flashLayer: CALayer?
+    /// The glint over the ring or left bar, and the row and look it was built for.
+    private var glintLayer: CALayer?
+    private var glintFor: (id: String, glint: RowGlint, size: CGSize)?
+    /// Rows whose one-shot glint has played, so a relayout or a scroll back never replays it.
+    private static var glinted = Set<String>()
     private var animateImages = true
     /// A member's Atmosphere behind the row, with the text bitmap on its own layer above it.
     private var wash: AtmosphereWashLayer?
@@ -36,6 +41,13 @@ final class ChatRowCell: UIView {
         layer.contentsScale = scale
         showBitmap(layout.renderBitmap(scale: scale), layout: layout, scale: scale)
         rebuildImages(layout, scale: scale)
+        showGlint(layout)
+    }
+
+    /// The striped-rows background: the layer's own color, under the bitmap and every decor
+    /// layer, so flipping it never redraws the row.
+    func setStripe(_ color: CGColor?) {
+        if layer.backgroundColor != color { layer.backgroundColor = color }
     }
 
     /// The text bitmap straight on the view's layer, or over the author's Atmosphere when they
@@ -200,6 +212,188 @@ final class ChatRowCell: UIView {
         overlay.add(fade, forKey: "flash")
     }
 
+    /// The row's glint over its ring or left bar: once when a live row is first shown, or
+    /// cycling while it is on screen when the viewer asked for a loop. Layers and Core Animation
+    /// only, so the row never redraws. Reduce Motion (or the app's motion off) keeps it still,
+    /// and reduced motion plays a loop once.
+    private func showGlint(_ layout: ChatRowLayout) {
+        let size = CGSize(width: layout.width, height: layout.height)
+        if let now = glintFor, glintLayer != nil, now.id == layout.id, now.glint == layout.decor.glint, now.size == size {
+            return
+        }
+        stopGlint()
+        let motion = Look.shared.motion
+        guard let glint = layout.decor.glint, layout.live, motion != .off, !UIAccessibility.isReduceMotionEnabled,
+              size.width > 0, size.height > 0 else { return }
+        let loop = glint.loop && !motion.stopsLoops
+        if !loop {
+            guard !Self.glinted.contains(layout.id) else { return }
+            if Self.glinted.count > 2000 { Self.glinted.removeAll() }
+            Self.glinted.insert(layout.id)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let holder = Self.glintHolder(glint, size: size)
+        layer.addSublayer(holder)
+        Self.animateGlint(glint, holder: holder, loop: loop)
+        CATransaction.commit()
+        glintLayer = holder
+        glintFor = (layout.id, glint, size)
+    }
+
+    private func stopGlint() {
+        glintLayer?.removeAllAnimations()
+        glintLayer?.removeFromSuperlayer()
+        glintLayer = nil
+        glintFor = nil
+    }
+
+    /// The glint's light and where it shows: the ring's 1-point band (a stroked mask) or the bar.
+    private static func glintHolder(_ glint: RowGlint, size: CGSize) -> CALayer {
+        let holder = CALayer()
+        if glint.onRing {
+            holder.frame = CGRect(origin: .zero, size: size)
+            let band = CAShapeLayer()
+            band.frame = holder.bounds
+            band.path = UIBezierPath(roundedRect: holder.bounds.insetBy(dx: 0.5, dy: 0.5),
+                                     cornerRadius: RowGlint.ringRadius - 0.5).cgPath
+            band.fillColor = nil
+            band.strokeColor = UIColor.black.cgColor
+            band.lineWidth = 1
+            holder.mask = band
+        } else {
+            holder.frame = CGRect(x: 0, y: 0, width: RowGlint.barWidth, height: size.height)
+            holder.masksToBounds = true
+        }
+        let w = holder.bounds.width
+        let h = holder.bounds.height
+        let light: CALayer
+        switch glint.kind {
+        case .pulse:
+            light = CALayer()
+            light.frame = holder.bounds
+            light.backgroundColor = UIColor(white: 1, alpha: 0.55).cgColor
+            light.opacity = 0
+        case .chase where glint.onRing:
+            // A wedge of light orbiting the center, on a square that covers the row at any angle.
+            let cone = CAGradientLayer()
+            cone.type = .conic
+            let side = hypot(w, h)
+            cone.frame = CGRect(x: (w - side) / 2, y: (h - side) / 2, width: side, height: side)
+            cone.startPoint = CGPoint(x: 0.5, y: 0.5)
+            cone.endPoint = CGPoint(x: 0.5, y: 0)
+            cone.colors = [UIColor.clear, UIColor(white: 1, alpha: 0.9), UIColor.clear, UIColor.clear].map(\.cgColor)
+            cone.locations = [0, 24.0 / 360, 56.0 / 360, 1].map { NSNumber(value: $0) }
+            light = cone
+        case .sheen where glint.onRing:
+            // A slanted band two and a half rows wide, swept across from left to right.
+            let band = CAGradientLayer()
+            let bw = 2.5 * w
+            band.frame = CGRect(x: 0, y: 0, width: bw, height: h)
+            // The 105 degree slant: the gradient line through the center, as CSS lays it out.
+            let angle = 105 * CGFloat.pi / 180
+            let dir = CGPoint(x: sin(angle), y: -cos(angle))
+            let length = abs(bw * dir.x) + abs(h * dir.y)
+            band.startPoint = CGPoint(x: 0.5 - dir.x * length / (2 * bw), y: 0.5 - dir.y * length / (2 * h))
+            band.endPoint = CGPoint(x: 0.5 + dir.x * length / (2 * bw), y: 0.5 + dir.y * length / (2 * h))
+            band.colors = [UIColor.clear, UIColor(white: 1, alpha: 0.9), UIColor.clear].map(\.cgColor)
+            band.locations = [0.38, 0.5, 0.62]
+            light = band
+        case .sheen, .chase:
+            // Down the bar both read as a band of light rising up it.
+            let band = CAGradientLayer()
+            band.frame = CGRect(x: 0, y: 0, width: w, height: 3 * h)
+            band.startPoint = CGPoint(x: 0.5, y: 0)
+            band.endPoint = CGPoint(x: 0.5, y: 1)
+            band.colors = [UIColor.clear, UIColor(white: 1, alpha: 0.7), UIColor.clear].map(\.cgColor)
+            band.locations = [0.38, 0.5, 0.62]
+            light = band
+        }
+        holder.addSublayer(light)
+        return holder
+    }
+
+    /// The desktop's timings: a one-shot starts 0.15 s after arrival; a loop sweeps or pulses
+    /// at the start of every 5 s (the ring's chase orbits without a pause).
+    private static func animateGlint(_ glint: RowGlint, holder: CALayer, loop: Bool) {
+        guard let light = holder.sublayers?.first else { return }
+        let delay: CFTimeInterval = 0.15
+        let start = CACurrentMediaTime() + delay
+        let easeOut = CAMediaTimingFunction(name: .easeOut)
+        let easeInOut = CAMediaTimingFunction(name: .easeInEaseOut)
+        let w = holder.bounds.width
+        let h = holder.bounds.height
+
+        // A travel from `from` to `to`: once, or in the first 22% of each 5 s cycle.
+        func sweep(_ keyPath: String, from: CGFloat, to: CGFloat, once: CFTimeInterval) -> CAAnimation {
+            if loop {
+                let move = CAKeyframeAnimation(keyPath: keyPath)
+                move.values = [from, to, to]
+                move.keyTimes = [0, 0.22, 1]
+                move.timingFunctions = [easeOut, easeOut]
+                move.duration = 5
+                move.repeatCount = .infinity
+                return move
+            }
+            let move = CABasicAnimation(keyPath: keyPath)
+            move.fromValue = from
+            move.toValue = to
+            move.duration = once
+            move.timingFunction = easeOut
+            return move
+        }
+
+        let animation: CAAnimation
+        switch glint.kind {
+        case .pulse:
+            let pulse = CAKeyframeAnimation(keyPath: "opacity")
+            if loop {
+                pulse.values = [0, 1, 0, 0]
+                pulse.keyTimes = [0, 0.12, 0.24, 1]
+                pulse.timingFunctions = [easeInOut, easeInOut, easeInOut]
+                pulse.duration = 5
+                pulse.repeatCount = .infinity
+            } else {
+                pulse.values = [0, 1, 0]
+                pulse.keyTimes = [0, 0.45, 1]
+                pulse.timingFunctions = [easeInOut, easeInOut]
+                pulse.duration = 1.2
+            }
+            animation = pulse
+        case .chase where glint.onRing:
+            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+            spin.fromValue = 0
+            spin.toValue = 2 * CGFloat.pi
+            spin.duration = loop ? 1.8 : 1.4
+            spin.timingFunction = CAMediaTimingFunction(name: .linear)
+            if loop { spin.repeatCount = .infinity }
+            animation = spin
+        case .sheen where glint.onRing:
+            // The band's left edge from -1.95 to +0.9 row widths (CSS 130% to -60% of a 250% band).
+            let half = 1.25 * w
+            animation = sweep("position.x", from: -1.95 * w + half, to: 0.9 * w + half, once: 1.1)
+            light.position.x = 0.9 * w + half
+        case .sheen, .chase:
+            // The band's top from 1.2 to -2.6 bar heights (CSS -60% to 130% of a 300% band).
+            let half = 1.5 * h
+            animation = sweep("position.y", from: 1.2 * h + half, to: -2.6 * h + half, once: 1)
+            light.position.y = -2.6 * h + half
+        }
+        animation.beginTime = start
+        animation.fillMode = .backwards
+        light.add(animation, forKey: "glint")
+
+        guard !loop else { return }
+        // Once played, the holder goes clear and stays so (the chase fades its last stretch
+        // rather than stopping on a lit arc), and a clear layer costs the screen nothing.
+        let life = CAKeyframeAnimation(keyPath: "opacity")
+        life.values = [1, 1, 0]
+        life.keyTimes = glint.kind == .chase && glint.onRing ? [0, 0.8, 1] : [0, 0.99, 1]
+        life.duration = delay + animation.duration
+        holder.add(life, forKey: "life")
+        holder.opacity = 0
+    }
+
     /// The arrival animation for a new live row.
     func arrive(_ entrance: String) {
         let curve: CAMediaTimingFunction
@@ -235,11 +429,13 @@ final class ChatRowCell: UIView {
         for image in imageLayers { image.stopAnimating() }
         layer.removeAllAnimations()
         flashLayer?.removeAllAnimations()
+        stopGlint()
     }
 
     /// Hands the images back to the clock when the row returns to the screen.
     func resume() {
         guard let layout else { return }
+        showGlint(layout)
         var i = 0
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count

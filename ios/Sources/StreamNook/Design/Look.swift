@@ -15,6 +15,11 @@ final class Look {
     private(set) var glassBlur = true
     private(set) var motion = MotionMode.full
     private(set) var fontID: String?
+    /// The typed family the Custom font asks for.
+    private(set) var fontCustom: String?
+    /// Moves when the interface font's faces change (a Custom family registered), so text drawn
+    /// in it redraws.
+    private(set) var fontRevision = 0
     private(set) var themeID = "winters-glass"
     /// The theme's light (Prism's), or nil for a palette-only theme.
     private(set) var light: ThemeLight?
@@ -26,6 +31,8 @@ final class Look {
         glassBlur = settings.glassBlur ?? true
         motion = settings.motion
         fontID = settings.font
+        fontCustom = settings.fontCustom
+        Typeface.publishChat()
         themeID = settings.theme ?? "winters-glass"
     }
 
@@ -37,6 +44,10 @@ final class Look {
         }
         if light != self.light { self.light = light }
         self.themeID = themeID
+    }
+
+    func fontFacesChanged() {
+        fontRevision += 1
     }
 
     /// Glass shows as Liquid Glass: blur is on and glassiness above zero.
@@ -84,6 +95,7 @@ enum SN {
     static var info: Color { p.info.color }
     static var highlightPurple: Color { p.highlightPurple.color }
     static var highlightBlue: Color { p.highlightBlue.color }
+    static var highlightOrange: Color { p.highlightOrange.color }
 
     static var live: Color { FixedColor.live.color }
     static var twitch: Color { FixedColor.twitch.color }

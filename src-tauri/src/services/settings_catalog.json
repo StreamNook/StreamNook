@@ -200,12 +200,15 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row.",
+   "detail": "Reopening a past broadcast picks up where you left off.",
    "aliases": [
+    "continue",
+    "resume",
+    "vod position",
+    "where I left off",
     "vod",
     "continue watching",
-    "past broadcast",
-    "resume"
+    "past broadcast"
    ]
   },
   {
@@ -217,9 +220,10 @@
    ],
    "nested": true,
    "logo": null,
-   "detail": "Keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to.",
+   "detail": "Keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account.",
    "aliases": [
     "sync",
+    "cross device",
     "vod",
     "position"
    ]
@@ -285,7 +289,7 @@
   },
   {
    "page": "player",
-   "section": "Song Identification",
+   "section": "Latency & Buffering",
    "title": "Target latency",
    "paths": [
     "video_player.ll_target_latency"
@@ -955,8 +959,7 @@
    "aliases": [
     "avatar",
     "pfp"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1095,6 +1098,18 @@
    "title": "Shape",
    "paths": [
     "chat_design.mention_style"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Color",
+   "paths": [
+    "chat_design.mention_text_color"
    ],
    "nested": true,
    "logo": null,
@@ -1398,7 +1413,7 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "needs": "spell_dictionary"
   },
   {
    "page": "chat",
@@ -1703,8 +1718,7 @@
    "detail": "",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1775,18 +1789,6 @@
   },
   {
    "page": "chat",
-   "section": "Spam & Pyramid",
-   "title": "Color",
-   "paths": [
-    "chat_design.mention_text_color"
-   ],
-   "nested": true,
-   "logo": null,
-   "detail": "",
-   "aliases": []
-  },
-  {
-   "page": "chat",
    "section": "Links",
    "title": "Style",
    "paths": [
@@ -1798,8 +1800,7 @@
    "detail": "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1811,8 +1812,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -2055,9 +2055,10 @@
    "paths": [],
    "nested": false,
    "logo": null,
-   "detail": "With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices.",
+   "detail": "With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.",
    "aliases": [
     "vod",
+    "privacy",
     "continue watching"
    ]
   },
@@ -2175,8 +2176,101 @@
     "alerts",
     "push",
     "notify"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Notify me",
+   "paths": [
+    "live_notifications.show_mention_notifications"
    ],
-   "hidden_on_ios": true
+   "nested": false,
+   "detail": "When someone mentions or replies to you in a chat",
+   "logo": null,
+   "aliases": [
+    "mentions",
+    "replies",
+    "pings",
+    "@",
+    "mention notifications"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Counts as a mention",
+   "paths": [],
+   "nested": false,
+   "detail": "Your @name always counts. These count too, in Mentions and for notifications.",
+   "logo": null,
+   "aliases": [
+    "mention rules",
+    "what counts",
+    "match"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Name without @",
+   "paths": [
+    "mentions.match_bare_login"
+   ],
+   "nested": true,
+   "detail": "Your login written without the @ counts as a mention.",
+   "logo": null,
+   "aliases": [
+    "username",
+    "bare name",
+    "no at sign"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Display name",
+   "paths": [
+    "mentions.match_display_name"
+   ],
+   "nested": true,
+   "detail": "Your display name counts as a mention when it differs from your login.",
+   "logo": null,
+   "aliases": [
+    "nickname",
+    "name"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Highlight words",
+   "paths": [
+    "mentions.highlight_words"
+   ],
+   "nested": true,
+   "detail": "A message matching one of your highlight words notifies you and collects in Mentions.",
+   "logo": null,
+   "aliases": [
+    "highlight phrases",
+    "keywords"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions and replies",
+   "title": "Muted chats",
+   "paths": [
+    "mentions.muted_channels"
+   ],
+   "nested": false,
+   "detail": "Mentions in these chats never notify you or reach the Mentions list.",
+   "logo": null,
+   "aliases": [
+    "mute chat",
+    "silence mentions",
+    "quiet chat"
+   ]
   },
   {
    "page": "notifications",

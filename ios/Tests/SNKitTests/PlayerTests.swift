@@ -128,7 +128,9 @@ import Testing
 
     @Test func theWidthStaysBetween240AndHalfTheScreen() {
         let chat = LandscapeChatLayout(layout: "overlay", side: "auto", width: 600, opacity: 55)
-        #expect(chat.width(screenWidth: 932) == 466)
+        #expect(chat.width(screenWidth: 932) == 600)
+        #expect(LandscapeChatLayout(layout: "beside", side: "auto", width: 900, opacity: 55)
+            .width(screenWidth: 812) == 572)
         #expect(chat.width(screenWidth: 932, live: 100) == 240)
         #expect(chat.width(screenWidth: 932, live: 301.4) == 301)
     }
@@ -141,6 +143,10 @@ import Testing
     }
 
     @Test func theBackgroundIsClampedToAPercent() {
+        let side = LandscapeChatLayout(layout: "beside", side: "right", width: 340, opacity: 55)
+        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: true) == 59)
+        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: false) == 12)
+        #expect(side.textInset(edgeInset: 0, cutoutOnChatSide: false) == 0)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 140).opacity == 100)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 0).opacity == 0)
     }

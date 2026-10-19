@@ -21,6 +21,11 @@ struct YouScreen: View {
 
                 // Signed out, the card above already offers the sign-in; the accounts wait for it.
                 if user != nil {
+                    // Your mentions sit right under who you are, with their unread count.
+                    MentionsEntryRow(model: model)
+                        .snPanel()
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
                     label("Accounts")
                     AccountsCard(model: model, picks: picks, sevenTvPicture: ownIdentity?.picture)
                         .padding(.horizontal, 16)

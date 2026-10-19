@@ -180,23 +180,36 @@ struct PaintedName: View {
 /// A resub and a watch-streak milestone the viewer can share, directly above the composer,
 /// resub first (it is rarer and expires). Sharing posts the composer's text with it, consumes
 /// the token and hides the banner; dismissals hold for the session.
+///
+/// They wear the Liquid Glass the rooms strip's capsules wear (solid at Glassiness 0), a 12 point
+/// glyph in the leading column, what it is in bold with the detail quieter beside it, then the
+/// one action (Share, Liquid Glass tinted with the accent) and a quieter dismiss. They rise out of
+/// the composer's edge and fold back.
 struct StreakBanners: View {
     let rooms: ChatRooms
     let session: ChatSession
 
-    private static let amber = Color(red: 0xF5 / 255, green: 0x9E / 255, blue: 0x0B / 255)
-    private static let amberLight = Color(red: 0xFB / 255, green: 0xBF / 255, blue: 0x24 / 255)
+    private static let fold = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.2)
 
     var body: some View {
         let streaks = rooms.activeStreaks
-        if streaks.watch != nil || streaks.resub != nil {
-            VStack(spacing: 4) {
-                if let resub = streaks.resub { resubBanner(resub) }
-                if let watch = streaks.watch { watchBanner(watch) }
+        VStack(spacing: 0) {
+            if let resub = streaks.resub {
+                resubBanner(resub)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            if let watch = streaks.watch {
+                watchBanner(watch)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .clipped()
+        .animation(SNMotion.run(Self.fold), value: streaks.resub?.id)
+        .animation(SNMotion.run(Self.fold), value: streaks.watch?.milestoneID)
     }
 
     /// What the composer holds, shared with the streak.
@@ -205,119 +218,116 @@ struct StreakBanners: View {
     private func resubBanner(_ resub: ResubNotice) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "star.fill")
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(SN.accent)
+                .frame(width: 14)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(resub.title)
-                    .font(.sn(12))
-                    .foregroundStyle(SN.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                (Text(resub.isGift ? "Gift sub" : "Resub").font(.sn(12, 600)).foregroundStyle(SN.textPrimary)
+                    + Text(resubDetail(resub).map { " · \($0)" } ?? "")
+                    .font(.sn(12)).foregroundStyle(SN.textSecondary))
                     .lineLimit(1)
                 if resub.streakMonths > 1 {
                     Button {
                         rooms.includeStreak.toggle()
                     } label: {
-                        Text("\(rooms.includeStreak ? "✓ " : "")Include \(resub.streakMonths)-month streak")
-                            .font(.sn(10.5))
-                            .foregroundStyle(SN.textMuted)
+                        HStack(spacing: 4) {
+                            Image(systemName: rooms.includeStreak ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 11))
+                                .foregroundStyle(rooms.includeStreak ? SN.accent : SN.textMuted)
+                            Text("Include the \(resub.streakMonths)-month streak")
+                                .font(.sn(11))
+                                .foregroundStyle(SN.textMuted)
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(rooms.includeStreak ? .isSelected : [])
                 }
             }
+            .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                Task {
-                    if await rooms.shareResub(message: composer?.draft ?? "") { composer?.draft = "" }
-                }
-            } label: {
-                Text("Share")
-                    .font(.sn(11.5, 600))
-                    .foregroundStyle(SN.accent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(SN.accent.opacity(0.2)))
+            shareButton {
+                if await rooms.shareResub(message: composer?.draft ?? "") { composer?.draft = "" }
             }
-            .buttonStyle(.plain)
-            .disabled(rooms.sharing)
-            .opacity(rooms.sharing ? 0.5 : 1)
-            Button {
-                rooms.dismiss("resub")
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(SN.textMuted)
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss resub")
+            dismissButton(label: "Dismiss resub") { rooms.dismiss("resub") }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .modifier(StaticPopover())
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func watchBanner(_ milestone: WatchStreakMilestone) -> some View {
         HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(Self.amber.opacity(0.1))
-                .frame(width: 24, height: 24)
-                .overlay {
-                    Image(systemName: "flame.fill")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Self.amberLight)
-                }
-                .shadow(color: SN.warning.opacity(0.2), radius: 4)
+            // Twitch's streak flame, in the theme's orange like the chat's streak rows.
+            Image(systemName: Symbol.streak)
+                .font(.system(size: 13))
+                .foregroundStyle(SN.highlightOrange)
+                .frame(width: 14)
                 .accessibilityHidden(true)
-            Text(milestone.title)
-                .font(.sn(12))
-                .foregroundStyle(SN.textPrimary)
+            (Text("Watch streak").font(.sn(12, 600)).foregroundStyle(SN.textPrimary)
+                + Text(milestone.streakCount.map { " · \($0) stream\($0 == 1 ? "" : "s")" } ?? "")
+                .font(.sn(12)).foregroundStyle(SN.textSecondary))
                 .lineLimit(1)
+                .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                Task {
-                    if await rooms.shareWatchStreak(message: composer?.draft ?? "") { composer?.draft = "" }
-                }
-            } label: {
-                Text("Share")
-                    .font(.sn(11.5, 600))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Self.amber))
-                    .shadow(color: SN.warning.opacity(0.2), radius: 5)
+            shareButton {
+                if await rooms.shareWatchStreak(message: composer?.draft ?? "") { composer?.draft = "" }
             }
-            .buttonStyle(ShrinkPress())
-            .disabled(rooms.sharing)
-            .opacity(rooms.sharing ? 0.5 : 1)
-            Button {
-                rooms.dismiss("watch")
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Self.amberLight.opacity(0.6))
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss watch streak")
+            dismissButton(label: "Dismiss watch streak") { rooms.dismiss("watch") }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Self.amber.opacity(0.05))
-                .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Self.amber.opacity(0.2), lineWidth: 1) }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    /// The banner's one action: Share, on Liquid Glass tinted with the theme's accent.
+    private func shareButton(_ action: @escaping () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            Text("Share")
+                .font(.sn(12, 600))
+                .padding(.horizontal, 14)
+                .frame(height: 28)
         }
+        .buttonStyle(AccentGlass())
+        .disabled(rooms.sharing)
+        .opacity(rooms.sharing ? 0.5 : 1)
+    }
+
+    /// A step quieter than Share: a light glyph in muted text, with a 28 point target.
+    private func dismissButton(label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(SN.textMuted)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// The quieter half of the resub line: who gifted it, or how many months.
+    private func resubDetail(_ resub: ResubNotice) -> String? {
+        if resub.isGift { return resub.gifter.map { "from \($0)" } }
+        let n = resub.cumulativeMonths
+        return "\(n) month\(n == 1 ? "" : "s")"
     }
 }
 
-/// A chip that scales to 0.95 while pressed.
-private struct ShrinkPress: ButtonStyle {
+/// The one action on a glass banner: Liquid Glass tinted with the theme's accent, interactive under
+/// the finger (the desktop's glazed accent button), a solid accent capsule at Glassiness 0. Its
+/// text is white on a dark accent and near-black on a pale one.
+private struct AccentGlass: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .foregroundStyle(Look.shared.palette.accent.luminance > 0.5 ? Color.black.opacity(0.88) : .white)
+            .snGlass(Capsule(), tint: SN.accent, interactive: true)
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.85 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

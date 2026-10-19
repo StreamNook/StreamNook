@@ -858,7 +858,7 @@
     },
     {
       "category": "Everyone",
-      "description": "Read text aloud on this computer",
+      "description": "Read text aloud on this device",
       "label": "Everyone",
       "name": "tts",
       "usage": "/tts <text>"

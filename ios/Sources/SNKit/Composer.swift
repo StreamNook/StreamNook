@@ -58,8 +58,9 @@ public struct EmoteMatchResult: Decodable, Sendable {
 // MARK: Draft editing
 
 public enum ComposerText {
-    /// Words this short match most of the set and are noise, not help.
-    public static let minimumSuggestLength = 2
+    /// Any word asks: the core answers a one-character word with only an emote of exactly that
+    /// name ("0"), since a prefix list for it would be most of the set.
+    public static let minimumSuggestLength = 1
 
     /// The run of non-space characters at the end of the draft (empty after a space).
     public static func lastWord(_ text: String) -> String {

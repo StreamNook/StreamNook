@@ -44,9 +44,6 @@ private struct ComposerBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(SN.borderSubtle)
-                .frame(height: 1)
             if let reply = session.replyTo {
                 replyChip(reply)
             }

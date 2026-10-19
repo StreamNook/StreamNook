@@ -53,6 +53,26 @@ struct RowDecor {
     var cologne: CologneLook?
     /// Frosted blocks behind the text when the Atmosphere asks for them (drawn into the bitmap).
     var frost: [RowFrost] = []
+    /// An outline of the whole row in `color` (a first-time chatter's ring), with a faint fill
+    /// inside when `fill` is set. Drawn into the bitmap.
+    var ring: (color: UIColor, fill: Bool)?
+    /// The glint a live row plays over its ring or left bar, run by the cell.
+    var glint: RowGlint?
+}
+
+/// A highlight that crosses a row's ring or left bar when it arrives live, as Core Animation
+/// layers on the cell so nothing redraws per frame.
+struct RowGlint: Equatable {
+    enum Kind: String { case sheen, pulse, chase }
+    var kind: Kind
+    /// Over the ring; otherwise down the bar on the left.
+    var onRing: Bool
+    /// Keeps cycling instead of playing once.
+    var loop: Bool
+
+    /// The ring's corner radius, shared by the bitmap and the glint's mask.
+    static let ringRadius: CGFloat = 8
+    static let barWidth: CGFloat = 4
 }
 
 /// A readability block behind a row's text over a busy Atmosphere: the tint without a per-row
@@ -169,21 +189,12 @@ struct ChatRowLayoutBuilder {
     var emoteMargin: CGFloat { CGFloat(style.emoteMargin) * 16 }
 
     func font(_ size: CGFloat, _ weight: UIFont.Weight, italic: Bool = false) -> UIFont {
-        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        let base = ChatFont.font(size, weight)
         guard italic, let descriptor = base.fontDescriptor.withSymbolicTraits(.traitItalic) else { return base }
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    var bodyWeight: UIFont.Weight { .light }
-    var baseWeight: UIFont.Weight {
-        switch style.fontWeight {
-        case ..<350: return .light
-        case ..<450: return .regular
-        case ..<550: return .medium
-        case ..<650: return .semibold
-        default: return .bold
-        }
-    }
+    var bodyWeight: UIFont.Weight { ChatFont.bodyWeight(textWeight: style.fontWeight) }
 
     func build(_ row: ChatRowModel) -> ChatRowLayout {
         let message = row.message
@@ -261,8 +272,9 @@ struct ChatRowLayoutBuilder {
             decor.leadingBar = (ChatTheme.color(style.replyColor) ?? ChatTheme.error, 4)
             if style.mentionAnimation && row.live { decor.flash = (ChatTheme.color(style.replyColor) ?? ChatTheme.error, 0.3) }
         } else if let highlight = meta.highlight, let color = ChatTheme.color(highlight.color) {
-            decor.leadingBar = (color, 4)
-            decor.fill = .tint(color, alpha: 0.20)
+            // Highlight Appearance: standard draws the tint and bar, minimal the bar, none neither.
+            if style.highlightShowsBar { decor.leadingBar = (color, 4) }
+            if style.highlightShowsTint { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
             if row.live { decor.flash = (color, 0.35) }
         } else if kind == .announcement {
             let color = Self.announcementColor(message.tags["msg-param-color"], mention: style.mentionColor)
@@ -270,8 +282,20 @@ struct ChatRowLayoutBuilder {
             decor.fill = .tint(color, alpha: 0.20)
             label = ("Announcement", color)
         } else if let builtIn = meta.builtIn, let color = ChatTheme.color(builtIn.color) {
-            decor.leadingBar = (color, 4)
-            decor.fill = .tint(color, alpha: 0.20)
+            let firstTime = builtIn.kind == "first_time"
+            let ring = firstTime && style.firstTimeStyle == "ring"
+            if ring {
+                // The ring stands in for the wash whatever the Highlight Appearance says.
+                decor.ring = (color, style.firstTimeFill)
+                // A straight divider would cut across the ring's rounded corners.
+                decor.topHairline = nil
+            } else {
+                if style.highlightShowsBar { decor.leadingBar = (color, RowGlint.barWidth) }
+                if style.highlightShowsTint { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
+            }
+            if firstTime, row.live, let kind = RowGlint.Kind(rawValue: style.firstTimeAnimation) {
+                decor.glint = RowGlint(kind: kind, onRing: ring, loop: style.firstTimeAnimateRepeat)
+            }
             label = (builtIn.label, color)
         } else if let suspicious = meta.suspicious {
             let restricted = suspicious == "restricted"
@@ -556,6 +580,8 @@ struct ChatRowLayoutBuilder {
         var decor = base
         decor.leadingBar = nil
         decor.flash = nil
+        decor.ring = nil
+        decor.glint = nil
         decor.topHairline = ChatTheme.borderSubtle
         var top = CGFloat(style.rowPadding) + 2
         var lines: [PlacedLine] = []

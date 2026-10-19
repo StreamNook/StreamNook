@@ -40,10 +40,10 @@ struct ChatSettingsPanel: View {
     private var landscape: some View {
         SettingsBlock(title: "Landscape Chat", detail: "How chat shares the screen when the phone is on its side.") {
             ChoiceRow(title: "Layout", path: "fullscreen_chat.phone_layout",
-                      choices: [Choice("Over the video", "overlay"), Choice("Beside the video", "beside")], fallback: "overlay",
+                      choices: [Choice("Over the video", "overlay"), Choice("Beside the video", "beside")], fallback: "beside",
                       detail: "Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it.",
-                      help: "Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through. Width never goes past half the screen.") {
-                if store.string("fullscreen_chat.phone_layout", "overlay") == "overlay" {
+                      help: "Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through.") {
+                if store.string("fullscreen_chat.phone_layout", "beside") == "overlay" {
                     NestedSlider(title: "Background", path: "fullscreen_chat.opacity", range: 0...100, step: 5, fallback: 55,
                                  readout: { "\(Int($0))%" })
                 }
@@ -91,6 +91,7 @@ struct ChatSettingsPanel: View {
 
     private var events: some View {
         SettingsBlock(title: "Chat Events", detail: "What live channel activity shows while you watch. Turn any of these off to keep chat clean.") {
+            EventRowsPreview()
             ToggleRow(title: "Redemptions", path: "show_channel_point_redemptions", fallback: true,
                       detail: "A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward.",
                       help: "Rewards that already post to chat are unaffected.")
@@ -119,6 +120,7 @@ struct ChatSettingsPanel: View {
 
     private var layout: some View {
         SettingsBlock(title: "Message Layout", detail: "Spacing, text size, animation and timestamps.") {
+            MessageLayoutPreview()
             ToggleRow(title: "Dividers", path: "chat_design.show_dividers",
                       detail: "A thin line between messages so a fast chat is easier to scan.")
             ToggleRow(title: "Striped rows", path: "chat_design.alternating_backgrounds",
@@ -151,6 +153,7 @@ struct ChatSettingsPanel: View {
 
     private var names: some View {
         SettingsBlock(title: "Names & Badges", detail: "How chatter names, badges and 7TV paints look.") {
+            NamesPreview()
             ChoiceRow(title: "Name style", path: "chat_design.username_style",
                       choices: [Choice("Plain", "plain"), Choice("Accent bar", "bar"), Choice("Chip / tag", "chip"),
                                 Choice("Brackets   [name]", "brackets"), Choice("Color dot", "dot")],
@@ -165,8 +168,10 @@ struct ChatSettingsPanel: View {
                                 fallback: "none", accessibility: "Name separator", fullWidth: false)
                 }
                 if store.string("chat_design.username_separator", "none") != "none" || store.string("chat_design.username_style", "plain") != "plain" {
+                    // An earlier build saved "accent", which nothing reads; it shows as the theme choice.
                     NestedChoice(title: "Prefix color", path: "chat_design.username_accent_source",
-                                 choices: [Choice("User color", "user"), Choice("Theme accent", "accent")], fallback: "user")
+                                 choices: [Choice("User color", "user"), Choice("Theme accent", "theme")], fallback: "user",
+                                 shown: { $0 == "accent" ? "theme" : $0 })
                 }
             }
             ToggleRow(title: "Readable colors", path: "chat_design.name_color_adjustment",
@@ -187,11 +192,17 @@ struct ChatSettingsPanel: View {
                     SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
-            // The picture source (7TV or Twitch) is not read on the iPhone yet, so only Animation shows.
-            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_animation",
-                      choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
-                      detail: "Animated 7TV profile pictures play, or hold their first frame.",
-                      shown: { $0 == "hover" ? "never" : $0 })
+            ProfilePicturePreview()
+            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
+                      choices: [Choice("7TV", "seventv"), Choice("Twitch", "twitch")], fallback: "seventv",
+                      detail: "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
+                      help: "Twitch shows each platform's own picture (Kick included) and never asks 7TV for one; paints and badges stay. Animation has its own choice and does not follow Reduce Motion.") {
+                if store.string("cosmetics.profile_picture_source", "seventv") != "twitch" {
+                    NestedChoice(title: "Animation", path: "cosmetics.profile_picture_animation",
+                                 choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
+                                 shown: { $0 == "hover" ? "never" : $0 })
+                }
+            }
             ToggleRow(title: "@ prefix", path: "chat_design.show_at_sign", detail: "Writes every name as @name.")
             ChoiceRow(title: "Paint shadows", path: "cosmetics.paint_shadows",
                       choices: [Choice("All", "all"), Choice("One", "one"), Choice("None", "none")], fallback: "all",
@@ -207,6 +218,7 @@ struct ChatSettingsPanel: View {
 
     private var mentions: some View {
         SettingsBlock(title: "Mentions & Replies", detail: "How a message that mentions you, and a reply, stand out, and how an @name reads in chat.") {
+            MentionsPreview()
             SettingRow(title: "@name style", detail: "How an @mention reads in chat.",
                        help: "A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright.") {
                 EmptyView()
@@ -294,6 +306,7 @@ struct ChatSettingsPanel: View {
 
     private var input: some View {
         SettingsBlock(title: "Chat Input", detail: "Small conveniences in the box where you type, and which buttons sit around it.") {
+            ChatInputPreview()
             ToggleRow(title: "Duplicate sends", path: "chat_input.bypass_duplicate",
                       detail: "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
                       help: "Twitch normally blocks identical messages sent back to back. Handy for repeating an emote.")
@@ -333,6 +346,7 @@ struct ChatSettingsPanel: View {
 
     private var behavior: some View {
         SettingsBlock(title: "Chat Behavior", detail: "Deleted messages, shared chat, scrolling, and how much chat is kept.") {
+            DeletedMessagePreview()
             // Five segments do not fit a phone's width at 13 pt, so this one is a menu.
             ChoiceRow(title: "Deleted messages", path: "chat_design.deleted_message_style",
                       choices: [Choice("Strikethrough", "strikethrough"), Choice("Dimmed", "dimmed"), Choice("Italic", "italic"),
@@ -352,11 +366,25 @@ struct ChatSettingsPanel: View {
 
     private var highlightAppearance: some View {
         SettingsBlock(title: "Highlight Appearance", detail: "Applies to every highlight type below: phrases, usernames, badges, and events.") {
-            SliderRow(title: { "Opacity: \(Int($0))%" }, path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
-                      fallback: 20, detail: "How bright a highlighted row's tint is; 20% matches the original look.",
-                      accessibility: "Highlight opacity")
+            ChoiceRow(title: "Style", path: "chat_highlights.appearance.display_style",
+                      choices: [Choice("Standard", "standard"), Choice("Minimal", "minimal"), Choice("None", "none")],
+                      fallback: "standard",
+                      help: "Opacity is how bright the row tint appears, in the Standard style only. 20% matches the original look.",
+                      detailFor: { Self.highlightStyleHints[$0 ?? "standard"] ?? "" },
+                      accessibility: "Highlight style") {
+                if store.string("chat_highlights.appearance.display_style", "standard") == "standard" {
+                    NestedSlider(title: "Opacity", path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
+                                 fallback: 20, readout: { "\(Int($0))%" })
+                }
+            }
         }
     }
+
+    static let highlightStyleHints = [
+        "standard": "Tinted row background plus colored left border.",
+        "minimal": "Colored left border only, no row tint.",
+        "none": "Nothing drawn on the row.",
+    ]
 
     private var spam: some View {
         SettingsBlock(title: "Spam & Pyramid", detail: "How /spam and /pyramid send their lines.") {

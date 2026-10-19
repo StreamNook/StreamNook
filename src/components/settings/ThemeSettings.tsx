@@ -37,7 +37,59 @@ interface ThemeCardProps {
     onEdit?: () => void;
 }
 
-const ThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: ThemeCardProps) => {
+const ThemeCard = (props: ThemeCardProps) => (IS_MOBILE ? <PhoneThemeCard {...props} /> : <DesktopThemeCard {...props} />);
+
+/** The phone's card, as the iPhone draws it: three to a line, the theme's
+ *  swatches and its name on its own background, and the description read out
+ *  by screen readers rather than printed. A custom theme's edit button shows
+ *  outright, since a touch never hovers. */
+const PhoneThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: ThemeCardProps) => {
+    const { palette } = theme;
+    const swatches = [palette.accent, palette.highlight.pink, palette.highlight.purple, palette.highlight.blue, palette.highlight.green];
+    return (
+        <div className="relative h-full">
+            <button
+                onClick={onSelect}
+                aria-label={theme.description ? `${theme.name}. ${theme.description}` : theme.name}
+                aria-pressed={isSelected}
+                className={`relative flex h-full w-full flex-col gap-1.5 rounded-lg border p-2.5 text-left active:scale-[0.98] transition-transform ${
+                    isSelected ? 'border-accent ring-2 ring-accent/30' : 'border-borderSubtle'
+                }`}
+                style={{ backgroundColor: palette.background }}
+            >
+                <span className="flex gap-[3px]" aria-hidden>
+                    {swatches.map((color, i) => (
+                        <span key={i} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                    ))}
+                </span>
+                {/* A long name takes a second line rather than being cut short
+                    (the iPhone shrinks its type instead, which CSS cannot). */}
+                <span
+                    className={`block line-clamp-2 break-words text-[13px] font-semibold leading-tight ${isCustom && onEdit ? 'pr-5' : ''}`}
+                    style={{ color: palette.textPrimary }}
+                >
+                    {theme.name}
+                </span>
+                {isSelected && (
+                    <span className="absolute right-1.5 top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent" aria-hidden>
+                        <Check size={11} className="text-background" strokeWidth={3} />
+                    </span>
+                )}
+            </button>
+            {isCustom && onEdit && (
+                <button
+                    onClick={onEdit}
+                    aria-label={`Edit ${theme.name}`}
+                    className="absolute bottom-0.5 right-0.5 flex h-7 w-7 items-center justify-center"
+                >
+                    <Edit2 size={12} style={{ color: palette.textSecondary }} />
+                </button>
+            )}
+        </div>
+    );
+};
+
+const DesktopThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: ThemeCardProps) => {
     const { palette } = theme;
 
     return (
@@ -420,7 +472,10 @@ const ThemeSettings = () => {
                 })}
                 {/* Custom: same tile language as the presets: once a name
                     is typed, the tile label IS the preview, in that face. */}
-                <Tooltip content="Type any font name. Free fonts load automatically, and fonts installed on this PC work too." side="top">
+                <Tooltip
+                    content={IS_MOBILE ? 'Type any free font from Google Fonts.' : 'Type any font name. Free fonts load automatically, and fonts installed on this PC work too.'}
+                    side="top"
+                >
                     <button
                         onClick={() => handleFontChange(CUSTOM_FONT_ID)}
                         style={{ transform: 'translateZ(0)' }}
@@ -478,7 +533,9 @@ const ThemeSettings = () => {
                         ))}
                     </div>
                     <p className="text-xs text-textMuted leading-relaxed">
-                        Any free font from fonts.google.com works, just type its exact name. Fonts installed on this PC work too, with no download.
+                        {IS_MOBILE
+                            ? 'Any free font from fonts.google.com works, just type its exact name. It is kept on this phone after the first time.'
+                            : 'Any free font from fonts.google.com works, just type its exact name. Fonts installed on this PC work too, with no download.'}
                     </p>
                 </div>
             )}
@@ -557,8 +614,8 @@ const ThemeSettings = () => {
 
     // The phone's page, in the settings pages' grouped style: the four settings
     // as rows on one card under the section the settings catalog names, then
-    // each family of themes on its own card, two to a line so a name and its
-    // swatches stay readable at phone width.
+    // each family of themes on its own card, three small cards to a line with
+    // names only, as the iPhone draws them.
     if (IS_MOBILE) {
         return (
             <div className="space-y-6">
@@ -584,9 +641,10 @@ const ThemeSettings = () => {
                         onReset={resetGlass}
                         control={<span className="text-[13px] text-textMuted font-mono">{liveGlass}%</span>}
                     >
-                        {/* Held to the width a settings slider is capped at, so
-                            Solid and Frosted glass sit under its two ends. */}
-                        <div className="space-y-1.5 max-w-[15rem]">{glassSlider}</div>
+                        {/* Full width under the row, as the phone's other
+                            sliders run; Solid and Frosted glass sit under its
+                            two ends. */}
+                        <div className="space-y-1.5">{glassSlider}</div>
                     </SettingsRow>
                     <SettingsRow
                         title="Font"
@@ -607,7 +665,7 @@ const ThemeSettings = () => {
 
                 {customThemes.length > 0 && (
                     <SettingsSection label="Your Themes" description="Your own creations">
-                        <div className="grid grid-cols-2 gap-2.5 py-4">{customThemeCards}</div>
+                        <div className="grid grid-cols-3 gap-2.5 py-4">{customThemeCards}</div>
                     </SettingsSection>
                 )}
 
@@ -616,7 +674,7 @@ const ThemeSettings = () => {
                     if (categoryThemes.length === 0) return null;
                     return (
                         <SettingsSection key={category.id} label={category.name} description={category.description}>
-                            <div className="grid grid-cols-2 gap-2.5 py-4">{themeCardsFor(categoryThemes)}</div>
+                            <div className="grid grid-cols-3 gap-2.5 py-4">{themeCardsFor(categoryThemes)}</div>
                         </SettingsSection>
                     );
                 })}

@@ -11,6 +11,9 @@ struct PredictionCard: View {
     let open: Bool
     @FocusState private var typing: Bool
 
+    /// The place button's height: a card's action, a step below the screens' worded buttons.
+    private static let buttonHeight: CGFloat = 40
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CardHead(open: open, label: "Prediction", line: prediction.result?.line ?? prediction.title,
@@ -26,10 +29,6 @@ struct PredictionCard: View {
                     if prediction.canPredict {
                         sides
                         SplitBar(outcomes: prediction.outcomes)
-                        if let status = prediction.statusLine {
-                            VoteLinePill(text: status, icon: prediction.pointsIcon, showsIcon: true)
-                        }
-                        betControls
                     } else {
                         SplitBar(outcomes: prediction.outcomes)
                         if let result = prediction.result {
@@ -45,6 +44,24 @@ struct PredictionCard: View {
                         }
                     }
                 }
+            }
+            // The bet sits under the scrolling body, never inside it: under Rust's height cap the
+            // button and the balance used to be below the fold with only a fade to say so.
+            if open && prediction.canPredict {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Placed: what the viewer staked, in view beside the bet while they can still
+                    // add to it.
+                    if let status = prediction.statusLine {
+                        VoteLinePill(text: status, icon: prediction.pointsIcon, showsIcon: true)
+                    }
+                    betControls
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+                .overlay(alignment: .top) {
+                    SN.borderSubtle.opacity(0.6).frame(height: 1).accessibilityHidden(true)
+                }
+                .transition(.opacity)
             }
         }
         .modifier(VoteCardSurface())
@@ -134,6 +151,20 @@ struct PredictionCard: View {
 
     @ViewBuilder private var betControls: some View {
         let bet = model.bet
+        // What there is to spend, right where the amount is set.
+        if let balance = bet?.balanceLine {
+            HStack(spacing: 6) {
+                Text("Your points")
+                    .foregroundStyle(SN.textMuted)
+                Spacer(minLength: 8)
+                PointsArt(iconURL: prediction.pointsIcon, size: 13)
+                Text(balance)
+                    .foregroundStyle(SN.textPrimary)
+            }
+            .font(.sn(12, 500))
+            .monospacedDigit()
+            .lineLimit(1)
+        }
         HStack(spacing: 6) {
             ForEach(Array((bet?.presets ?? []).enumerated()), id: \.offset) { index, preset in
                 Button {
@@ -151,6 +182,14 @@ struct PredictionCard: View {
             amountField
         }
         .frame(height: 34)
+        if let failure = model.failure {
+            Text(failure)
+                .font(.sn(12.5, 500))
+                .foregroundStyle(SN.error)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .accessibilityAddTraits(.isStaticText)
+        }
         Group {
             if let bet, let problem = bet.problem {
                 // Rust's reason in the button's place, the same height, so nothing jumps.
@@ -160,7 +199,7 @@ struct PredictionCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
                     .frame(maxWidth: .infinity)
-                    .frame(height: SNButtonStyle.height)
+                    .frame(height: Self.buttonHeight)
                     .background(Capsule().fill(SN.surface))
             } else {
                 Button {
@@ -168,25 +207,20 @@ struct PredictionCard: View {
                     model.openConfirm()
                 } label: {
                     HStack(spacing: 7) {
-                        PointsArt(iconURL: prediction.pointsIcon, size: 17)
+                        PointsArt(iconURL: prediction.pointsIcon, size: 15)
                         Text(bet?.button ?? " ")
                     }
                 }
-                .buttonStyle(.snPrimary)
+                .buttonStyle(PlaceGlass(height: Self.buttonHeight))
                 .disabled(bet?.ok != true)
             }
         }
-        HStack(spacing: 8) {
-            Text(bet?.ok == true ? bet?.winLine ?? "" : "")
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(bet?.balanceLine ?? "")
-                .lineLimit(1)
-        }
-        .font(.sn(12))
-        .monospacedDigit()
-        .foregroundStyle(SN.textMuted)
-        .frame(minHeight: 14)
+        Text(bet?.ok == true ? bet?.winLine ?? "" : "")
+            .lineLimit(1)
+            .font(.sn(12))
+            .monospacedDigit()
+            .foregroundStyle(SN.textMuted)
+            .frame(maxWidth: .infinity, minHeight: 14)
     }
 
     /// The typed amount, as the last chip: a number pad opens on a tap, and what is typed goes to
@@ -310,5 +344,28 @@ private struct PredictConfirm: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .fittedSheet()
+    }
+}
+
+/// The card's place button: Liquid Glass tinted with the theme's accent, interactive under the
+/// finger, a solid accent capsule at Glassiness 0. White text on a dark accent, near-black on a
+/// pale one; dimmed while Rust says the bet cannot be placed.
+private struct PlaceGlass: ButtonStyle {
+    let height: CGFloat
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.sn(14, 600))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .foregroundStyle(Look.shared.palette.accent.luminance > 0.5 ? Color.black.opacity(0.88) : .white)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .snGlass(Capsule(), tint: SN.accent, interactive: true)
+            .contentShape(Capsule())
+            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

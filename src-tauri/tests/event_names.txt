@@ -64,6 +64,8 @@ member-aliases-invalidated
 member-theme-changed
 membership-gift-received
 membership-status-changed
+mention-inbox-changed
+mention-notify
 mirrored-notification
 mirrored-notification-activate
 multi-nook://meta
