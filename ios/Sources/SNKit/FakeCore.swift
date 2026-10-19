@@ -65,6 +65,17 @@ public final class FakeCore: CoreBridge {
         }
     }
 
+    /// The whole settings object, as the core answers it: the fake's saved settings with the
+    /// recording's chat look over them, so a fixture room draws as it was recorded.
+    private func settingsObject() throws -> [String: Any] {
+        let saved = try fixtures?.answer("load_settings", [:])
+        var root = saved.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+        if let design = chatFixture.flatMap({ try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) as? [String: Any] }) {
+            // A setting written since keeps its value over the recording's.
+            root["chat_design"] = design.merging(root["chat_design"] as? [String: Any] ?? [:]) { $1 }
+        }
+        return root
+    }
     public func invoke(_ cmd: String, _ argsJSON: String) async throws -> String {
         let started = state.withLock { state -> Bool in
             state.calls.append(cmd)
@@ -108,14 +119,10 @@ public final class FakeCore: CoreBridge {
         case "stop_stream", "stop_chat", "watch_stop":
             return "null"
         case "load_settings":
-            // The whole settings object, as the core answers it: the fake's saved settings with the
-            // recording's chat look over them, so a fixture room draws as it was recorded.
-            let saved = try fixtures?.answer(cmd, args)
-            var root = saved.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
-            if root["chat_design"] == nil, let design = chatFixture.flatMap({ try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) }) {
-                root["chat_design"] = design
-            }
-            return try Self.json(root)
+            return try Self.json(try settingsObject())
+        case "get_settings_view":
+            // What the settings pages draw from: the same object, and the paths a write changed.
+            return try Self.json(["values": try settingsObject(), "changed": fixtures?.changedPaths ?? []] as [String: Any])
         case "load_channel_history":
             return "[]"
         case "get_alert_types":
