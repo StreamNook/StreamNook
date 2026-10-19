@@ -10,6 +10,7 @@ import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { buildEmoteNameMap, EmoteText } from '../utils/emoteText';
 import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
+import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultView } from '../types';
 
 /**
@@ -62,6 +63,9 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const [betAnswer, setBetAnswer] = useState<{ key: string; bet: BetView | null } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Why the last placement was refused, for the bet it was asked about: it
+  // shows as one line in the card and goes once the side or amount changes.
+  const [failure, setFailure] = useState<{ key: string; line: string } | null>(null);
 
   // Outcome titles are plain text with no emote ranges, so match emote names
   // against the channel's set the same way pinned messages do.
@@ -118,6 +122,8 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const bet = canPredict && betAnswer && betAnswer.key === betKey ? betAnswer.bet : null;
   // The confirm only makes sense while predicting is still offered.
   const showConfirm = confirming && canPredict && bet !== null;
+  const failureKey = `${betKey ?? ''}|${amountInput}`;
+  const failureLine = failure && failure.key === failureKey ? failure.line : null;
 
   // Ask Rust what this bet would say whenever the side, the amount or the card
   // changes (the pool moves the "win up to" line). Asking spends nothing.
@@ -158,13 +164,20 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
         outcomeId: side,
         amount: bet.amount,
       });
-      addToast(outcome.message, outcome.success ? 'success' : 'error');
+      // A placed bet says so in the card (Rust's status line) and once as a
+      // toast; a refusal is one line in the card, beside the button.
+      if (outcome.success) {
+        addToast(outcome.message, 'success');
+        setFailure(null);
+      } else {
+        setFailure({ key: failureKey, line: outcome.message });
+      }
       if (outcome.view && outcome.view.channel_id === currentChannelId) {
         setCard({ channelId: currentChannelId, view: outcome.view });
       }
     } catch (err) {
       Logger.error('[Prediction] predict failed:', err);
-      addToast(String(err), 'error');
+      setFailure({ key: failureKey, line: String(err) });
     } finally {
       // Back to the bet row either way: a refusal's reason shows there.
       setConfirming(false);
@@ -256,8 +269,12 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
       </div>
 
       {/* The bet, then a confirm before any points are spent. */}
+      {/* The bet stays pinned to the card's bottom edge while the outcomes
+          scroll under it: under the phones' capped stack the button and the
+          balance used to sit below the fold, with only a faint fade to hint
+          that the card scrolled. */}
       {canPredict && side && (
-        <div className="px-3 pb-3">
+        <div className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-3 border-t border-borderSubtle/60">
           {showConfirm && bet ? (
             <div className="p-3 bg-backgroundSecondary rounded-lg border border-border text-center">
               <p className="text-sm font-semibold text-textPrimary">{bet.confirm_title}</p>
@@ -274,11 +291,8 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                 <button
                   onClick={handlePredict}
                   disabled={submitting || !bet.ok}
-                  className={`flex-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${
-                    submitting || !bet.ok
-                      ? 'bg-background border border-border text-textSecondary cursor-not-allowed'
-                      : 'bg-accent-on-surface hover:opacity-90 text-background'
-                  }`}
+                  className={`${ACCENT_BUTTON} flex-1 h-8 px-3 !text-xs`}
+                  style={ACCENT_FILL}
                 >
                   {submitting ? '...' : 'Predict'}
                 </button>
@@ -286,6 +300,16 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
             </div>
           ) : (
             <>
+              {/* What there is to spend, right where the amount is set. */}
+              {bet?.balance_line && (
+                <div className="mb-1.5 flex items-center justify-between text-xs text-textSecondary">
+                  <span>Your points</span>
+                  <span className="flex items-center gap-1 font-medium text-textPrimary tabular-nums">
+                    {pointsIcon('text-textSecondary')}
+                    {bet.balance_line}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-2 p-2 bg-backgroundSecondary rounded-lg border border-border">
                 <input
                   type="text"
@@ -315,6 +339,11 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                   ))}
                 </div>
               </div>
+              {failureLine && (
+                <p role="alert" className="mt-2 truncate text-center text-xs font-medium text-error">
+                  {failureLine}
+                </p>
+              )}
               <div className="mt-2">
                 {bet?.problem ? (
                   <p className="py-1.5 text-center text-xs font-medium text-textSecondary">{bet.problem}</p>
@@ -322,27 +351,14 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                   <button
                     onClick={() => setConfirming(true)}
                     disabled={!bet || !bet.ok}
-                    className={`w-full px-3 py-1.5 rounded text-xs font-bold transition-colors ${
-                      bet && bet.ok
-                        ? 'bg-accent-on-surface hover:opacity-90 text-background'
-                        : 'bg-background border border-border text-textSecondary cursor-not-allowed'
-                    }`}
+                    className={`${ACCENT_BUTTON} w-full h-8 px-3 !text-xs`}
+                    style={ACCENT_FILL}
                   >
                     {bet?.button ?? '...'}
                   </button>
                 )}
               </div>
-              {bet && (
-                <div className="mt-1.5 flex items-center justify-between text-xs text-textSecondary">
-                  <span>{bet.win_line}</span>
-                  {bet.balance_line && (
-                    <span className="flex items-center gap-1">
-                      {pointsIcon('text-textSecondary')}
-                      {bet.balance_line}
-                    </span>
-                  )}
-                </div>
-              )}
+              {bet?.ok && <p className="mt-1.5 text-center text-xs text-textSecondary">{bet.win_line}</p>}
             </>
           )}
         </div>
