@@ -416,10 +416,13 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     public var nickname: String?
     /// Link cards under the body, in link order.
     public var previews: [ChatRowPreview] = []
+    /// The chat event this row is (`twitch:subscription`, `kick:follow`), nil for an ordinary
+    /// message: the key `chat_events.hidden_provider_events` lists to hide it.
+    public var event: String?
 
     enum CodingKeys: String, CodingKey {
         case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne, source, nickname
-        case previews
+        case previews, event
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -443,6 +446,7 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
         nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
         previews = (try? c.decodeIfPresent([ChatRowPreview].self, forKey: .previews)) ?? []
+        event = try c.decodeIfPresent(String.self, forKey: .event)
     }
 }
 

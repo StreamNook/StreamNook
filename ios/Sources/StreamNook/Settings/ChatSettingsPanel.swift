@@ -5,6 +5,7 @@ import SwiftUI
 /// settings. Sections that only hold a list editor live in ChatListSettings.
 struct ChatSettingsPanel: View {
     @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
     @AppStorage("sn-mention-haptic") private var mentionHaptic = "on"
 
     var body: some View {
@@ -96,16 +97,16 @@ struct ChatSettingsPanel: View {
             WideRow(title: "Platforms", detail: "Turn event kinds off per platform. Lit means shown.",
                     paths: ["chat_events.hidden_provider_events"]) {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Self.eventKinds, id: \.0) { platform, label, kinds in
+                    ForEach(ChatEventKinds.platforms(watchable: model.kick.watchable)) { platform in
                         HStack(alignment: .top, spacing: 8) {
                             HStack(spacing: 4) {
-                                BrandLogo(id: platform, size: 13)
-                                Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                                BrandLogo(id: platform.id, size: 13)
+                                Text(platform.label).font(.sn(12)).foregroundStyle(SN.textSecondary)
                             }
                             .frame(width: 84, alignment: .leading)
                             .padding(.top, 7)
                             SettingChips(path: "chat_events.hidden_provider_events",
-                                         chips: kinds.map { Choice($0.1, "\(platform):\($0.0)") })
+                                         chips: platform.kinds.map { Choice($0.label, $0.key) })
                         }
                     }
                 }
@@ -113,13 +114,6 @@ struct ChatSettingsPanel: View {
             }
         }
     }
-
-    /// Twitch and Kick only: the iPhone has no YouTube or TikTok chat.
-    static let eventKinds: [(String, String, [(String, String)])] = [
-        ("twitch", "Twitch", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("bits", "Bits"), ("raids", "Raids"),
-                             ("milestones", "Milestones"), ("channel_points", "Channel points"), ("announcements", "Announcements")]),
-        ("kick", "Kick", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("follows", "Follows"), ("raids", "Raids")]),
-    ]
 
     // MARK: Layout, names, mentions
 
@@ -311,6 +305,7 @@ struct ChatSettingsPanel: View {
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
                       detail: "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.")
+            WalletBalanceRow()
         }
     }
 
@@ -331,7 +326,7 @@ struct ChatSettingsPanel: View {
         SettingsBlock(title: "Channel Points", detail: "Bonus chest pickup on the channel you are watching.") {
             ToggleRow(title: "Bonus chests", path: "auto_claim_points_watching", fallback: true,
                       detail: "Collects the bonus chest on the stream you are watching the moment it appears.",
-                      help: "When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin.")
+                      help: "When this is off, a claim button appears on the points icon so you can grab it yourself. Only the channel you are watching is claimed.")
         }
     }
 
@@ -481,6 +476,30 @@ struct SettingTextField: View {
                 save?.cancel()
                 Task { await store.set(path, text) }
             }
+        }
+    }
+}
+
+/// Chat Input > Wallet balance: Always puts the short balance beside the wallet button, Hidden
+/// keeps just the icon. Same two keys as desktop and Android; a saved desktop On hover shows as
+/// Hidden, which is how the composer draws it, and is only rewritten when a choice is picked.
+private struct WalletBalanceRow: View {
+    @Environment(SettingsStore.self) private var store
+
+    var body: some View {
+        let always = store.bool("chat_input.show_points_balance_inline") && !store.bool("chat_input.hide_points_balance")
+        WideRow(title: "Wallet balance",
+                detail: "Always shows your balance beside the wallet button in the message box. Hidden keeps just the icon, and the wallet shows your balance when you open it.",
+                help: "The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers.",
+                paths: ["chat_input.hide_points_balance", "chat_input.show_points_balance_inline"]) {
+            SettingSegments(choices: [Choice("Always", "always"), Choice("Hidden", "hidden")],
+                            selected: always ? "always" : "hidden", accessibility: "Wallet balance") { mode in
+                Task {
+                    await store.set(["chat_input.hide_points_balance": mode == "hidden",
+                                     "chat_input.show_points_balance_inline": mode == "always"])
+                }
+            }
+            .padding(.top, 12)
         }
     }
 }

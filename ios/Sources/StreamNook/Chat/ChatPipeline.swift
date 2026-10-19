@@ -46,6 +46,7 @@ final class ChatPipeline: @unchecked Sendable {
         self.onModes = onModes
         self.onRowCount = onRowCount
         buffer = ChatRoomBuffer(cap: style.bufferCap)
+        buffer.setHiddenEvents(style.hiddenEvents)
         failureObserver = NotificationCenter.default.addObserver(forName: ImagePipeline.failedNotification,
                                                                  object: nil, queue: nil) { [weak self] note in
             guard let url = note.userInfo?["url"] as? String else { return }
@@ -168,6 +169,7 @@ final class ChatPipeline: @unchecked Sendable {
             guard style != self.style else { return }
             self.style = style
             buffer.cap = style.bufferCap
+            buffer.setHiddenEvents(style.hiddenEvents)
             relayoutAll()
         }
     }

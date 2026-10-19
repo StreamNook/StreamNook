@@ -72,7 +72,7 @@ const ModerationCardSettings = () => {
 
   return (
     <SettingsSection label="Moderation" description="The buttons on a user card in channels you moderate.">
-      <SettingsRow title="Timeout lengths" description="Tap one to change it. The desktop's hover dock uses the same four.">
+      <SettingsRow title="Timeout lengths" description="Tap one to change it. Every quick timeout uses the same four.">
         <div className="flex gap-[7px]">
           {four.map((seconds, index) => (
             <select

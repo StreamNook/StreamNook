@@ -470,6 +470,12 @@ pub struct RowView {
     /// One still being read arrives as a `ROW_PREVIEW` frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub previews: Vec<RowPreview>,
+    /// The chat event this row is, as `provider:category` (`twitch:subscription`,
+    /// `kick:follow`), or None for an ordinary message. The shell hides the row
+    /// while that key is in `chat_events.hidden_provider_events`, the same keys
+    /// the settings page writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
 }
 
 /// One link's card on a row.

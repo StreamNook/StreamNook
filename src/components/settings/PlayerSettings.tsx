@@ -518,51 +518,48 @@ const PlayerSettings = () => {
           />
         </SettingsRow>
 
-        {/* Desktop only: the phone app has no past broadcasts to resume. */}
-        {!IS_MOBILE && (
-          <SettingsRow
-            title="Resume VODs"
-            onReset={thenRun(resetFor(['video_player.resume_vod_playback', true]), () => {
-              void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-            })}
-            description="Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row."
-            help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
-            control={
-              <Toggle
-                enabled={resumeVodPlayback}
-                onChange={() => {
-                  setVideoPlayer({ resume_vod_playback: !resumeVodPlayback });
-                  // The row is gated on this setting, and Home is mounted behind
-                  // this dialog, so ask Rust to rebuild it rather than waiting
-                  // for a remount.
+        <SettingsRow
+          title="Resume VODs"
+          onReset={thenRun(resetFor(['video_player.resume_vod_playback', true]), () => {
+            void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+          })}
+          description="Reopening a past broadcast picks up where you left off, and Home keeps a Continue Watching row."
+          help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
+          control={
+            <Toggle
+              enabled={resumeVodPlayback}
+              onChange={() => {
+                setVideoPlayer({ resume_vod_playback: !resumeVodPlayback });
+                // The row is gated on this setting, and Home is mounted behind
+                // this dialog, so ask Rust to rebuild it rather than waiting
+                // for a remount.
+                void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+              }}
+            />
+          }
+        >
+          {resumeVodPlayback && (
+            <SubControls>
+              <SubControl
+                title="Device sync"
+                onReset={thenRun(resetFor(['video_player.sync_vod_progress', true]), () => {
                   void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-                }}
+                })}
+                control={
+                  <Toggle
+                    enabled={syncVodProgress}
+                    onChange={() => {
+                      setVideoPlayer({ sync_vod_progress: !syncVodProgress });
+                      // Turning it on pulls the positions saved elsewhere into
+                      // the row behind this dialog straight away.
+                      void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                    }}
+                  />
+                }
               />
-            }
-          >
-            {resumeVodPlayback && (
-              <SubControls>
-                <SubControl
-                  title="Device sync"
-                  onReset={thenRun(resetFor(['video_player.sync_vod_progress', true]), () => {
-                    void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-                  })}
-                  control={
-                    <Toggle
-                      enabled={syncVodProgress}
-                      onChange={() => {
-                        setVideoPlayer({ sync_vod_progress: !syncVodProgress });
-                        // Turning it on pulls the positions saved elsewhere into
-                        // the row behind this dialog straight away.
-                        void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-                      }}
-                    />
-                  }
-                />
-              </SubControls>
-            )}
-          </SettingsRow>
-        )}
+            </SubControls>
+          )}
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection

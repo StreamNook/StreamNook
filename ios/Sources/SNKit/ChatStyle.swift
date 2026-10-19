@@ -66,6 +66,12 @@ public struct ChatStyle: Sendable, Equatable {
     public var showRoomModes = true
     /// The suggestion strip over the composer (chat_input.emote_tab_complete_enabled).
     public var suggestionsEnabled = true
+    /// Chat event kinds turned off, as `provider:category` (chat_events.hidden_provider_events).
+    public var hiddenEvents: Set<String> = []
+    /// Wallet balance is Hidden (chat_input.hide_points_balance).
+    public var hidePointsBalance = false
+    /// Wallet balance is Always (chat_input.show_points_balance_inline).
+    public var pointsBalanceInline = false
 
     public init() {}
 
@@ -91,6 +97,11 @@ public struct ChatStyle: Sendable, Equatable {
             hideEmoteButton = i["hide_emote_button"] as? Bool ?? hideEmoteButton
             showRoomModes = i["show_room_modes"] as? Bool ?? showRoomModes
             suggestionsEnabled = i["emote_tab_complete_enabled"] as? Bool ?? suggestionsEnabled
+            hidePointsBalance = i["hide_points_balance"] as? Bool ?? hidePointsBalance
+            pointsBalanceInline = i["show_points_balance_inline"] as? Bool ?? pointsBalanceInline
+        }
+        if let e = root["chat_events"] as? [String: Any], let hidden = e["hidden_provider_events"] as? [Any] {
+            hiddenEvents = Set(hidden.compactMap { $0 as? String })
         }
         if let c = root["cosmetics"] as? [String: Any], let shadows = c["paint_shadows"] as? String {
             paintShadows = shadows
@@ -142,6 +153,10 @@ public struct ChatStyle: Sendable, Equatable {
     /// Emotes animate unless the setting asks for stills; a touch never hovers, so `hover`
     /// draws stills too.
     public var animatesEmotes: Bool { animateEmotes == "always" }
+
+    /// The wallet button carries the short balance beside its icon: Wallet balance is Always. A
+    /// touch has no hover, so a saved desktop On hover reads as Hidden here: just the icon.
+    public var walletBalanceShown: Bool { pointsBalanceInline && !hidePointsBalance }
 
     /// Vertical padding of a plain row: `max(4, spacing / 2)`.
     public var rowPadding: Double { max(4, messageSpacing / 2) }

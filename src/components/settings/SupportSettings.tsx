@@ -26,6 +26,9 @@ interface CommunityInvite {
     name: string | null;
     description: string | null;
     icon_url: string | null;
+    /** The server icon to try in order (the animated one, then the same icon
+     *  still); the card shows the first one that loads, else the StreamNook logo. */
+    icon_urls?: string[];
     /** The hosted banner first, then the server's own; the card shows the
      *  first one that loads. */
     banner_urls: string[];
@@ -48,6 +51,8 @@ const SupportSettings = () => {
     const [invite, setInvite] = useState<CommunityInvite | null>(null);
     // Banners that failed to load; the header falls through to the next one.
     const [failedBanners, setFailedBanners] = useState<string[]>([]);
+    // Icons that failed to load; the frame falls through to the next, then the logo.
+    const [failedIcons, setFailedIcons] = useState<string[]>([]);
 
     useEffect(() => {
         const read = () => {
@@ -74,7 +79,9 @@ const SupportSettings = () => {
     };
 
     const name = invite?.name ?? 'StreamNook';
-    const iconUrl = invite?.icon_url ?? null;
+    const iconUrl =
+        (invite?.icon_urls ?? (invite?.icon_url ? [invite.icon_url] : [])).find((url) => !failedIcons.includes(url)) ??
+        null;
     const bannerUrl = invite?.banner_urls.find((url) => !failedBanners.includes(url)) ?? null;
     const description = invite?.description ?? null;
     const presence = invite?.online;
@@ -145,6 +152,7 @@ const SupportSettings = () => {
                                         src={iconUrl}
                                         alt={name}
                                         className="absolute inset-0 h-full w-full object-contain"
+                                        onError={() => setFailedIcons((failed) => [...failed, iconUrl])}
                                     />
                                 ) : (
                                     <div className="flex h-full w-full items-center justify-center bg-accent/10 p-3">
@@ -329,7 +337,7 @@ const DataRecordedSection = () => (
         />
         <SettingsRow
             title="Version and platform"
-            description="Records which build you are on, your operating system, and whether your updater is working."
+            description="Records which build you are on, your operating system, and whether update checks are getting through."
             help="This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current."
         />
         <SettingsRow

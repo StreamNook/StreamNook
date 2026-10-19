@@ -1296,12 +1296,90 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         source,
         nickname: own.nickname,
         previews,
+        event: event_key(msg),
     });
+}
+
+/// A notice's chat event category by its msg-id / msg_type. Shared with the
+/// web renderers' `categoryOf` (src/utils/chatEvents.ts) so a key the settings
+/// page writes hides the same rows on every shell.
+fn event_category(msg_type: &str) -> Option<&'static str> {
+    Some(match msg_type {
+        "sub" | "resub" | "primepaidupgrade" | "giftpaidupgrade" | "anongiftpaidupgrade" | "standardpayforward"
+        | "communitypayforward" | "membership" | "sharedchatnotice" => "subscription",
+        "subgift" | "submysterygift" | "anonsubgift" | "anonsubmysterygift" | "membergift" | "giftedsub"
+        | "tiktok_gift" | "kick_gift" | "kick_gifted" => "gift",
+        "raid" | "unraid" => "raid",
+        "announcement" | "ritual" => "announcement",
+        "viewermilestone" | "watchstreak" | "bitsbadgetier" => "milestone",
+        "charitydonation" | "cheer" | "bits" | "superchat" | "superticker" | "supersticker" => "cheer",
+        "tiktok_follow" | "tiktok_share" | "follow" | "kick_follow" => "follow",
+        _ => return None,
+    })
+}
+
+/// `provider:category` for an event row, or None for an ordinary message. A
+/// Twitch cheer is an ordinary message carrying bits, so it counts as one.
+pub fn event_key(msg: &ChatMessage) -> Option<String> {
+    let provider = if msg.provider.is_empty() { "twitch" } else { msg.provider.as_str() };
+    let msg_type = msg.metadata.msg_type.as_deref().or_else(|| msg.tags.get("msg-id").map(String::as_str));
+    let mut category = msg_type.and_then(event_category);
+    if category.is_none() && provider == "twitch" {
+        let bits = msg
+            .metadata
+            .bits_amount
+            .unwrap_or_else(|| msg.tags.get("bits").and_then(|b| b.parse().ok()).unwrap_or(0));
+        if bits > 0 {
+            category = Some("cheer");
+        }
+    }
+    category.map(|c| format!("{provider}:{c}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notice(provider: &str, msg_type: Option<&str>, tags: &[(&str, &str)], bits: Option<u32>) -> ChatMessage {
+        let mut msg: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": "1", "user_id": "7", "username": "a", "display_name": "A", "color": null, "badges": [],
+            "timestamp": "", "content": "", "provider": provider, "tags": {}
+        }))
+        .unwrap();
+        msg.metadata.msg_type = msg_type.map(String::from);
+        msg.metadata.bits_amount = bits;
+        msg.tags = tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        msg
+    }
+
+    #[test]
+    fn event_keys_match_the_settings_page() {
+        assert_eq!(event_key(&notice("twitch", Some("resub"), &[], None)).as_deref(), Some("twitch:subscription"));
+        assert_eq!(event_key(&notice("twitch", None, &[("msg-id", "submysterygift")], None)).as_deref(), Some("twitch:gift"));
+        assert_eq!(event_key(&notice("twitch", None, &[], Some(100))).as_deref(), Some("twitch:cheer"));
+        assert_eq!(event_key(&notice("twitch", None, &[("bits", "5")], None)).as_deref(), Some("twitch:cheer"));
+        assert_eq!(event_key(&notice("twitch", Some("viewermilestone"), &[], None)).as_deref(), Some("twitch:milestone"));
+        assert_eq!(event_key(&notice("kick", Some("kick_follow"), &[], None)).as_deref(), Some("kick:follow"));
+        assert_eq!(event_key(&notice("kick", Some("raid"), &[], None)).as_deref(), Some("kick:raid"));
+        assert_eq!(event_key(&notice("", Some("raid"), &[], None)).as_deref(), Some("twitch:raid"));
+        // Ordinary messages are not events; a Kick message with bits is not a cheer.
+        assert_eq!(event_key(&notice("twitch", None, &[], None)), None);
+        assert_eq!(event_key(&notice("kick", None, &[], Some(5))), None);
+        assert_eq!(event_key(&notice("twitch", Some("highlighted-message"), &[], None)), None);
+    }
+
+    #[test]
+    fn the_stamped_view_carries_the_event_key() {
+        let mut msg = notice("twitch", Some("sub"), &[], None);
+        stamp_view(&mut msg);
+        let view = msg.metadata.view.as_ref().unwrap();
+        assert_eq!(view.event.as_deref(), Some("twitch:subscription"));
+        assert_eq!(serde_json::to_value(view).unwrap()["event"], "twitch:subscription");
+
+        let mut plain = notice("twitch", None, &[], None);
+        stamp_view(&mut plain);
+        assert!(serde_json::to_value(plain.metadata.view.as_ref().unwrap()).unwrap().get("event").is_none());
+    }
 
     #[test]
     fn user_overrides_read_from_settings() {

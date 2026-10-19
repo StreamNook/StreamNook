@@ -130,6 +130,7 @@ pub mod ll_origin;
 pub mod theme_palette;
 pub mod settings_backups;
 pub mod settings_catalog;
+pub mod client_capabilities;
 #[cfg(test)]
 mod ll_soak;
 #[cfg(test)]

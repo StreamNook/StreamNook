@@ -613,6 +613,7 @@ fn apply_settings_patch(
     // `channel_links` by the link service. A patch never overrides them.
     next.adopt_backend_owned(current);
     next.lift_custom_theme_muted();
+    next.map_legacy_event_keys();
     Ok(next)
 }
 
@@ -755,6 +756,7 @@ pub(crate) fn apply_imported_settings(
     let mut imported: Settings = serde_json::from_value(merged)
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
     imported.lift_custom_theme_muted();
+    imported.map_legacy_event_keys();
 
     let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {

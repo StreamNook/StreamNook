@@ -54,10 +54,22 @@ pub struct RosterAccount {
     /// This build can sign in to it here. YouTube and TikTok sign in through a desktop webview
     /// only, so the phones offer them nowhere until their own sign-in lands.
     pub can_sign_in: bool,
+    /// This build can open that platform's streams and chat. The phones list,
+    /// follow and play Twitch and Kick only, so YouTube and TikTok rows, the
+    /// settings that only touch them, and their share links stay off there.
+    pub can_watch: bool,
 }
 
 /// Whether this build can run `id`'s sign-in.
 pub fn can_sign_in(id: &str) -> bool {
+    match id {
+        "youtube" | "tiktok" => cfg!(desktop),
+        _ => true,
+    }
+}
+
+/// Whether this build can watch `id`'s streams and chat.
+pub fn can_watch(id: &str) -> bool {
     match id {
         "youtube" | "tiktok" => cfg!(desktop),
         _ => true,
@@ -169,6 +181,7 @@ fn empty(id: &'static str, status: AccountStatus) -> RosterAccount {
         account_id: None,
         reason: None,
         can_sign_in: can_sign_in(id),
+        can_watch: can_watch(id),
     }
 }
 
@@ -216,6 +229,7 @@ async fn platform_row(id: &'static str) -> RosterAccount {
         account_id,
         reason: None,
         can_sign_in: can_sign_in(id),
+        can_watch: can_watch(id),
     }
 }
 
@@ -244,6 +258,7 @@ fn twitch_row_from(identity: Option<UserInfo>, reason: Option<SignInReason>) -> 
             account_id: Some(user.id),
             reason: None,
             can_sign_in: true,
+            can_watch: true,
         },
         None => empty("twitch", AccountStatus::NotConnected),
     }
@@ -317,6 +332,16 @@ mod tests {
         assert!(can_sign_in("twitch") && can_sign_in("kick") && can_sign_in("twitch_drops"));
         assert_eq!(can_sign_in("youtube"), cfg!(desktop));
         assert_eq!(can_sign_in("tiktok"), cfg!(desktop));
+    }
+
+    #[test]
+    fn youtube_and_tiktok_watch_only_where_the_build_can() {
+        assert!(can_watch("twitch") && can_watch("kick"));
+        assert_eq!(can_watch("youtube"), cfg!(desktop));
+        assert_eq!(can_watch("tiktok"), cfg!(desktop));
+        let row = empty("youtube", AccountStatus::NotConnected);
+        assert_eq!(row.can_watch, cfg!(desktop));
+        assert_eq!(serde_json::to_value(&row).unwrap()["can_watch"], cfg!(desktop));
     }
 
     #[test]

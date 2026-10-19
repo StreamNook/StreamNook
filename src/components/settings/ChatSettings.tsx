@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { X } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { useClientCapabilities } from '../../stores/clientCapabilitiesStore';
+import { usePlatformAccountStore } from '../../stores/platformAccountStore';
+import { useAccountRosterStore } from '../../stores/accountRosterStore';
 // This panel is genuinely SHARED - both shells render it - so a platform branch
 // here is legitimate, unlike in components that only ever run on one platform.
 // It hides rows whose backing feature does not exist on Android, so the phone
@@ -441,6 +444,32 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const hiddenEvents = chatEvents.hidden_provider_events ?? [];
   const toggleHiddenEvent = (key: string) =>
     void editSettingsList('chat_events.hidden_provider_events', { op: 'toggle', value: key });
+  // What this build has, as Rust reports it (client capabilities, and each
+  // platform's roster row): a row for a surface or platform it lacks is simply
+  // not drawn.
+  const caps = useClientCapabilities();
+  // Twitch's roster row says true on every build; before the roster answers it
+  // is assumed, so the Twitch line never blinks in.
+  const twitchWatch = useAccountRosterStore((s) => s.roster?.main.find((a) => a.id === 'twitch')?.can_watch ?? true);
+  const kickWatch = usePlatformAccountStore((s) => s.kick.canWatch);
+  const youtubeWatch = usePlatformAccountStore((s) => s.youtube.canWatch);
+  const tiktokWatch = usePlatformAccountStore((s) => s.tiktok.canWatch);
+  const watchable: Record<string, boolean> = { twitch: twitchWatch, kick: kickWatch, youtube: youtubeWatch, tiktok: tiktokWatch };
+  const canWatch = (provider: string): boolean => watchable[provider] ?? false;
+  // A touch has no hover: the phones offer Always and Hidden, and a saved On
+  // hover (say, from a desktop backup) reads as Hidden, which is how the phone
+  // composer draws it, without rewriting the saved value.
+  const walletInline = settings.chat_input?.show_points_balance_inline === true;
+  const walletHidden = settings.chat_input?.hide_points_balance === true;
+  const walletMode: 'always' | 'hover' | 'hidden' = IS_MOBILE
+    ? walletInline && !walletHidden
+      ? 'always'
+      : 'hidden'
+    : walletHidden
+      ? 'hidden'
+      : walletInline
+        ? 'always'
+        : 'hover';
   // The option under the pointer in a visual setting, shown in its preview
   // before it is picked; null falls back to the saved value.
   const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
@@ -923,122 +952,126 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsSection>
       )}
 
-      <SettingsSection
-        id="settings-section-combined-chat"
-        label="Combined Chat"
-        description="Show a streamer's chat from their other platforms alongside the one you are watching."
-      >
-        <SettingsRow
-          title="Merged feed"
-          onReset={resetFor(['chat_blend.enabled', false])}
-          description="When a streamer you are watching also streams elsewhere, their other chats join this one in a single feed, each message marked with where it came from."
-          help="Off by default, and inactive while off: no extra connections and nothing extra fetched. Suggestions look for a Kick or YouTube channel of the same name when you open a stream and wait behind the + in the chat header; YouTube is only found while it is live, and nothing is linked without you. Platform marks put a small logo on messages from the other platforms. Platforms sets which ones may ever join; the marks in the chat header drop one for just this channel. You chat on the platform you are watching, but a reply to someone elsewhere goes back there. Saved filters about sub length or bits only match Twitch messages."
-          control={
-            <Toggle
-              enabled={settings.chat_blend?.enabled === true}
-              onChange={() => setBlend({ enabled: !(settings.chat_blend?.enabled === true) })}
+      {caps.combined_chat && (
+        <SettingsSection
+          id="settings-section-combined-chat"
+          label="Combined Chat"
+          description="Show a streamer's chat from their other platforms alongside the one you are watching."
+        >
+          <SettingsRow
+            title="Merged feed"
+            onReset={resetFor(['chat_blend.enabled', false])}
+            description="When a streamer you are watching also streams elsewhere, their other chats join this one in a single feed, each message marked with where it came from."
+            help="Off by default, and inactive while off: no extra connections and nothing extra fetched. Suggestions look for a Kick or YouTube channel of the same name when you open a stream and wait behind the + in the chat header; YouTube is only found while it is live, and nothing is linked without you. Platform marks put a small logo on messages from the other platforms. Platforms sets which ones may ever join; the marks in the chat header drop one for just this channel. You chat on the platform you are watching, but a reply to someone elsewhere goes back there. Saved filters about sub length or bits only match Twitch messages."
+            control={
+              <Toggle
+                enabled={settings.chat_blend?.enabled === true}
+                onChange={() => setBlend({ enabled: !(settings.chat_blend?.enabled === true) })}
+              />
+            }
+          >
+            {settings.chat_blend?.enabled === true && (
+              <SubControls>
+                <SubControl
+                  title="Suggestions"
+                  onReset={resetFor(['chat_blend.suggest_links', true])}
+                  control={
+                    <Toggle
+                      enabled={settings.chat_blend?.suggest_links !== false}
+                      onChange={() => setBlend({ suggest_links: !(settings.chat_blend?.suggest_links !== false) })}
+                    />
+                  }
+                />
+                <SubControl
+                  title="Platform marks"
+                  onReset={resetFor(['chat_blend.show_platform_badge', true])}
+                  control={
+                    <Toggle
+                      enabled={settings.chat_blend?.show_platform_badge !== false}
+                      onChange={() =>
+                        setBlend({ show_platform_badge: !(settings.chat_blend?.show_platform_badge !== false) })
+                      }
+                    />
+                  }
+                />
+                <SubControl
+                  title="Platforms"
+                  onReset={
+                    BLEND_PLATFORMS.some((p) => settings.chat_blend?.platforms?.[p] === false)
+                      ? resetFor(['chat_blend.platforms', {}])
+                      : undefined
+                  }
+                  stacked
+                  control={
+                    <div className="flex flex-wrap gap-4">
+                      {BLEND_PLATFORMS.map((p) => (
+                        <label key={p} className="flex items-center gap-1.5 text-[12px] text-textSecondary">
+                          <Toggle
+                            enabled={settings.chat_blend?.platforms?.[p] !== false}
+                            ariaLabel={`Include ${PROVIDERS[p].label} in combined chat`}
+                            onChange={() =>
+                              setBlend({
+                                platforms: {
+                                  ...settings.chat_blend?.platforms,
+                                  [p]: !(settings.chat_blend?.platforms?.[p] !== false),
+                                },
+                              })
+                            }
+                          />
+                          <ProviderMark provider={p} size={13} />
+                          {PROVIDERS[p].label}
+                        </label>
+                      ))}
+                    </div>
+                  }
+                />
+              </SubControls>
+            )}
+          </SettingsRow>
+        </SettingsSection>
+      )}
+
+      {youtubeWatch && (
+        <SettingsSection
+          id="settings-section-youtube-chat"
+          label="YouTube Chat"
+          // The phone names the platform with its mark, as the iPhone page does;
+          // the desktop's section strip and search keep the written name.
+          logo={IS_MOBILE ? <ProviderMark provider="youtube" size={14} /> : undefined}
+          shownLabel={IS_MOBILE ? 'Chat' : undefined}
+          description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
+        >
+          <SettingsRow
+            title="Feed"
+            onReset={resetFor(['youtube_chat_view', 'live'])}
+            description="Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable."
+            help="Top chat drops messages YouTube judges low quality and most of one person's repeats, so you see less but can miss some."
+          >
+            <SegmentedSelect<YouTubeChatView>
+              value={settings.youtube_chat_view ?? 'live'}
+              onChange={(view) => updateSettings({ ...settings, youtube_chat_view: view })}
+              options={[
+                { value: 'live', label: 'Live chat' },
+                { value: 'top', label: 'Top chat' },
+              ]}
             />
-          }
-        >
-          {settings.chat_blend?.enabled === true && (
-            <SubControls>
-              <SubControl
-                title="Suggestions"
-                onReset={resetFor(['chat_blend.suggest_links', true])}
-                control={
-                  <Toggle
-                    enabled={settings.chat_blend?.suggest_links !== false}
-                    onChange={() => setBlend({ suggest_links: !(settings.chat_blend?.suggest_links !== false) })}
-                  />
-                }
-              />
-              <SubControl
-                title="Platform marks"
-                onReset={resetFor(['chat_blend.show_platform_badge', true])}
-                control={
-                  <Toggle
-                    enabled={settings.chat_blend?.show_platform_badge !== false}
-                    onChange={() =>
-                      setBlend({ show_platform_badge: !(settings.chat_blend?.show_platform_badge !== false) })
-                    }
-                  />
-                }
-              />
-              <SubControl
-                title="Platforms"
-                onReset={
-                  BLEND_PLATFORMS.some((p) => settings.chat_blend?.platforms?.[p] === false)
-                    ? resetFor(['chat_blend.platforms', {}])
-                    : undefined
-                }
-                stacked
-                control={
-                  <div className="flex flex-wrap gap-4">
-                    {BLEND_PLATFORMS.map((p) => (
-                      <label key={p} className="flex items-center gap-1.5 text-[12px] text-textSecondary">
-                        <Toggle
-                          enabled={settings.chat_blend?.platforms?.[p] !== false}
-                          ariaLabel={`Include ${PROVIDERS[p].label} in combined chat`}
-                          onChange={() =>
-                            setBlend({
-                              platforms: {
-                                ...settings.chat_blend?.platforms,
-                                [p]: !(settings.chat_blend?.platforms?.[p] !== false),
-                              },
-                            })
-                          }
-                        />
-                        <ProviderMark provider={p} size={13} />
-                        {PROVIDERS[p].label}
-                      </label>
-                    ))}
-                  </div>
-                }
-              />
-            </SubControls>
-          )}
-        </SettingsRow>
-      </SettingsSection>
+          </SettingsRow>
 
-      <SettingsSection
-        id="settings-section-youtube-chat"
-        label="YouTube Chat"
-        // The phone names the platform with its mark, as the iPhone page does;
-        // the desktop's section strip and search keep the written name.
-        logo={IS_MOBILE ? <ProviderMark provider="youtube" size={14} /> : undefined}
-        shownLabel={IS_MOBILE ? 'Chat' : undefined}
-        description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
-      >
-        <SettingsRow
-          title="Feed"
-          onReset={resetFor(['youtube_chat_view', 'live'])}
-          description="Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable."
-          help="Top chat drops messages YouTube judges low quality and most of one person's repeats, so you see less but can miss some."
-        >
-          <SegmentedSelect<YouTubeChatView>
-            value={settings.youtube_chat_view ?? 'live'}
-            onChange={(view) => updateSettings({ ...settings, youtube_chat_view: view })}
-            options={[
-              { value: 'live', label: 'Live chat' },
-              { value: 'top', label: 'Top chat' },
-            ]}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          title="Currency"
-          onReset={resetFor(['chat_events.superchat_currency', ''])}
-          description="Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
-        >
-          <Dropdown<string>
-            value={chatEvents.superchat_currency ?? ''}
-            onChange={(superchat_currency) => setEvents({ superchat_currency })}
-            className="w-full"
-            ariaLabel="Super Chat currency"
-            options={[{ value: '', label: 'As sent' }, ...CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))]}
-          />
-        </SettingsRow>
-      </SettingsSection>
+          <SettingsRow
+            title="Currency"
+            onReset={resetFor(['chat_events.superchat_currency', ''])}
+            description="Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
+          >
+            <Dropdown<string>
+              value={chatEvents.superchat_currency ?? ''}
+              onChange={(superchat_currency) => setEvents({ superchat_currency })}
+              className="w-full"
+              ariaLabel="Super Chat currency"
+              options={[{ value: '', label: 'As sent' }, ...CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))]}
+            />
+          </SettingsRow>
+        </SettingsSection>
+      )}
 
       <SettingsSection
         label="Polls & Predictions"
@@ -1287,7 +1320,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description="Turn event kinds off per platform. Lit means shown."
         >
           <div className="flex flex-col gap-2 w-full">
-            {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).map((provider) => (
+            {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).filter(canWatch).map((provider) => (
               <div key={provider} className="flex flex-wrap items-center gap-1.5">
                 <span className="flex w-[78px] shrink-0 items-center gap-1 text-[12px] text-textSecondary">
                   <ProviderMark provider={provider} size={13} />
@@ -1717,7 +1750,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Profile pictures"
           onReset={resetFor(['cosmetics.profile_picture_source', DEFAULT_PROFILE_PICTURE_SOURCE])}
           description="7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app."
-          help="Twitch shows each platform's own picture (Kick and YouTube included) and never asks 7TV for one; paints and badges stay. Animation has its own choice below and does not follow your Motion setting."
+          help="Twitch shows the picture each platform has for the chatter and never asks 7TV for one; paints and badges stay. Animation has its own choice below and does not follow your Motion setting."
         >
           <div className="space-y-3">
             <SegmentedSelect<ProfilePictureSource>
@@ -1759,12 +1792,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           )}
         </SettingsRow>
 
-        <SettingsRow
-          title="Pictures in chat"
-          onReset={resetFor(['chat_design.show_avatars', true])}
-          description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
-          control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
-        />
+        {(youtubeWatch || tiktokWatch) && (
+          <SettingsRow
+            title="Pictures in chat"
+            onReset={resetFor(['chat_design.show_avatars', true])}
+            description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
+            control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
+          />
+        )}
 
         <SettingsRow
           title="@ prefix"
@@ -2430,7 +2465,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Chat modes"
           onReset={resetFor(['chat_input.show_room_modes', true])}
           description="Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
-          help="When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          help="When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover or tap it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
@@ -2489,32 +2524,42 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Wallet balance"
           onReset={resetFor(['chat_input.hide_points_balance', false], ['chat_input.show_points_balance_inline', false])}
-          description="Always shows your channel points and bits beside the wallet button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
-          help="The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers. Hover the button for your exact balances."
+          description={
+            IS_MOBILE
+              ? 'Always shows your balance beside the wallet button in the message box. Hidden keeps just the icon, and the wallet shows your balance when you open it.'
+              : 'Always shows your channel points and bits beside the wallet button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.'
+          }
+          help={
+            IS_MOBILE
+              ? 'The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers.'
+              : 'The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers. Hover the button for your exact balances.'
+          }
           control={
             <SegmentedSelect<'always' | 'hover' | 'hidden'>
-              value={
-                settings.chat_input?.hide_points_balance
-                  ? 'hidden'
-                  : settings.chat_input?.show_points_balance_inline
-                    ? 'always'
-                    : 'hover'
-              }
+              value={walletMode}
               onChange={(mode) =>
                 setInput({
                   hide_points_balance: mode === 'hidden',
                   show_points_balance_inline: mode === 'always',
                 })
               }
-              options={[
-                { value: 'always', label: 'Always' },
-                { value: 'hover', label: 'On hover' },
-                { value: 'hidden', label: 'Hidden' },
-              ]}
+              options={
+                IS_MOBILE
+                  ? [
+                      { value: 'always', label: 'Always' },
+                      { value: 'hidden', label: 'Hidden' },
+                    ]
+                  : [
+                      { value: 'always', label: 'Always' },
+                      { value: 'hover', label: 'On hover' },
+                      { value: 'hidden', label: 'Hidden' },
+                    ]
+              }
             />
           }
         >
-          {!settings.chat_input?.hide_points_balance && (
+          {/* The phone's wallet button never goes away, so its gains always play. */}
+          {(IS_MOBILE || !settings.chat_input?.hide_points_balance) && (
             <SubControls>
               <SubControl
                 title="Show gains"
@@ -2666,7 +2711,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Bonus chests"
           onReset={resetFor(['auto_claim_points_watching', true])}
           description="Collects the bonus chest on the stream you are watching the moment it appears."
-          help="When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin."
+          help="When this is off, a claim button appears on the points icon so you can grab it yourself. Only the channel you are watching is claimed."
           control={
             <Toggle
               enabled={settings.auto_claim_points_watching ?? true}
@@ -2757,25 +2802,27 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection
-        label="Docked Chats"
-        description="Chats you keep open beside the stream, and how you switch between them."
-      >
-        <SettingsRow
-          title="Menu style"
-          onReset={resetFor(['chat_design.chat_dock_switcher', 'menu'])}
-          description="A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away."
+      {caps.chat_dock && (
+        <SettingsSection
+          label="Docked Chats"
+          description="Chats you keep open beside the stream, and how you switch between them."
         >
-          <SegmentedSelect<'menu' | 'tabs'>
-            value={cd.chat_dock_switcher ?? 'menu'}
-            onChange={(chat_dock_switcher) => setDesign({ chat_dock_switcher })}
-            options={[
-              { value: 'menu', label: 'List' },
-              { value: 'tabs', label: 'Tabs' },
-            ]}
-          />
-        </SettingsRow>
-      </SettingsSection>
+          <SettingsRow
+            title="Menu style"
+            onReset={resetFor(['chat_design.chat_dock_switcher', 'menu'])}
+            description="A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away."
+          >
+            <SegmentedSelect<'menu' | 'tabs'>
+              value={cd.chat_dock_switcher ?? 'menu'}
+              onChange={(chat_dock_switcher) => setDesign({ chat_dock_switcher })}
+              options={[
+                { value: 'menu', label: 'List' },
+                { value: 'tabs', label: 'Tabs' },
+              ]}
+            />
+          </SettingsRow>
+        </SettingsSection>
+      )}
 
       <SettingsSection
         id="settings-section-repeated-messages"
