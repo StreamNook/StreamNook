@@ -253,6 +253,7 @@ function PhoneSubControl({
   const id = useId();
   const group = useContext(SubControlGroup);
   const isSlider = isValidElement(control) && control.type === InlineSlider;
+  const isSegmented = isValidElement(control) && control.type === SegmentedSelect;
   const report = group?.report;
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -263,15 +264,20 @@ function PhoneSubControl({
       if (!nameEl || !part) return;
       // The control's natural width is only readable while it sits beside the
       // name (its group can put it under too); the name sizes to its own text
-      // either way (w-fit).
-      if (!under.current) natural.current = part.scrollWidth;
+      // either way (w-fit). A segmented control is read by its track's own box:
+      // its sliding thumb can still sit where a full-width layout put it, which
+      // would inflate scrollWidth.
+      if (!under.current) {
+        const track = part.firstElementChild;
+        natural.current = isSegmented && track ? track.getBoundingClientRect().width : part.scrollWidth;
+      }
       setOwnStack(nameEl.scrollWidth + 16 + natural.current > row.clientWidth);
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(row);
     return () => ro.disconnect();
-  }, []);
+  }, [isSegmented]);
   useLayoutEffect(() => {
     if (!report || !isSlider) return;
     report(id, ownStack);
