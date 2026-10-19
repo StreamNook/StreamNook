@@ -165,6 +165,12 @@ struct PlayerChrome: View {
                 }
                 .buttonStyle(.plain)
             }
+            // A quiet moon while the sleep timer runs; the menu says when it stops.
+            if model.sleepTimer?.running == true {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityLabel(model.sleepTimer?.rowLabel ?? "Sleep timer on")
+            }
             if let recorded = recordedLine {
                 Text(recorded)
             } else if watch.room == nil {
@@ -466,6 +472,7 @@ struct QualitySheet: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
             }
+            SleepTimerSection(model: model)
         }
         .fittedSheet()
     }

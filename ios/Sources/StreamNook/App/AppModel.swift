@@ -47,6 +47,8 @@ final class AppModel {
     var clip: ClipLink?
     /// The Create clip sheet, from the player's Clip button or `/clip`.
     var clipTarget: ClipTarget?
+    /// The sleep timer as the core runs it (the player's menu and the moon in the header).
+    private(set) var sleepTimer: SleepTimerState?
     /// A playing VOD's recorded chat, fed by the core in step with the player.
     private(set) var replay: ChatSession?
     /// The chat pane shows the replay (the default for a VOD) rather than the channel's live chat.
@@ -367,6 +369,39 @@ final class AppModel {
         }
     }
 
+    func startSleepTimer(minutes: Int) async {
+        if let state = try? await core.invoke("sleep_timer_start", args: ["minutes": minutes], as: SleepTimerState.self) {
+            sleepTimer = state
+        }
+    }
+
+    func cancelSleepTimer() async {
+        if let state = try? await core.invoke("sleep_timer_cancel", args: [:], as: SleepTimerState.self) {
+            sleepTimer = state
+        }
+        watch.cancelFade()
+    }
+
+    func refreshSleepTimer() async {
+        if let state = try? await core.invoke("sleep_timer_state", args: [:], as: SleepTimerState.self) {
+            sleepTimer = state
+        }
+    }
+
+    /// The core's timer moved: the audio fades for its last seconds, then playback stops as if
+    /// the viewer had closed it (the core already stopped the relay; this lets go of the player,
+    /// the lock screen card and background audio).
+    private func sleepTimerChanged(_ state: SleepTimerState) {
+        sleepTimer = state
+        switch state.phase {
+        case "fading": watch.fadeOut(seconds: state.fadeSecs)
+        case "fired":
+            log.notice("sleep timer fired; stopping playback")
+            if watch.stream != nil { stopWatching() }
+        default: watch.cancelFade()
+        }
+    }
+
     func stopWatching() {
         watch.close(core: core)
         nav.close()
@@ -405,6 +440,8 @@ final class AppModel {
                 case "streamnook-settings-updated":
                     await self.loadSettings()
                     if self.settingsStore.loaded { await self.settingsStore.refresh() }
+                case "sleep-timer://state":
+                    if let state = SleepTimerState.parse(event.payloadJSON) { self.sleepTimerChanged(state) }
                 case "app-foregrounded":
                     let payload = Self.object(event.payloadJSON)
                     log.notice("foregrounded: chat port \(payload["chat_port"] as? Int ?? 0) alive \(payload["chat_alive"] as? Bool ?? false) relay rebound \(payload["relay_rebound"] as? Bool ?? false)")

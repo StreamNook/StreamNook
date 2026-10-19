@@ -34,6 +34,23 @@ pub async fn watch_stop(app: AppHandle, state: State<'_, AppState>, preserve_bac
     Ok(())
 }
 
+/// Start (or restart) the phones' sleep timer for `minutes` (services/sleep_timer.rs).
+#[tauri::command]
+pub fn sleep_timer_start(app: AppHandle, minutes: u32) -> crate::services::sleep_timer::SleepTimerState {
+    crate::services::sleep_timer::start(&app, minutes)
+}
+
+#[tauri::command]
+pub fn sleep_timer_cancel(app: AppHandle) -> crate::services::sleep_timer::SleepTimerState {
+    crate::services::sleep_timer::cancel(&app)
+}
+
+/// Where the sleep timer stands, with its menu words and presets.
+#[tauri::command]
+pub fn sleep_timer_state() -> crate::services::sleep_timer::SleepTimerState {
+    crate::services::sleep_timer::state()
+}
+
 /// Open a Twitch channel's offline room in the main view (see
 /// services/watch_start.rs `open_room`).
 #[tauri::command]

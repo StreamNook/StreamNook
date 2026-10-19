@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { Check } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { MobileSheet } from '../ui/MobileSheet';
+import { SleepTimerSection } from './SleepTimerSection';
 
 // Row names, the same words the iPhone sheet uses. Labelled here rather than
 // with CSS `capitalize`, which read the raw keys back as "Audio_only" and
@@ -89,6 +90,7 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
           })}
         </div>
       )}
+      <SleepTimerSection />
     </MobileSheet>
   );
 };

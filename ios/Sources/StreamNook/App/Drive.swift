@@ -22,6 +22,7 @@ import SwiftUI
 /// - `nowplaying` logs the lock screen card (title, channel, artwork, live, rate, seek)
 /// - `room:LOGIN` opens LOGIN's offline room (or its stream when it is live); `roomvod` plays the
 ///   room's latest broadcast, `roomback` returns to the room; `roomstate` logs what the room holds
+/// - `sleep:MINUTES` starts the sleep timer, `sleepoff` turns it off, `sleepstate` logs it
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
 /// - `channelsheet` opens the watched channel's videos and clips; `vodof:INDEX` plays the watched
 ///   channel's past broadcast at INDEX (as its Channel sheet does), `clipof:INDEX` its clip;
@@ -138,6 +139,12 @@ enum Drive {
                                                  gameName: "", isLive: false))
             case "roomvod": model.watch.playRoomVod()
             case "roomback": model.watch.leaveRoomVod()
+            case "sleep": await model.startSleepTimer(minutes: Int(value) ?? 1)
+            case "sleepoff": await model.cancelSleepTimer()
+            case "sleepstate":
+                await model.refreshSleepTimer()
+                let t = model.sleepTimer
+                log.notice("drive sleep \(t?.phase ?? "-", privacy: .public) \(t?.rowLabel ?? "-", privacy: .public) remaining \(t?.remainingSecs ?? -1) volume \(model.watch.player.volume) playing \(model.watch.stream?.userLogin ?? "-", privacy: .public)")
             case "channelsheet": model.channelSheet = model.watch.stream ?? model.nav.playing
             case "vodof": await openMedia(model, clips: false, index: Int(value) ?? 0)
             case "clipof": await openMedia(model, clips: true, index: Int(value) ?? 0)

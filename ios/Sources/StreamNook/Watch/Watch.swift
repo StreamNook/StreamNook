@@ -118,6 +118,9 @@ final class Watch {
     private static let maxRecoveries = 2
     private var watchers: [NSKeyValueObservation] = []
     private var vodClock: Task<Void, Never>?
+    /// The sleep timer's fade and the volume it began from (put back when playback stops).
+    private var fadeTask: Task<Void, Never>?
+    private var volumeBeforeFade: Float?
     private var vodThumbnail: String?
     private var sessionObservers: [NSObjectProtocol] = []
     /// What the core's link governor hears from this player (stalls, and downloads on the
@@ -426,6 +429,33 @@ final class Watch {
         }
     }
 
+    /// The sleep timer's last seconds: the volume falls to nothing over `seconds`. The stop that
+    /// follows puts it back for the next stream.
+    func fadeOut(seconds: Int) {
+        guard stream != nil else { return }
+        let from = volumeBeforeFade ?? player.volume
+        volumeBeforeFade = from
+        fadeTask?.cancel()
+        let steps = max(1, seconds * 10)
+        fadeTask = Task { [weak self] in
+            for step in 1...steps {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, !Task.isCancelled else { return }
+                self.player.volume = from * Float(steps - step) / Float(steps)
+            }
+        }
+    }
+
+    /// The timer was turned off mid-fade (or stopped): the volume comes back.
+    func cancelFade() {
+        fadeTask?.cancel()
+        fadeTask = nil
+        if let volume = volumeBeforeFade {
+            player.volume = volume
+            volumeBeforeFade = nil
+        }
+    }
+
     /// The VOD ends here: its last position is saved and the replay stops.
     private func endVod() {
         guard playingVod != nil else { return }
@@ -610,6 +640,7 @@ final class Watch {
         guard let login = stream?.userLogin else { return }
         // A pause still waiting out its grace must not gate the next stream off.
         reportState("teardown")
+        cancelFade()
         endVod()
         ScreenAwake.hold("player", false)
         // A brightness the landscape dial borrowed goes back with the stream.

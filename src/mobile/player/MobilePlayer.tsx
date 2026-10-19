@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -14,6 +14,7 @@ import { platformTerms } from '../../utils/platformTerms';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
 import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngine';
 import { useVodProgressReporter } from '../../hooks/useVodProgressReporter';
+import { listenSleepTimer, sleepTimerRunning, useSleepTimer } from './sleepTimer';
 import { makeKey } from '../../utils/providerKey';
 import { setLiveVideo } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
@@ -107,6 +108,11 @@ export const MobilePlayer: React.FC<{
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
+  // The core's sleep timer: its fade and its stop reach the player from here,
+  // and a quiet moon in the header says one is running.
+  useEffect(() => listenSleepTimer(), []);
+  const sleepTimer = useSleepTimer((s) => s.state);
+  const sleepOn = sleepTimerRunning(sleepTimer);
   // VOD position checkpoints to Rust, as the desktop player sends them: Rust
   // decides from the start's play stamp what each report may write (only a VOD
   // the viewer opened files a position). Live, clips and idle attach nothing.
@@ -456,7 +462,7 @@ export const MobilePlayer: React.FC<{
       if (el) observer.observe(el);
     }
     return () => observer.disconnect();
-  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount]);
+  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount, sleepOn]);
 
   const onSurfaceTap = () => {
     setControlsVisible((v) => {
@@ -605,6 +611,9 @@ export const MobilePlayer: React.FC<{
           <span className="sr-only"> viewers</span>
         </span>
         {withUptime && uptimeText && <span>{uptimeText}</span>}
+        {sleepOn && (
+          <MoonStars size={11} weight="fill" aria-label={sleepTimer?.rowLabel ?? 'Sleep timer on'} />
+        )}
       </span>
     );
   };
