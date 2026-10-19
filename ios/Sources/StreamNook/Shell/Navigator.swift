@@ -17,7 +17,7 @@ enum Route: Hashable {
 /// The settings sections, in the You tab's order. One table drives the rows and the pages they
 /// open, so a row and its page cannot drift apart.
 enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
-    case player, adFree, chat, theme, notifications, cache, support, changed, backup
+    case player, adFree, chat, moderation, theme, notifications, cache, support, changed, backup
 
     var id: String { rawValue }
 
@@ -29,6 +29,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .player: "Player"
         case .adFree: "Ad-free"
         case .chat: "Chat"
+        case .moderation: "Moderation"
         case .theme: "Theme"
         case .notifications: "Notifications"
         case .cache: "Cache"
@@ -43,6 +44,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .player: "Video quality, latency, and behavior"
         case .adFree: "How streams are served and which relays are used"
         case .chat: "Chat design and behavior"
+        case .moderation: "Swipe to moderate and user card buttons"
         case .theme: "Color theme, glass, and fonts"
         case .notifications: "Mentions and replies while StreamNook is open"
         case .cache: "Emote, badge, and metadata caches"
@@ -57,6 +59,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .player: Symbol.player
         case .adFree: Symbol.adFree
         case .chat: Symbol.chat
+        case .moderation: Symbol.moderation
         case .theme: Symbol.theme
         case .notifications: Symbol.notifications
         case .cache: Symbol.cache

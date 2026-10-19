@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct CatalogRow {
-    /// The settings page: `player`, `adFree`, `chat`, `theme`, `notifications`, `cache`, `support`.
+    /// The settings page: `player`, `adFree`, `chat`, `moderation`, `theme`, `notifications`, `cache`, `support`.
     pub page: String,
     pub section: String,
     pub title: String,
@@ -101,13 +101,14 @@ pub fn rows() -> &'static [CatalogRow] {
 }
 
 /// The order pages are listed in, so ties read top to bottom like the You tab.
-const PAGE_ORDER: &[&str] = &["player", "adFree", "chat", "theme", "notifications", "cache", "support"];
+const PAGE_ORDER: &[&str] = &["player", "adFree", "chat", "moderation", "theme", "notifications", "cache", "support"];
 
 fn page_name(page: &str) -> &'static str {
     match page {
         "player" => "player",
         "adFree" => "ad-free ad free",
         "chat" => "chat",
+        "moderation" => "moderation mod",
         "theme" => "theme",
         "notifications" => "notifications",
         "cache" => "cache",
@@ -389,6 +390,27 @@ mod tests {
             assert_eq!(hit[0].paths, ["chat_design.mention_hold"]);
             assert_eq!(hit[0].under.as_deref(), Some("Highlight"));
         }
+    }
+
+    #[test]
+    fn moderation_rows_live_on_their_own_page() {
+        // Every moderation row sits on the Moderation page, none on Chat.
+        for row in rows() {
+            let moderation = row.paths.iter().any(|p| p.starts_with("moderation.") || p.starts_with("chat_design.mod_slider"));
+            assert_eq!(moderation, row.page == "moderation", "{} is on {}", row.title, row.page);
+        }
+        for ios in [false, true] {
+            let swipe = search_on("swipe to moderate", 3, ios, &nothing);
+            assert_eq!((swipe[0].page.as_str(), swipe[0].section.as_str()), ("moderation", "Swipe to Moderate"));
+            let lengths = search_on("timeout lengths", 3, ios, &nothing);
+            assert_eq!((lengths[0].page.as_str(), lengths[0].section.as_str()), ("moderation", "User Cards"));
+        }
+        // Changed settings lists them after Chat and before Theme.
+        let changed = ["chat_design.mod_slider_timeouts".to_string(), "chat_design.font_size".to_string(), "theme".to_string()];
+        let pages: Vec<String> = changed_rows_on(&changed, false, &nothing).into_iter().map(|r| r.page).collect();
+        let at = |page: &str| pages.iter().position(|p| p == page).unwrap();
+        assert!(at("chat") < at("moderation") && at("moderation") < at("theme"), "{pages:?}");
+        assert_eq!(rows().iter().find(|r| r.title == "Steps").unwrap().paths.len(), 3);
     }
 
     #[test]

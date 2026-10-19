@@ -31,7 +31,6 @@ struct ChatSettingsPanel: View {
         BadgeHighlightsSettings()
         spam
         CustomCommandsSettings()
-        ModerationSettings()
         NicknamesSettings()
     }
 

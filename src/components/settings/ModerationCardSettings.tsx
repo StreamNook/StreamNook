@@ -1,4 +1,4 @@
-// Chat > Moderation on the phone: swiping a message to moderate it (on or
+// Settings > Moderation on the phone: swiping a message to moderate it (on or
 // off, its look, its reach and its steps), the four timeout lengths on a user
 // card (the desktop hover dock's first four, so one edit changes both) and the
 // viewer's own card buttons. Rust keeps every list (`edit_mod_slider_timeouts`,
@@ -227,7 +227,7 @@ function SwipeModerateSettings() {
                       if (next === CUSTOM) setAdding(true);
                       else if (next) void edit('add', next);
                     }}
-                    className="h-8 appearance-none rounded-full border border-dashed border-accent/40 bg-transparent px-3 text-[13px] font-medium text-accent outline-none"
+                    className="h-8 w-[72px] appearance-none rounded-full border border-dashed border-accent/40 bg-transparent px-3 text-center text-[13px] font-medium text-accent outline-none"
                   >
                     <option value="" disabled>
                       + Add
@@ -301,9 +301,9 @@ const ModerationCardSettings = () => {
   };
 
   return (
-    <>
+    <div className="space-y-6">
     <SwipeModerateSettings />
-    <SettingsSection label="Moderation" description="The buttons on a user card in channels you moderate.">
+    <SettingsSection label="User Cards" description="The buttons on a user card in channels you moderate.">
       <SettingsRow title="Timeout lengths" description="Tap one to change it. Every quick timeout uses the same four.">
         <div className="flex gap-[7px]">
           {four.map((seconds, index) => (
@@ -361,7 +361,7 @@ const ModerationCardSettings = () => {
                     label="Timeout length"
                     value={a.seconds ?? 600}
                     onPick={(next) => void editActions({ op: 'update', id: a.id, patch: { seconds: next } })}
-                    className={selectClass}
+                    className={`${selectClass} w-[84px]`}
                   />
                 )}
               </div>
@@ -387,7 +387,7 @@ const ModerationCardSettings = () => {
         </div>
       </SettingsRow>
     </SettingsSection>
-    </>
+    </div>
   );
 };
 

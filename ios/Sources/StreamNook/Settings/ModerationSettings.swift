@@ -1,7 +1,7 @@
 import SNKit
 import SwiftUI
 
-/// Settings > Chat > Moderation: swiping a message to moderate it (on or off, its look, its reach
+/// Settings > Moderation: swiping a message to moderate it (on or off, its look, its reach
 /// and its steps), the four timeout lengths on a user card (the desktop dock's first four, so one
 /// edit changes both) and the viewer's own card buttons. The core keeps every list
 /// (`edit_mod_slider_timeouts`, `set_card_timeout_length`, `edit_settings_list`) and reads typed
@@ -179,7 +179,7 @@ struct ModerationSettings: View {
     // MARK: User card
 
     private var cardBlock: some View {
-        SettingsBlock(title: "Moderation", detail: "The buttons on a user card in channels you moderate.") {
+        SettingsBlock(title: "User Cards", detail: "The buttons on a user card in channels you moderate.") {
             WideRow(title: "Timeout lengths", detail: "Tap one to change it. Every quick timeout uses the same four.",
                     paths: ["moderation.timeout_presets"]) {
                 HStack(spacing: 7) {
