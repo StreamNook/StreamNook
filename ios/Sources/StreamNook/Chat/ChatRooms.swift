@@ -507,7 +507,12 @@ final class ChatRooms {
     /// What a Twitch room shows over and under its rows: pins (the core polls them every 30 s
     /// while the room is watched, and at once after a pin) and its streak banners, read once.
     private func loadExtras(_ tab: ChatTabInfo) {
-        guard tab.provider == "twitch", let id = tab.channelID, !id.isEmpty else { return }
+        guard tab.provider == "twitch" else { return }
+        guard let id = tab.channelID, !id.isEmpty else {
+            // Without the id there are no pins, streak or resub offers to read for this room.
+            chatLog.notice("chat room \(tab.login, privacy: .public) has no channel id: no streak offers read")
+            return
+        }
         let core = core
         Task {
             guard let json = try? await core.invoke("watch_channel_state", args: ["login": tab.login, "channelId": id]) else { return }
@@ -532,7 +537,10 @@ final class ChatRooms {
         Task {
             var found = Streaks()
             found.watch = try? await core.invoke("get_watch_streak", args: ["channelId": id], as: WatchStreakMilestone?.self)
-            found.resub = try? await core.invoke("get_resub_notification", args: ["channelId": id], as: ResubNotice?.self)
+            found.resub = try? await core.invoke("get_resub_notification", args: ["channelLogin": tab.login], as: ResubNotice?.self)
+            // What the banners will show for this room (the core log says why, per offer).
+            let watch = found.watch.map { "\($0.streakCount.map(String.init) ?? "?") streams" } ?? "none"
+            chatLog.notice("chat room \(tab.login, privacy: .public) streak offers: watch \(watch, privacy: .public) resub \(found.resub == nil ? "none" : "yes", privacy: .public)")
             guard sessions[tab.channel] != nil else { return }
             streaks[tab.channel] = found
         }
