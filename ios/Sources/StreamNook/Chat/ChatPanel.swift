@@ -340,8 +340,13 @@ struct ChatListHost: UIViewRepresentable {
         list.prepareSwipe = { layout, width, startX in
             guard let message = session.pipeline.message(layout.id), let room = session.roomID else { return nil }
             let core = session.core
-            guard let slider = try? await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName)
-            else { return nil }
+            let slider: SwipeSlider
+            do {
+                slider = try await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName)
+            } catch {
+                chatLog.notice("[swipe] slider failed: \(String(describing: error), privacy: .public)")
+                return nil
+            }
             let (messageID, userID, name) = (message.id, message.userID, message.shownName)
             return ChatListView.PreparedSwipe(slider: slider) { step in
                 Task { @MainActor in

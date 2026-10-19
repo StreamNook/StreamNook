@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
+import { Logger } from '../../utils/logger';
 import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
 import { stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
 
@@ -167,7 +168,9 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       const r = row.getBoundingClientRect();
       const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null };
       press = current;
+      trace(`down on ${messageId} at x ${Math.round(e.clientX - r.left)} of ${Math.round(r.width)}; slider requested`);
       void live.current.sliderFor(r.width, e.clientX - r.left, target.name).then((s) => {
+        trace(s ? `slider ready: enabled ${s.enabled} steps ${s.steps.length} start ${Math.round(s.start)}` : 'slider missing');
         if (press === current) current.slider = s;
       });
     };
@@ -181,12 +184,14 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
         const engage = s?.engage ?? 10;
         // A vertical move is the list's scroll, and the fan owns a hold that armed.
         if (live.current.fanArmed() || (Math.abs(dy) > engage && Math.abs(dy) >= Math.abs(dx))) {
+          trace(live.current.fanArmed() ? 'gave way to the hold menu' : 'gave way to a scroll');
           end(false);
           return;
         }
         // Sideways and rightward claims the finger, once the core has laid the slider out.
         if (!s?.enabled || dx < engage || dx < Math.abs(dy)) return;
         engaged = true;
+        trace('slider drawn');
         // The pull may leave the list; its release still comes here.
         try {
           list.setPointerCapture(e.pointerId);
@@ -242,10 +247,13 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       if (!press || e.pointerId !== press.id) return;
       const s = press.slider;
       if (s && rowRect) offRow = e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash;
+      if (engaged) trace(`released: ${!offRow && !resting() && step != null ? 'ran the armed step' : 'cancelled'}`);
       end(true);
     };
     const onCancel = (e: PointerEvent) => {
       if (press && e.pointerId !== press.id) return;
+      // The browser took the touch for a pan of its own: the rows' pan-y should have stopped that.
+      if (press) trace('the browser took the touch (pointercancel)');
       end(false);
     };
     const onTouchMove = (e: TouchEvent) => {
@@ -276,6 +284,11 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
   const host = listRef.current;
   if (!view || !shown || !host) return null;
   return createPortal(<SwipeOverlay view={view} slider={shown} />, host);
+}
+
+/** One line per step of a swipe in the app log, so a phone that does nothing can say why. */
+function trace(line: string): void {
+  Logger.warn('[Swipe]', line);
 }
 
 /** The list fades its top edge; the chip stays below that. */

@@ -597,16 +597,28 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     @objc private func touched(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
-            guard swipeEnabled, !readOnly, swipe == nil, fan == nil else { return }
+            // Whether this room is moderated is read live (`swipeAllowed`), never from a flag the
+            // SwiftUI host pushes in, which could be stale when the roles land after the list.
+            guard !readOnly, swipe == nil, fan == nil, swipeAllowed != nil else { return }
             let point = g.location(in: scroll)
-            guard let (row, cell) = row(at: point), swipeAllowed?(row.layout) == true else { return }
+            guard let (row, cell) = row(at: point) else { return }
+            guard swipeAllowed?(row.layout) == true else {
+                chatLog.notice("[swipe] down on \(row.id, privacy: .public): not swipeable here")
+                return
+            }
             let startX = point.x - cell.frame.minX
             touchPress = (row, cell, startX, nil)
+            chatLog.notice("[swipe] down on \(row.id, privacy: .public) at x \(Int(startX)) of \(Int(cell.frame.width)); slider requested")
             let id = row.id
             Task { @MainActor [weak self] in
-                guard let self, let prepare = self.prepareSwipe,
-                      let ready = await prepare(row.layout, cell.frame.width, startX),
-                      self.touchPress?.row.id == id else { return }
+                guard let self, let prepare = self.prepareSwipe else { return }
+                let ready = await prepare(row.layout, cell.frame.width, startX)
+                guard self.touchPress?.row.id == id else { return }
+                if let ready {
+                    chatLog.notice("[swipe] slider ready: enabled \(ready.slider.enabled) steps \(ready.slider.steps.count) start \(Int(ready.slider.start))")
+                } else {
+                    chatLog.notice("[swipe] slider missing (see the error above)")
+                }
                 self.touchPress?.prepared = ready
             }
         case .ended, .cancelled, .failed:
@@ -620,10 +632,15 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         guard g === swipePan else { return true }
         guard !readOnly, swipe == nil, fan == nil, let held = touchPress else { return false }
         // The core's slider may still be on its way; only a press it turned down is refused here.
-        if let ready = held.prepared, !ready.slider.enabled { return false }
+        if let ready = held.prepared, !ready.slider.enabled {
+            chatLog.notice("[swipe] pan refused: swipe to moderate is off")
+            return false
+        }
         let t = swipePan.translation(in: scroll)
         // Only a mainly vertical move (the list's scroll) or a leftward one is refused.
-        return t.x > 0 && abs(t.x) >= abs(t.y)
+        let begin = t.x > 0 && abs(t.x) >= abs(t.y)
+        chatLog.notice("[swipe] pan \(begin ? "begins" : "refused (vertical or leftward)", privacy: .public) at \(Int(t.x)),\(Int(t.y)); slider \(held.prepared == nil ? "pending" : "ready", privacy: .public)")
+        return begin
     }
 
     /// How far right of where the thumb went down the finger is now.
@@ -641,12 +658,15 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                 guard ready.slider.enabled else { return endSwipe() }
                 swipe = SwipeModerator(slider: ready.slider, cell: held.cell, in: scroll, visibleTop: scroll.contentOffset.y,
                                        commit: ready.commit)
+                chatLog.notice("[swipe] slider drawn")
                 // The gesture is found: the one-time hint goes now, before the chip could meet it.
                 onSwipeDone?()
             }
             swipe?.track(pull: pull(g, held), y: g.location(in: scroll).y)
         case .ended:
-            _ = swipe?.release()
+            let ran = swipe?.release() ?? false
+            let outcome = ran ? "ran the armed step" : swipe == nil ? "no slider drawn" : "cancelled"
+            chatLog.notice("[swipe] released: \(outcome, privacy: .public)")
             endSwipe()
         default:
             endSwipe()
