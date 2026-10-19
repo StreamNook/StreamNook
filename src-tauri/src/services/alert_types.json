@@ -7,7 +7,7 @@
    "setting": "live_notifications.show_live_notifications",
    "channel": "live-channels",
    "setup": true,
-   "platforms": ["desktop", "android"]
+   "platforms": ["desktop", "android", "ios"]
   },
   {
    "id": "favorite_live",

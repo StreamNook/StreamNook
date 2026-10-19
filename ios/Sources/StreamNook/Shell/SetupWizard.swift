@@ -284,6 +284,7 @@ struct SetupWizard: View {
         guard on else { return }
         await MentionAlerts.askIfUndecided()
         alertStatus = await MentionAlerts.status()
+        await LiveAlerts.sync(model)
     }
 
     private func summary(_ title: String, mark: PlatformMark.Platform? = nil, done: Bool) -> some View {

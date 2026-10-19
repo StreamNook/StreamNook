@@ -4,8 +4,8 @@
 //! notifies. Both phones draw their Notifications section and the setup
 //! wizard's Notifications step from this one list, in its order and with its
 //! words. A type a platform cannot send is left out there, never shown as
-//! missing: giving the iPhone go-live alerts is adding `ios` to that type's
-//! platforms. The types live in `alert_types.json` beside this file.
+//! missing: a type joins a platform by adding it to that type's platforms.
+//! The types live in `alert_types.json` beside this file.
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -104,9 +104,10 @@ mod tests {
     fn each_phone_lists_only_what_it_sends() {
         // Android polls for go-lives and posts drops, badges and mentions.
         assert_eq!(ids_on("android"), ["live", "mentions", "drops", "badges"]);
-        // The iPhone posts mentions while it runs; go-lives wait for push.
-        assert_eq!(ids_on("ios"), ["mentions"]);
-        assert!(works_on("mentions", "ios") && !works_on("live", "ios"));
+        // The iPhone posts mentions while it runs; go-lives arrive by push (services/push_alerts.rs).
+        assert_eq!(ids_on("ios"), ["live", "mentions"]);
+        assert!(works_on("mentions", "ios") && works_on("live", "ios"));
+        assert!(!works_on("drops", "ios") && !works_on("badges", "ios"));
         assert!(works_on("favorite_live", "desktop") && !works_on("favorite_live", "android"));
     }
 
@@ -117,7 +118,7 @@ mod tests {
         let android: Vec<String> = for_platform("android").into_iter().filter(|t| t.setup).map(|t| t.id).collect();
         assert_eq!(android, ["live", "mentions"]);
         let ios: Vec<String> = for_platform("ios").into_iter().filter(|t| t.setup).map(|t| t.id).collect();
-        assert_eq!(ios, ["mentions"]);
+        assert_eq!(ios, ["live", "mentions"]);
     }
 
     #[test]

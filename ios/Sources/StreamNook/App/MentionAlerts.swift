@@ -54,8 +54,9 @@ enum MentionAlerts {
     }
 }
 
-/// Shows notifications as banners while StreamNook is in front, and routes a tapped mention to
-/// its chat. Installed at launch (installing asks nothing), so a tap that opens the app is caught.
+/// Shows notifications as banners while StreamNook is in front (a go-live for the channel playing
+/// excepted), and routes a tap: a mention to its chat, a go-live to its stream. Installed at launch
+/// (installing asks nothing), so a tap that opens the app is caught.
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     static let mentionKey = "mention_id"
     @MainActor private static let shared = NotificationRouter()
@@ -63,6 +64,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     @MainActor private static var handler: ((String) -> Void)?
     /// A mention tapped before the app could open it.
     @MainActor private static var pending: String?
+    /// Plays a go-live alert's stream; set once the app can play.
+    @MainActor private static var liveHandler: ((LivePush.Alert) -> Void)?
+    /// A go-live tapped before the app could play it.
+    @MainActor private static var pendingLive: LivePush.Alert?
+    /// Whether a go-live is about the channel playing now; its banner is left out.
+    @MainActor static var isPlaying: ((LivePush.Alert) -> Bool)?
 
     @MainActor static func install() {
         let center = UNUserNotificationCenter.current()
@@ -78,18 +85,40 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// The app is ready to play go-live alerts; one tapped while it booted plays now.
+    @MainActor static func handleLive(_ open: @escaping (LivePush.Alert) -> Void) {
+        liveHandler = open
+        if let alert = pendingLive {
+            pendingLive = nil
+            open(alert)
+        }
+    }
+
     @MainActor private static func route(_ id: String) {
         if let handler { handler(id) } else { pending = id }
     }
 
+    @MainActor private static func route(_ alert: LivePush.Alert) {
+        if let liveHandler { liveHandler(alert) } else { pendingLive = alert }
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        if let alert = LivePush.alert(in: notification.request.content.userInfo),
+           await MainActor.run(body: { Self.isPlaying?(alert) ?? false }) {
+            return []
+        }
+        return [.banner, .sound, .list]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let id = response.notification.request.content.userInfo[Self.mentionKey] as? String else { return }
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        let info = response.notification.request.content.userInfo
+        if let alert = LivePush.alert(in: info) {
+            await MainActor.run { Self.route(alert) }
+            return
+        }
+        guard let id = info[Self.mentionKey] as? String else { return }
         await MainActor.run { Self.route(id) }
     }
 }

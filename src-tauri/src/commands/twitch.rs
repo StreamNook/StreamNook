@@ -1835,6 +1835,9 @@ pub async fn follow_channel(target_user_id: String) -> Result<(), String> {
     // A followers-only room you are in now words itself for the new follow.
     crate::services::irc_service::own_follow_changed(&target_user_id, true).await;
     crate::services::channel_state::own_follow_changed(&target_user_id, true).await;
+    // The phone's go-live pushes cover the new follow.
+    #[cfg(mobile)]
+    crate::services::push_alerts::server::schedule();
     Ok(())
 }
 
@@ -1845,6 +1848,8 @@ pub async fn unfollow_channel(target_user_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     crate::services::irc_service::own_follow_changed(&target_user_id, false).await;
     crate::services::channel_state::own_follow_changed(&target_user_id, false).await;
+    #[cfg(mobile)]
+    crate::services::push_alerts::server::schedule();
     Ok(())
 }
 

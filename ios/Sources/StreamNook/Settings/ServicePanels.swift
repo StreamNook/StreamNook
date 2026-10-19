@@ -130,9 +130,10 @@ struct MasterCard: View {
 
 /// Settings > Notifications on the iPhone: only what this iPhone sends. "Notify me about" lists
 /// the alert types the core says this build sends (`get_alert_types`), the same list and words
-/// Android draws; today that is mentions and replies, posted while StreamNook runs. Go-live,
-/// drops and badges join the list when the core adds the iPhone to them; background checking is
-/// Android's own and stays hidden here (its saved values are kept for the other apps).
+/// Android draws; today that is go-lives (pushed, app open or closed; Which channels narrows them)
+/// and mentions and replies (posted while StreamNook runs). Drops and badges join the list when
+/// the core adds the iPhone to them; background checking and Instant alerts are Android's own and
+/// stay hidden here (their saved values are kept for the other apps).
 struct NotificationsPanel: View {
     @Environment(SettingsStore.self) private var store
     @Environment(AppModel.self) private var model
@@ -191,6 +192,7 @@ struct NotificationsPanel: View {
                     Task {
                         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
                         await readStatus()
+                        await LiveAlerts.sync(model)
                     }
                 }
             }
@@ -204,6 +206,7 @@ struct NotificationsPanel: View {
     private func ask() async {
         await MentionAlerts.askIfUndecided()
         await readStatus()
+        await LiveAlerts.sync(model)
     }
 
     private func readStatus() async {
@@ -220,7 +223,9 @@ struct NotificationsPanel: View {
 }
 
 /// Notifications > Notify me about: a switch per alert type the core lists for this iPhone, in its
-/// order and with its words. Turning one on asks for permission the first time.
+/// order and with its words. Which channels sits nested under Live channels, shown whether or not
+/// that switch is on so it never appears and disappears under the reader (as on Android). Turning
+/// a type on asks for permission the first time.
 struct AlertTypeSettings: View {
     let types: [AlertType]
     let ask: () async -> Void
@@ -229,11 +234,49 @@ struct AlertTypeSettings: View {
         if !types.isEmpty {
             SettingsBlock(title: "Notify me about") {
                 ForEach(types) { type in
-                    ToggleRow(title: type.title, path: type.setting, fallback: true, detail: type.detail,
-                              onChange: { on in if on { await ask() } })
+                    if type.id == "live" {
+                        ToggleRow(title: type.title, path: type.setting, fallback: true, detail: type.detail,
+                                  onChange: { on in if on { await ask() } }, showsNestedWhenOff: true) {
+                            WhichChannelsLine()
+                        }
+                    } else {
+                        ToggleRow(title: type.title, path: type.setting, fallback: true, detail: type.detail,
+                                  onChange: { on in if on { await ask() } })
+                    }
                 }
             }
         }
+    }
+}
+
+/// Live channels > Which channels: every channel followed on Twitch, or all but the ones muted (in
+/// the list this opens, or with the bell beside a playing channel's name), in Android's words. The
+/// whole line under the name opens the list.
+struct WhichChannelsLine: View {
+    @Environment(SettingsStore.self) private var store
+    @State private var open = false
+    private static let path = "live_notifications.muted_live_channels"
+
+    var body: some View {
+        let muted = store.strings(Self.path).count
+        let summary = muted > 0 ? "Everything you follow except \(muted)" : "Everything you follow"
+        NestedLine(title: "Which channels", paths: [Self.path], stacked: true) {
+            Button { open = true } label: {
+                HStack(spacing: 8) {
+                    Text(summary).font(.sn(12)).foregroundStyle(SN.textSecondary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(SN.textMuted)
+                }
+                // A full touch target that keeps the line its own height beside the name.
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, -12)
+            .accessibilityLabel("Which channels")
+            .accessibilityValue(summary)
+        }
+        .sheet(isPresented: $open) { NotifiedChannelsSheet() }
     }
 }
 

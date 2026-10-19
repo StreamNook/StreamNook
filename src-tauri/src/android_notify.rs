@@ -33,11 +33,6 @@ use crate::services::twitch_service::TwitchService;
 /// enough that the file cannot grow without bound.
 const SHOWN_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 
-/// The push lane's server. Registration is authed by the user's own Twitch
-/// token; the server validates it against Twitch and stores only the user id,
-/// device token and followed channel ids.
-const NOTIFY_SERVER: &str = "https://notify.streamnook.app";
-
 /// Serializes every read-modify-write of `notify_state.json`. The poll lane
 /// (WorkManager -> `pollOnce`) and the push lane (`claimShow`) run in the same
 /// process on different threads, so a process-local lock is sufficient — and
@@ -428,91 +423,6 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_claimShow<'local>(
     );
     write_state(&state);
     1
-}
-
-/// Register this device with the push server: current FCM token plus the ids
-/// of every followed channel. Called from the shell after auth and whenever the
-/// push toggle turns on; re-running is cheap and idempotent (the server
-/// replaces the follow set wholesale).
-///
-/// "no-token" is a normal outcome, not an error: the token file is written by
-/// Kotlin once Play services answers, which can trail the first boot. The next
-/// launch registers; the poll lane delivers meanwhile.
-#[tauri::command]
-pub async fn push_register() -> Result<String, String> {
-    let token_path = cache_service::get_app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("fcm_token");
-    let Some(fcm_token) = std::fs::read_to_string(&token_path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return Ok("no-token".to_string());
-    };
-
-    let user_token = TwitchService::get_token().await.map_err(|e| e.to_string())?;
-
-    // Every followed channel id, paged. Reuses the shared helper rather than
-    // reimplementing the endpoint; the hard stop mirrors fetch_followed_live.
-    let mut follows: Vec<String> = Vec::new();
-    let mut cursor: Option<String> = None;
-    for _ in 0..20 {
-        let (page, next) = TwitchService::get_all_followed_channels(100, cursor)
-            .await
-            .map_err(|e| e.to_string())?;
-        follows.extend(page.into_iter().map(|c| c.user_id));
-        cursor = next;
-        if cursor.is_none() {
-            break;
-        }
-    }
-
-    let client = crate::services::http::client().clone();
-    let resp = client
-        .post(format!("{NOTIFY_SERVER}/register"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("OAuth {user_token}"),
-        )
-        .json(&serde_json::json!({ "fcm_token": fcm_token, "follows": follows }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("register failed: {status}"));
-    }
-    Ok(format!("registered:{}", follows.len()))
-}
-
-/// Drop this device from the push server (push toggle turned off). The poll
-/// lane keeps delivering; this only stops the instant pushes.
-#[tauri::command]
-pub async fn push_unregister() -> Result<(), String> {
-    let token_path = cache_service::get_app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("fcm_token");
-    let Some(fcm_token) = std::fs::read_to_string(&token_path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return Ok(());
-    };
-    let user_token = TwitchService::get_token().await.map_err(|e| e.to_string())?;
-    let client = crate::services::http::client().clone();
-    client
-        .post(format!("{NOTIFY_SERVER}/unregister"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("OAuth {user_token}"),
-        )
-        .json(&serde_json::json!({ "fcm_token": fcm_token }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Followed channels that are live right now, fully paged.

@@ -46,8 +46,9 @@ public enum AlertTypes {
         return changes
     }
 
-    /// The list the fake core answers: the iPhone's today, mentions and replies.
+    /// The list the fake core answers: the iPhone's today, go-lives (pushed) and mentions.
     static let fakeJSON = #"""
-    [{"id":"mentions","title":"Mentions and replies","detail":"When someone mentions or replies to you","setting":"live_notifications.show_mention_notifications","channel":"mentions","setup":true}]
+    [{"id":"live","title":"Live channels","detail":"When a channel you follow goes live","setting":"live_notifications.show_live_notifications","channel":"live-channels","setup":true},
+     {"id":"mentions","title":"Mentions and replies","detail":"When someone mentions or replies to you","setting":"live_notifications.show_mention_notifications","channel":"mentions","setup":true}]
     """#
 }

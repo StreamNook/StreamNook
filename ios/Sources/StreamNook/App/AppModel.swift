@@ -164,6 +164,10 @@ final class AppModel {
             guard let self else { return }
             Task { await self.openMention(id) }
         }
+        // Go-lives: the channel playing gets no banner, and a tap plays the stream.
+        NotificationRouter.isPlaying = { [weak self] alert in self?.isPlaying(alert) ?? false }
+        NotificationRouter.handleLive { [weak self] alert in self?.openLiveAlert(alert) }
+        Task { await settingsStore.refresh(); await LiveAlerts.sync(self) }
     }
 
     /// Reads the settings, applies the look and hands the player its saved choices. A failed read
@@ -391,6 +395,8 @@ final class AppModel {
         if state == "foreground" {
             Task { await signIn.refresh() }
             Task { await home.resumed() }
+            // Notifications may have been allowed in iPhone Settings meanwhile.
+            Task { await LiveAlerts.sync(self) }
         }
     }
 

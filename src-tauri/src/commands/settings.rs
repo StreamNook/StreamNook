@@ -638,6 +638,9 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::reminder_service::refresh(settings);
     #[cfg(target_os = "ios")]
     crate::services::twitch_resolver::refresh_device_codecs(settings);
+    // The phone's go-live push registration follows the switches and the mute list.
+    #[cfg(mobile)]
+    crate::services::push_alerts::server::refresh(settings);
     crate::services::hidden_channels::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by

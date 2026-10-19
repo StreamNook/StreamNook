@@ -1119,6 +1119,8 @@ pub fn run() {
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
+                // What the go-live push registration compares each save against.
+                services::push_alerts::server::seed(&loaded);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1699,10 +1701,12 @@ pub fn run() {
             services::ios_sheet::sheet_redirected,
             #[cfg(target_os = "ios")]
             services::ios_sheet::sheet_closed,
-            #[cfg(target_os = "android")]
-            android_notify::push_register,
-            #[cfg(target_os = "android")]
-            android_notify::push_unregister,
+            #[cfg(mobile)]
+            services::push_alerts::server::push_register,
+            #[cfg(mobile)]
+            services::push_alerts::server::push_unregister,
+            #[cfg(target_os = "ios")]
+            services::push_alerts::server::push_set_apns_device,
             #[cfg(target_os = "android")]
             cast_plugin::cast_get_state,
             #[cfg(target_os = "android")]

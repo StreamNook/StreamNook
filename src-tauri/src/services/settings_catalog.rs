@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn alert_rows_follow_the_alert_list() {
-        // The iPhone sends mentions only: search finds that row and none of the go-live ones.
+        // The iPhone sends mentions and go-lives: search finds those rows and none of the others.
         let iphone = |n: &str| match n.strip_prefix("alert:") {
             Some(id) => crate::services::alert_types::works_on(id, "ios"),
             None => true,
@@ -350,10 +350,14 @@ mod tests {
             Some(id) => crate::services::alert_types::works_on(id, "android"),
             None => true,
         };
-        assert!(titles(&search_on("mentions and replies", 5, true, &iphone)).contains(&"Mentions and replies"));
+        for title in ["Mentions and replies", "Live channels", "Which channels"] {
+            assert!(titles(&search_on(&title.to_lowercase(), 5, true, &iphone)).contains(&title), "{title} on iPhone");
+        }
         for title in ["Live channels", "Which channels", "Drops", "New badges"] {
-            assert!(!titles(&search_on(&title.to_lowercase(), 5, true, &iphone)).contains(&title), "{title} on iPhone");
             assert!(titles(&search_on(&title.to_lowercase(), 5, false, &android)).contains(&title), "{title} on Android");
+        }
+        for title in ["Drops", "New badges"] {
+            assert!(!titles(&search_on(&title.to_lowercase(), 5, true, &iphone)).contains(&title), "{title} on iPhone");
         }
         // Every type a phone lists has its row on the Notifications page, by the same title.
         for platform in ["android", "ios"] {

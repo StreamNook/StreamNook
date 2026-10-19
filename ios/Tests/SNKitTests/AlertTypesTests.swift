@@ -12,8 +12,12 @@ import Testing
 
     @Test func theCoreListsWhatThisIPhoneSends() async throws {
         let types = await AlertTypes.load(core: try started())
-        #expect(types.map(\.id) == ["mentions"])
-        let mentions = try #require(types.first)
+        #expect(types.map(\.id) == ["live", "mentions"])
+        let live = try #require(types.first)
+        #expect(live.title == "Live channels")
+        #expect(live.setting == "live_notifications.show_live_notifications")
+        #expect(live.setup)
+        let mentions = try #require(types.last)
         #expect(mentions.title == "Mentions and replies")
         #expect(mentions.setting == "live_notifications.show_mention_notifications")
         #expect(mentions.setup)

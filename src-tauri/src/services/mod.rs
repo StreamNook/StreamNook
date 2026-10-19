@@ -136,6 +136,9 @@ pub mod settings_backups;
 pub mod install_marker;
 pub mod settings_catalog;
 pub mod alert_types;
+// Phones only: go-live push registration. Its rules are tested on desktop.
+#[cfg(any(mobile, test))]
+pub mod push_alerts;
 pub mod client_capabilities;
 #[cfg(test)]
 mod ll_soak;

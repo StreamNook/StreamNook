@@ -871,6 +871,10 @@ impl TwitchService {
                 // This token was granted every scope in SCOPES, so a sign-in
                 // StreamNook asked for is no longer owed.
                 crate::services::twitch_signin::clear();
+                // A phone's go-live pushes register under the account
+                // that just signed in.
+                #[cfg(mobile)]
+                crate::services::push_alerts::server::schedule();
 
                 // Emit success event
                 debug!("[LOGIN] Emitting twitch-login-complete event...");
