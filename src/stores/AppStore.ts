@@ -2397,17 +2397,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       if (!preserveBackend) {
-        await invoke('stop_chat');
+        // Rust answers whether the connection went down. It stays up while
+        // the viewer keeps a chat open beside the stream (a phone's Chats
+        // room, a docked chat, another window), and those rooms are still on
+        // screen.
+        const stopped = await invoke<boolean>('stop_chat');
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
         // exit left every user from the last channel resident. Releasing it here
-        // means a full exit actually frees that reference.
-        try {
-          const { useChatUserStore } = await import('./chatUserStore');
-          useChatUserStore.getState().clearUsers();
-        } catch (e) {
-          Logger.warn('Could not clear chat user store on stop:', e);
+        // means a full exit actually frees that reference. Only then: the store
+        // is shared by every chat this page shows, so clearing it under a chat
+        // that stays open strips its rows' paints and badges.
+        if (stopped) {
+          try {
+            const { useChatUserStore } = await import('./chatUserStore');
+            useChatUserStore.getState().clearUsers();
+          } catch (e) {
+            Logger.warn('Could not clear chat user store on stop:', e);
+          }
         }
       }
 

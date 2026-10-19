@@ -500,10 +500,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
     <div
       className="shrink-0 border-t border-borderSubtle"
       style={{
-        // The Chats screen sets --sn-composer-floor so the box clears the tab
-        // bar; the keyboard, when up, covers the bar and wins.
-        paddingBottom:
-          'max(calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px), var(--sn-composer-floor, 0px))',
+        paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
         transition: 'padding-bottom 0.15s ease-out',
       }}
     >
@@ -622,7 +619,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              // Its own hide-keyboard button replaces commands while typing.
+              // Its own hide-keyboard button takes the menu's slot while typing.
               data-keyboard-hide="own"
               onFocus={() => setTyping(true)}
               onBlur={() => setTyping(false)}
@@ -672,19 +669,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
               text), so only a Twitch room shows it. */}
-          {typing ? (
-            <button
-              // Held on the press, so the field keeps the keyboard until this
-              // tap lands; otherwise it would blur first and this button would
-              // give its place back before the tap.
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => inputRef.current?.blur()}
-              className="shrink-0 w-9 h-9 flex items-center justify-center text-textSecondary active:opacity-70"
-              aria-label="Hide keyboard"
-            >
-              <KeyboardHideIcon size={19} />
-            </button>
-          ) : isTwitch && channel && (
+          {isTwitch && channel && (
             <button
               onClick={() => {
                 setEmotesOpen(false);
@@ -826,7 +811,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
         </div>
 
         {/* One slot, two jobs: Send while there is a message, otherwise the chat
-            menu. Avoids parking a permanently disabled Send on screen. */}
+            menu. Avoids parking a permanently disabled Send on screen. While the
+            keyboard is up with nothing typed, the menu's place is the way to put
+            the keyboard away (scrolling the chat never does), and it is the menu
+            again once the keyboard goes. */}
         {canSend ? (
           <button
             onClick={() => void send()}
@@ -862,18 +850,39 @@ const MobileChatInputImpl: React.FC<Props> = ({
           </button>
         ) : (
           <button
+            // Held on the press while typing, so the field keeps the keyboard
+            // until the tap lands; otherwise it would blur first and the button
+            // would turn back into the menu under the finger.
+            onPointerDown={(e) => {
+              if (typing) e.preventDefault();
+            }}
             onClick={() => {
+              if (typing) {
+                inputRef.current?.blur();
+                return;
+              }
               setEmotesOpen(false);
               setPointsOpen(false);
               setMenuOpen(true);
             }}
             className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
-            aria-label={mentionsUnread > 0 ? 'Chat options, unread mentions' : 'Chat options'}
+            aria-label={
+              typing ? 'Hide keyboard' : mentionsUnread > 0 ? 'Chat options, unread mentions' : 'Chat options'
+            }
           >
-            <DotsThreeVertical size={20} weight="bold" />
-            {/* Unread mentions wait behind this menu's Mentions row. */}
+            {/* Both marks in one place, crossfading, so nothing moves. */}
+            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}>
+              <DotsThreeVertical size={20} weight="bold" />
+            </span>
+            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-100' : 'opacity-0'}`}>
+              <KeyboardHideIcon size={20} />
+            </span>
+            {/* Unread mentions wait behind this menu's Mentions row; it fades
+                with the menu mark. */}
             {mentionsUnread > 0 && (
-              <span className="absolute top-[7px] right-[7px] w-2 h-2 rounded-full bg-accent pointer-events-none" />
+              <span
+                className={`absolute top-[7px] right-[7px] w-2 h-2 rounded-full bg-accent pointer-events-none transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}
+              />
             )}
           </button>
         )}

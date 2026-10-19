@@ -328,7 +328,7 @@ impl ChatTabs {
         if let Some(i) = current.filter(|&i| self.tabs[i].channel == next.channel) {
             // Same room: only what it is called and how it looks can change.
             let tab = &mut self.tabs[i];
-            tab.label = next.label;
+            tab.label = kept_label(next.label, &tab.label);
             if next.avatar.is_some() {
                 tab.avatar = next.avatar;
             }
@@ -345,6 +345,7 @@ impl ChatTabs {
             Some(i) => {
                 let open = self.tabs.remove(i);
                 next.kept = open.kept;
+                next.label = kept_label(next.label, &open.label);
                 if next.avatar.is_none() {
                     next.avatar = open.avatar;
                 }
@@ -576,6 +577,16 @@ pub fn apply<X>(f: impl FnOnce(&mut ChatTabs) -> (Effects, X)) -> (ChatTabsChang
     (tabs.change(fx), out)
 }
 
+/// A name that is only the login's lowercase ("xqc", what a start from a login alone carries)
+/// never replaces the display name the room already has ("xQc"); any other name does.
+fn kept_label(next: String, current: &str) -> String {
+    if next != current && next.eq_ignore_ascii_case(current) && next == next.to_lowercase() {
+        current.to_string()
+    } else {
+        next
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,6 +734,18 @@ mod tests {
         assert!(fx.acquire.is_empty() && fx.release.is_empty());
         let tab = &t.tabs[0];
         assert_eq!((tab.label.as_str(), tab.avatar.as_deref(), tab.channel_id.as_deref()), ("Streamer", Some("a.png"), Some("1")));
+    }
+
+    #[test]
+    fn a_login_only_start_keeps_the_rooms_display_name() {
+        let mut t = ChatTabs::default();
+        t.add(&room("twitch", "xqc", Some("1"), "xQc"));
+        t.sync_stream(Some(&room("twitch", "xqc", Some("1"), "xqc")));
+        assert_eq!(t.tabs[0].label, "xQc", "the open room's name survives the stream claiming it");
+        t.sync_stream(Some(&room("twitch", "xqc", Some("1"), "xqc")));
+        assert_eq!(t.tabs[0].label, "xQc", "and the same stream again");
+        t.sync_stream(Some(&room("twitch", "xqc", Some("1"), "XQC")));
+        assert_eq!(t.tabs[0].label, "XQC", "a real new name still lands");
     }
 
     #[test]

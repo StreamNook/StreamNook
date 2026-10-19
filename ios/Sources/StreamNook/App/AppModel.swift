@@ -80,6 +80,7 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
+        watch.pip.onCloseToAudio = { watch.player.play() }
         watch.onRow = { [weak self] row in
             guard let self else { return }
             self.nav.refresh(row)
@@ -105,6 +106,7 @@ final class AppModel {
         chat.mentions = mentions
         let home = home
         chat.followedLive = { home.lists.followingLive }
+        chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
     }
 
     var signedIn: Bool { signIn.signedIn }
@@ -121,9 +123,10 @@ final class AppModel {
         let core = core
         let clock = ContinuousClock.now
         do {
-            let (dirs, key, codecs) = try CoreHost.startInputs()
+            let (dirs, key, codecs) = try await CoreHost.startInputs()
             try await Task.detached(priority: .userInitiated) {
                 try core.start(dirs: dirs, version: CoreHost.appVersion, vaultKey: key, codecs: codecs)
+                CoreHost.excludeSealedFromBackup()
             }.value
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
@@ -169,7 +172,7 @@ final class AppModel {
             await loadTheme()
             if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
                 watch.savedQuality = prefs.quality
-                watch.pip.floats = prefs.floatsVideo
+                watch.pip.keepsAudio = prefs.keepsAudio
             }
             return settings
         } catch {

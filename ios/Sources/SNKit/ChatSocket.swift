@@ -90,6 +90,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
     /// every row of theirs in every room.
     case member(userID: String, atmosphere: String?, cologne: CologneLook?, badge: ChatViewBadge?)
     case patch(channel: String?, rows: [ChatRowPatch])
+    /// A link's card read after its rows were sent (`ROW_PREVIEW`), for every room: nil when
+    /// the link has none, so its held room goes.
+    case preview(url: String, preview: ChatLinkPreview?)
     case notice(channel: String?, msgID: String?, message: String?)
     /// A message AutoMod held, or the decision on one (`AUTOMOD_HELD`).
     case held(channel: String?, row: HeldRow)
@@ -130,6 +133,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
         case "ROW_MEMBER":
             guard let frame = try? decoder.decode(MemberFrame.self, from: data) else { return .other(text) }
             return .member(userID: frame.userID, atmosphere: frame.atmosphere, cologne: frame.cologne, badge: frame.badge)
+        case "ROW_PREVIEW":
+            guard let frame = try? decoder.decode(PreviewFrame.self, from: data) else { return .other(text) }
+            return .preview(url: frame.url, preview: frame.preview)
         case "HISTORY_SEGMENTS":
             guard let frame = try? decoder.decode(PatchFrame.self, from: data) else { return .other(text) }
             return .patch(channel: head.channel, rows: frame.rows.map {
@@ -172,6 +178,11 @@ public enum ChatSocketFrame: Sendable, Equatable {
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
         return try? decoder.decode(ChatMessage.self, from: data)
+    }
+
+    private struct PreviewFrame: Decodable {
+        var url: String
+        var preview: ChatLinkPreview?
     }
 
     private struct FrameHead: Decodable {

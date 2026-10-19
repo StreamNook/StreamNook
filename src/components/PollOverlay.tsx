@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BarChart3, Users, CheckCircle2, Trophy } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
-import { OverlayBanner } from './chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat/OverlayBanner';
+import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
 import type { PollPush, PollView } from '../types';
@@ -18,9 +19,11 @@ import type { PollPush, PollView } from '../types';
 interface PollOverlayProps {
   channelId?: string;
   channelLogin?: string;
+  /** Its slot in the top-of-chat stack, when it sits in one. */
+  stack?: StackCardControl;
 }
 
-const PollOverlay = ({ channelId }: PollOverlayProps) => {
+const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
   const { addToast, currentStream } = useAppStore();
   const currentChannelId = channelId || currentStream?.user_id;
 
@@ -34,7 +37,7 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
   // shows nothing until the new channel's card arrives.
   const [card, setCard] = useState<{ channelId: string; view: PollView | null } | null>(null);
   const view = card && card.channelId === currentChannelId ? card.view : null;
-  const [isExpanded, setIsExpanded] = useState(!pollsStartCollapsed);
+  const [expandedHere, setExpandedHere] = useState(!pollsStartCollapsed);
   // A tap marks its choice at once; Rust's next push confirms it, and a
   // refusal takes the mark back.
   const [pending, setPending] = useState<{ pollId: string; choiceId: string } | null>(null);
@@ -73,12 +76,18 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
   const [seenPollId, setSeenPollId] = useState<string | null>(null);
   if (pollId && pollId !== seenPollId) {
     setSeenPollId(pollId);
-    setIsExpanded(!pollsStartCollapsed);
+    setExpandedHere(!pollsStartCollapsed);
   }
 
   const countdown = useDeadlineClock(view?.deadline_ms);
 
-  if (!view) return null;
+  // In a stack Rust decides which card is open, and this one reports itself so
+  // it gets a slot; on its own it keeps its own fold.
+  const released = useStackPresence(stack, pollId);
+  const isExpanded = stack ? stack.open : expandedHere;
+  const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
+
+  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
 
   const pendingChoice = pending?.pollId === view.poll_id ? pending.choiceId : null;
   const canTap = view.can_vote && !pendingChoice;
@@ -96,25 +105,25 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
     }
   };
 
-  const timeBadge = countdown ? (
-    <span className="text-xs font-mono font-bold text-warning bg-warning/20 border border-warning/40 px-1.5 py-1 rounded-md">
-      {countdown}
-    </span>
+  const status = countdown ? (
+    <BannerStatus>{countdown}</BannerStatus>
   ) : view.badge ? (
-    <span className="text-xs font-medium text-accent bg-accent/20 border border-accent/40 px-1.5 py-1 rounded-md">
-      {view.badge}
-    </span>
+    <BannerStatus mono={false}>{view.badge}</BannerStatus>
   ) : null;
 
   return (
+    <StackCardPresence onLeft={released}>
     <OverlayBanner
-      icon={<BarChart3 className="w-4 h-4 text-accent" />}
+      key="poll"
+      icon={<BarChart3 className="w-4 h-4 text-accent-on-surface" />}
+      kind="Poll"
       title={view.title}
       isExpanded={isExpanded}
-      onToggleExpanded={() => setIsExpanded(!isExpanded)}
-      badges={timeBadge}
+      onToggleExpanded={toggle}
+      badges={status}
+      order={stack?.order}
     >
-      <div className="p-3 space-y-2">
+      <div className="px-1.5 space-y-0.5">
         {view.choices.map((choice) => {
           const isMine = choice.mine || pendingChoice === choice.id;
           return (
@@ -122,55 +131,54 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
               key={choice.id}
               onClick={() => handleVote(choice.id)}
               disabled={!canTap}
-              className={`w-full relative p-2.5 rounded-lg border transition-all overflow-hidden ${
-                choice.winner
-                  ? 'bg-accent/20 border-accent'
-                  : isMine
-                    ? 'bg-accent/20 border-accent/70'
-                    : 'bg-backgroundSecondary border-border ' +
-                      (canTap ? 'hover:bg-accent/10 hover:border-accent/40 cursor-pointer' : 'cursor-default')
+              aria-pressed={isMine}
+              className={`w-full block text-left px-1.5 py-1.5 rounded-md transition-colors ${
+                canTap ? 'hover:bg-textPrimary/[0.05] active:bg-textPrimary/[0.08] cursor-pointer' : 'cursor-default'
               }`}
             >
-              {/* Vote-share bar */}
-              <div
-                className={`absolute inset-y-0 left-0 rounded-md opacity-25 transition-[width] duration-500 ${
-                  choice.winner ? 'bg-accent' : 'bg-accent/70'
-                }`}
-                style={{ width: `${choice.percent}%` }}
+              <ShareRow
+                title={choice.title}
+                strong={choice.winner || isMine}
+                percent={choice.percent}
+                mark={
+                  choice.winner ? (
+                    <Trophy className="w-3.5 h-3.5 text-accent-on-surface" />
+                  ) : isMine ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-accent-on-surface" />
+                  ) : undefined
+                }
+                trailing={
+                  <>
+                    <span className="flex items-center gap-1 text-textMuted">
+                      <Users className="w-3 h-3" />
+                      {choice.votes_label}
+                    </span>
+                    <span className="w-9 text-right font-semibold text-textPrimary">{choice.percent}%</span>
+                  </>
+                }
               />
-              <div className="relative flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {choice.winner && <Trophy className="w-3.5 h-3.5 text-accent flex-shrink-0" />}
-                  {isMine && !choice.winner && <CheckCircle2 className="w-3.5 h-3.5 text-accent flex-shrink-0" />}
-                  <span className="font-semibold text-textPrimary text-sm truncate">{choice.title}</span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-textSecondary flex-shrink-0">
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    {choice.votes_label}
-                  </span>
-                  <span className="font-bold text-sm text-textPrimary">{choice.percent}%</span>
-                </div>
-              </div>
             </button>
           );
         })}
       </div>
 
-      <div className="px-3 pb-3">
+      <div className="px-3 pt-1.5 pb-3">
         {view.result_line && (
-          <div className="mb-2 py-2 px-3 bg-accent/15 border border-accent/40 rounded-lg flex items-center justify-center gap-2">
-            <Trophy className="w-4 h-4 text-accent" />
-            <span className="text-accent text-sm font-semibold">{view.result_line}</span>
-          </div>
+          <p className="mb-1 flex items-center gap-1.5 text-[12px] font-semibold text-accent-on-surface">
+            <Trophy className="w-3.5 h-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{view.result_line}</span>
+          </p>
         )}
-        <p className="text-center text-xs text-textSecondary">{view.footer}</p>
-        <div className="mt-2 flex items-center justify-center gap-1 text-xs text-textSecondary">
-          <Users className="w-3 h-3" />
-          {view.voters_line}
-        </div>
+        <p className="flex items-center gap-2 text-[11px] text-textMuted">
+          <span className="flex-1 min-w-0 truncate">{view.footer}</span>
+          <span className="shrink-0 flex items-center gap-1 tabular-nums">
+            <Users className="w-3 h-3" />
+            {view.voters_line}
+          </span>
+        </p>
       </div>
     </OverlayBanner>
+    </StackCardPresence>
   );
 };
 

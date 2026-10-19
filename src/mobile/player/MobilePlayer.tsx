@@ -19,10 +19,10 @@ import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from 
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
-import { collabLabel } from '../../utils/sharedViewers';
+import { collabLabel, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
 import { CastSheet } from '../cast/CastSheet';
-import { isCastable } from '../cast/castState';
+import { isCastable, useCastState } from '../cast/castState';
 import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
@@ -222,6 +222,7 @@ export const MobilePlayer: React.FC<{
   const [qualityOpen, setQualityOpen] = useState(false);
   const [togetherOpen, setTogetherOpen] = useState(false);
   const [castOpen, setCastOpen] = useState(false);
+  const castOffered = useCastState().offered;
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -559,7 +560,7 @@ export const MobilePlayer: React.FC<{
     const together = collab && (
       <>
         <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
-        {!compactGroup && 'Together'}
+        {!compactGroup && (isTogether(collab) ? 'Together' : 'Shared chat')}
       </>
     );
     return (
@@ -806,17 +807,20 @@ export const MobilePlayer: React.FC<{
             >
               {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
             </button>
-            {/* Cast and mirroring, together: the two ways onto a TV. */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setCastOpen(true);
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Watch on a TV"
-            >
-              <Screencast size={BAR_ICON} />
-            </button>
+            {/* Cast and mirroring, together: the two ways onto a TV. Only on
+                builds that offer them (Rust cast_session::OFFERED). */}
+            {castOffered && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCastOpen(true);
+                }}
+                className="sn-touch flex items-center justify-center text-white"
+                aria-label="Watch on a TV"
+              >
+                <Screencast size={BAR_ICON} />
+              </button>
+            )}
             {currentStream && (
               <button
                 onClick={(e) => {
@@ -916,7 +920,9 @@ export const MobilePlayer: React.FC<{
 
       <QualitySheet open={qualityOpen} onClose={() => setQualityOpen(false)} />
       <TogetherSheet collab={collab} open={togetherOpen} onClose={() => setTogetherOpen(false)} />
-      <CastSheet open={castOpen} onClose={() => setCastOpen(false)} castable={isCastable(currentStream)} />
+      {castOffered && (
+        <CastSheet open={castOpen} onClose={() => setCastOpen(false)} castable={isCastable(currentStream)} />
+      )}
     </div>
   );
 };

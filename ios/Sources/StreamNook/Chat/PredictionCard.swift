@@ -8,20 +8,21 @@ import SwiftUI
 struct PredictionCard: View {
     @Bindable var model: LiveVotesModel
     let prediction: PredictionView
-    let slot: LiveVoteSlot
+    let open: Bool
     @FocusState private var typing: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VoteHead(kind: .prediction, slot: slot, line: prediction.result?.line ?? prediction.title,
-                     deadlineMS: prediction.deadlineMS, badge: prediction.badge, model: model)
-            if !slot.folded {
+            CardHead(open: open, label: "Prediction", line: prediction.result?.line ?? prediction.title,
+                     action: { model.tap(.prediction) }) {
+                VoteKindMark(card: .prediction)
+            } status: {
+                VoteTimeSlot(deadlineMS: prediction.deadlineMS, badge: prediction.badge)
+            }
+            CardBody(open: open) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(prediction.title)
-                        .font(.sn(15, 600))
-                        .foregroundStyle(SN.textPrimary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VoteQuestion(text: prediction.title)
+                        .padding(.bottom, 2)
                     if prediction.canPredict {
                         sides
                         SplitBar(outcomes: prediction.outcomes)
@@ -38,21 +39,21 @@ struct PredictionCard: View {
                         }
                         if !prediction.totalsLine.isEmpty {
                             Text(prediction.totalsLine)
-                                .font(.sn(11.5))
+                                .font(.sn(12))
                                 .foregroundStyle(SN.textMuted)
                                 .lineLimit(1)
                         }
                     }
                 }
-                .padding(.top, 8)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .modifier(VoteCardSurface(folded: slot.folded))
+        .modifier(VoteCardSurface())
         .sheet(isPresented: $model.confirmOpen) {
             PredictConfirm(model: model, iconURL: prediction.pointsIcon)
         }
-        .onChange(of: slot.folded) { _, folded in if folded { typing = false } }
+        .onChange(of: open) { _, open in if !open { typing = false } }
+        // The number pad shrinks the chat column; the card being typed in keeps its room.
+        .onChange(of: typing) { _, typing in model.holdHeight(typing) }
     }
 
     private func tone(_ tone: String) -> Color? {
@@ -106,11 +107,11 @@ struct PredictionCard: View {
                     Text(outcome.ratio).lineLimit(1)
                     Spacer(minLength: 4)
                     Image(systemName: "person.fill")
-                        .font(.system(size: 8))
+                        .font(.system(size: 9))
                         .accessibilityHidden(true)
                     Text(outcome.peopleLabel).lineLimit(1)
                 }
-                .font(.sn(10.5))
+                .font(.sn(11))
                 .monospacedDigit()
                 .foregroundStyle(SN.textMuted)
             }
@@ -182,7 +183,7 @@ struct PredictionCard: View {
             Text(bet?.balanceLine ?? "")
                 .lineLimit(1)
         }
-        .font(.sn(11.5))
+        .font(.sn(12))
         .monospacedDigit()
         .foregroundStyle(SN.textMuted)
         .frame(minHeight: 14)
@@ -231,8 +232,8 @@ struct PredictionCard: View {
             .foregroundStyle(SN.textPrimary)
             .padding(.horizontal, 4)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { shape.fill(selected ? SN.accent.opacity(0.22) : SN.surface) }
-            .overlay { shape.stroke(selected ? SN.accent : .clear, lineWidth: 1) }
+            .background { shape.fill(selected ? SN.accentOnSurface.opacity(0.22) : SN.surface) }
+            .overlay { shape.stroke(selected ? SN.accentOnSurface : .clear, lineWidth: 1) }
             .contentShape(shape)
     }
 }
@@ -276,7 +277,7 @@ private struct PredictConfirm: View {
                     .padding(.top, 22)
                     .accessibilityAddTraits(.isHeader)
                 Text(bet.confirmLine)
-                    .font(.sn(13.5))
+                    .font(.sn(14))
                     .foregroundStyle(SN.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)

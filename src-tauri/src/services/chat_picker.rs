@@ -89,6 +89,15 @@ fn row(r: &DiscoverRow, live: bool, last_live: Option<String>, open: &HashSet<St
     })
 }
 
+/// The row's own data says the channel is not live (a Kick row whose stream ended before the
+/// lists were rebuilt): it belongs with the offline follows, not in Live with no audience.
+fn says_offline(r: &DiscoverRow) -> bool {
+    match r {
+        DiscoverRow::Twitch(t) => t.is_live == Some(false),
+        DiscoverRow::Provider(p) => !p.is_live,
+    }
+}
+
 /// The picker from the Following lists. `platforms` keeps the ones a shell
 /// can chat on (None keeps every one); `open` holds the keys of chats open now.
 pub fn build(
@@ -100,7 +109,12 @@ pub fn build(
     let allowed = |r: &PickerRow| platforms.is_none_or(|p| p.iter().any(|x| x.eq_ignore_ascii_case(&r.provider)));
     let mut seen: HashSet<String> = HashSet::new();
     let mut live = Vec::new();
+    let mut ended = Vec::new();
     for r in following.favorites.iter().chain(following.live.iter()) {
+        if says_offline(r) {
+            ended.push(r);
+            continue;
+        }
         if let Some(r) = row(r, true, None, open).filter(|r| allowed(r)) {
             if seen.insert(r.key.clone()) {
                 live.push(r);
@@ -108,7 +122,7 @@ pub fn build(
         }
     }
     let mut offline = Vec::new();
-    for r in &following.offline {
+    for r in ended.into_iter().chain(following.offline.iter()) {
         let last = match r {
             DiscoverRow::Twitch(t) => last_broadcasts.get(&t.user_id).cloned().flatten(),
             DiscoverRow::Provider(_) => None,
@@ -179,6 +193,20 @@ mod tests {
         assert_eq!(p.live[1].viewer_count, Some(900));
         assert_eq!(p.offline[0].viewer_count, None);
         assert_eq!(p.offline[0].game_name, None, "an offline row names no category");
+    }
+
+    #[test]
+    fn a_live_listed_row_that_says_offline_sorts_as_offline() {
+        let mut ended = kick("xqc");
+        if let DiscoverRow::Provider(p) = &mut ended {
+            p.is_live = false;
+        }
+        let following = Following { live: vec![twitch("xqc", "1", 30), ended], ..Default::default() };
+        let p = build(&following, &HashMap::new(), None, &HashSet::new());
+        assert_eq!(keys(&p.live), ["xqc"]);
+        assert_eq!(keys(&p.offline), ["kick:xqc"]);
+        assert!(!p.offline[0].is_live);
+        assert!(p.mixed_platforms, "the Kick row keeps its mark beside the Twitch one");
     }
 
     #[test]

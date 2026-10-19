@@ -22,6 +22,7 @@ final class Look {
     /// Takes the look out of a settings read.
     func apply(_ settings: SettingsLook) {
         glassiness = Double(settings.glassiness) / 100
+        ChatTheme.use(glassiness: glassiness)
         glassBlur = settings.glassBlur ?? true
         motion = settings.motion
         fontID = settings.font
@@ -46,7 +47,10 @@ final class Look {
     /// Shows a state without writing settings: the Glassiness slider while it is dragged, and
     /// drive steps.
     func preview(glassiness: Double? = nil, motion: MotionMode? = nil) {
-        if let glassiness { self.glassiness = glassiness }
+        if let glassiness {
+            self.glassiness = glassiness
+            ChatTheme.use(glassiness: glassiness)
+        }
         if let motion { self.motion = motion }
     }
 }
@@ -69,6 +73,8 @@ enum SN {
     static var accent: Color { p.accent.color }
     static var accentHover: Color { p.accentHover.color }
     static var accentMuted: Color { p.accentMuted.color }
+    /// The accent for marks and bars on a card, readable on the card track in every theme.
+    static var accentOnSurface: Color { p.accentOnSurface.color }
     static var border: Color { p.border.color }
     static var borderLight: Color { p.borderLight.color }
     static var borderSubtle: Color { p.borderSubtle.color }
@@ -83,8 +89,11 @@ enum SN {
     static var twitch: Color { FixedColor.twitch.color }
     static var kick: Color { FixedColor.kick.color }
 
-    /// The darker pill that marks the chosen item inside glass.
-    static let glazeSelected = Color.black.opacity(0.72)
+    /// The darker pill that marks the chosen item inside glass. On a light theme a dark pill
+    /// would sink the theme's dark text into it, so there it is a tint of that text instead.
+    static var glazeSelected: Color {
+        p.lightContent ? Color.black.opacity(0.72) : p.textPrimary.color.opacity(0.1)
+    }
 
     /// The 1 point edge of a layer floating over content (the mini player), so it reads over any
     /// thumbnail, with `floatShadow` under it.

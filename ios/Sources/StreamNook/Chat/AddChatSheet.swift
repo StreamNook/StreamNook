@@ -136,7 +136,8 @@ struct ChatPicker: View {
         return Button {
             pick(row, open: open)
         } label: {
-            RoomRow(row: row, open: open, mixed: mixed, following: following)
+            RoomRow(row: row, open: open, mixed: mixed, following: following,
+                    group: row.isLive && row.provider == "twitch" && !row.userID.isEmpty ? rooms.groupFor(row.userID) : nil)
         }
         .buttonStyle(PressFade())
     }
@@ -190,6 +191,8 @@ private struct RoomRow: View {
     var mixed = false
     /// A search result you follow says so.
     var following = false
+    /// A live room streaming together or sharing its chat, as the cards say it.
+    var group: ChannelGroup?
 
     private var detail: String {
         guard row.isLive else { return row.subline }
@@ -220,10 +223,27 @@ private struct RoomRow: View {
                         .lineLimit(1)
                     if mixed && row.provider == "kick" { PlatformMark(platform: .kick, size: 12) }
                 }
-                Text(detail)
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.textMuted)
-                    .lineLimit(1)
+                // One line: the group's faces and word lead it when there is one.
+                HStack(spacing: 4) {
+                    if let group {
+                        HStack(spacing: -4) {
+                            ForEach(group.others.prefix(3), id: \.userID) { member in
+                                AsyncImage(url: member.avatarURL.flatMap(URL.init(string:))) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: {
+                                    SN.surface
+                                }
+                                .frame(width: 14, height: 14)
+                                .clipShape(Circle())
+                            }
+                        }
+                        Text(group.together ? "Together ·" : "Shared chat ·")
+                            .fixedSize()
+                    }
+                    Text(detail).lineLimit(1)
+                }
+                .font(.sn(12.5))
+                .foregroundStyle(SN.textMuted)
             }
             Spacer(minLength: 0)
             if open {

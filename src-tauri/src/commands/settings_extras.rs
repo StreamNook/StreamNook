@@ -218,6 +218,17 @@ pub async fn get_theme_catalog(state: State<'_, AppState>) -> Result<Value, Stri
     Ok(crate::services::theme_palette::catalog(&custom, accent.as_deref()))
 }
 
+/// A palette as a shell is about to paint it (a built-in, a custom theme, one being edited, OLED
+/// in a picked accent), with Rust's floors applied: muted and secondary text, and the accent on
+/// cards (`accentOnSurface`). The desktop and Android paint the palette they hold and take these
+/// floored keys from here, so every theme clears the same contrast the iPhone gets.
+#[tauri::command]
+pub fn lift_theme_palette(palette: Value) -> Value {
+    let mut palette = palette;
+    crate::services::theme_palette::lift_text(&mut palette);
+    palette
+}
+
 /// The palette the saved theme paints with.
 #[tauri::command]
 pub async fn get_active_theme(

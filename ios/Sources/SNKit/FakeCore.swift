@@ -158,7 +158,18 @@ public final class FakeCore: CoreBridge {
                 }
                 return reply.json
             }
-            if let fixtures, let answer = try fixtures.answer(cmd, args) { return answer }
+            if let fixtures, let answer = try fixtures.answer(cmd, args) {
+                // The real core announces a drops sign-in once Twitch hands the grant back; the
+                // fake grants it at once and says so a moment later, the same way.
+                if cmd == "open_drops_sheet" {
+                    let events = events
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(400))
+                        events.emit(name: "drops-login-complete", payloadJSON: "null", target: nil)
+                    }
+                }
+                return answer
+            }
             throw CoreFailure.command(json: #""unknown command \#(cmd)""#)
         }
     }

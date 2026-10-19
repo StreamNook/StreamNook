@@ -9,11 +9,11 @@
 //!     meta tags via `scraper`.
 //!
 //! The fetch runs here (not in the webview) so it sidesteps CORS, and so the UI
-//! never has to touch arbitrary chat-pasted URLs directly. Results are cached
-//! in-process with a TTL: many chatters paste the same link, and several chat
-//! widgets/windows share this backend. The frontend gates WHICH urls reach this
-//! command (a trusted-domain allowlist), so this never auto-fetches the whole
-//! firehose.
+//! never has to touch arbitrary chat-pasted URLs directly. Answers go through
+//! `services::link_preview_cache` (bounded, one fetch per URL at a time): many
+//! chatters paste the same link, and several chat windows share this backend.
+//! Only trusted hosts auto-expand (the allowlist lives there too), so this never
+//! auto-fetches the whole firehose.
 
 use crate::services::twitch_service::TwitchService;
 use log::debug;
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct LinkPreview {
     pub url: String,
     /// "youtube" | "image" | "generic" | "tweet" | "discord" | "steam" | "spotify" | "reddit"
@@ -49,8 +49,7 @@ pub struct LinkPreview {
     pub member_count: Option<u64>,
 }
 
-// Chat links are ephemeral — no preview cache is kept. Each request resolves
-// fresh and is forgotten. We read only the page <head> (OG / Twitter-card /
+// We read only the page <head> (OG / Twitter-card /
 // <title> meta all live there), capped so a huge page never downloads in full —
 // that full-body download + full-DOM parse is what made slow/large pages take
 // many seconds to preview.
@@ -89,7 +88,7 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
         return Err("Unsupported URL scheme".to_string());
     }
 
-    build_preview(&url).await
+    crate::services::link_preview_cache::get(&url).await.ok_or_else(|| "No preview".to_string())
 }
 
 /// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
@@ -113,7 +112,7 @@ pub(crate) fn has_dedicated_card(url: &str) -> bool {
         || instagram_handle(url).is_some()
 }
 
-async fn build_preview(url: &str) -> Result<LinkPreview, String> {
+pub(crate) async fn build_preview(url: &str) -> Result<LinkPreview, String> {
     // twitter.com now redirects to x.com — normalize so both get identical
     // handling (and the card opens the x.com variant).
     let canonical = canonicalize_x(url);

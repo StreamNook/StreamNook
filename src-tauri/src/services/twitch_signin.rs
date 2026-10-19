@@ -10,13 +10,19 @@
 //! change, so a window opened later still knows. It is kept on disk as well:
 //! closing the app before signing in must not lose it. It ends when a sign-in
 //! stores a token that carries every scope.
+//!
+//! On disk it is sealed by the token vault like the sign-in it speaks for, so
+//! it belongs to this install: a copy a backup restores onto a fresh install
+//! cannot be opened there and is dropped (see `token_vault::Lost`). A first
+//! launch must never say "again".
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+use crate::services::token_vault::CachedCredential;
 
 /// Why StreamNook needs the user to sign in to Twitch again.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,47 +50,42 @@ impl SignInReason {
     }
 }
 
-/// Plain JSON beside the token files. Not a secret: it names a reason, never a
-/// credential.
-const FILE_NAME: &str = ".twitch_signin_reason";
+/// Sealed beside the token files. Read from disk until one read settles it;
+/// memory is the answer after that.
+static REASON: CachedCredential<SignInReason> = CachedCredential::new(".twitch_signin_owed");
 
-fn file_path() -> Option<PathBuf> {
-    crate::services::twitch_service::get_app_data_dir()
-        .ok()
-        .map(|dir| dir.join(FILE_NAME))
-}
+/// Where builds before the vault kept the reason, as plain JSON. A backup
+/// restored it onto fresh installs, so it is deleted unread.
+const PLAIN_FILE_NAME: &str = ".twitch_signin_reason";
 
-/// A missing or unreadable file means no reason is owed.
-fn read_from(path: &Path) -> Option<SignInReason> {
-    let text = fs::read_to_string(path).ok()?;
-    serde_json::from_str(text.trim()).ok()
-}
-
-fn write_to(path: &Path, reason: Option<SignInReason>) -> io::Result<()> {
-    match reason {
-        Some(reason) => {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
-            let json = serde_json::to_string(&reason).map_err(io::Error::other)?;
-            fs::write(path, json)
-        }
-        None => match fs::remove_file(path) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            other => other,
-        },
+fn drop_plain_file() {
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+    if DROPPED.load(Ordering::Acquire) {
+        return;
     }
-}
-
-/// Read from disk once, on first use; memory is the answer after that.
-fn cell() -> &'static Mutex<Option<SignInReason>> {
-    static CELL: OnceLock<Mutex<Option<SignInReason>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(file_path().and_then(|p| read_from(&p))))
+    // Before setup resolves the mobile data dir, the path is not the real one.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if crate::services::app_paths::mobile_base().is_none() {
+        return;
+    }
+    let Ok(dir) = crate::services::twitch_service::get_app_data_dir() else {
+        return;
+    };
+    match fs::remove_file(dir.join(PLAIN_FILE_NAME)) {
+        Ok(()) => log::info!("[Auth] Deleted the unsealed Twitch sign-in reason"),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => {
+            log::warn!("[Auth] Could not delete the unsealed Twitch sign-in reason: {e}");
+            return;
+        }
+    }
+    DROPPED.store(true, Ordering::Release);
 }
 
 /// Why Twitch is waiting on a new sign-in, if StreamNook ended the last one.
 pub fn current() -> Option<SignInReason> {
-    cell().lock().map(|reason| *reason).unwrap_or(None)
+    drop_plain_file();
+    REASON.cell().lock().map(|reason| *reason).unwrap_or(None)
 }
 
 /// Record that the user has to sign in to Twitch again, and why.
@@ -98,7 +99,8 @@ pub fn clear() {
 }
 
 fn set(next: Option<SignInReason>) {
-    let changed = match cell().lock() {
+    drop_plain_file();
+    let changed = match REASON.cell().lock() {
         Ok(mut reason) => {
             let changed = *reason != next;
             *reason = next;
@@ -109,10 +111,13 @@ fn set(next: Option<SignInReason>) {
     if !changed {
         return;
     }
-    if let Some(path) = file_path() {
-        if let Err(e) = write_to(&path, next) {
-            log::warn!("[Auth] Could not save the Twitch sign-in reason: {e}");
+    match next {
+        Some(reason) => {
+            if let Err(e) = REASON.store(&reason) {
+                log::warn!("[Auth] Could not save the Twitch sign-in reason: {e:#}");
+            }
         }
+        None => REASON.remove_file(),
     }
     crate::services::account_roster::notify();
 }
@@ -120,42 +125,6 @@ fn set(next: Option<SignInReason>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch_file(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir()
-            .join(format!("sn-signin-{}-{nanos}-{name}", std::process::id()))
-            .join(FILE_NAME)
-    }
-
-    #[test]
-    fn reason_round_trips_through_its_file() {
-        let path = scratch_file("roundtrip");
-        assert_eq!(read_from(&path), None);
-
-        write_to(&path, Some(SignInReason::NewPermissions)).unwrap();
-        assert_eq!(read_from(&path), Some(SignInReason::NewPermissions));
-
-        write_to(&path, None).unwrap();
-        assert!(!path.exists());
-        assert_eq!(read_from(&path), None);
-        // Clearing what is already clear is not an error.
-        write_to(&path, None).unwrap();
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn a_damaged_file_owes_nothing() {
-        let path = scratch_file("damaged");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "not json").unwrap();
-        assert_eq!(read_from(&path), None);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
 
     #[test]
     fn reason_reaches_the_page_in_snake_case() {

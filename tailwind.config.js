@@ -40,6 +40,8 @@ const THEME_COLORS = {
   'accent-hover': 'var(--color-accent-hover)',
   'accent-muted': 'var(--color-accent-muted)',
   'accent-neon': 'var(--color-accent-neon)',
+  // The accent floored to 3:1 on a card, for marks drawn on one (applyTheme).
+  'accent-on-surface': 'var(--color-accent-on-surface)',
   textPrimary: 'var(--color-text-primary)',
   textSecondary: 'var(--color-text-secondary)',
   textMuted: 'var(--color-text-muted)',

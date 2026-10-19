@@ -420,7 +420,7 @@ extension ChatSocketFrame {
              .cosmetics(let channel, _, _, _), .patch(let channel, _), .notice(let channel, _, _),
              .held(let channel, _):
             raw = channel
-        case .status, .other, .member: raw = nil
+        case .status, .other, .member, .preview: raw = nil
         }
         guard let raw else { return nil }
         let key = raw.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased()

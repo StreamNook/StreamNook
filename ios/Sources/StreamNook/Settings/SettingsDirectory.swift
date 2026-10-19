@@ -78,7 +78,7 @@ struct SettingsDirectory: View {
             .id(Self.fieldID)
 
             if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
-                VStack(spacing: 0) {
+                GroupedCard {
                     ForEach(SettingsSection.listed) { section in
                         NavigationLink(value: Route.settings(section)) {
                             RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
@@ -86,13 +86,13 @@ struct SettingsDirectory: View {
                         .buttonStyle(RowPress())
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
             } else if results.isEmpty {
                 Text("No setting matches \"\(search.query)\".")
                     .font(.sn(14, 500)).foregroundStyle(SN.textSecondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 24)
             } else {
-                VStack(spacing: 0) {
+                GroupedCard {
                     ForEach(results) { row in
                         Button { openSettingsRow(row, model: model) } label: {
                             CatalogRowLabel(row: row)
@@ -100,7 +100,7 @@ struct SettingsDirectory: View {
                         .buttonStyle(RowPress())
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
             }
         }
         .task(id: search.query) {
@@ -163,50 +163,57 @@ struct ChangedPanel: View {
     @State private var rows: [CatalogRow]?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            PanelIntro(text: "Everything you set differently from a fresh install. The arrow puts one back; tap a row to open its page.")
-            if let rows {
-                if rows.isEmpty {
-                    EmptyNote(text: "Every setting is at its default.", hint: nil)
-                }
-                ForEach(SettingsSection.allCases.filter { page in rows.contains { $0.page == page.rawValue } }) { page in
-                    SettingsBlock(title: page.title) {
-                        ForEach(rows.filter { $0.page == page.rawValue }) { row in
-                            HStack(alignment: .settingTitle, spacing: 4) {
-                                Button { openSettingsRow(row, model: model) } label: {
+        Section {
+            Label {
+                Text("Everything you set differently from a fresh install. The arrow puts one back; tap a row to open its page.")
+                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+            } icon: {
+                Image(systemName: "slider.horizontal.below.square.and.square.filled")
+            }
+            .task(id: store.changed.count) { await load() }
+        }
+        if let rows {
+            if rows.isEmpty {
+                Section { EmptyNote(text: "Every setting is at its default.", hint: nil) }
+            }
+            ForEach(SettingsSection.allCases.filter { page in rows.contains { $0.page == page.rawValue } }) { page in
+                SettingsBlock(title: page.title) {
+                    ForEach(rows.filter { $0.page == page.rawValue }) { row in
+                        HStack(spacing: 4) {
+                            Button { openSettingsRow(row, model: model) } label: {
+                                Label {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 5) {
                                             if let logo = row.logo { BrandLogo(id: logo, size: 13) }
-                                            Text(row.title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                                            Text(row.title).foregroundStyle(SN.textPrimary)
                                         }
-                                        .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                                         Text(row.section).font(.sn(12)).foregroundStyle(SN.textSecondary)
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 12)
-                                    .contentShape(Rectangle())
+                                } icon: {
+                                    Image(systemName: SettingIcons.symbol(paths: row.paths, title: row.title))
                                 }
-                                .buttonStyle(.plain)
-                                if !row.paths.isEmpty {
-                                    IconButton(symbol: "arrow.counterclockwise", label: "Reset \(row.title) to default", size: 14,
-                                               tint: SN.textSecondary) {
-                                        Task {
-                                            await store.reset(row.paths)
-                                            await load()
-                                        }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if !row.paths.isEmpty {
+                                IconButton(symbol: "arrow.counterclockwise", label: "Reset \(row.title) to default", size: 14,
+                                           tint: SN.textSecondary) {
+                                    Task {
+                                        await store.reset(row.paths)
+                                        await load()
                                     }
-                                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
-                                    .padding(.trailing, -16)
                                 }
+                                .padding(.trailing, -8)
                             }
                         }
                     }
                 }
-            } else {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 30)
             }
+        } else {
+            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 30)
+                .listRowBackground(Color.clear)
         }
-        .task(id: store.changed.count) { await load() }
     }
 
     private func load() async {
@@ -232,41 +239,40 @@ struct BackupPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            SettingsBlock(title: "Daily copies", detail: "StreamNook keeps a copy of your settings each day you use it, for the last 7 days. If your settings ever fail to load, the newest copy is put back on its own.") {
-                if backups.isEmpty {
-                    Text("The first copy is saved the next time a setting changes.")
-                        .font(.sn(12)).foregroundStyle(SN.textMuted).padding(.vertical, 12)
-                }
-                ForEach(backups) { backup in
-                    SettingRow(title: Self.day(backup.id),
-                               detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes),
-                               centersControl: true) {
-                        ArmedPill(label: "Restore", armedLabel: "Replace current",
-                                  armed: Binding(get: { armed == backup.id }, set: { armed = $0 ? backup.id : nil })) {
-                            Task { await restore(backup.id) }
-                        }
+        SettingsBlock(title: "Daily copies", detail: "StreamNook keeps a copy of your settings each day you use it, for the last 7 days. If your settings ever fail to load, the newest copy is put back on its own.") {
+            if backups.isEmpty {
+                Text("The first copy is saved the next time a setting changes.")
+                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary)
+            }
+            ForEach(backups) { backup in
+                SettingRow(title: Self.day(backup.id),
+                           detail: restored == backup.id ? "Restored. Your settings now match this day." : Self.size(backup.bytes),
+                           icon: "clock.arrow.circlepath", centersControl: true) {
+                    ArmedPill(label: "Restore", armedLabel: "Replace current",
+                              armed: Binding(get: { armed == backup.id }, set: { armed = $0 ? backup.id : nil })) {
+                        Task { await restore(backup.id) }
                     }
                 }
             }
-            SettingsBlock(title: "Settings file", detail: "Save every setting to one file (your accounts stay out of it), or bring one back on this phone or another device.") {
-                WideRow(title: "Export", detail: "Opens the share sheet, so you can save it to Files or send it on.") {
-                    SettingButton(title: "Export settings", symbol: "square.and.arrow.up") { Task { await export() } }
-                        .padding(.top, 10)
-                }
-                WideRow(title: "Import", detail: importNote ?? "Replaces your settings with the ones in the file. Your accounts stay signed in.") {
-                    SettingButton(title: "Import a file", symbol: "square.and.arrow.down") { importing = true }
-                        .padding(.top, 10)
-                }
+        }
+        SettingsBlock(title: "Settings file", detail: "Save every setting to one file (your accounts stay out of it), or bring one back on this phone or another device.") {
+            // The page's loader, share sheet and file picker sit on this row, which is always there.
+            WideRow(title: "Export", detail: "Opens the share sheet, so you can save it to Files or send it on.") {
+                SettingButton(title: "Export settings", symbol: "square.and.arrow.up") { Task { await export() } }
+                    .padding(.top, 10)
             }
-        }
-        .task { await load() }
-        .sheet(item: Binding(get: { shareURL.map(ShareItem.init) }, set: { shareURL = $0?.url })) { item in
-            ActivitySheet(url: item.url).ignoresSafeArea()
-        }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-            guard case .success(let url) = result else { return }
-            Task { await importFile(url) }
+            .task { await load() }
+            .sheet(item: Binding(get: { shareURL.map(ShareItem.init) }, set: { shareURL = $0?.url })) { item in
+                ActivitySheet(url: item.url).ignoresSafeArea()
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                guard case .success(let url) = result else { return }
+                Task { await importFile(url) }
+            }
+            WideRow(title: "Import", detail: importNote ?? "Replaces your settings with the ones in the file. Your accounts stay signed in.") {
+                SettingButton(title: "Import a file", symbol: "square.and.arrow.down") { importing = true }
+                    .padding(.top, 10)
+            }
         }
     }
 

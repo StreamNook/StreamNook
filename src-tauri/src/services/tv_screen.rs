@@ -137,7 +137,7 @@ pub(crate) fn apply(app: &AppHandle) {
     let casting = crate::services::cast_session::state().phase == crate::services::cast_session::Phase::Casting;
     let (want, changed) = with_inner(|i| {
         let want = match (&i.state.display, i.state.enabled, casting) {
-            (Some(_), true, false) => i.local_url.clone(),
+            (Some(_), true, false) if crate::services::cast_session::OFFERED => i.local_url.clone(),
             _ => None,
         };
         let changed = want != i.shown_url;

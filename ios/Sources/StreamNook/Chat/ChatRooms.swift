@@ -32,6 +32,9 @@ final class ChatRooms {
     @ObservationIgnored var addQuery = ""
     /// Pinned messages by Twitch login, newest first, as the core's channel state reads them.
     private(set) var pins: [String: [PinnedChat]] = [:]
+    /// Each Twitch room's Shared Chat or Together group, by login, as the core's channel state
+    /// reads it (the first answer, then its pushes).
+    private(set) var groups: [String: ChannelGroup] = [:]
     /// The viewer's relationship to each Twitch room's channel, as the core holds it (read when
     /// the room opened, pushed on every change), so the chat menu opens with it known.
     private(set) var relationships: [String: ChannelRelationship] = [:]
@@ -59,6 +62,9 @@ final class ChatRooms {
     @ObservationIgnored var mentionFocus: Task<Void, Never>?
     /// The Twitch follows that are live now, for the "Add a chat" sheet (the home snapshot's).
     @ObservationIgnored var followedLive: @MainActor () -> [TwitchStream] = { [] }
+    /// A live Twitch channel's group (streaming together or sharing its chat), by channel id: the
+    /// home snapshot's maps the stream cards read.
+    @ObservationIgnored var groupFor: @MainActor (String) -> ChannelGroup? = { _ in nil }
 
     @ObservationIgnored private let routes = ChatRoutes()
     @ObservationIgnored private var reader: Task<Void, Never>?
@@ -127,6 +133,8 @@ final class ChatRooms {
             for await event in channelState {
                 if let update = PinnedUpdate.parse(event.payloadJSON) {
                     self?.takePins(login: update.login.lowercased(), update.pinned)
+                } else if let self, let room = self.groupRoom(event.payloadJSON) {
+                    self.setGroup(room.group, login: room.login)
                 } else if let update = RelationshipUpdate.parse(event.payloadJSON) {
                     self?.takeRelationship(login: update.login.lowercased(), update.relationship)
                 }
@@ -330,6 +338,7 @@ final class ChatRooms {
             return
         }
         pins[tab.login] = nil
+        groups[tab.login] = nil
         relationships[tab.login.lowercased()] = nil
         let core = core
         let login = tab.login
@@ -505,6 +514,15 @@ final class ChatRooms {
             if let held = RelationshipUpdate.held(inState: json) {
                 takeRelationship(login: tab.login.lowercased(), held)
             }
+            // The group the channel is in now; pushes only follow changes.
+            struct Held: Decodable {
+                var collab: ChannelGroup?
+                var sharedChat: ChannelGroup?
+                enum CodingKeys: String, CodingKey { case collab, sharedChat = "shared_chat" }
+            }
+            if sessions[tab.channel] != nil, let held = try? JSONDecoder().decode(Held.self, from: Data(json.utf8)) {
+                setGroup(held.collab ?? held.sharedChat, login: tab.login)
+            }
         }
         Task {
             var found = Streaks()
@@ -528,6 +546,30 @@ final class ChatRooms {
     private func takeRelationship(login: String, _ relationship: ChannelRelationship?) {
         guard sessions.values.contains(where: { $0.channel == login }) else { return }
         relationships[login] = relationship
+    }
+
+    /// The group a room's channel-state push carries, for an open Twitch room.
+    private func groupRoom(_ json: String) -> (login: String, group: ChannelGroup?)? {
+        for tab in state.tabs where tab.provider == "twitch" {
+            if let group = ChannelGroup.collabPush(json, login: tab.login) { return (tab.login, group) }
+        }
+        return nil
+    }
+
+    private func setGroup(_ group: ChannelGroup?, login: String) {
+        guard groups[login] != group else { return }
+        groups[login] = group
+        let kind = group.map { $0.together ? "together" : "shared chat" } ?? "none"
+        chatLog.notice("chat room \(login, privacy: .public) group: \(kind, privacy: .public)")
+    }
+
+    /// The room on screen's group, when its channel streams together or shares its chat.
+    var activeGroup: ChannelGroup? {
+        guard let tab = active, tab.provider == "twitch" else { return nil }
+        // The maps the Following cards read come first (by Twitch id), so the chip and the card
+        // always agree; the channel's own pushed state covers a room the maps miss.
+        if let id = tab.channelID, !id.isEmpty, let group = groupFor(id) { return group }
+        return groups[tab.login]
     }
 
     private func takePins(login: String, _ pinned: [PinnedChat]) {

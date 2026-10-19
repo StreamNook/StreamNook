@@ -10,6 +10,8 @@ public struct WatchDrop: Decodable, Sendable, Equatable {
     public var image: String
     /// "12m left" or "Ready to claim".
     public var trailing: String
+    /// The strip's few words: "12m to watch", or "Ready" once the minutes are in.
+    public var status: String
     /// "Campaign · 2 of 5".
     public var line: String
     public var percent: Double
@@ -19,7 +21,7 @@ public struct WatchDrop: Decodable, Sendable, Equatable {
     public var spoken: String
 
     enum CodingKeys: String, CodingKey {
-        case name, image, trailing, line, percent, complete, spoken
+        case name, image, trailing, status, line, percent, complete, spoken
         case campaignID = "campaign_id"
         case dropID = "drop_id"
         case instanceID = "instance_id"

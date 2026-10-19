@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { Trophy, Users, CheckCircle2 } from 'lucide-react';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
-import { OverlayBanner } from './chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat/OverlayBanner';
+import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useAppStore } from '../stores/AppStore';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { buildEmoteNameMap, EmoteText } from '../utils/emoteText';
@@ -22,37 +23,29 @@ import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultVie
 interface PredictionOverlayProps {
   channelId?: string;
   channelLogin?: string;
+  /** Its slot in the top-of-chat stack, when it sits in one. */
+  stack?: StackCardControl;
 }
 
 /** How long to wait after the last side or amount change before asking Rust. */
 const BET_ASK_DEBOUNCE_MS = 150;
 
-const SIDE_STYLES: Record<string, { idle: string; chosen: string; bar: string }> = {
-  blue: {
-    idle: 'bg-highlight-blue/20 border-highlight-blue/50 hover:bg-highlight-blue/30',
-    chosen: 'bg-highlight-blue border-white/25',
-    bar: 'bg-highlight-blue',
-  },
-  pink: {
-    idle: 'bg-highlight-pink/20 border-highlight-pink/50 hover:bg-highlight-pink/30',
-    chosen: 'bg-highlight-pink border-white/25',
-    bar: 'bg-highlight-pink',
-  },
+// Each side keeps its color in its pick ring and its share bar. The words sit
+// on the card itself, never on the color, so they read on every theme.
+const SIDE_STYLES: Record<string, { ring: string; dot: string; bar: string }> = {
+  blue: { ring: 'border-highlight-blue', dot: 'bg-highlight-blue', bar: 'bg-highlight-blue' },
+  pink: { ring: 'border-highlight-pink', dot: 'bg-highlight-pink', bar: 'bg-highlight-pink' },
 };
-const OTHER_SIDE_STYLE = {
-  idle: 'bg-highlight-purple/20 border-highlight-purple/50 hover:bg-highlight-purple/30',
-  chosen: 'bg-highlight-purple border-white/25',
-  bar: 'bg-highlight-purple',
-};
+const OTHER_SIDE_STYLE = { ring: 'border-highlight-purple', dot: 'bg-highlight-purple', bar: 'bg-highlight-purple' };
 
 const RESULT_STYLES: Record<ResultView['tone'], string> = {
   won: 'bg-success/20 border-success/50 text-success',
   lost: 'bg-error/20 border-error/50 text-error',
   refunded: 'bg-info/20 border-info/50 text-info',
-  ended: 'bg-accent/20 border-accent/50 text-accent',
+  ended: 'bg-transparent border-accent-on-surface/60 text-accent-on-surface',
 };
 
-const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) => {
+const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlayProps) => {
   const { addToast, currentStream } = useAppStore();
   const currentChannelId = channelId || currentStream?.user_id;
   const currentChannelLogin = channelLogin || currentStream?.user_login;
@@ -61,7 +54,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
   // shows nothing until the new channel's card arrives.
   const [card, setCard] = useState<{ channelId: string; view: PredictionView | null } | null>(null);
   const view = card && card.channelId === currentChannelId ? card.view : null;
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [expandedHere, setExpandedHere] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [amountInput, setAmountInput] = useState('10');
   // Rust's answer about a bet, tagged with the prediction and side it was for,
@@ -112,7 +105,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
   const [seenPredictionId, setSeenPredictionId] = useState<string | null>(null);
   if (view && predictionId !== seenPredictionId) {
     setSeenPredictionId(predictionId);
-    setIsExpanded(true);
+    setExpandedHere(true);
     setSelected(view.picked ?? view.outcomes[0]?.id ?? null);
     setAmountInput('10');
     setConfirming(false);
@@ -148,7 +141,13 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
 
   const countdown = useDeadlineClock(view?.deadline_ms);
 
-  if (!view) return null;
+  // In a stack Rust decides which card is open, and this one reports itself so
+  // it gets a slot; on its own it keeps its own fold.
+  const released = useStackPresence(stack, predictionId);
+  const isExpanded = stack ? stack.open : expandedHere;
+  const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
+
+  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
 
   const handlePredict = async () => {
     if (!currentChannelId || !side || !bet || submitting) return;
@@ -180,26 +179,26 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
       <ChannelPointsIcon size={12} className={className} />
     );
 
-  const timeBadge = countdown ? (
-    <span className="text-xs font-mono font-bold text-warning bg-warning/20 border border-warning/40 px-1.5 py-1 rounded-md">
-      {countdown}
-    </span>
+  const status = countdown ? (
+    <BannerStatus>{countdown}</BannerStatus>
   ) : view.badge ? (
-    <span className="text-xs font-medium text-textSecondary bg-backgroundSecondary border border-border px-1.5 py-1 rounded-md">
-      {view.badge}
-    </span>
+    <BannerStatus mono={false}>{view.badge}</BannerStatus>
   ) : null;
 
   return (
+    <StackCardPresence onLeft={released}>
     <OverlayBanner
-      icon={<Trophy className="w-4 h-4 text-accent" />}
+      key="prediction"
+      icon={<Trophy className="w-4 h-4 text-accent-on-surface" />}
+      kind="Prediction"
       title={view.title}
       isExpanded={isExpanded}
-      onToggleExpanded={() => setIsExpanded(!isExpanded)}
-      badges={timeBadge}
+      onToggleExpanded={toggle}
+      badges={status}
+      order={stack?.order}
     >
       {/* Outcomes */}
-      <div className="p-3 space-y-2">
+      <div className="px-1.5 pb-1.5 space-y-0.5">
         {view.outcomes.map((outcome) => {
           const style = SIDE_STYLES[outcome.color] ?? OTHER_SIDE_STYLE;
           const isChosen = canPredict && side === outcome.id;
@@ -213,45 +212,44 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                 setConfirming(false);
               }}
               disabled={closedToViewer}
-              className={`w-full relative p-2.5 rounded-lg border transition-all overflow-hidden ${
-                isChosen ? style.chosen : style.idle
-              } ${outcome.winner ? 'ring-1 ring-success' : ''} ${
-                closedToViewer ? 'cursor-default' : 'cursor-pointer'
-              } ${closedToViewer && !outcome.winner && !outcome.mine ? 'opacity-70' : ''}`}
+              aria-pressed={isChosen}
+              className={`w-full block text-left px-1.5 py-1.5 rounded-md transition-colors ${
+                isChosen ? 'bg-textPrimary/[0.06]' : ''
+              } ${closedToViewer ? 'cursor-default' : 'cursor-pointer hover:bg-textPrimary/[0.05]'} ${
+                closedToViewer && !outcome.winner && !outcome.mine ? 'opacity-70' : ''
+              }`}
             >
-              {/* Share of the points */}
-              <div
-                className={`absolute inset-y-0 left-0 rounded-md opacity-30 transition-[width] duration-500 ${style.bar}`}
-                style={{ width: `${outcome.percent}%` }}
+              <ShareRow
+                title={<EmoteText text={outcome.title} emoteMap={emoteMap} keyPrefix={`pred-${outcome.id}`} />}
+                strong={isChosen || outcome.winner || outcome.mine}
+                percent={outcome.percent}
+                barClass={style.bar}
+                mark={
+                  outcome.winner ? (
+                    <Trophy className="w-3.5 h-3.5 text-success" />
+                  ) : outcome.mine ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-textPrimary" />
+                  ) : canPredict ? (
+                    <span className={`w-3.5 h-3.5 rounded-full border-2 ${style.ring} flex items-center justify-center`}>
+                      {isChosen && <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />}
+                    </span>
+                  ) : undefined
+                }
+                trailing={
+                  <>
+                    <span className="font-mono text-textSecondary">{outcome.ratio}</span>
+                    <span className="flex items-center gap-1 text-textMuted">
+                      <Users className="w-3 h-3" />
+                      {outcome.people_label}
+                    </span>
+                    <span className="flex items-center gap-1 text-textMuted">
+                      {pointsIcon('text-textMuted')}
+                      {outcome.points_label}
+                    </span>
+                    <span className="w-9 text-right font-semibold text-textPrimary">{outcome.percent}%</span>
+                  </>
+                }
               />
-              <div className="relative flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {isChosen && (
-                    <div className="w-4 h-4 rounded-full bg-white/30 flex items-center justify-center flex-shrink-0">
-                      <div className="w-2.5 h-2.5 rounded-full bg-white" />
-                    </div>
-                  )}
-                  {outcome.winner && <Trophy className="w-3.5 h-3.5 text-success flex-shrink-0" />}
-                  {outcome.mine && !outcome.winner && !isChosen && (
-                    <CheckCircle2 className="w-3.5 h-3.5 text-white flex-shrink-0" />
-                  )}
-                  <span className="font-semibold text-white text-sm truncate">
-                    <EmoteText text={outcome.title} emoteMap={emoteMap} keyPrefix={`pred-${outcome.id}`} />
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-white/90 flex-shrink-0">
-                  <span className="font-mono">{outcome.ratio}</span>
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    {outcome.people_label}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    {pointsIcon('text-white/90')}
-                    {outcome.points_label}
-                  </span>
-                  <span className="font-bold text-sm">{outcome.percent}%</span>
-                </div>
-              </div>
             </button>
           );
         })}
@@ -279,7 +277,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                   className={`flex-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${
                     submitting || !bet.ok
                       ? 'bg-background border border-border text-textSecondary cursor-not-allowed'
-                      : 'bg-accent hover:bg-accent-hover text-white'
+                      : 'bg-accent-on-surface hover:opacity-90 text-background'
                   }`}
                 >
                   {submitting ? '...' : 'Predict'}
@@ -308,7 +306,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                       onClick={() => setAmountInput(String(preset.amount))}
                       className={`px-2 py-1.5 text-xs font-medium rounded transition-colors border ${
                         bet?.amount === preset.amount
-                          ? 'bg-accent/30 border-accent/60 text-accent'
+                          ? 'bg-transparent border-accent-on-surface text-accent-on-surface'
                           : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
                       }`}
                     >
@@ -326,7 +324,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                     disabled={!bet || !bet.ok}
                     className={`w-full px-3 py-1.5 rounded text-xs font-bold transition-colors ${
                       bet && bet.ok
-                        ? 'bg-accent hover:bg-accent-hover text-white'
+                        ? 'bg-accent-on-surface hover:opacity-90 text-background'
                         : 'bg-background border border-border text-textSecondary cursor-not-allowed'
                     }`}
                   >
@@ -373,6 +371,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
         {view.totals_line}
       </p>
     </OverlayBanner>
+    </StackCardPresence>
   );
 };
 

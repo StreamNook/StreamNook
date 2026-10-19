@@ -202,11 +202,13 @@ pub struct VideoPlayerSettings {
     pub ad_bypass_proxies: String,
     /// What leaving the app does while a stream is playing (Android only).
     ///
-    /// "pip"   - float the video in a system picture-in-picture window. Default,
-    ///           and the behaviour the phone app has always had.
-    /// "audio" - no floating window: the stream drops to its audio-only
-    ///           rendition and keeps playing behind a media notification, which
-    ///           taps back into the app.
+    /// Leaving the app always floats the video in a system picture-in-picture
+    /// window where the phone allows it; this decides what happens after that:
+    /// "pip"   - closing the window ends the stream. Default.
+    /// "audio" - "Background play": closing the window, or leaving when the
+    ///           video cannot float, keeps the stream going on its audio-only
+    ///           rendition behind a media notification, which taps back into
+    ///           the app.
     ///
     /// The audio path is not merely a preference. Backgrounding without PiP
     /// destroys the activity's window surface, and Chromium tears down a media

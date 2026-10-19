@@ -333,6 +333,71 @@ public struct SharedChatSource: Codable, Sendable, Equatable {
     }
 }
 
+/// A link's card (Rust `LinkPreview`): what the core read from the page, or for a Discord
+/// invite the server's name, icon and counts.
+public struct ChatLinkPreview: Codable, Sendable, Equatable {
+    public var url: String
+    /// "discord", "youtube", "clip", "vod", "tweet", "image", "media", "generic" and more.
+    public var kind: String
+    public var title: String?
+    public var description: String?
+    public var image: String?
+    public var siteName: String?
+    /// A byline; the `discord.gg/<code>` handle on a Discord card, the price on a Steam one.
+    public var author: String?
+    public var authorAvatar: String?
+    public var viewCount: Int?
+    public var duration: Double?
+    public var onlineCount: Int?
+    public var memberCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case url, kind, title, description, image, author, duration
+        case siteName = "site_name", authorAvatar = "author_avatar", viewCount = "view_count"
+        case onlineCount = "online_count", memberCount = "member_count"
+    }
+
+    public init(url: String, kind: String, title: String? = nil, description: String? = nil, image: String? = nil,
+                siteName: String? = nil, author: String? = nil, onlineCount: Int? = nil, memberCount: Int? = nil) {
+        self.url = url
+        self.kind = kind
+        self.title = title
+        self.description = description
+        self.image = image
+        self.siteName = siteName
+        self.author = author
+        self.onlineCount = onlineCount
+        self.memberCount = memberCount
+    }
+}
+
+/// One link's card on a row (Rust `RowPreview`). A card still being read has no `preview`;
+/// `reserve` says its room is held now, so the row does not grow when it lands.
+public struct ChatRowPreview: Codable, Sendable, Equatable {
+    public var url: String
+    public var preview: ChatLinkPreview?
+    public var reserve: Bool
+    /// The link stays in the text beside its card; otherwise the card stands for it.
+    public var keepLink: Bool
+
+    enum CodingKeys: String, CodingKey { case url, preview, reserve, keepLink = "keep_link" }
+
+    public init(url: String, preview: ChatLinkPreview? = nil, reserve: Bool = false, keepLink: Bool = false) {
+        self.url = url
+        self.preview = preview
+        self.reserve = reserve
+        self.keepLink = keepLink
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        preview = try? c.decodeIfPresent(ChatLinkPreview.self, forKey: .preview)
+        reserve = try c.decodeIfPresent(Bool.self, forKey: .reserve) ?? false
+        keepLink = try c.decodeIfPresent(Bool.self, forKey: .keepLink) ?? false
+    }
+}
+
 /// What a row draws, worked out once by the core: readable name colour, badge art, paint and
 /// the grouped body.
 public struct ChatRowView: Codable, Sendable, Equatable {
@@ -349,9 +414,12 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     public var source: SharedChatSource?
     /// The viewer's own nickname for the author, drawn in place of their name.
     public var nickname: String?
+    /// Link cards under the body, in link order.
+    public var previews: [ChatRowPreview] = []
 
     enum CodingKeys: String, CodingKey {
         case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne, source, nickname
+        case previews
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -374,6 +442,7 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         atmosphere = try c.decodeIfPresent(String.self, forKey: .atmosphere)
         cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
         nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
+        previews = (try? c.decodeIfPresent([ChatRowPreview].self, forKey: .previews)) ?? []
     }
 }
 

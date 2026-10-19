@@ -148,8 +148,10 @@ fn edge_at(edges: &VecDeque<EdgeArrival>, now: i64) -> Option<(i64, i64)> {
 
 /// Measure `player_pdt_ms` against the edge and drain the request log. With a
 /// `target_ms`, the answer's `rate` runs a gentle catch-up with hysteresis;
-/// without one it stays 1.
-pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistance {
+/// without one it stays 1. With no parts to measure against (the whole-segment
+/// route), the readout falls back to `playlist_behind_ms`, the player's own
+/// distance from its playlist's end; it never drives the catch-up.
+pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>, playlist_behind_ms: Option<f64>) -> LiveDistance {
     ACTIVE.store(true, Ordering::Relaxed);
     let now = now_ms();
     let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -165,7 +167,8 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistanc
         _ => false,
     };
     s.catching_up = catching_up;
-    if let Some(b) = behind_ms {
+    let readout = behind_ms.or_else(|| playlist_behind_ms.filter(|b| b.is_finite() && *b >= 0.0).map(|b| b as i64));
+    if let Some(b) = readout {
         s.recent.push_back(b);
         while s.recent.len() > LABEL_SAMPLES {
             s.recent.pop_front();
@@ -259,6 +262,16 @@ mod tests {
         assert_eq!(behind_spoken(1_640), "1.6 seconds behind live");
         assert_eq!(behind_spoken(12_400), "12 seconds behind live");
         assert_eq!(behind_spoken(120_000), "over a minute behind live");
+    }
+
+    #[test]
+    fn without_parts_the_readout_reads_the_playlist_distance() {
+        reset();
+        assert_eq!(report(None, None, Some(2_400.0)).behind_label, None);
+        let second = report(None, None, Some(2_500.0));
+        assert_eq!(second.behind_label.as_deref(), Some("2.5s"));
+        assert_eq!(second.behind_ms, None, "the fallback never stands in for the relay's own distance");
+        reset();
     }
 
     #[test]

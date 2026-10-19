@@ -5,7 +5,7 @@ import UIKit
 /// An image inside a row: an emote with what stacks over it, a badge, a cheer gem, a GIF or a
 /// gigantified emote. Its rect is fixed before the image loads, so a row never reflows.
 struct RowAttachment {
-    enum Kind { case emote, badge, cheer, gif, giant, avatar }
+    enum Kind { case emote, badge, cheer, gif, giant, avatar, preview }
     var kind: Kind
     var url: String
     /// The pixel height to decode at.
@@ -14,6 +14,8 @@ struct RowAttachment {
     var overlays: [String]
     var effects: UInt32
     var animate: Bool
+    /// A link card's picture: its corner radius, filled to its box.
+    var radius: CGFloat = 0
 }
 
 /// Where a tap on a row goes.
@@ -74,6 +76,8 @@ struct RowShape {
         case bar(UIColor)
         case dot(UIColor)
         case symbol(String, UIColor)
+        /// A link card's panel: the floor and wash, a dark contour and light along the top.
+        case card(radius: CGFloat)
     }
     var kind: Kind
     var rect: CGRect
@@ -367,6 +371,15 @@ struct ChatRowLayoutBuilder {
         }
 
         var spans = view?.spans ?? message.segments.map(Self.span)
+        // A link with its card shown is drawn by the card alone, unless the viewer keeps both.
+        let cards = (view?.previews ?? []).filter { $0.preview != nil || $0.reserve }
+        let carded = Set(cards.filter { !$0.keepLink }.map(\.url))
+        if !carded.isEmpty {
+            spans.removeAll { span in
+                if case .link(_, let url) = span { return carded.contains(Self.absolute(url)) }
+                return false
+            }
+        }
         var giant: ChatViewEmote?
         if msgID == "gigantified-emote-message", style.giantEmotes, style.giantEmoteAlign != "inline",
            let last = spans.lastIndex(where: { if case .emote = $0 { return true } else { return false } }),
@@ -414,8 +427,19 @@ struct ChatRowLayoutBuilder {
                                              overlays: [], effects: 0, animate: style.animatesEmotes))
             top += h
         }
+        var cardWords: [String] = []
+        for card in cards {
+            top += 6
+            let built = previewCard(card, top: top)
+            lines += built.lines
+            attachments += built.attachments
+            shapes += built.shapes
+            taps += built.taps
+            top = built.bottom
+            if let words = built.words { cardWords.append(words) }
+        }
         top += padding
-        let accessibility = "\(message.shownName): \(spans.map(\.text).joined())"
+        let accessibility = (["\(message.shownName): \(spans.map(\.text).joined())"] + cardWords).joined(separator: ". ")
         let built = ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
                                   attachments: attachments, shapes: shapes, taps: taps, decor: decor,
                                   accessibilityText: accessibility, live: row.live,
@@ -730,4 +754,144 @@ struct ChatRowLayoutBuilder {
 
     /// The 4x file of an emote for the gigantified block.
     static func giantURL(_ url: String) -> String { url }
+
+    /// A link as the core keys its card: a bare `www.` link gains its scheme.
+    static func absolute(_ url: String) -> String {
+        url.hasPrefix("http://") || url.hasPrefix("https://") ? url : "https://\(url)"
+    }
+
+    // MARK: Link cards
+
+    struct BuiltCard {
+        var lines: [PlacedLine] = []
+        var attachments: [RowAttachment] = []
+        var shapes: [RowShape] = []
+        var taps: [RowTap] = []
+        var bottom: CGFloat
+        var words: String?
+    }
+
+    /// Every card is this tall, read or still pending, so a held card never changes the row's height.
+    static let cardHeight: CGFloat = 66
+    static let discordBlurple = ChatTheme.color("#5865F2")!
+    static let discordGreen = ChatTheme.color("#23A55A")!
+
+    /// One link card under the body, as desktop draws it: a Discord invite as its server (icon,
+    /// name, live online and member counts, a Join pill), anything else as its picture beside its
+    /// site, title and byline. A card not read yet holds the same room with faint bars.
+    func previewCard(_ card: ChatRowPreview, top: CGFloat) -> BuiltCard {
+        let pad: CGFloat = 10
+        let x = sideInset
+        let cardWidth = min(width - 2 * sideInset, 380)
+        let rect = CGRect(x: x, y: top, width: cardWidth, height: Self.cardHeight)
+        var built = BuiltCard(bottom: rect.maxY)
+        built.shapes.append(RowShape(kind: .card(radius: 12), rect: rect))
+        if let url = URL(string: card.url) { built.taps.append(RowTap(rect: rect, action: .link(url))) }
+        let picture: CGFloat = Self.cardHeight - 2 * pad
+        let host = URL(string: card.url)?.host?.replacingOccurrences(of: "www.", with: "") ?? card.url
+
+        guard let preview = card.preview else {
+            // Pending: the room held, the host named, two faint bars for what comes.
+            let discord = host.contains("discord")
+            built.shapes.append(RowShape(kind: .capsule(fill: ChatTheme.textMuted.withAlphaComponent(0.12), stroke: nil),
+                                         rect: CGRect(x: x + pad, y: top + pad, width: picture, height: picture)))
+            let left = x + pad + picture + 12
+            let textWidth = cardWidth - (left - x) - pad
+            built.lines.append(cardLine(discord ? "Discord" : host, font(11, .semibold),
+                                        discord ? Self.discordBlurple : ChatTheme.textSecondary,
+                                        x: left, baseline: top + pad + 10, width: textWidth))
+            for (i, share) in [0.62, 0.38].enumerated() {
+                built.shapes.append(RowShape(kind: .bar(ChatTheme.textMuted.withAlphaComponent(0.16)),
+                                             rect: CGRect(x: left, y: top + pad + 19 + CGFloat(i) * 14, width: textWidth * share, height: 8)))
+            }
+            return built
+        }
+
+        if preview.kind == "discord" {
+            let icon = CGRect(x: x + pad, y: top + pad, width: picture, height: picture)
+            if let image = preview.image, !ImagePipeline.shared.hasFailed(image) {
+                built.shapes.append(RowShape(kind: .capsule(fill: UIColor.white.withAlphaComponent(0.04), stroke: nil), rect: icon))
+                built.attachments.append(RowAttachment(kind: .preview, url: image, pixelHeight: Int(picture * scale), rect: icon,
+                                                       overlays: [], effects: 0, animate: style.animatesEmotes, radius: 14))
+            } else {
+                built.shapes.append(RowShape(kind: .capsule(fill: Self.discordBlurple, stroke: nil), rect: icon))
+                let glyph = picture * 0.5
+                built.shapes.append(RowShape(kind: .symbol("person.2.fill", .white),
+                                             rect: CGRect(x: icon.midX - glyph / 2, y: icon.midY - glyph / 2, width: glyph, height: glyph)))
+            }
+            // The Join pill: what the tap does, at the card's right.
+            let joinFont = font(12, .semibold)
+            let joinWidth = ("Join" as NSString).size(withAttributes: [.font: joinFont]).width + 24
+            let join = CGRect(x: rect.maxX - pad - joinWidth, y: rect.midY - 15, width: joinWidth, height: 30)
+            built.shapes.append(RowShape(kind: .capsule(fill: Self.discordBlurple, stroke: nil), rect: join))
+            built.lines.append(cardLine("Join", joinFont, .white, x: join.minX + 12, baseline: join.midY + 4.5, width: joinWidth))
+            let left = icon.maxX + 12
+            let textWidth = join.minX - 10 - left
+            built.lines.append(cardLine("Discord", font(11, .semibold), Self.discordBlurple, x: left, baseline: top + pad + 10, width: textWidth))
+            built.lines.append(cardLine(preview.title ?? host, font(14, .semibold), ChatTheme.textPrimary,
+                                        x: left, baseline: top + pad + 27, width: textWidth))
+            let counts = NSMutableAttributedString()
+            let small = font(11, .regular)
+            let strong = font(11, .semibold)
+            func count(_ n: Int, _ label: String, dot: UIColor) {
+                if counts.length > 0 { counts.append(NSAttributedString(string: "   ", attributes: [.font: small])) }
+                counts.append(NSAttributedString(string: "\u{25CF} ", attributes: [.font: font(8, .regular), .foregroundColor: dot]))
+                counts.append(NSAttributedString(string: n.formatted(), attributes: [.font: strong, .foregroundColor: ChatTheme.textPrimary]))
+                counts.append(NSAttributedString(string: " \(label)", attributes: [.font: small, .foregroundColor: ChatTheme.textSecondary]))
+            }
+            if let online = preview.onlineCount { count(online, "Online", dot: Self.discordGreen) }
+            if let members = preview.memberCount { count(members, "Members", dot: ChatTheme.textMuted.withAlphaComponent(0.6)) }
+            if counts.length > 0 {
+                built.lines.append(cardLine(counts, x: left, baseline: top + pad + 42, width: textWidth))
+            }
+            let tally = [preview.onlineCount.map { "\($0.formatted()) online" }, preview.memberCount.map { "\($0.formatted()) members" }]
+                .compactMap { $0 }.joined(separator: ", ")
+            built.words = "Discord server \(preview.title ?? host)" + (tally.isEmpty ? "" : ", \(tally)")
+            return built
+        }
+
+        // Everything else: the picture (16:9, or square for a face) beside three lines.
+        var left = x + pad
+        if let image = preview.image ?? preview.authorAvatar, !ImagePipeline.shared.hasFailed(image) {
+            let square = preview.image == nil || ["tweet", "instagram", "spotify", "youtube_channel"].contains(preview.kind)
+            let w = square ? picture : (picture * 16 / 9).rounded()
+            let box = CGRect(x: left, y: top + pad, width: w, height: picture)
+            built.shapes.append(RowShape(kind: .capsule(fill: UIColor.white.withAlphaComponent(0.04), stroke: nil), rect: box))
+            built.attachments.append(RowAttachment(kind: .preview, url: image, pixelHeight: Int(picture * scale), rect: box,
+                                                   overlays: [], effects: 0, animate: style.animatesEmotes, radius: 8))
+            left = box.maxX + 12
+        }
+        let textWidth = rect.maxX - pad - left
+        let site = preview.siteName ?? host
+        let title = preview.title ?? preview.description ?? host
+        var byline = preview.author
+        if let views = preview.viewCount { byline = [byline, "\(views.formatted()) views"].compactMap { $0 }.joined(separator: " \u{00B7} ") }
+        if byline == nil, preview.title != nil { byline = preview.description }
+        built.lines.append(cardLine(site, font(11, .semibold), ChatTheme.textSecondary, x: left, baseline: top + pad + 10, width: textWidth))
+        built.lines.append(cardLine(title, font(14, .semibold), ChatTheme.textPrimary, x: left, baseline: top + pad + 27, width: textWidth))
+        if let byline, !byline.isEmpty {
+            built.lines.append(cardLine(byline, font(12, .regular), ChatTheme.textSecondary, x: left, baseline: top + pad + 42, width: textWidth))
+        }
+        built.words = "\(site): \(title)"
+        return built
+    }
+
+    /// One line of card text on `baseline`, cut with an ellipsis to `width`.
+    func cardLine(_ text: String, _ font: UIFont, _ color: UIColor, x: CGFloat, baseline: CGFloat, width: CGFloat) -> PlacedLine {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return cardLine(NSAttributedString(string: flat, attributes: [.font: font, .foregroundColor: color]),
+                        x: x, baseline: baseline, width: width)
+    }
+
+    func cardLine(_ text: NSAttributedString, x: CGFloat, baseline: CGFloat, width: CGFloat) -> PlacedLine {
+        var line = CTLineCreateWithAttributedString(text)
+        if CTLineGetTypographicBounds(line, nil, nil, nil) > Double(width) {
+            let font = text.length > 0 ? text.attribute(.font, at: 0, effectiveRange: nil) as? UIFont : nil
+            let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: [
+                .font: font ?? self.font(12, .regular), .foregroundColor: ChatTheme.textSecondary,
+            ]))
+            if let cut = CTLineCreateTruncatedLine(line, Double(max(width, 1)), .end, ellipsis) { line = cut }
+        }
+        return PlacedLine(line: line, origin: CGPoint(x: x, y: baseline))
+    }
 }

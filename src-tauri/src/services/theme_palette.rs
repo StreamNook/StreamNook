@@ -83,6 +83,7 @@ pub fn oled_palette(base: &Value, accent: Option<&str>) -> Value {
         p.insert("textSecondary".into(), json!(lighten(&accent, oled_secondary_lighten())));
         p.insert("scrollbarThumb".into(), json!(format!("rgba({r}, {g}, {b}, 0.25)")));
     }
+    lift_accent(&mut palette);
     palette
 }
 
@@ -215,6 +216,15 @@ pub fn lift_custom_themes(custom_themes: &mut Value) -> bool {
             if let Some(hundredths) = floor_hundredths(fg, bg) {
                 if let Some(muted) = theme.pointer_mut("/palette/textMuted").and_then(Value::as_object_mut) {
                     muted.insert("opacity".into(), json!(hundredths));
+                    changed = true;
+                }
+            }
+        }
+        if let Some(on_surface) = accent_on_surface(&custom_palette(theme)) {
+            let stored = theme.pointer("/palette/accentOnSurface/value").and_then(Value::as_str).map(str::to_string);
+            if stored.as_deref() != Some(on_surface.as_str()) {
+                if let Some(p) = theme.get_mut("palette").and_then(Value::as_object_mut) {
+                    p.insert("accentOnSurface".into(), json!({ "value": on_surface, "opacity": 100 }));
                     changed = true;
                 }
             }
@@ -371,11 +381,59 @@ pub fn lift_secondary(palette: &mut Value) {
     }
 }
 
+/// The least contrast an accent mark keeps on a raised surface: a poll's share bar, a card's
+/// accent words and icons. WCAG's floor for graphics and large text.
+pub const ACCENT_CONTRAST_FLOOR: f64 = 3.0;
+
+/// The accent at the floor on the raised surface (the surface over the background): the same hue
+/// and saturation with its HSL lightness moved away from the surface in 0.5% steps until it
+/// reaches `ACCENT_CONTRAST_FLOOR`. An accent already there comes back as written; one that
+/// cannot reach it becomes white or black.
+fn floor_accent(accent: (f64, f64, f64), bg: (f64, f64, f64), surface: (f64, f64, f64, f64)) -> (f64, f64, f64) {
+    let track = over(surface, bg);
+    if ratio(accent, track) >= ACCENT_CONTRAST_FLOOR {
+        return accent;
+    }
+    let up = ratio((255.0, 255.0, 255.0), track) >= ratio((0.0, 0.0, 0.0), track);
+    let (h, s, l) = rgb_to_hsl(accent.0, accent.1, accent.2);
+    for step in 0..=200 {
+        let nl = if up { (l + step as f64 * 0.005).min(1.0) } else { (l - step as f64 * 0.005).max(0.0) };
+        let c = hsl_to_rgb(h, s, nl);
+        if ratio(c, track) >= ACCENT_CONTRAST_FLOOR {
+            return c;
+        }
+        if nl == 0.0 || nl == 1.0 {
+            break;
+        }
+    }
+    if up { (255.0, 255.0, 255.0) } else { (0.0, 0.0, 0.0) }
+}
+
+/// The palette's `accentOnSurface`: its accent floored on its raised surface, as `#rrggbb`. Every
+/// shell draws accent marks that sit on a card (share bars, accent words) in this colour.
+pub fn accent_on_surface(palette: &Value) -> Option<String> {
+    let color = |key: &str| palette.get(key).and_then(Value::as_str).and_then(css_rgba);
+    let bg = color("background")?;
+    let accent = color("accent")?;
+    let (r, g, b) = floor_accent((accent.0, accent.1, accent.2), (bg.0, bg.1, bg.2), color("surface")?);
+    Some(format!("#{:02x}{:02x}{:02x}", r as u8, g as u8, b as u8))
+}
+
+/// Writes `accentOnSurface` into the palette, recomputed from its accent (the built-ins ship it,
+/// and a test pins those to this value).
+pub fn lift_accent(palette: &mut Value) {
+    let Some(on_surface) = accent_on_surface(palette) else { return };
+    if let Some(p) = palette.as_object_mut() {
+        p.insert("accentOnSurface".into(), json!(on_surface));
+    }
+}
+
 /// Both text floors: muted against the background, then secondary on the raised surface (which
-/// reads the lifted muted text).
+/// reads the lifted muted text). The accent's floor on that surface rides along.
 pub fn lift_text(palette: &mut Value) {
     lift_muted(palette);
     lift_secondary(palette);
+    lift_accent(palette);
 }
 
 /// The theme a shell paints.
@@ -708,5 +766,69 @@ mod tests {
         let catalog = catalog(&[], None);
         let lit: Vec<&str> = catalog["themes"].as_array().unwrap().iter().filter(|t| t.get("light").is_some()).filter_map(|t| t["id"].as_str()).collect();
         assert_eq!(lit, ["prism"]);
+    }
+}
+
+#[cfg(test)]
+mod accent_floor_tests {
+    use super::*;
+
+    fn track_ratio(palette: &Value, key: &str) -> f64 {
+        let color = |k: &str| palette.get(k).and_then(Value::as_str).and_then(css_rgba).unwrap();
+        let bg = color("background");
+        let track = over(color("surface"), (bg.0, bg.1, bg.2));
+        let c = color(key);
+        ratio((c.0, c.1, c.2), track)
+    }
+
+    #[test]
+    fn every_built_in_ships_its_floored_accent() {
+        for theme in built_in_themes() {
+            let id = theme["id"].as_str().unwrap_or("?");
+            let palette = &theme["palette"];
+            let shipped = palette["accentOnSurface"].as_str().unwrap_or_else(|| panic!("{id} has no accentOnSurface"));
+            assert_eq!(Some(shipped.to_string()), accent_on_surface(palette), "{id}'s accentOnSurface drifted from Rust's floor");
+            assert!(track_ratio(palette, "accentOnSurface") >= ACCENT_CONTRAST_FLOOR - 0.01, "{id} under 3:1");
+        }
+    }
+
+    #[test]
+    fn every_oled_preset_clears_the_floor() {
+        let base = built_in_themes().iter().find(|t| t["id"] == OLED_THEME_ID).unwrap()["palette"].clone();
+        for (name, hex) in OLED_ACCENT_PRESETS {
+            let p = oled_palette(&base, Some(hex));
+            assert!(track_ratio(&p, "accentOnSurface") >= ACCENT_CONTRAST_FLOOR - 0.01, "OLED {name}");
+        }
+    }
+
+    #[test]
+    fn a_pale_accent_on_a_light_theme_darkens_and_keeps_its_hue() {
+        let palette = json!({ "background": "#f4f4f6", "surface": "rgba(0, 0, 0, 0.06)", "accent": "#a5f3fc" });
+        let floored = accent_on_surface(&palette).unwrap();
+        let mut p = palette.clone();
+        p["accentOnSurface"] = json!(floored.clone());
+        assert!(track_ratio(&p, "accentOnSurface") >= ACCENT_CONTRAST_FLOOR);
+        let (fr, fg, fb, _) = css_rgba(&floored).unwrap();
+        let (h0, _, _) = rgb_to_hsl(165.0, 243.0, 252.0);
+        let (h1, _, l1) = rgb_to_hsl(fr, fg, fb);
+        assert!((h0 - h1).abs() < 0.02 && l1 < 0.8, "same cyan, darker: {floored}");
+    }
+
+    #[test]
+    fn a_custom_accent_being_edited_gets_its_floor_at_once() {
+        // What the desktop editor sends while the accent is dragged: a pale cyan on a light card.
+        let mut p = json!({ "background": "#f6f6f8", "surface": "rgba(0, 0, 0, 0.05)", "accent": "#a5f3fc",
+                            "textPrimary": "#111111", "textSecondary": "#555555", "textMuted": "rgba(0, 0, 0, 0.6)" });
+        lift_text(&mut p);
+        assert!(track_ratio(&p, "accentOnSurface") >= ACCENT_CONTRAST_FLOOR);
+        p["accent"] = json!("#0e7490");
+        lift_text(&mut p);
+        assert_eq!(p["accentOnSurface"], "#0e7490", "an accent that already clears it comes back as written");
+    }
+
+    #[test]
+    fn resolve_hands_every_shell_the_floored_accent() {
+        let t = resolve("winters-glass", &[], None);
+        assert!(t.palette["accentOnSurface"].is_string());
     }
 }

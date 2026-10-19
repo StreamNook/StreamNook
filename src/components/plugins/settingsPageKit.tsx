@@ -10,6 +10,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow } from '../settings/_primitives';
+import { IS_MOBILE } from '../../utils/platform';
 
 /** A long settings page that scrolls on its own, with the section rail beside
  *  it on wide windows. Fill it with PageSections; `railKey` names the page. */
@@ -158,7 +159,9 @@ export function SubControl({
   onReset?: () => void;
 }) {
   const name = (
-    <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">
+    // On the phone a step under its row's 15px name, so the nesting still
+    // reads while the line stays easy to read.
+    <div className={`min-w-0 ${IS_MOBILE ? 'text-[14px]' : 'text-[12.5px]'} font-medium text-textPrimary`}>
       {title}
       {onReset && <ResetArrow onReset={onReset} />}
     </div>

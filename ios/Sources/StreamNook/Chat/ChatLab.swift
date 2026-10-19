@@ -12,6 +12,8 @@ enum ChatLab {
     private static var window: UIWindow?
     private(set) static var session: ChatSession?
     static let state = ChatLabState()
+    /// The stage's own drop, shown by `dropfake` (the stage has no watched stream).
+    static let drop = WatchDropModel()
 
     static func open(core: CoreBridge, mode: String) {
         close()
@@ -45,6 +47,7 @@ enum ChatLab {
     }
 
     static func close() {
+        drop.set(nil)
         session?.stop()
         session = nil
         window?.isHidden = true
@@ -82,7 +85,7 @@ struct ChatLabView: View {
                 VStack(spacing: 0) {
                     videoStandIn
                         .aspectRatio(16 / 9, contentMode: .fit)
-                    ChatPanel(session: session)
+                    ChatPanel(session: session, drop: ChatLab.drop)
                         .background(SN.background)
                 }
             }
@@ -207,6 +210,24 @@ enum ChatDrive {
             currentList?.resume(force: true, glide: true)
         case "chatperf":
             await perf(seconds: Double(value) ?? 60)
+        case "badgeprobe":
+            // The newest rows' badges: whether each asked to move, how many frames it decoded to,
+            // and whether the shared clock is running them.
+            guard let list = currentList else {
+                log.error("badgeprobe: no chat stage")
+                return true
+            }
+            var seen = Set<String>()
+            for attachment in list.rows.suffix(30).flatMap(\.layout.attachments) where attachment.kind == .badge {
+                guard seen.insert(attachment.url).inserted else { continue }
+                let moving = ImagePipeline.shared.cached(attachment.url, pixelHeight: attachment.pixelHeight, animated: true)
+                let still = ImagePipeline.shared.cached(attachment.url, pixelHeight: attachment.pixelHeight, animated: false)
+                let frames = moving?.frames ?? []
+                let moves = frames.count > 1
+                    && (frames[0].dataProvider?.data as Data?) != (frames[frames.count / 2].dataProvider?.data as Data?)
+                log.notice("badgeprobe \(String(attachment.url.prefix(100)), privacy: .public) animate \(attachment.animate) frames \(frames.count) differ \(moves) still \(still != nil)")
+            }
+            log.notice("badgeprobe reduceMotion \(AnimationClock.shared.reduceMotion) animating \(AnimationClock.shared.registeredCount)")
         case "chattype":
             composer?.draft = value
         case "chatsend":

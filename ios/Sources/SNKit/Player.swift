@@ -148,8 +148,10 @@ public struct PlayerPrefs: Decodable, Sendable, Equatable {
         backgroundMode = try player?.decodeIfPresent(String.self, forKey: .backgroundMode)
     }
 
-    /// Leaving the app floats the video in Picture in Picture unless the viewer chose audio only.
-    public var floatsVideo: Bool { backgroundMode != "audio" }
+    /// Background play is on: the audio keeps playing once the video cannot float (the Picture
+    /// in Picture window was closed, or it never started). Leaving the app still floats the video
+    /// first either way.
+    public var keepsAudio: Bool { backgroundMode == "audio" }
 }
 
 /// The words the player's controls show.

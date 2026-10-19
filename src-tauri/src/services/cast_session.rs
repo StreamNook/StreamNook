@@ -35,6 +35,13 @@ use tauri::{Emitter, Manager};
 
 pub const STATE_EVENT: &str = "cast://state";
 
+/// Whether this build offers Cast, screen mirroring and TV screen mode at all.
+/// Off until they have been tested on a device: the page hides the player's TV
+/// button (it reads [`CastState::offered`]), a Cast session the SDK resumes is
+/// ignored, and a mirrored TV keeps showing the plain phone screen. Setting it
+/// to true turns all three back on; nothing else gates them.
+pub const OFFERED: bool = false;
+
 /// The stream id the Kick adapter is asked to resolve under. Its resolve is
 /// pure, but the id keeps a cast lookup from ever being mistaken for the
 /// phone's solo stream in a log.
@@ -84,6 +91,8 @@ impl CastTarget {
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CastState {
+    /// Whether this build offers Cast and mirroring at all ([`OFFERED`]).
+    pub offered: bool,
     /// Whether this phone can cast at all (Google Play services present).
     pub available: bool,
     pub phase: Phase,
@@ -182,8 +191,7 @@ fn with_inner<R>(f: impl FnOnce(&mut Inner) -> R) -> R {
 }
 
 fn emit(app: &AppHandle) {
-    let state = with_inner(|i| i.state.clone());
-    let _ = app.emit(STATE_EVENT, state);
+    let _ = app.emit(STATE_EVENT, state());
 }
 
 /// Called once from setup. Starts the event worker and replays anything Kotlin
@@ -208,7 +216,7 @@ pub fn init(app: AppHandle) {
 }
 
 pub fn state() -> CastState {
-    with_inner(|i| i.state.clone())
+    CastState { offered: OFFERED, ..with_inner(|i| i.state.clone()) }
 }
 
 /// The app handle, once setup has run. TV screen mode borrows it, since it is
@@ -260,6 +268,9 @@ pub fn on_native_event(json: String) {
 /// any that a newer one overtook) and the queue keeps moving.
 fn handle(app: &AppHandle, event: NativeEvent) {
     match event {
+        // Not offered: a session the SDK kept from a test install never takes
+        // the phone's stream or shows the casting card.
+        NativeEvent::Session { .. } | NativeEvent::Media { .. } | NativeEvent::LoadFailed { .. } if !OFFERED => {}
         NativeEvent::Available { value } => {
             with_inner(|i| i.state.available = value);
             emit(app);

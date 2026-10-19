@@ -42,6 +42,9 @@ struct Prefs {
     hidden_badge_providers: Vec<String>,
     bttv_modifiers: bool,
     ffz_effects: bool,
+    link_previews: bool,
+    link_preview_keep_link: bool,
+    link_preview_trusted: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -55,6 +58,9 @@ impl Default for Prefs {
             hidden_badge_providers: Vec::new(),
             bttv_modifiers: true,
             ffz_effects: true,
+            link_previews: true,
+            link_preview_keep_link: false,
+            link_preview_trusted: Vec::new(),
         }
     }
 }
@@ -119,6 +125,9 @@ pub fn refresh(settings: &Settings) {
         hidden_badge_providers: d.hidden_badge_providers.iter().map(|p| p.to_lowercase()).collect(),
         bttv_modifiers: d.bttv_emote_modifiers,
         ffz_effects: d.ffz_emote_effects,
+        link_previews: d.link_previews,
+        link_preview_keep_link: d.link_preview_keep_link,
+        link_preview_trusted: d.link_preview_trusted_domains.clone(),
     };
     if let Ok(mut guard) = PREFS.write() {
         *guard = Some(next);
@@ -1098,6 +1107,8 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             out.push(badge);
         }
     }
+    // The one surface order decides, so this row and the You card never disagree.
+    out.sort_by_key(|b| crate::services::badge_service::surface_rank(&b.provider));
     out
 }
 
@@ -1269,6 +1280,11 @@ pub fn stamp_view(msg: &mut ChatMessage) {
     } else {
         None
     };
+    let previews = if prefs.link_previews {
+        crate::services::link_preview_cache::row_previews(&body, &prefs.link_preview_trusted, prefs.link_preview_keep_link)
+    } else {
+        Vec::new()
+    };
     msg.metadata.view = Some(RowView {
         name_color,
         badges: badges(msg, &prefs, worn.as_ref()),
@@ -1279,6 +1295,7 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         cologne: theme.as_ref().and_then(|t| t.chat_cologne()),
         source,
         nickname: own.nickname,
+        previews,
     });
 }
 

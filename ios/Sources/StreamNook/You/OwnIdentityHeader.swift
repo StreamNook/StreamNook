@@ -2,10 +2,11 @@ import SNKit
 import SwiftUI
 
 /// Who you are, at the top of the You tab: your Atmosphere glowing behind you, your picture on its
-/// own (no marks: your accounts and badges show in the rows below), your name in your 7TV paint,
-/// the badges you wear and what you have on, a line of chat as everyone sees it, and the way into
-/// Edit profile. The core saves the identity for the next cold launch, so the card paints on the
-/// first frame, then rebuilds it fresh.
+/// own (no marks: your accounts show in the rows below), your name in your 7TV paint, the badges
+/// you wear (in the core's one badge order, StreamNook last, already capped) and what you have
+/// on, and the way into Edit profile,
+/// whose chat row previews your picks live. The core saves the identity for the next cold launch,
+/// so the card paints on the first frame, then rebuilds it fresh.
 struct OwnIdentityCard: View {
     let model: AppModel
     let user: TwitchUser
@@ -15,7 +16,7 @@ struct OwnIdentityCard: View {
     @Binding var identity: OwnIdentityData?
 
     /// How far down the card the Atmosphere's glow reaches: the picture, the name and the worn
-    /// line, fading out above the preview row.
+    /// line, fading out above Edit profile.
     static let glow: CGFloat = 210
     static let avatar: CGFloat = 80
     static let radius: CGFloat = 22
@@ -28,12 +29,7 @@ struct OwnIdentityCard: View {
             details
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-            if picks.sn != nil || picks.ext != nil {
-                ProfilePreviewRow(name: user.displayName, picks: picks, fallbackPaint: identity?.paint, framed: false)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 16)
-            }
-            Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.top, 12)
+            Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.top, 16)
             NavigationLink(value: Route.cosmetics) {
                 HStack(spacing: 10) {
                     Text("Edit profile").font(.snRowStrong).foregroundStyle(SN.textPrimary)
@@ -86,7 +82,7 @@ struct OwnIdentityCard: View {
             let wearing = wearingLine
             if !badges.isEmpty || wearing != nil {
                 HStack(spacing: 6) {
-                    ForEach(badges.prefix(6)) { badge in
+                    ForEach(badges) { badge in
                         WornBadge(badge: badge)
                     }
                     if !badges.isEmpty && wearing != nil {

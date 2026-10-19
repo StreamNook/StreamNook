@@ -64,6 +64,22 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const STALE_WARNING_MS = 2 * 60_000;
 const STALE_RECONNECT_MS = 3 * 60_000;
 
+/**
+ * How long the connection has gone without any sign of life: neither a chat
+ * frame nor the backend's heartbeat. Rust sends that heartbeat every thirty
+ * seconds while its IRC reads are alive and stops it once they are not, so a
+ * quiet room keeps answering here and only a dead connection goes silent.
+ */
+export function connectionSilentMs(now: number, lastFrameAt: number, lastHeartbeatAt: number): number {
+  return now - Math.max(lastFrameAt, lastHeartbeatAt);
+}
+
+/** Whether to raise the stale warning, which the phones' watchdog rebuilds on. */
+export function staleWarningDue(now: number, lastFrameAt: number, lastHeartbeatAt: number): boolean {
+  const silent = connectionSilentMs(now, lastFrameAt, lastHeartbeatAt);
+  return silent > STALE_WARNING_MS && silent <= STALE_RECONNECT_MS;
+}
+
 // --- Public types -----------------------------------------------------------
 
 export interface ModerationContext {
@@ -320,6 +336,8 @@ let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 let lastMessageTime = Date.now();
+/** When the backend's last HEARTBEAT arrived (0 = none on this socket yet). */
+let lastHeartbeatTime = 0;
 let intentionalDisconnect = false;
 let currentUserId: string | null = null;
 // True between a backend IRC_RECONNECTING and the next IRC_CONNECTED; gates
@@ -1483,13 +1501,16 @@ function startHealthCheck() {
       scheduleReconnect(0);
       return;
     }
-    const elapsed = Date.now() - lastMessageTime;
-    if (elapsed > STALE_WARNING_MS && elapsed <= STALE_RECONNECT_MS) {
-      Logger.warn(
-        `[ChatStore] No frames for ${Math.floor(elapsed / 1000)}s — connection may be stale`,
-      );
-      setAllChannelsError(`Connection may be stale — no data for ${Math.floor(elapsed / 1000)}s`);
-    } else if (elapsed > STALE_RECONNECT_MS) {
+    const now = Date.now();
+    const elapsed = now - lastMessageTime;
+    if (staleWarningDue(now, lastMessageTime, lastHeartbeatTime)) {
+      const silent = Math.floor(connectionSilentMs(now, lastMessageTime, lastHeartbeatTime) / 1000);
+      Logger.warn(`[ChatStore] No frames or heartbeats for ${silent}s, connection may be stale`);
+      setAllChannelsError(`Connection may be stale, no data for ${silent}s`);
+    }
+    // The re-JOIN probe below reads frames alone: a socket the heartbeat still
+    // reaches can be deaf to its channels, and only a channel frame proves a JOIN.
+    if (elapsed > STALE_RECONNECT_MS) {
       Logger.debug('[ChatStore] No frames for 3+ minutes — checking stream / reconnecting');
       lastMessageTime = Date.now();
 
@@ -1706,6 +1727,45 @@ export async function reconnectAllChannels(): Promise<void> {
 }
 
 /**
+ * Rebuild the Twitch chat connection without letting go of any room (the
+ * phones). Rust stops the Twitch side and brings it back with every room this
+ * window holds (`rebuild_chat`, services/chat_recovery.rs), then this window's
+ * socket attaches to the new bridge. Every slice keeps its rows on screen, and
+ * each room's history load fills only what the outage missed.
+ *
+ * Answers whether Rust ran a cycle. It declines one already running, an
+ * automatic one within a minute of the last, or a window holding no Twitch room.
+ */
+export async function rebuildTwitchChat(reason: string, force = false): Promise<boolean> {
+  const twitchSlices = () =>
+    Array.from(useChatConnectionStore.getState().channels.values()).filter((s) => s.provider === 'twitch');
+  if (twitchSlices().length === 0) return false;
+  let port: number | null = null;
+  try {
+    port = (await invoke<number | null>('rebuild_chat', { force, reason })) ?? null;
+  } catch (err) {
+    Logger.warn('[ChatStore] rebuild_chat failed:', err);
+    return false;
+  }
+  if (port === null) return false;
+  // Rust closed the old socket when it took the bridge down, and that close
+  // scheduled a reconnect of its own. This one replaces it.
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+  await reconnectAll(true);
+  // The reconnect reloads history for the window's first channel only; the
+  // other rooms fill their gap here. Rows already shown are skipped.
+  const first = useChatConnectionStore.getState().channels.keys().next().value;
+  for (const slice of twitchSlices()) {
+    if (slice.channel !== first) void preloadChannel(slice.channel, slice.channelId);
+  }
+  return true;
+}
+
+/**
  * Hard-refresh a single channel's chat — the chat-side analog of restarting the
  * stream. Wipes the visible message buffer + dedup/moderation state, busts and
  * re-fetches the channel's emote set, then forces the shared IRC bridge to tear
@@ -1880,6 +1940,7 @@ async function connectBridgeInner(
     ws = socket;
     reconnectAttempts = 0;
     lastMessageTime = Date.now();
+    lastHeartbeatTime = 0;
 
     socket.onmessage = (event) => handleWsMessage(event.data);
     sendRouteSnapshot();
@@ -2159,8 +2220,11 @@ function handleWsMessage(raw: string) {
   // lastMessageTime: the backend heartbeat only proves the socket reads
   // SOMETHING (its own PONGs included), so letting it reset the stale timer
   // blinded the watchdog to a connection that was TCP-alive but delivering no
-  // channel traffic. It still clears the stale-warning banner.
+  // channel traffic. It still proves the backend's IRC reads are alive, which
+  // is what the stale warning asks (Rust stops sending it once they are not),
+  // and it clears that warning.
   if (raw === 'HEARTBEAT') {
+    lastHeartbeatTime = Date.now();
     setAllChannelsError(null);
     return;
   }

@@ -105,35 +105,107 @@ import Testing
         #expect(read == LiveVoteSettings(showPolls: false, showPredictions: true, pollFirst: true, pollsStartCollapsed: true))
     }
 
-    @Test func theOrderPicksTheOpenCardAndFoldsStick() throws {
-        let poll = try decode(PollView.self, Self.poll)
-        let prediction = try decode(PredictionView.self, Self.prediction)
-        var folds = LiveVoteFolds()
-        var slots = LiveVoteStack.slots(poll: poll, prediction: prediction, settings: LiveVoteSettings(), folds: folds)
-        #expect(slots.map(\.kind) == [.prediction, .poll])
-        #expect(slots.map(\.folded) == [false, true])
-        slots = LiveVoteStack.slots(poll: poll, prediction: prediction, settings: LiveVoteSettings(pollFirst: true), folds: folds)
-        #expect(slots.map(\.kind) == [.poll, .prediction])
-        #expect(slots.map(\.folded) == [false, true])
-        // Alone, each card opens, unless polls start collapsed.
-        #expect(LiveVoteStack.slots(poll: poll, prediction: nil, settings: LiveVoteSettings(), folds: folds).first?.folded == false)
-        #expect(LiveVoteStack.slots(poll: poll, prediction: nil, settings: LiveVoteSettings(pollsStartCollapsed: true),
-                                    folds: folds).first?.folded == true)
-        // A card the viewer folded stays folded through updates, and one they opened stays open.
-        folds.set("prediction:p1", folded: true)
-        folds.set("poll:q1", folded: false)
-        slots = LiveVoteStack.slots(poll: poll, prediction: prediction, settings: LiveVoteSettings(), folds: folds)
-        #expect(slots.map(\.folded) == [true, false])
-        // A new poll is a new card: it follows the default again.
-        var next = poll
-        next.pollID = "q2"
-        slots = LiveVoteStack.slots(poll: next, prediction: prediction, settings: LiveVoteSettings(), folds: folds)
-        #expect(slots.last?.key == "poll:q2" && slots.last?.folded == true)
-        folds.keep(only: ["prediction:p1"])
-        #expect(folds.folded("poll:q1", default: true))
-        // Turned off, a card does not show.
-        let off = LiveVoteSettings(showPolls: false, showPredictions: false)
-        #expect(LiveVoteStack.slots(poll: poll, prediction: prediction, settings: off, folds: folds).isEmpty)
+    // MARK: The stack (Rust decides it; these pin the shapes and the viewer's own state)
+
+    @Test func decodesTheStackLayout() throws {
+        let layout = try decode(StackLayout.self, #"""
+        { "slots": [{ "kind": "poll", "open": true }, { "kind": "drop", "open": false }, { "kind": "banner", "open": false }],
+          "max_height": 280.0 }
+        """#)
+        #expect(layout.slots.map(\.kind) == ["poll", "drop", "banner"])
+        #expect(layout.slots.map(\.card) == [.poll, .drop, nil])
+        #expect(layout.slots.map(\.open) == [true, false, false])
+        #expect(layout.maxHeight == 280)
+        #expect(try decode(StackLayout.self, #"{ "slots": [], "max_height": 0 }"#) == StackLayout(slots: [], maxHeight: 0))
+    }
+
+    /// The request as JSON, read back as a dictionary.
+    private func encoded(_ request: StackRequest) throws -> [String: Any] {
+        let args = try #require(try JSONSerialization.jsonObject(with: Data(request.argsJSON.utf8)) as? [String: Any])
+        return try #require(args["request"] as? [String: Any])
+    }
+
+    @Test func encodesTheStackRequestAsRustReadsIt() throws {
+        let viewer = StackViewer(opened: .drop, folded: [.poll, .prediction])
+        let request = StackRequest(cards: [.poll, .drop], settings: LiveVoteSettings(pollFirst: true, pollsStartCollapsed: true),
+                                   viewer: viewer, chatHeight: 380)
+        let json = try encoded(request)
+        #expect(json["cards"] as? [String] == ["poll", "drop"])
+        #expect(json["order"] as? String == "poll-first")
+        #expect(json["polls_start_collapsed"] as? Bool == true)
+        #expect(json["opened"] as? String == "drop")
+        // Folded in a fixed order, so the same state always asks the same question.
+        #expect(json["folded"] as? [String] == ["prediction", "poll"])
+        #expect((json["chat_height"] as? NSNumber)?.doubleValue == 380)
+
+        let plain = try encoded(StackRequest(cards: [], settings: LiveVoteSettings(), viewer: StackViewer(), chatHeight: 0))
+        #expect(plain["order"] as? String == "prediction-first")
+        #expect(plain["polls_start_collapsed"] as? Bool == false)
+        #expect(plain["opened"] == nil, "nothing opened is left out; Rust reads it as none")
+        #expect(plain["folded"] as? [String] == [])
+        #expect((plain["chat_height"] as? NSNumber)?.doubleValue == 0)
+    }
+
+    @Test func theViewerOpensOneCardAndFoldsStick() {
+        var viewer = StackViewer()
+        // Opening the drop strip beside an open poll folds the poll: one card is open at a time.
+        viewer.tap(.drop, wasOpen: false, shown: [.poll, .drop])
+        #expect(viewer.opened == .drop && viewer.folded == [.poll])
+        // Folding the open card folds everything shown, so nothing opens by itself in its place.
+        viewer.tap(.drop, wasOpen: true, shown: [.poll, .drop])
+        #expect(viewer.opened == nil && viewer.folded == [.poll, .drop])
+        viewer.tap(.poll, wasOpen: false, shown: [.poll, .drop])
+        #expect(viewer.opened == .poll && viewer.folded == [.drop])
+        // A new poll is a new card: the viewer's choice for the old one goes.
+        viewer.forget(.poll)
+        #expect(viewer.opened == nil && viewer.folded == [.drop])
+    }
+
+    @Test func aTapShowsItsLayoutAtOnce() {
+        let layout = StackLayout(slots: [StackSlot(kind: "prediction", open: true), StackSlot(kind: "poll", open: false),
+                                         StackSlot(kind: "drop", open: false)], maxHeight: 280)
+        #expect(layout.showing(open: .drop).slots.map(\.open) == [false, false, true])
+        #expect(layout.showing(open: nil).slots.map(\.open) == [false, false, false])
+        #expect(layout.showing(open: nil).maxHeight == 280)
+        #expect(StackLayout.strips([.poll, .drop]) == StackLayout(slots: [StackSlot(kind: "poll", open: false),
+                                                                           StackSlot(kind: "drop", open: false)], maxHeight: 0))
+    }
+
+    /// The fake's layout for a request, as the slots' kinds, the open ones and the cap.
+    private func fakeStack(_ cards: [String], _ height: Double, _ extra: [String: Any] = [:]) throws -> (kinds: [String], open: [String], max: Double) {
+        var request: [String: Any] = ["cards": cards, "chat_height": height]
+        request.merge(extra) { $1 }
+        let layout = try decode(StackLayout.self, FakeCore.json(FakeLiveVotes.stackLayout(request)))
+        return (layout.slots.map(\.kind), layout.slots.filter(\.open).map(\.kind), layout.maxHeight)
+    }
+
+    /// FakeCore stacks the cards the way chat_top_stack.rs does (its tests, case for case), so
+    /// the fake chat stage shows what the real core would.
+    @Test func theFakeStacksLikeRust() throws {
+        var l = try fakeStack(["drop", "poll"], 700)
+        #expect(l.kinds == ["poll", "drop"] && l.open == ["poll"] && l.max == 280)
+        l = try fakeStack(["drop", "poll", "prediction"], 900)
+        #expect(l.kinds == ["prediction", "poll", "drop"] && l.open == ["prediction"])
+        #expect(try fakeStack(["drop", "poll", "prediction"], 900, ["order": "poll-first"]).open == ["poll"])
+        l = try fakeStack(["drop", "poll"], 380)
+        #expect(l.open.isEmpty && l.max == 152)
+        #expect(try fakeStack(["drop", "poll"], 120).max == 76)
+        #expect(try fakeStack(["drop", "poll"], 700, ["folded": ["poll"]]).open.isEmpty)
+        #expect(try fakeStack(["drop", "poll"], 700, ["folded": ["poll"], "opened": "drop"]).open == ["drop"])
+        #expect(try fakeStack(["drop", "poll"], 380, ["opened": "poll"]).open == ["poll"])
+        #expect(try fakeStack(["poll"], 700, ["polls_start_collapsed": true]).open.isEmpty)
+        #expect(try fakeStack(["poll", "prediction"], 700, ["order": "poll-first", "polls_start_collapsed": true]).open == ["prediction"])
+        #expect(try fakeStack(["drop"], 700).open == ["drop"])
+        #expect(try fakeStack(["drop"], 700, ["opened": "poll"]).open == ["drop"])
+        l = try fakeStack(["banner", "poll"], 0)
+        #expect(l.kinds == ["poll"] && l.open == ["poll"] && l.max == 0)
+    }
+
+    @Test func theFakeDropDecodes() throws {
+        let ready = try decode(WatchDrop.self, FakeRewards.watchDropJSON(ready: true))
+        #expect(ready.complete && ready.trailing.isEmpty && ready.claimLabel == "Claim" && ready.percent == 100)
+        let earning = try decode(WatchDrop.self, FakeRewards.watchDropJSON(ready: false))
+        #expect(!earning.complete && earning.trailing == "1h 48m to watch" && earning.percent == 40)
     }
 
     private struct NoAnswer: Error {}
@@ -221,5 +293,10 @@ import Testing
         #expect(push.view?.predictionID == "fake-prediction")
         let poll = try await core.invoke("watch_channel_poll_view", args: ["channelId": "4242"], as: PollView?.self)
         #expect(poll == nil)
+        let request = StackRequest(cards: [.drop, .prediction], settings: LiveVoteSettings(), viewer: StackViewer(), chatHeight: 700)
+        let json = try await core.invoke("chat_top_stack", request.argsJSON)
+        let layout = try JSONDecoder().decode(StackLayout.self, from: Data(json.utf8))
+        #expect(layout == StackLayout(slots: [StackSlot(kind: "prediction", open: true), StackSlot(kind: "drop", open: false)],
+                                      maxHeight: 280))
     }
 }

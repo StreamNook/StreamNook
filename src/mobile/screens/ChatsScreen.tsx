@@ -8,8 +8,8 @@
 // restores them at launch without joining). While it is in front it keeps the
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Plus } from 'phosphor-react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChatsCircle, Play, Plus } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
 import { MobileChatPane } from '../chat/MobileChatPane';
@@ -21,7 +21,15 @@ import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
+import { useChannelState } from '../../stores/channelStateStore';
+import { CollabAvatarStack } from '../../components/SharedViewers';
+import { groupFor, isTogether } from '../../utils/sharedViewers';
+import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
+
+/** The Chats header's room strip: 40 px capsules with 7 px of air above and
+ *  below, so they sit clear of the separator under them. */
+const CHATS_STRIP_H = 54;
 
 /** The room on screen as the player's start reads it; Rust fills what a tab
  *  does not know (title, category, the live row). */
@@ -81,6 +89,10 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const startStream = useAppStore((s) => s.startStream);
   const [addOpen, setAddOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
+  // The closed banner's height: the list starts under it. Opened, the banner
+  // floats over the rows, so nothing below it moves.
+  const pinsRef = useRef<HTMLDivElement | null>(null);
+  const [pinsBox, setPinsBox] = useState(0);
 
   // The first look joins the saved chats; a parked set comes back too.
   useEffect(() => {
@@ -90,6 +102,21 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 
   const pinned = useRoomPins(shown && tabs.length > 0);
+  const hasPins = pinned.length > 0;
+  useLayoutEffect(() => {
+    const el = pinsRef.current;
+    if (!hasPins || !el) {
+      setPinsBox(0);
+      return;
+    }
+    const read = () => {
+      if (!pinsOpen) setPinsBox(el.offsetHeight);
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasPins, pinsOpen]);
   const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
@@ -185,17 +212,54 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     },
   };
 
-  // The handle: a grabber at the top center, which also closes on a tap. Its
-  // row is the gap between the status bar and the rooms.
+  // The handle: a compact grabber at the top center, which also closes on a
+  // tap. The rooms below get the air (CHATS_STRIP_H), not the grabber row.
   const grabber = (
     <button
       onClick={exitChats}
       aria-label="Close chats"
-      className="mx-auto flex h-6 w-16 shrink-0 items-start justify-center pt-2"
+      className="mx-auto flex h-4 w-16 shrink-0 items-start justify-center pt-1.5"
     >
       <span className="block h-[5px] w-9 rounded-full bg-textMuted/45" />
     </button>
   );
+
+  // The room on screen streams together, or shares its chat: said the way the
+  // watch screen says it (Rust's channel state for the room, the partners'
+  // faces and the group's word), in the strip's empty left side. Tapping it
+  // lists the partners, and a partner starts their stream.
+  // The room's group comes from the maps the Following cards read (by Twitch id), so the chip
+  // and the card always agree; the channel's own pushed state covers a room the maps miss.
+  const roomState = useChannelState(active?.provider === 'twitch' ? active.login : null);
+  const collabs = useAppStore((s) => s.collaborations);
+  const sharedChats = useAppStore((s) => s.sharedChats);
+  const group =
+    (active ? groupFor(collabs, sharedChats, { provider: active.provider, user_id: active.channelId ?? '' }) : undefined) ??
+    roomState?.collab ??
+    roomState?.shared_chat ??
+    null;
+  const [groupOpen, setGroupOpen] = useState(false);
+  // Leaving Chats closes its sheets: they draw outside the hidden screen.
+  useEffect(() => {
+    if (shown) return;
+    setAddOpen(false);
+    setGroupOpen(false);
+  }, [shown]);
+  const leading = group ? (
+    <button
+      onClick={() => setGroupOpen(true)}
+      className="min-w-0 h-11 flex items-center active:opacity-70"
+      aria-label={group.label}
+    >
+      <span className="min-w-0 h-10 flex items-center gap-1.5 pl-2 pr-3 rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+        {!isTogether(group) && <ChatsCircle size={14} weight="fill" className="shrink-0" />}
+        <span className="shrink-0">
+          <CollabAvatarStack collab={group} size={18} />
+        </span>
+        <span className="min-w-0 truncate text-[12px] font-medium">{isTogether(group) ? 'Together' : 'Shared chat'}</span>
+      </span>
+    </button>
+  ) : null;
 
   // The strip's own parts: the same 40 px glass as the rooms capsule, quieter
   // than the room it serves (secondary text, no red; the room's face already
@@ -235,7 +299,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           moves to it; the room row still scrolls sideways). */}
       <div className="shrink-0 flex flex-col [touch-action:pan-x]" {...headerHandlers}>
         {grabber}
-        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} />}
+        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} leading={leading} height={CHATS_STRIP_H} />}
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
@@ -245,8 +309,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
       ) : (
         <>
           <div className="flex-1 min-h-0 relative flex flex-col">
-            {pinned.length > 0 && (
-              <div className="absolute left-0 right-0 top-0 px-2.5 pt-1.5 pb-2 z-20 pointer-events-none flex flex-col gap-1">
+            {hasPins && (
+              // A grabber's gap under the header, 4 px over the list.
+              <div
+                ref={pinsRef}
+                className="absolute left-0 right-0 top-0 px-2.5 pt-3 pb-1 z-20 pointer-events-none flex flex-col gap-1"
+              >
                 <PinnedBanner
                   pins={pinned}
                   channelId={chatChannelId ?? undefined}
@@ -255,11 +323,13 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
                 />
               </div>
             )}
+            {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
             <MobileChatPane strip={false} paused={!shown} />
           </div>
         </>
       )}
       <AddChatSheet open={addOpen} onClose={closeAdd} />
+      <TogetherSheet collab={group} open={groupOpen} onClose={() => setGroupOpen(false)} />
     </div>
   );
 };

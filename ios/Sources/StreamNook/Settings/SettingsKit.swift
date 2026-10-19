@@ -7,8 +7,8 @@ import SwiftUI
 // mean something with another one sit nested under it. Every control reads and writes the
 // core's settings through the SettingsStore in the environment, one field at a time.
 
-/// A feature's section: its name, a line on what it covers, then its rows in one panel with
-/// hairlines between them.
+/// A feature's section in the grouped list: its name above the card, its rows on the card with
+/// separators inset after their symbols, and a line on what it covers under the card.
 struct SettingsBlock<Content: View>: View {
     let title: String
     var logo: String?
@@ -18,45 +18,21 @@ struct SettingsBlock<Content: View>: View {
     var detail: String?
     /// A small action on the heading line (a "Show reference" link).
     var accessory: AnyView?
+    /// A block of list entries rather than settings rows; drawn the same way.
     var bare = false
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // On the page's one left edge with the panels below (design-eye).
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if let logo { BrandLogo(id: logo, size: 13) }
-                Text(shownTitle ?? title).snSectionStyle()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .trailing) { accessory }
-            if let detail {
-                Text(detail)
-                    .font(.sn(12))
-                    .foregroundStyle(SN.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
-            }
-            Group {
-                if bare {
-                    VStack(alignment: .leading, spacing: 12) { content }
-                } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Group(subviews: content) { rows in
-                            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                if index > 0 { Rectangle().fill(SN.borderSubtle).frame(height: 0.5) }
-                                row
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .snPanel()
-                }
-            }
-            .padding(.top, 16)
+        Section {
+            content
+        } header: {
+            // The accessory overlays the header line, so a tall tap target never pushes the card down.
+            ListHeader(text: shownTitle ?? title, logo: logo)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .trailing) { accessory }
+        } footer: {
+            if let detail { ListFooter(text: detail) }
         }
-        .accessibilityElement(children: .contain)
         .id(title)
     }
 }
@@ -68,7 +44,8 @@ struct SettingTitle: View {
     var paths: [String] = []
     var hasHelp = false
     @Binding var helpOpen: Bool
-    var font: Font = .sn(13, 500)
+    /// A row's title reads like the chat menu's rows; a nested line passes its own, smaller.
+    var font: Font = .snBody
     /// A platform or badge service the row is about: its logo leads the title.
     var logo: String?
     /// Runs after a reset lands (a control with a side effect).
@@ -117,14 +94,17 @@ struct SettingTitle: View {
     }
 }
 
-/// A row: the title line and its description on the left, a small control on the right, a
-/// wide control under it, then the help text when opened and the nested settings.
+/// A row, as the chat menu draws one: its symbol, then the title line and its description with a
+/// small control on the right, a wide control under it, the help text when opened, and the nested
+/// settings, all on the text's edge so the separator starts after the symbol.
 struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
     let title: String
     var detail: String?
     var help: String?
     var paths: [String] = []
     var logo: String?
+    /// The leading symbol; by default the one `SettingIcons` gives the row's setting.
+    var icon: String?
     var afterReset: (() async -> Void)?
     /// Centers the control on the title and its text together (a row whose control is a button).
     var centersControl = false
@@ -134,33 +114,37 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
     @State private var helpOpen = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // The control lines up with the title, not the middle of a long description.
-            RowTop(centersControl: centersControl) {
-                SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, logo: logo,
-                             afterReset: afterReset)
-                VStack(alignment: .leading, spacing: 0) {
-                    if let detail {
-                        Text(detail)
-                            .font(.sn(12))
-                            .foregroundStyle(SN.textSecondary)
-                            .lineSpacing(2)
-                            .padding(.top, 2)
+        Label {
+            VStack(alignment: .leading, spacing: 0) {
+                // The control lines up with the title, not the middle of a long description.
+                RowTop(centersControl: centersControl) {
+                    SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, logo: logo,
+                                 afterReset: afterReset)
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let detail {
+                            Text(detail)
+                                .font(.sn(12))
+                                .foregroundStyle(SN.textSecondary)
+                                .lineSpacing(2)
+                                .padding(.top, 2)
+                        }
+                        if helpOpen, let help {
+                            Text(help)
+                                .font(.sn(12))
+                                .foregroundStyle(SN.textMuted)
+                                .padding(.top, 4)
+                                .transition(.opacity)
+                        }
                     }
-                    if helpOpen, let help {
-                        Text(help)
-                            .font(.sn(12))
-                            .foregroundStyle(SN.textMuted)
-                            .padding(.top, 4)
-                            .transition(.opacity)
-                    }
+                    ZStack { trailing }
                 }
-                ZStack { trailing }
+                below
+                nested
             }
-            below
-            nested
+        } icon: {
+            Image(systemName: icon ?? SettingIcons.symbol(paths: paths, title: title))
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, 4)
     }
 }
 
@@ -175,6 +159,15 @@ struct RowTop: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? 320
         return CGSize(width: width, height: measure(width, subviews).height)
+    }
+
+    /// The title's first baseline, so a row's symbol lines up with its title, not its middle.
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? {
+        guard guide == .firstTextBaseline, subviews.count == 3 else { return nil }
+        let m = measure(bounds.width, subviews)
+        let title = subviews[0].dimensions(in: ProposedViewSize(width: m.text, height: m.title))
+        return bounds.minY + m.top + title[.firstTextBaseline]
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -218,8 +211,9 @@ extension SettingRow where Below == EmptyView {
 
 extension SettingRow where Below == EmptyView, Nested == EmptyView {
     init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [], logo: String? = nil,
-         afterReset: (() async -> Void)? = nil, centersControl: Bool = false, @ViewBuilder trailing: () -> Trailing) {
-        self.init(title: title, detail: detail, help: help, paths: paths, logo: logo, afterReset: afterReset,
+         icon: String? = nil, afterReset: (() async -> Void)? = nil, centersControl: Bool = false,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.init(title: title, detail: detail, help: help, paths: paths, logo: logo, icon: icon, afterReset: afterReset,
                   centersControl: centersControl, trailing: trailing, below: { EmptyView() }, nested: { EmptyView() })
     }
 }
@@ -231,19 +225,20 @@ struct WideRow<Below: View, Nested: View>: View {
     var detail: String?
     var help: String?
     var paths: [String] = []
+    var icon: String?
     @ViewBuilder var below: Below
     @ViewBuilder var nested: Nested
 
     var body: some View {
-        SettingRow(title: title, detail: detail, help: help, paths: paths,
+        SettingRow(title: title, detail: detail, help: help, paths: paths, icon: icon,
                    trailing: { EmptyView() }, below: { below }, nested: { nested })
     }
 }
 
 extension WideRow where Nested == EmptyView {
-    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [],
+    init(title: String, detail: String? = nil, help: String? = nil, paths: [String] = [], icon: String? = nil,
          @ViewBuilder below: () -> Below) {
-        self.init(title: title, detail: detail, help: help, paths: paths, below: below, nested: { EmptyView() })
+        self.init(title: title, detail: detail, help: help, paths: paths, icon: icon, below: below, nested: { EmptyView() })
     }
 }
 

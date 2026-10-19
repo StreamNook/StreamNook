@@ -63,11 +63,14 @@ export interface VideoPlayerSettings {
   /** Relay bases to prefer, comma or newline separated. Empty = bundled pool. */
   ad_bypass_proxies?: string;
   /**
-   * What leaving the app does while a stream plays. Android only.
+   * What happens once a playing stream can no longer float. Phones only.
+   * Leaving the app always floats the video in picture-in-picture first, where
+   * the phone allows it.
    *
-   * 'pip'   - float the video in a system picture-in-picture window (default).
-   * 'audio' - no floating window; drop to the audio-only rendition and keep
-   *           playing behind a media notification that taps back into the app.
+   * 'pip'   - closing the window ends the stream (default).
+   * 'audio' - Background play: closing the window, or leaving when the video
+   *           cannot float, keeps playing on the audio-only rendition behind a
+   *           media notification that taps back into the app.
    */
   background_mode?: 'pip' | 'audio';
   /** Scroll over the player to adjust volume. Default true. */
@@ -916,7 +919,10 @@ export interface CustomThemePalette {
   accent: CustomThemeColor;
   accentHover: CustomThemeColor;
   accentMuted: CustomThemeColor;
-  
+  /** Written by Rust on load (theme_palette::lift_custom_themes): the accent
+   *  floored to 3:1 on the theme's raised surface. Absent on an older save. */
+  accentOnSurface?: CustomThemeColor;
+
   // Border colors
   border: CustomThemeColor;
   borderLight: CustomThemeColor;

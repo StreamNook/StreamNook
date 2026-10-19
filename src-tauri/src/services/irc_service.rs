@@ -696,6 +696,29 @@ fn get_bridge_bringup_lock() -> &'static Mutex<()> {
     BRIDGE_BRINGUP_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Moves on at every full stop. Aborting the bridge's server task stops it
+/// accepting, but each page socket already upgraded runs in a task of its own
+/// with its own handle on the old broadcaster, so it stayed open with nothing
+/// feeding it: the page saw a healthy socket, never reconnected, and its chat
+/// went silent until a watchdog noticed. Each socket watches this instead and
+/// closes when it moves past the value its server was built at.
+static BRIDGE_CLOSE: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
+
+fn bridge_close() -> &'static tokio::sync::watch::Sender<u64> {
+    BRIDGE_CLOSE.get_or_init(|| tokio::sync::watch::channel(0).0)
+}
+
+/// The value a bridge server built now is born at.
+fn bridge_generation() -> u64 {
+    *bridge_close().borrow()
+}
+
+/// Closes every page socket the bridge serves now (code 1012, "service
+/// restart"), so each page reconnects at once to whatever bridge comes next.
+fn close_page_sockets() {
+    bridge_close().send_modify(|g| *g = g.wrapping_add(1));
+}
+
 fn get_current_channels() -> &'static Mutex<HashSet<String>> {
     CURRENT_CHANNELS.get_or_init(|| Mutex::new(HashSet::new()))
 }
@@ -3223,9 +3246,17 @@ impl IrcService {
     async fn handle_local_ws(
         local_socket: warp::ws::WebSocket,
         tx: Arc<broadcast::Sender<BridgeFrame>>,
+        born: u64,
     ) {
         let (mut local_tx, mut local_rx) = local_socket.split();
         let mut rx = tx.subscribe();
+        // Resolves once a full stop has come after this socket's server was
+        // built, even one that landed before this task started.
+        let mut closing = bridge_close().subscribe();
+        let stopped = async move {
+            let _ = closing.wait_for(|g| *g != born).await;
+        };
+        tokio::pin!(stopped);
 
         debug!("[WS] New local WebSocket client connected");
 
@@ -3303,6 +3334,13 @@ impl IrcService {
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = &mut stopped => {
+                    let _ = local_tx
+                        .send(warp::ws::Message::close_with(1012u16, "chat service stopped"))
+                        .await;
+                    debug!("[WS] Closed a page socket: the chat service stopped");
+                    break;
+                }
                 frame = rx.recv() => match frame {
                     Ok(f) => {
                         if let Some(text) = route.on_frame(&f) {
@@ -5440,7 +5478,8 @@ impl IrcService {
         // Clear IRC writer
         *get_irc_writer().lock().await = None;
 
-        // Stop WS server
+        // Stop WS server. This stops it accepting; the page sockets it already
+        // serves are closed at the end, once everything below is cleared.
         if let Some(handle) = get_ws_server_handle().lock().await.take() {
             handle.abort();
         }
@@ -5476,7 +5515,9 @@ impl IrcService {
         // bring-up rather than thinking a stale port is still serving.
         *get_ws_port().lock().await = None;
 
-        debug!("[IRC Chat] Chat service stopped");
+        // Last, so a page that reconnects at once finds everything cleared.
+        close_page_sockets();
+        record_lifecycle("chat service stopped: IRC and the bridge are down, page sockets closed");
 
         Ok(())
     }
@@ -5563,9 +5604,10 @@ impl IrcService {
         let tx = Arc::new(tx);
 
         let tx_for_warp = tx.clone();
+        let born = bridge_generation();
         let local_ws = warp::ws().map(move |ws: warp::ws::Ws| {
             let tx_clone = tx_for_warp.clone();
-            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone))
+            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
         // Pick a free port via an ephemeral probe bind, then hand it to warp. (warp 0.4
         // exposes no ephemeral bind that returns the port, and a fixed random port in a
@@ -5618,9 +5660,10 @@ impl IrcService {
         }
         let previous = *get_ws_port().lock().await;
         let tx_for_warp = tx.clone();
+        let born = bridge_generation();
         let local_ws = warp::ws().map(move |ws: warp::ws::Ws| {
             let tx_clone = tx_for_warp.clone();
-            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone))
+            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
         let probe = match previous {
             Some(p) => match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
@@ -7405,6 +7448,23 @@ mod chat_fixture_tests {
         let channel = inputs["channel"].as_str().unwrap().to_string();
         let set: EmoteSet = serde_json::from_value(inputs["emotes"].clone()).expect("emote set");
         rebuild_parse_lookup(&channel, &set);
+        // The invite's card as Discord's public invite read answers it.
+        crate::services::link_preview_cache::remember_for_test(
+            "https://discord.gg/discord-developers",
+            crate::commands::link_preview::LinkPreview {
+                url: "https://discord.gg/discord-developers".into(),
+                kind: "discord".into(),
+                title: Some("Discord Developers".into()),
+                image: Some(
+                    "https://cdn.discordapp.com/icons/613425648685547541/a_1d18823294be0ccfbcdec090c8ffcc0d.gif?size=128".into(),
+                ),
+                site_name: Some("Discord".into()),
+                author: Some("discord.gg/discord-developers".into()),
+                online_count: Some(70761),
+                member_count: Some(308559),
+                ..Default::default()
+            },
+        );
         crate::services::chat_row_view::note_twitch_badges(
             None,
             inputs["twitch_badges"].as_array().unwrap().iter().map(|b| {
@@ -7482,6 +7542,12 @@ mod chat_fixture_tests {
         // A mention of the viewer is stamped by the rule engine.
         assert_eq!(row(&parsed, "fx-0007")["metadata"]["is_mentioned"], json!(true));
 
+        // A Discord invite carries its server card, read before the row was sent.
+        let invite = &row(&parsed, "fx-discord")["metadata"]["view"]["previews"][0];
+        assert_eq!(invite["url"], json!("https://discord.gg/discord-developers"));
+        assert_eq!(invite["preview"]["kind"], json!("discord"));
+        assert_eq!(invite["preview"]["member_count"], json!(308559));
+
         // Paints, Twitch badge art and the 7TV badge for a chatter the cache knows.
         let owl = row(&parsed, "fx-0001");
         assert_eq!(owl["metadata"]["view"]["paint"]["kind"], json!("linear"));
@@ -7515,5 +7581,46 @@ mod chat_fixture_tests {
             });
             std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").expect("write fixtures");
         }
+    }
+}
+
+#[cfg(test)]
+mod bridge_close_tests {
+    use super::{bridge_generation, close_page_sockets, IrcService};
+    use futures_util::StreamExt;
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// The close code a page socket ends with, or `None` when it ended without one.
+    async fn close_code(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ) -> Option<u16> {
+        while let Some(frame) = socket.next().await {
+            match frame {
+                Ok(Message::Close(c)) => return c.map(|f| u16::from(f.code)),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    // Drives the same close `IrcService::stop` ends with, without the rest of
+    // its teardown: that clears process-wide caches other tests here read.
+    #[tokio::test]
+    async fn a_full_stop_closes_the_page_socket_it_left_open() {
+        let port = IrcService::ensure_local_ws_bridge().await.expect("bridge up");
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
+            .await
+            .expect("page socket connects");
+
+        let before = bridge_generation();
+        close_page_sockets();
+        assert_ne!(bridge_generation(), before);
+
+        let code = tokio::time::timeout(Duration::from_secs(5), close_code(&mut socket))
+            .await
+            .expect("the page socket closes within five seconds");
+        assert_eq!(code, Some(1012), "a service-restart close, so the page reconnects");
     }
 }

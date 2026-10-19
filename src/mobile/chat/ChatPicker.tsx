@@ -17,6 +17,8 @@ import { ProviderMark } from '../../components/ProviderLogo';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { lastLiveLabel } from '../../utils/lastLive';
 import { formatViewerCount } from '../../utils/streamStats';
+import { CollabAvatarStack } from '../../components/SharedViewers';
+import { groupFor, isTogether, type ChannelGroup } from '../../utils/sharedViewers';
 
 /** A channel as `chat_picker`, `search_chat_rooms` and `chat_room_from_link` answer it. */
 interface PickerRow {
@@ -49,8 +51,10 @@ const Row: React.FC<{
   open: boolean;
   mark: boolean;
   following?: boolean;
+  /** A live room streaming together or sharing its chat, as the cards say it. */
+  group?: ChannelGroup;
   onPick: (row: PickerRow) => void;
-}> = ({ row, open, mark, following, onPick }) => {
+}> = ({ row, open, mark, following, group, onPick }) => {
   const name = row.user_name || row.user_login;
   const detail = row.pasted
     ? 'Open this Kick chat'
@@ -95,7 +99,18 @@ const Row: React.FC<{
           <span className="truncate">{name}</span>
           {mark && row.provider !== 'twitch' && <ProviderMark provider={row.provider} size={12} />}
         </span>
-        <span className="block text-[12.5px] text-textMuted truncate">{detail}</span>
+        {/* One line: the group's faces and word lead it when there is one. */}
+        <span className="flex items-center gap-1 min-w-0 text-[12.5px] text-textMuted">
+          {group && (
+            <>
+              <span className="shrink-0">
+                <CollabAvatarStack collab={group} size={14} />
+              </span>
+              <span className="shrink-0">{isTogether(group) ? 'Together' : 'Shared chat'} ·</span>
+            </>
+          )}
+          <span className="truncate">{detail}</span>
+        </span>
       </span>
       {open ? (
         <span className="shrink-0 h-[22px] px-2.5 rounded-full flex items-center gap-1 text-[11.5px] font-semibold text-textPrimary bg-accent/20">
@@ -130,6 +145,10 @@ export const ChatPicker: React.FC<{
   const setActive = useChatTabsStore((s) => s.setActive);
   // The snapshot's Following lists moved: read the picker again.
   const following = useAppStore((s) => s.following);
+  const collabs = useAppStore((s) => s.collaborations);
+  const sharedChats = useAppStore((s) => s.sharedChats);
+  const groupOf = (row: PickerRow): ChannelGroup | undefined =>
+    row.is_live ? groupFor(collabs, sharedChats, { provider: row.provider, user_id: row.user_id }) : undefined;
 
   const [lists, setLists] = useState<PickerLists>(EMPTY);
   const [query, setQuery] = useState('');
@@ -236,7 +255,7 @@ export const ChatPicker: React.FC<{
                   open={openKeys.has(row.key)}
                   mark={mixedFound}
                   following={followed.has(row.key)}
-                  onPick={pick}
+                  group={groupOf(row)} onPick={pick}
                 />
               ))}
             </>
@@ -248,7 +267,7 @@ export const ChatPicker: React.FC<{
               <div className="px-2 py-2 text-[13px] text-textMuted">Nobody you follow is live.</div>
             ) : (
               lists.live.map((row) => (
-                <Row key={row.key} row={row} open={openKeys.has(row.key)} mark={lists.mixed_platforms} onPick={pick} />
+                <Row key={row.key} row={row} open={openKeys.has(row.key)} mark={lists.mixed_platforms} group={groupOf(row)} onPick={pick} />
               ))
             )}
             {lists.offline.length > 0 && (
@@ -260,7 +279,7 @@ export const ChatPicker: React.FC<{
                     row={row}
                     open={openKeys.has(row.key)}
                     mark={lists.mixed_platforms}
-                    onPick={pick}
+                    group={groupOf(row)} onPick={pick}
                   />
                 ))}
               </>

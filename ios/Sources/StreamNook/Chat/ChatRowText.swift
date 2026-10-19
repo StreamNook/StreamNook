@@ -98,11 +98,12 @@ struct RowText {
         builder.font(size, .regular).xHeight / 2
     }
 
-    /// A badge whose image could not load takes no room at all.
+    /// A badge whose image could not load takes no room at all. An animated badge (a StreamNook
+    /// member's, a 7TV one) moves whatever the emote setting says, as on desktop.
     mutating func badge(_ badge: ChatViewBadge, gapAfter: CGFloat) {
         guard !ImagePipeline.shared.hasFailed(badge.url) else { return }
         let size = builder.badgeSize
-        inline(.image(.badge, url: badge.url, pixelHeight: Int(size * builder.scale), overlays: [], effects: 0, animate: false),
+        inline(.image(.badge, url: badge.url, pixelHeight: Int(size * builder.scale), overlays: [], effects: 0, animate: true),
                width: size, height: size, centerAboveBaseline: 0.38 * fontSize, marginRight: gapAfter)
     }
 

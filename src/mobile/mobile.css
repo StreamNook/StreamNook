@@ -340,6 +340,38 @@ body:has(.sn-mobile) .glass-input:focus {
   background-color: rgba(255, 255, 255, 0.06);
 }
 
+/* The grouped card (mobile/ui/GroupedList): the settings pages' sections and
+   any other list of rows on a page. Solid at every Glassiness, the way a
+   static popover is: the theme's raised surface over its background, the pair
+   the segment track uses, so the text floors hold and nothing behind the card
+   reads through. The corner is the phone menu's 14px. Not scoped under
+   .sn-mobile, so a card inside a sheet (portaled into <body>) gets it too. */
+.sn-group-card {
+  border-radius: 14px;
+  background: linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background);
+  overflow: hidden;
+}
+/* Each row draws the hairline above itself, starting after the icon column
+   (16px inset, 24px icon, 12px gap) and running to the card's trailing edge.
+   The body is lifted a pixel under the card's clipped top, so the first row's
+   line never shows whatever wrappers the rows sit in. */
+.sn-group-body {
+  margin-top: -1px;
+}
+.sn-group-row {
+  position: relative;
+}
+.sn-group-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 52px;
+  right: 0;
+  height: 1px;
+  background: var(--color-border-subtle);
+  pointer-events: none;
+}
+
 /* Chat floating over landscape video on a phone. The desktop overlay's
    recipe (a tint of the theme background at the chosen opacity, a faint top
    sheen, one inset hairline on the video edge) minus its backdrop blur: the
@@ -399,6 +431,11 @@ body:has(.sn-mobile) .glass-input:focus {
 }
 .sn-mobile .chrome-glaze--dock .glaze-selected {
   background-color: rgb(0 0 0 / 0.5);
+}
+/* On a light theme a dark pill sinks the theme's dark text into it, so the
+   chosen item is a tint of that text instead. */
+:root[data-theme-tone='light'] .sn-mobile .glaze-selected {
+  background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
 /* The floor under the floating tab bar: the page's own background rising from
