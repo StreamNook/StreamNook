@@ -233,15 +233,23 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     },
   };
 
-  // The handle: a compact grabber at the top center, which also closes on a
-  // tap. The rooms below get the air (CHATS_STRIP_H), not the grabber row.
+  // The handle: the whole band from the top of the screen (through the status
+  // bar's inset) down to the rooms, so it is easy to catch. A tap closes, a
+  // slide down leaves, and the pill lights up while it is held. It takes no
+  // more layout room than its 16 px row: the rooms below get the air
+  // (CHATS_STRIP_H), and the band reaches up into the inset instead.
   const grabber = (
     <button
       onClick={exitChats}
       aria-label="Close chats"
-      className="mx-auto flex h-4 w-16 shrink-0 items-start justify-center pt-1.5"
+      className="group w-full shrink-0 flex items-start justify-center"
+      style={{
+        marginTop: 'calc(-1 * var(--sn-safe-t, 0px))',
+        paddingTop: 'calc(var(--sn-safe-t, 0px) + 6px)',
+        height: 'max(calc(var(--sn-safe-t, 0px) + 16px), 44px)',
+      }}
     >
-      <span className="block h-[5px] w-9 rounded-full bg-textMuted/45" />
+      <span className="block h-[5px] w-10 rounded-full bg-textMuted/60 transition-[width,background-color] duration-150 group-active:w-12 group-active:bg-textSecondary" />
     </button>
   );
 
@@ -324,8 +332,10 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-1 [scrollbar-width:none] sn-fade-top">
-          <ChatPicker bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
+        // The search field stays put and fully drawn; only the lists under it
+        // scroll and fade.
+        <div className="flex-1 min-h-0 flex flex-col px-2 pt-1">
+          <ChatPicker scrolls bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
         </div>
       ) : (
         <>

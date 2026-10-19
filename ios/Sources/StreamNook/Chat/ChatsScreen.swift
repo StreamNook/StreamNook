@@ -84,22 +84,16 @@ struct ChatsScreen: View {
         .onChange(of: keepsAwake) { _, on in awake.start(on: on, idle: rooms.state.keepAwakeIdleSecs) }
     }
 
-    /// The handle: a grabber at the top center (a tap closes), then the rooms. A slide down that
-    /// starts here leaves Chats; the chat list is never a handle, so a drag there stays a scroll.
+    /// The handle: the grabber band (a tap closes), then the rooms. A slide down that starts here
+    /// leaves Chats; the chat list is never a handle, so a drag there stays a scroll.
     private var header: some View {
         VStack(spacing: 0) {
             Button {
                 model.nav.exitChats()
             } label: {
-                // Compact: the rooms below get the air, not this row.
-                Capsule()
-                    .fill(SN.textMuted.opacity(0.45))
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 6)
-                    .frame(width: 64, height: 16, alignment: .top)
-                    .contentShape(Rectangle())
+                Color.clear
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GrabberBand(held: drop > 0, reach: Self.topInset))
             .accessibilityLabel("Close chats")
             if model.signedIn, !rooms.tabs.isEmpty {
                 // 40 pt capsules with 7 pt of air above and below, clear of the separator.
@@ -126,6 +120,12 @@ struct ChatsScreen: View {
                     }
                 }
         )
+    }
+
+    /// The status bar's inset, which the grabber band reaches up through.
+    @MainActor private static var topInset: CGFloat {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.top ?? 0
     }
 
     /// What stays below the chat: the window's home-indicator inset less the 24 pt the watch
@@ -213,6 +213,30 @@ struct ChatsScreen: View {
         TwitchStream(id: tab.channel, userLogin: tab.login, userName: tab.label, title: "",
                      viewerCount: tab.viewerCount ?? 0, gameName: "", userID: tab.channelID,
                      profileImageURL: tab.avatar, isLive: true, provider: tab.provider, key: tab.channel)
+    }
+}
+
+/// The grabber: a 40 pt pill in a full-width band that reaches from the top of the screen
+/// (through the status bar's inset) down to the rooms, so it is easy to catch. It takes only its
+/// 16 pt row in the layout. Held (pressed, or while the screen follows a slide), the pill widens
+/// and brightens.
+private struct GrabberBand: ButtonStyle {
+    var held: Bool
+    /// How far above its row the band reaches: the status bar's inset.
+    var reach: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        let on = held || configuration.isPressed
+        Capsule()
+            .fill(on ? SN.textSecondary : SN.textMuted.opacity(0.6))
+            .frame(width: on ? 48 : 40, height: 5)
+            .padding(.top, 6)
+            .frame(maxWidth: .infinity, minHeight: 16, maxHeight: 16, alignment: .top)
+            // At least 44 pt to catch, wherever the inset leaves it.
+            .padding(.top, max(reach, 28))
+            .contentShape(Rectangle())
+            .padding(.top, -max(reach, 28))
+            .animation(.easeOut(duration: 0.15), value: on)
     }
 }
 
