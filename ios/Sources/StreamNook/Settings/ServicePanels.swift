@@ -540,11 +540,14 @@ struct SupportPanel: View {
     @Environment(AppModel.self) private var model
     @State private var invite: Invite?
     @State private var bannerIndex = 0
+    @State private var iconIndex = 0
 
     struct Invite: Decodable {
         let name: String?
         let description: String?
         let icon_url: String?
+        /// The server icon to try in order (animated, then the same icon still).
+        let icon_urls: [String]?
         let banner_urls: [String]
         let online: Int?
         let members: Int?
@@ -580,7 +583,7 @@ struct SupportPanel: View {
                        detail: "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
                        help: "Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted.") { EmptyView() }
             SettingRow(title: "Version and platform",
-                       detail: "Records which build you are on, your operating system, and whether your updater is working.",
+                       detail: "Records which build you are on, your operating system, and whether update checks are getting through.",
                        help: "This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current.") { EmptyView() }
             SettingRow(title: "Linked accounts",
                        detail: "Records which other platforms you have connected, so they survive a reinstall.") { EmptyView() }
@@ -655,18 +658,27 @@ struct SupportPanel: View {
         .clipped()
     }
 
+    /// The first icon that loads, then the Penrose mark; the same list Android tries.
     private var serverIcon: some View {
-        AsyncImage(url: invite?.icon_url.flatMap(URL.init(string:))) { phase in
+        let urls = invite?.icon_urls ?? invite?.icon_url.map { [$0] } ?? []
+        let url = iconIndex < urls.count ? URL(string: urls[iconIndex]) : nil
+        return AsyncImage(url: url) { phase in
             if let image = phase.image {
                 image.resizable().scaledToFill()
+            } else if phase.error != nil, iconIndex + 1 < urls.count {
+                iconFallback.onAppear { iconIndex += 1 }
             } else {
-                PenroseMark(width: 44).accessibilityHidden(true)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(SN.backgroundTertiary)
+                iconFallback
             }
         }
         .frame(width: 68, height: 68)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(SN.backgroundTertiary, lineWidth: 4) }
+    }
+
+    private var iconFallback: some View {
+        PenroseMark(width: 44).accessibilityHidden(true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(SN.backgroundTertiary)
     }
 
     private func export() async {

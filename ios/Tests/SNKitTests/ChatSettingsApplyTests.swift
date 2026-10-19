@@ -112,28 +112,4 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
         #expect(SettingsPath.number("1.5") as? Double == 1.5)
         #expect(SettingsPath.number("slide") == nil)
     }
-
-    /// Event rows of a hidden kind are hidden on their platform only; ordinary messages never are.
-    @Test func hiddenEventKindsMatchByPlatformAndCategory() {
-        let gift = ChatMessage(id: "1", username: "a", content: "", tags: ["msg-id": "submysterygift"])
-        var raidMeta = ChatMetadata()
-        raidMeta.msgType = "raid"
-        let raid = ChatMessage(id: "2", username: "b", content: "", metadata: raidMeta)
-        let cheer = ChatMessage(id: "3", username: "c", content: "Cheer100", tags: ["bits": "100"])
-        let kickGift = ChatMessage(id: "4", username: "d", content: "", provider: "kick", tags: ["msg-id": "kick_gift"])
-        let plain = ChatMessage(id: "5", username: "e", content: "hello")
-
-        #expect(ChatEventCategory.key(of: gift) == "twitch:gift")
-        #expect(ChatEventCategory.key(of: raid) == "twitch:raid")
-        #expect(ChatEventCategory.key(of: cheer) == "twitch:cheer")
-        #expect(ChatEventCategory.key(of: kickGift) == "kick:gift")
-        #expect(ChatEventCategory.key(of: plain) == nil)
-
-        let hidden = ["twitch:gift"]
-        #expect(ChatEventCategory.isHidden(gift, hidden))
-        #expect(!ChatEventCategory.isHidden(kickGift, hidden))
-        #expect(!ChatEventCategory.isHidden(raid, hidden))
-        #expect(!ChatEventCategory.isHidden(plain, hidden))
-        #expect(!ChatEventCategory.isHidden(gift, []))
-    }
 }

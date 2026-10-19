@@ -11,21 +11,36 @@ public struct RosterAccount: Decodable, Sendable, Equatable {
     public var avatarURL: String?
     /// The id that platform's chat stamps on this account's messages (Kick's numeric account id).
     public var accountID: String?
+    /// This build can watch the platform's streams and chat (the core's `can_watch`).
+    public var canWatch: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, status, name, handle
         case avatarURL = "avatar_url"
         case accountID = "account_id"
+        case canWatch = "can_watch"
     }
 
     public init(id: String, status: String, name: String? = nil, handle: String? = nil, avatarURL: String? = nil,
-                accountID: String? = nil) {
+                accountID: String? = nil, canWatch: Bool = false) {
         self.id = id
         self.status = status
         self.name = name
         self.handle = handle
         self.avatarURL = avatarURL
         self.accountID = accountID
+        self.canWatch = canWatch
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        status = try c.decode(String.self, forKey: .status)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        handle = try c.decodeIfPresent(String.self, forKey: .handle)
+        avatarURL = try c.decodeIfPresent(String.self, forKey: .avatarURL)
+        accountID = try c.decodeIfPresent(String.self, forKey: .accountID)
+        canWatch = try c.decodeIfPresent(Bool.self, forKey: .canWatch) ?? false
     }
 
     /// Connected means the core holds a usable token; an expired row reads as signed out.
@@ -51,6 +66,9 @@ public struct AccountRoster: Decodable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey { case main, extras }
 
     public func account(_ id: String) -> RosterAccount? { main.first { $0.id == id } }
+
+    /// The platforms this build can watch, in the roster's order.
+    public var watchable: [String] { main.filter(\.canWatch).map(\.id) }
 }
 
 /// A channel on the follow list the core keeps for platforms other than Twitch

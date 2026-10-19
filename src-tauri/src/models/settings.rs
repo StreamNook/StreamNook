@@ -1825,11 +1825,81 @@ impl Settings {
             .get_mut("custom_themes")
             .is_some_and(crate::services::theme_palette::lift_custom_themes)
     }
+
+    /// Rewrites hidden chat event keys an older iPhone build saved in its own
+    /// spelling (`twitch:subscriptions`, `kick:follows`) into the keys every
+    /// shell matches rows by (`twitch:subscription`, `kick:follow`), so a kind
+    /// someone turned off stays off on every device. Runs on load, on every
+    /// save and on import; returns whether anything changed.
+    pub fn map_legacy_event_keys(&mut self) -> bool {
+        let Some(list) = self
+            .extra
+            .get_mut("chat_events")
+            .and_then(|e| e.get_mut("hidden_provider_events"))
+            .and_then(|l| l.as_array_mut())
+        else {
+            return false;
+        };
+        let mut changed = false;
+        let mut next: Vec<serde_json::Value> = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            let mapped = item.as_str().and_then(legacy_event_key).map(serde_json::Value::from);
+            changed |= mapped.is_some();
+            let value = mapped.unwrap_or_else(|| item.clone());
+            if next.contains(&value) {
+                changed = true;
+            } else {
+                next.push(value);
+            }
+        }
+        if changed {
+            *list = next;
+        }
+        changed
+    }
+}
+
+/// The settings key for a hidden chat event an older iPhone build wrote, or
+/// None when `key` is already current.
+fn legacy_event_key(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "twitch:subscriptions" => "twitch:subscription",
+        "twitch:gifts" => "twitch:gift",
+        "twitch:bits" => "twitch:cheer",
+        "twitch:raids" => "twitch:raid",
+        "twitch:milestones" => "twitch:milestone",
+        "twitch:channel_points" => "twitch:redemption",
+        "twitch:announcements" => "twitch:announcement",
+        "kick:subscriptions" => "kick:subscription",
+        "kick:gifts" => "kick:gift",
+        "kick:follows" => "kick:follow",
+        "kick:raids" => "kick:raid",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod backup_persistence_tests {
     use super::*;
+
+    #[test]
+    fn legacy_iphone_event_keys_become_the_shared_ones() {
+        let mut s = Settings::default();
+        s.extra.insert(
+            "chat_events".into(),
+            serde_json::json!({ "hidden_provider_events": [
+                "twitch:subscriptions", "twitch:bits", "twitch:subscription", "kick:follows", "youtube:cheer", 7
+            ] }),
+        );
+        assert!(s.map_legacy_event_keys());
+        assert_eq!(
+            s.extra["chat_events"]["hidden_provider_events"],
+            serde_json::json!(["twitch:subscription", "twitch:cheer", "kick:follow", "youtube:cheer", 7])
+        );
+        // Current keys are left alone, and a second pass changes nothing.
+        assert!(!s.map_legacy_event_keys());
+        assert!(!Settings::default().map_legacy_event_keys());
+    }
 
     #[test]
     fn header_marks_reset_the_global_platform_switches_once() {

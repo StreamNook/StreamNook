@@ -44,6 +44,7 @@ import { WarningBox } from './WarningBox';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
+import { formatShortCount } from '../../utils/streamStats';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { ManageChannelSheet } from './ManageChannelSheet';
 
@@ -263,6 +264,12 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const composerCheer = useCheerDraft(isTwitch ? channel : null, text);
   const cheerBlocked = !!composerCheer && composerCheer.problems.length > 0;
   const hasWallet = isTwitch && !!channel && !!channelId && (points.balance !== null || !!walletBits);
+  // Wallet balance: Always puts the short balance beside the icon; Hidden (and
+  // a saved desktop On hover, which a touch cannot do) keeps just the icon.
+  const balanceAlways = useAppStore(
+    (s) => s.settings.chat_input?.show_points_balance_inline === true && s.settings.chat_input?.hide_points_balance !== true,
+  );
+  const shownBalance = balanceAlways && !pointsOpen ? (points.balance ?? walletBits?.balance ?? null) : null;
   // One rewards read per channel while it has a points button, so the sheet's
   // first open paints Rust's list instead of waiting on Twitch.
   const hasPointsButton = !!channel && !!channelId && points.balance !== null;
@@ -680,11 +687,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
               <CircleSlash size={19} strokeWidth={2} />
             </button>
           )}
-          {/* Icon only. The balance was briefly shown here to prove earning was
-              happening, and once proven it went back: it cost the message field
-              real width to state a number nobody needs at rest, and the menu has
-              always printed it in full. What matters is the MOMENT of earning,
-              which the flash and the floating amount carry. */}
+          {/* Icon only unless Wallet balance is Always: a number at rest costs
+              the message field real width, and the menu always prints it in
+              full. What matters is the MOMENT of earning, which the flash and
+              the floating amount carry. */}
           {hasWallet && (
             <button
               onClick={() => {
@@ -696,9 +702,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 setEmotesOpen(false);
                 setPointsOpen((v) => !v);
               }}
-              className={`relative shrink-0 w-9 h-9 flex items-center justify-center active:opacity-70 ${
-                pointsOpen ? 'text-accent' : 'text-textSecondary'
-              }`}
+              className={`relative shrink-0 h-9 flex items-center justify-center gap-1 active:opacity-70 ${
+                shownBalance !== null ? 'px-1.5' : 'w-9'
+              } ${pointsOpen ? 'text-accent' : 'text-textSecondary'}`}
               aria-label={pointsOpen ? 'Close the wallet' : 'Wallet'}
             >
               {/* The amount, drifting up off the icon and dissolving.
@@ -804,6 +810,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   </span>
                 )}
               </motion.span>
+              {shownBalance !== null && (
+                <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap text-textPrimary">
+                  {formatShortCount(shownBalance)}
+                </span>
+              )}
             </button>
           )}
         </div>

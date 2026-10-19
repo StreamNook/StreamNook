@@ -59,6 +59,9 @@ public struct ChatRoomBuffer: Sendable {
         didSet { if paused { pausedOverflowAllowance = Self.pausedOverflow } }
     }
     public private(set) var modes: ChatRoomModes?
+    /// Chat event kinds turned off (`provider:category`): a row the core keyed with one is never
+    /// held, and setting this drops the held ones.
+    public private(set) var hiddenEvents: Set<String> = []
 
     static let pausedOverflow = 150
     static let decayPerBatch = 5
@@ -68,6 +71,26 @@ public struct ChatRoomBuffer: Sendable {
 
     public init(cap: Int = 100) {
         self.cap = cap
+    }
+
+    /// Whether a row is a chat event kind in `hidden`.
+    public static func hides(_ message: ChatMessage, _ hidden: Set<String>) -> Bool {
+        guard !hidden.isEmpty, let event = message.metadata.view?.event else { return false }
+        return hidden.contains(event)
+    }
+
+    /// Turns event kinds off or back on. Rows already held of a kind now off are dropped; answers
+    /// whether any were, so the list can be laid out again. A kind turned back on shows from its
+    /// next row.
+    @discardableResult
+    public mutating func setHiddenEvents(_ hidden: Set<String>) -> Bool {
+        guard hidden != hiddenEvents else { return false }
+        hiddenEvents = hidden
+        guard rows.contains(where: { Self.hides($0.message, hidden) }) else { return false }
+        rows.removeAll { Self.hides($0.message, hidden) }
+        base = 0
+        index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        return true
     }
 
     public func row(_ id: String) -> ChatRowModel? {
@@ -94,7 +117,7 @@ public struct ChatRoomBuffer: Sendable {
                     row.revision += 1
                     rows[i - base] = row
                     updated[row.id] = row
-                } else {
+                } else if !Self.hides(message, hiddenEvents) {
                     let row = ChatRowModel(message: message, live: !message.metadata.fromBackfill)
                     index[message.id] = base + rows.count
                     rows.append(row)
@@ -264,7 +287,7 @@ public struct ChatRoomBuffer: Sendable {
     /// no send time keeps the place of the row before it. Answers whether anything was added.
     public mutating func insertInTimeOrder(_ messages: [ChatMessage]) -> Bool {
         var seen = Set<String>()
-        let fresh = messages.filter { index[$0.id] == nil && seen.insert($0.id).inserted }
+        let fresh = messages.filter { index[$0.id] == nil && !Self.hides($0, hiddenEvents) && seen.insert($0.id).inserted }
         guard !fresh.isEmpty else { return false }
         var last: Int64 = 0
         var keyed: [(at: Int64, order: Int, row: ChatRowModel)] = []

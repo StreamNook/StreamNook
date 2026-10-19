@@ -34,7 +34,7 @@ struct ModerationSettings: View {
 
     var body: some View {
         SettingsBlock(title: "Moderation", detail: "The buttons on a user card in channels you moderate.") {
-            WideRow(title: "Timeout lengths", detail: "Tap one to change it. The desktop's hover dock uses the same four.",
+            WideRow(title: "Timeout lengths", detail: "Tap one to change it. Every quick timeout uses the same four.",
                     paths: ["moderation.timeout_presets"]) {
                 HStack(spacing: 7) {
                     ForEach(Array(four.enumerated()), id: \.offset) { index, seconds in

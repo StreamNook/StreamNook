@@ -29,44 +29,55 @@ struct WalletButton: View {
             if wallet.chestWaiting { Task { await wallet.claimChest(channelID: session.roomID) } }
             wallet.sheetOpen = true
         } label: {
-            ZStack(alignment: .topTrailing) {
-                face(wallet)
-                    .keyframeAnimator(initialValue: Beat(), trigger: pulse) { content, beat in
-                        content
-                            .scaleEffect(beat.scale)
-                            .brightness(beat.brightness)
-                            .shadow(color: Color(red: 0.92, green: 0.70, blue: 0.03).opacity(beat.glow), radius: 7 * beat.glow)
-                    } keyframes: { _ in
-                        KeyframeTrack(\.scale) {
-                            CubicKeyframe(1.3, duration: 0.25)
-                            CubicKeyframe(1, duration: 0.27)
-                            CubicKeyframe(1.3, duration: 0.25)
-                            CubicKeyframe(1, duration: 0.38)
+            HStack(spacing: 4) {
+                ZStack(alignment: .topTrailing) {
+                    face(wallet)
+                        .keyframeAnimator(initialValue: Beat(), trigger: pulse) { content, beat in
+                            content
+                                .scaleEffect(beat.scale)
+                                .brightness(beat.brightness)
+                                .shadow(color: Color(red: 0.92, green: 0.70, blue: 0.03).opacity(beat.glow), radius: 7 * beat.glow)
+                        } keyframes: { _ in
+                            KeyframeTrack(\.scale) {
+                                CubicKeyframe(1.3, duration: 0.25)
+                                CubicKeyframe(1, duration: 0.27)
+                                CubicKeyframe(1.3, duration: 0.25)
+                                CubicKeyframe(1, duration: 0.38)
+                            }
+                            KeyframeTrack(\.glow) {
+                                CubicKeyframe(0.95, duration: 0.25)
+                                CubicKeyframe(0, duration: 0.27)
+                                CubicKeyframe(0.95, duration: 0.25)
+                                CubicKeyframe(0, duration: 0.38)
+                            }
+                            KeyframeTrack(\.brightness) {
+                                CubicKeyframe(0.35, duration: 0.25)
+                                CubicKeyframe(0, duration: 0.27)
+                                CubicKeyframe(0.35, duration: 0.25)
+                                CubicKeyframe(0, duration: 0.38)
+                            }
                         }
-                        KeyframeTrack(\.glow) {
-                            CubicKeyframe(0.95, duration: 0.25)
-                            CubicKeyframe(0, duration: 0.27)
-                            CubicKeyframe(0.95, duration: 0.25)
-                            CubicKeyframe(0, duration: 0.38)
-                        }
-                        KeyframeTrack(\.brightness) {
-                            CubicKeyframe(0.35, duration: 0.25)
-                            CubicKeyframe(0, duration: 0.27)
-                            CubicKeyframe(0.35, duration: 0.25)
-                            CubicKeyframe(0, duration: 0.38)
-                        }
+                    if wallet.chestWaiting {
+                        // The gain's amber, rimmed dark so it reads apart from the glyph's arc.
+                        Circle()
+                            .fill(GainFloat.amber)
+                            .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1.5))
+                            .frame(width: 9, height: 9)
+                            .offset(x: 1, y: 4)
+                            .accessibilityHidden(true)
                     }
-                if wallet.chestWaiting {
-                    // The gain's amber, rimmed dark so it reads apart from the glyph's arc.
-                    Circle()
-                        .fill(GainFloat.amber)
-                        .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1.5))
-                        .frame(width: 9, height: 9)
-                        .offset(x: 1, y: 4)
-                        .accessibilityHidden(true)
+                }
+                if let balance = shownBalance(wallet) {
+                    Text(balance)
+                        .font(.sn(12, 600))
+                        .monospacedDigit()
+                        .foregroundStyle(SN.textPrimary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
-            .frame(width: 32, height: 36)
+            .padding(.horizontal, shownBalance(wallet) == nil ? 0 : 4)
+            .frame(minWidth: 32, minHeight: 36)
             .contentShape(Rectangle())
             .overlay(alignment: .top) {
                 if let pop = wallet.pops.first {
@@ -94,6 +105,13 @@ struct WalletButton: View {
         } else if let gem = wallet.bits?.gemURL {
             RewardArt(url: gem, width: 19, height: 19, radius: 0, fit: true, placeholder: nil)
         }
+    }
+
+    /// The short balance beside the icon while Wallet balance is Always and the sheet is closed.
+    private func shownBalance(_ wallet: WalletModel) -> String? {
+        guard session.style.walletBalanceShown, !wallet.sheetOpen,
+              let balance = wallet.points?.balance ?? wallet.bits?.balance else { return nil }
+        return balance.formatted(.number.notation(.compactName))
     }
 
     /// "Wallet: 12,850 Nooks, 300 bits".

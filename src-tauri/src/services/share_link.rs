@@ -174,6 +174,18 @@ pub fn parse(url: &url::Url) -> Option<WatchLink> {
     })
 }
 
+/// The stream a link should open on this build: `parse`, then nothing for a
+/// platform this build cannot watch (`account_roster::can_watch`). A phone
+/// handed a YouTube or TikTok link simply opens nothing, the same as a link
+/// it cannot read.
+pub fn openable(url: &url::Url) -> Option<WatchLink> {
+    openable_with(url, crate::services::account_roster::can_watch)
+}
+
+fn openable_with(url: &url::Url, can_watch: impl Fn(&str) -> bool) -> Option<WatchLink> {
+    parse(url).filter(|link| can_watch(link.provider))
+}
+
 /// `parse` for a link held as text.
 pub fn parse_str(link: &str) -> Option<WatchLink> {
     url::Url::parse(link.trim()).ok().as_ref().and_then(parse)
@@ -334,6 +346,21 @@ mod tests {
         // An unknown channel with no row id shares the channel's live page.
         assert_eq!(share_channel("youtube", "@nobody-known-here", Some("")), "@nobody-known-here");
         assert_eq!(share_channel("kick", "xqc", Some("123")), "xqc");
+    }
+
+    #[test]
+    fn a_build_that_cannot_watch_a_platform_opens_none_of_its_links() {
+        let url = |s: &str| url::Url::parse(s).unwrap();
+        let phone = |p: &str| !matches!(p, "youtube" | "tiktok");
+        assert!(openable_with(&url("streamnook://watch/youtube/dQw4w9WgXcQ"), phone).is_none());
+        assert!(openable_with(&url("streamnook://watch/tiktok/someone"), phone).is_none());
+        assert!(openable_with(&url("https://streamnook.app/w/youtube/@handle?d=0101"), phone).is_none());
+        assert_eq!(openable_with(&url("streamnook://watch/kick/xqc"), phone).map(|l| l.stream_key()).as_deref(), Some("kick:xqc"));
+        assert_eq!(openable_with(&url("streamnook://watch/xqc"), phone).map(|l| l.stream_key()).as_deref(), Some("xqc"));
+        // Every platform opens where the build can watch it.
+        assert!(openable_with(&url("streamnook://watch/youtube/dQw4w9WgXcQ"), |_| true).is_some());
+        // This build answers from the roster.
+        assert_eq!(openable(&url("streamnook://watch/tiktok/someone")).is_some(), cfg!(desktop));
     }
 
     #[test]

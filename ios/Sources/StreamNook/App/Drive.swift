@@ -10,7 +10,7 @@ import SwiftUI
 /// - `fake`, `fake:signedin` run the build on FakeCore's fixtures, signed out or signed in (read
 ///   when the core is made, so put them anywhere in the list)
 /// - `setup` shows the first-run wizard (without it a drive run skips the wizard for the session);
-///   `setup:PAGE` opens it on `welcome`, `accounts`, `drops`, `notifications` or `done`
+///   `setup:PAGE` opens it on `welcome`, `accounts`, `drops`, `kick` or `done`
 /// - `tab:NAME` picks a tab: `following`, `browse`, `rewards`, `you`
 /// - `browse` loads the Browse list again and waits for it; `browse:categories`, `browse:live`
 ///   switch its mode; `search:TEXT` searches it
@@ -453,6 +453,7 @@ extension SetupWizard.Page {
         case "welcome": .welcome
         case "accounts": .accounts
         case "drops": .drops
+        case "kick": .kick
         case "done": .done
         default: nil
         }
