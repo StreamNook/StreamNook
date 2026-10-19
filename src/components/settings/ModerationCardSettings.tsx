@@ -361,7 +361,7 @@ const ModerationCardSettings = () => {
                     label="Timeout length"
                     value={a.seconds ?? 600}
                     onPick={(next) => void editActions({ op: 'update', id: a.id, patch: { seconds: next } })}
-                    className={${selectClass} w-[84px]}
+                    className={`${selectClass} w-[84px]`}
                   />
                 )}
               </div>
