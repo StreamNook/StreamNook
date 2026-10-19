@@ -8,7 +8,7 @@
 // a re-render rather than a reconnect. This pane renders whichever tab is active
 // via `useChannelChat`.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CaretDown } from 'phosphor-react';
+import { CaretDown, HandPointing, X } from 'phosphor-react';
 import ChatMessageList from '../../components/ChatMessageList';
 import {
   setChannelPaused,
@@ -46,6 +46,8 @@ import { invoke } from '@tauri-apps/api/core';
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
 // it causes from fighting each other frame by frame. See `pause` below.
 const PAUSE_SETTLE_MS = 120;
+/** Set once a swipe has run (or its hint was dismissed): the hint stays gone. */
+const SWIPE_HINT_KEY = 'sn-swipe-mod-learned';
 
 /** What the read-only overlay leaves out of the fan. Module-level so the fan
  *  sees one array, not a fresh one per render. */
@@ -589,10 +591,15 @@ export const MobileChatPane: React.FC<{
     [describeMessage],
   );
 
+  // Swiping a row to moderate it is on where moderator tools are, never in
+  // the read-only overlay.
+  const swipeOn = modToolsArmed && !!broadcasterId && !readOnly;
   const press = useLongPressDrag({
     resolve: resolveRow,
     onArm: onArmFan,
     scrollLockRef: listRef,
+    // A sideways drift gives the hold up sooner, so the fan never opens over a swipe.
+    cancelSlop: swipeOn ? 6 : undefined,
   });
 
   const closeFan = useCallback(() => {
@@ -600,35 +607,45 @@ export const MobileChatPane: React.FC<{
     press.release();
   }, [press]);
 
-  // Swipe right on a message to moderate it. Rust lays the slider out for the
-  // list's width from the saved steps, Length and Style; read again when any
-  // of them changes.
-  const sliderSettings = useAppStore((s) => {
-    const d = s.settings.chat_design;
-    return `${d?.mod_slider}|${d?.mod_slider_style}|${d?.mod_slider_length}|${d?.mod_slider_delete}|${d?.mod_slider_ban}|${(d?.mod_slider_timeouts ?? []).join(',')}`;
-  });
-  const [touchSlider, setTouchSlider] = useState<TouchSlider | null>(null);
-  const [listWidth, setListWidth] = useState(0);
+  // Swipe right on a message to moderate it. Rust lays the slider out for each
+  // press, from where the thumb landed and with the chatter's name in its
+  // words; the saved steps, Length and Style are read there.
+  const sliderFor = useCallback(
+    (rowWidth: number, startX: number, targetName: string) =>
+      invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth, startX, targetName }).catch((err) => {
+        Logger.debug('[Swipe] slider unavailable:', err);
+        return null;
+      }),
+    [],
+  );
+  // The fan's quick Timeout is the swipe's first timeout length.
+  const sliderSettings = useAppStore((s) => (s.settings.chat_design?.mod_slider_timeouts ?? []).join(','));
+  const [quickSeconds, setQuickSeconds] = useState<number | undefined>(undefined);
   useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setListWidth(Math.round(entry.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!modToolsArmed || !broadcasterId || listWidth <= 0) {
-      setTouchSlider(null);
-      return;
-    }
+    if (!swipeOn) return;
     let cancelled = false;
-    void invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth: listWidth })
-      .then((slider) => !cancelled && setTouchSlider(slider))
-      .catch((err) => Logger.debug('[Swipe] slider unavailable:', err));
+    void invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth: 390 })
+      .then((slider) => !cancelled && setQuickSeconds(slider.quick_seconds))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [modToolsArmed, broadcasterId, listWidth, sliderSettings]);
+  }, [swipeOn, sliderSettings]);
+  const [hintLearned, setHintLearned] = useState(() => {
+    try {
+      return localStorage.getItem(SWIPE_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const learnSwipe = useCallback(() => {
+    setHintLearned(true);
+    try {
+      localStorage.setItem(SWIPE_HINT_KEY, '1');
+    } catch {
+      // Private storage is off; the hint just shows again next time.
+    }
+  }, []);
 
   /** The chatter behind a row a moderator may swipe: never another moderator,
    *  the broadcaster or staff (your own rows carry your badge too). */
@@ -641,6 +658,8 @@ export const MobileChatPane: React.FC<{
           const parsed = parseMessage(message as string | BackendChatMessage);
           const userId = parsed.tags.get('user-id') ?? '';
           if (!userId || parsed.username === 'System') return null;
+          // Subs, raids and other event rows are the room's, not a chatter's line.
+          if (parsed.tags.get('system-msg')) return null;
           const badges = parsed.tags.get('badges') ?? '';
           if (/(?:^|,)(?:moderator|broadcaster|staff|admin|global_mod|lead_moderator)\//.test(badges)) return null;
           return { userId, name: parsed.tags.get('display-name') || parsed.username || '' };
@@ -771,6 +790,8 @@ export const MobileChatPane: React.FC<{
         // gesture and the fan never arms. Chat text needs no selection anyway —
         // the fan's Copy bucket is the way to take a message.
         className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'}`}
+        // With swiping on, a sideways move is the swipe's from the first pixel, never a pan.
+        style={swipeOn ? { touchAction: 'pan-y' } : undefined}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}
@@ -801,6 +822,17 @@ export const MobileChatPane: React.FC<{
           homeProvider={activeProvider}
           getMessageId={getMessageId}
         />
+        {swipeOn && !hintLearned && (
+          <div className="pointer-events-none absolute left-0 right-0 top-2 z-10 flex justify-center">
+            <div className="glass-badge pointer-events-auto flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1 text-[12px] text-textPrimary">
+              <HandPointing size={14} weight="bold" className="text-accent" />
+              Swipe right on a message to moderate it
+              <button type="button" onClick={learnSwipe} aria-label="Dismiss the swipe hint" className="p-1 text-textMuted">
+                <X size={11} weight="bold" />
+              </button>
+            </div>
+          </div>
+        )}
         {isPaused && (
           <div className="absolute bottom-2 left-0 right-0 flex flex-col items-center gap-1 z-10 pointer-events-none">
             {!readOnly && (
@@ -851,10 +883,12 @@ export const MobileChatPane: React.FC<{
           moderators simply get more buckets. */}
       <SwipeModerator
         listRef={listRef}
-        slider={touchSlider}
+        enabled={swipeOn}
         broadcasterId={broadcasterId}
         targetFor={swipeTargetFor}
+        sliderFor={sliderFor}
         fanArmed={press.isArmed}
+        onDone={learnSwipe}
       />
       <ChatFanOut
         target={fanTarget}
@@ -870,7 +904,7 @@ export const MobileChatPane: React.FC<{
               : OTHER_PLATFORM_HIDES
         }
         onCommit={runFanAction}
-        quickSeconds={touchSlider?.quick_seconds}
+        quickSeconds={quickSeconds}
         onCancel={closeFan}
       />
     </div>

@@ -5,10 +5,14 @@
 // as the iPhone's. Rust keeps the held queue (`get_automod_queue`) and the room
 // log (`get_room_mod_log`, pushed as `room-mod-log`); every action goes
 // through the core.
-import React, { useCallback, useEffect, useState } from 'react';
+//
+// Nothing moves under a thumb: actions arriving while the sheet is open wait
+// behind an "N new" pill, a decided held message says Allowed or Denied for a
+// moment before it goes, and Unban asks once before it runs.
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { CaretRight, Flag, SlidersHorizontal, StopCircle } from 'phosphor-react';
+import { ArrowUp, CaretRight, Flag, SlidersHorizontal, StopCircle } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useAutomodStore, type HeldMessage } from '../../stores/automodStore';
 import { moderateChatter } from '../../services/moderation';
@@ -49,6 +53,15 @@ function ago(atMs: number): string {
 
 const words = (err: unknown) => (typeof err === 'string' ? err : 'That did not go through');
 
+/** How long a decided held message stays, saying what happened. */
+const DECIDED_MS = 1500;
+
+interface Decided {
+  message: HeldMessage;
+  outcome: 'Allowed' | 'Denied';
+  index: number;
+}
+
 export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, channelLogin, onManageChannel }) => {
   const channel = channelLogin.toLowerCase();
   const held = useAutomodStore((s) => s.held[channel]);
@@ -59,8 +72,16 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
   const [logNote, setLogNote] = useState<string | null>(null);
   const [phrase, setPhrase] = useState('');
   const [phraseNote, setPhraseNote] = useState<string | null>(null);
+  /** The phrase just blocked, while its Undo is offered. */
+  const [blocked, setBlocked] = useState<string | null>(null);
+  /** Actions that arrived while the sheet is open, behind the "N new" pill. */
+  const [incoming, setIncoming] = useState<RoomModAction[]>([]);
+  const [decided, setDecided] = useState<Record<string, Decided>>({});
+  /** The Unban or Lift waiting for its confirmation. */
+  const [liftPending, setLiftPending] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
+    setIncoming([]);
     void useAutomodStore.getState().seed(channel);
     try {
       setLog(await invoke<RoomModAction[]>('get_room_mod_log', { channel }));
@@ -78,21 +99,51 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
     const off = listen<RoomModAction>('room-mod-log', (e) => {
       const entry = e.payload;
       if (entry.channel !== channel) return;
-      setLog((cur) => (cur?.some((x) => x.id === entry.id) ? cur : [entry, ...(cur ?? [])]));
+      setIncoming((cur) => (cur.some((x) => x.id === entry.id) ? cur : [entry, ...cur]));
     });
     return () => {
       void off.then((f) => f());
     };
   }, [open, channel, reload]);
 
+  const showIncoming = () => {
+    setLog((cur) => [...incoming.filter((x) => !cur?.some((y) => y.id === x.id)), ...(cur ?? [])]);
+    setIncoming([]);
+  };
+
+  // A decided message keeps its place, saying what happened, until it goes.
+  const heldRows = useMemo(() => {
+    const rows: { message: HeldMessage; outcome?: Decided['outcome'] }[] = (held ?? []).map((message) => ({
+      message,
+      outcome: decided[message.message_id]?.outcome,
+    }));
+    for (const d of Object.values(decided).sort((a, b) => a.index - b.index)) {
+      if (rows.some((r) => r.message.message_id === d.message.message_id)) continue;
+      rows.splice(Math.min(d.index, rows.length), 0, { message: d.message, outcome: d.outcome });
+    }
+    return rows;
+  }, [held, decided]);
+
   const decide = async (message: HeldMessage, allow: boolean) => {
     setBusy(message.message_id);
+    const index = (held ?? []).findIndex((m) => m.message_id === message.message_id);
     const failure = await useAutomodStore.getState().resolve(message.message_id, allow);
     setBusy(null);
     setHeldNote(failure);
+    if (failure) return;
+    const id = message.message_id;
+    setDecided((cur) => ({ ...cur, [id]: { message, outcome: allow ? 'Allowed' : 'Denied', index: Math.max(0, index) } }));
+    setTimeout(() => {
+      setDecided((cur) => {
+        const next = { ...cur };
+        delete next[id];
+        return next;
+      });
+    }, DECIDED_MS);
   };
 
   const lift = async (entry: RoomModAction) => {
+    setLiftPending(null);
     if (!entry.target_id) return;
     setBusy(entry.id);
     try {
@@ -118,7 +169,24 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
     try {
       await invoke('add_blocked_term', { broadcasterId: channelId, text });
       setPhraseNote(`Blocked “${text}”`);
+      setBlocked(text);
       setPhrase('');
+    } catch (err) {
+      setPhraseNote(words(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Takes the phrase just blocked off the list again. */
+  const unblock = async () => {
+    const text = blocked;
+    if (!text) return;
+    setBusy('phrase');
+    try {
+      await invoke('remove_blocked_term', { broadcasterId: channelId, text });
+      setPhraseNote(`Unblocked “${text}”`);
+      setBlocked(null);
     } catch (err) {
       setPhraseNote(words(err));
     } finally {
@@ -139,10 +207,10 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
       <div className="px-3 pb-4">
         <div className={heading}>{held && held.length > 0 ? `Held by AutoMod · ${held.length}` : 'Held by AutoMod'}</div>
         <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
-          {!held || held.length === 0 ? (
+          {heldRows.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-textMuted">Nothing held right now.</p>
           ) : (
-            held.map((m) => (
+            heldRows.map(({ message: m, outcome }) => (
               <div key={m.message_id} className="px-3 py-2.5">
                 <div className="flex items-center gap-1.5 text-[12px] font-semibold text-warning">
                   <Flag size={12} weight="fill" />
@@ -151,6 +219,11 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                 <p className="mt-1 text-[14px] leading-snug text-textPrimary [overflow-wrap:anywhere]">
                   <span className="font-bold">{m.user_name || m.user_login}</span>: {m.text}
                 </p>
+                {outcome ? (
+                  <div className={`mt-2 flex h-[34px] items-center justify-center text-[14px] font-semibold ${outcome === 'Allowed' ? 'text-success' : 'text-error'}`}>
+                    {outcome}
+                  </div>
+                ) : (
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
@@ -169,6 +242,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                     Deny
                   </button>
                 </div>
+                )}
               </div>
             ))
           )}
@@ -177,7 +251,17 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
 
         <div className={heading}>Recent actions</div>
         <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
-          {log == null ? null : log.length === 0 ? (
+          {incoming.length > 0 && (
+            <button
+              type="button"
+              onClick={showIncoming}
+              className="flex h-10 w-full items-center justify-center gap-1.5 text-[13px] font-semibold text-accent"
+            >
+              <ArrowUp size={13} weight="bold" />
+              {incoming.length} new
+            </button>
+          )}
+          {log == null ? null : log.length === 0 && incoming.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-textMuted">No moderator actions since you opened this chat.</p>
           ) : (
             log.map((e) => (
@@ -189,15 +273,35 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                   )}
                   <div className="mt-0.5 text-[12px] text-textMuted">{ago(e.at_ms)}</div>
                 </div>
-                {e.liftable && e.target_id && (
+                {e.liftable && e.target_id && liftPending !== e.id && (
                   <button
                     type="button"
                     disabled={busy != null}
-                    onClick={() => void lift(e)}
+                    onClick={() => setLiftPending(e.id)}
                     className="shrink-0 px-1 py-1 text-[13px] font-semibold text-accent disabled:opacity-50"
                   >
                     {e.action === 'timeout' ? 'Lift' : 'Unban'}
                   </button>
+                )}
+                {liftPending === e.id && (
+                  // The tap turns the row's button into the question in place, so nothing shifts.
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setLiftPending(null)}
+                      className="px-1.5 py-1 text-[13px] font-medium text-textSecondary"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy != null}
+                      onClick={() => void lift(e)}
+                      className="px-1.5 py-1 text-[13px] font-semibold text-accent disabled:opacity-50"
+                    >
+                      {e.action === 'timeout' ? 'Lift timeout' : 'Unban'}
+                    </button>
+                  </div>
                 )}
               </div>
             ))
@@ -246,7 +350,21 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
             <CaretRight size={16} className="text-textMuted" />
           </button>
         </div>
-        {phraseNote && <p className={note}>{phraseNote}</p>}
+        {phraseNote && (
+          <div className="flex items-start gap-2">
+            <p className={`${note} flex-1`}>{phraseNote}</p>
+            {blocked && (
+              <button
+                type="button"
+                disabled={busy != null}
+                onClick={() => void unblock()}
+                className="shrink-0 px-1 pt-1.5 text-[12.5px] font-semibold text-accent disabled:opacity-50"
+              >
+                Undo
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </MobileSheet>
   );

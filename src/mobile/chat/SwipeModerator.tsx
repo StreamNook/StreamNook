@@ -1,26 +1,29 @@
 // Swipe right on a message to moderate it: the desktop mod slider with a
-// finger, the same on Android as on the iPhone. Rust lays out the ruler and
-// says every word (`get_touch_mod_slider`, services/touch_mod_slider.rs); this
-// follows the finger, draws the chosen style over the row, buzzes on each step
-// and on release sends the armed step through the one mod door.
+// finger, the same on Android as on the iPhone. Rust lays the slider out for
+// each press, from where the thumb landed, and says every word with the
+// chatter's name in it (`get_touch_mod_slider`, services/touch_mod_slider.rs);
+// this follows the finger, draws the chosen style over the row, buzzes on each
+// step and on release sends the armed step through the one mod door.
 //
-// One move, one direction: the pull only goes right. Short of the dead zone, or
-// with the finger strayed `leash` px above or below the message, the chip says
-// "Let go to cancel" and a release does nothing. Ban sits at the end of the
-// pull and arms only after the finger rests there; until then the slider shows
-// (and a release applies) the step before it.
+// One move, one direction: the pull only goes right. Short of the cancel zone,
+// or with the finger strayed `leash` px above or below the message, the chip
+// says "Let go to cancel" and a release does nothing. Ban sits at the end of
+// the pull and arms only after the finger rests there; a release before it
+// arms cancels, so a flick past the end does nothing at all.
 //
-// It listens on the list element natively and keeps its own state, so a moving
-// finger re-renders this overlay and nothing else: the pane's re-render storms
-// are what once dropped chat swipes. The list is held (`holdChatRow`) while the
-// finger is down, and a non-passive touchmove stops it scrolling under the pull.
+// The thumb landing on a row the viewer moderates holds the list at once
+// (`holdChatRow`) and captures the chatter, so in a fast chat the row pressed
+// is the row acted on. It listens on the list element natively and keeps its
+// own state, so a moving finger re-renders this overlay and nothing else: the
+// pane's re-render storms are what once dropped chat swipes. A non-passive
+// touchmove stops the list scrolling under the pull.
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
+import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
 import { stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
 
 export type { SwipeTarget, TouchSlider } from './swipeSteps';
-import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
 
 interface View {
   /** The row, relative to the list element. */
@@ -31,32 +34,47 @@ interface View {
   slide: number;
   step: number | null;
   offRow: boolean;
-  /** Ban's rest is running. */
+  /** Ban's rest is running: a release now cancels. */
   resting: boolean;
 }
 
 interface Props {
   listRef: React.RefObject<HTMLElement | null>;
-  slider: TouchSlider | null;
+  /** Swiping is on here (moderator tools on, not the read-only overlay). */
+  enabled: boolean;
   broadcasterId: string | null;
   /** The chatter behind a row the viewer may swipe, or null. */
   targetFor: (messageId: string) => SwipeTarget | null;
+  /** The core's slider for a press `startX` px into a row `width` px wide, on `name`'s message. */
+  sliderFor: (width: number, startX: number, name: string) => Promise<TouchSlider | null>;
   /** The long-press fan owns the finger once armed. */
   fanArmed: () => boolean;
+  /** A swipe ran (the one-time hint goes). */
+  onDone: () => void;
 }
 
-export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanArmed }: Props) {
+export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone }: Props) {
   const [view, setView] = useState<View | null>(null);
+  const [shown, setShown] = useState<TouchSlider | null>(null);
   // Everything the native listeners read, kept current without re-binding them.
-  const live = useRef({ slider, broadcasterId, targetFor, fanArmed });
-  live.current = { slider, broadcasterId, targetFor, fanArmed };
+  const live = useRef({ enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone });
+  live.current = { enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone };
 
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    let press: { id: number; x: number; y: number; row: HTMLElement; messageId: string } | null = null;
+    let press: {
+      id: number;
+      x: number;
+      y: number;
+      row: HTMLElement;
+      messageId: string;
+      target: SwipeTarget;
+      slider: TouchSlider | null;
+    } | null = null;
     let engaged = false;
     let step: number | null = null;
+    let offRow = false;
     let rest: { timer: ReturnType<typeof setTimeout>; anchor: number; armed: boolean } | null = null;
     let rowRect: DOMRect | null = null;
     let listRect: DOMRect | null = null;
@@ -76,45 +94,49 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
       if (rest) clearTimeout(rest.timer);
       rest = null;
     };
+    const resting = () => rest != null && !rest.armed;
+    /** The press ends: the list is let go, and with `apply` an armed step runs. */
     const end = (apply: boolean) => {
       const p = press;
-      const s = live.current.slider;
       press = null;
+      const s = p?.slider ?? null;
+      const armedStep = apply && engaged && !offRow && !resting() && step != null && s ? s.steps[step] : null;
       stopRest();
-      if (p && engaged) {
-        restore(p.row);
+      if (p) {
+        if (engaged) restore(p.row);
         holdChatRow(p.row, false);
-        const armedStep = step != null && s ? s.steps[step] : null;
-        const target = live.current.targetFor(p.messageId);
         const bid = live.current.broadcasterId;
-        if (apply && armedStep && target && bid) {
+        if (armedStep && bid) {
           if (armedStep.action === 'delete') hapticCommit();
           else hapticDestructive();
           void moderateWithToast({
             provider: 'twitch',
             broadcasterId: bid,
-            targetUserId: target.userId,
-            targetName: target.name,
+            targetUserId: p.target.userId,
+            targetName: p.target.name,
             action: stepAction(armedStep, p.messageId),
             useSavedReason: armedStep.action !== 'delete',
           });
+          live.current.onDone();
         }
       }
       engaged = false;
       step = null;
+      offRow = false;
       setView(null);
     };
 
-    const draw = (slide: number, offRow: boolean) => {
-      const s = live.current.slider;
+    const draw = (slide: number) => {
+      const s = press?.slider;
       if (!s || !press || !rowRect || !listRect) return;
       const b = body(press.row);
-      const armed = step != null && !offRow;
+      const lit = step != null && !offRow && !resting();
       if (s.style === 'capsule') press.row.style.transform = `translateX(${slide}px)`;
       if (s.style === 'preview' && b) {
-        b.style.opacity = armed ? '0.45' : '';
-        b.style.textDecoration = armed ? `line-through 1.5px ${stepTint(s.steps[step!])}` : '';
+        b.style.opacity = lit ? '0.45' : '';
+        b.style.textDecoration = lit ? `line-through 1.5px ${stepTint(s.steps[step!])}` : '';
       }
+      setShown(s);
       setView({
         top: rowRect.top - listRect.top,
         left: rowRect.left - listRect.left,
@@ -123,35 +145,40 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
         slide,
         step,
         offRow,
-        resting: rest != null && !rest.armed,
+        resting: resting(),
       });
     };
 
     const onDown = (e: PointerEvent) => {
-      const s = live.current.slider;
-      if (!e.isPrimary || !s?.enabled || press) return;
+      if (!e.isPrimary || !live.current.enabled || press) return;
       const row = (e.target as HTMLElement).closest<HTMLElement>('[data-message-id]');
       const messageId = row?.getAttribute('data-message-id');
-      if (!row || !messageId || !live.current.targetFor(messageId)) return;
-      press = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId };
+      const target = messageId ? live.current.targetFor(messageId) : null;
+      if (!row || !messageId || !target) return;
+      // Hold the list now: the row under the thumb is the row a swipe acts on.
+      holdChatRow(row, true);
+      const r = row.getBoundingClientRect();
+      const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null };
+      press = current;
+      void live.current.sliderFor(r.width, e.clientX - r.left, target.name).then((s) => {
+        if (press === current) current.slider = s;
+      });
     };
 
     const onMove = (e: PointerEvent) => {
-      const s = live.current.slider;
-      if (!press || e.pointerId !== press.id || !s) return;
+      if (!press || e.pointerId !== press.id) return;
+      const s = press.slider;
       const dx = e.clientX - press.x;
       const dy = e.clientY - press.y;
       if (!engaged) {
-        if (live.current.fanArmed()) {
-          press = null;
+        const engage = s?.engage ?? 10;
+        // A vertical move is the list's scroll, and the fan owns a hold that armed.
+        if (live.current.fanArmed() || (Math.abs(dy) > engage && Math.abs(dy) >= Math.abs(dx))) {
+          end(false);
           return;
         }
-        // Sideways and rightward claims the finger; anything else is the list's scroll.
-        if (Math.abs(dy) > s.engage && Math.abs(dy) >= Math.abs(dx)) {
-          press = null;
-          return;
-        }
-        if (dx < s.engage || dx < Math.abs(dy) * 1.5) return;
+        // Sideways and rightward claims the finger, once the core has laid the slider out.
+        if (!s?.enabled || dx < engage || dx < Math.abs(dy) * 1.5) return;
         engaged = true;
         // The pull may leave the list; its release still comes here.
         try {
@@ -161,10 +188,10 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
         }
         rowRect = press.row.getBoundingClientRect();
         listRect = list.getBoundingClientRect();
-        holdChatRow(press.row, true);
       }
+      if (!s) return;
       const slide = Math.min(Math.max(0, dx), s.end - 0.5);
-      const offRow = rowRect != null && (e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash);
+      offRow = rowRect != null && (e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash);
       let next = stepKeeping(s, slide, step);
       if (next != null && s.steps[next].action === 'ban') {
         if (!rest || Math.abs(slide - rest.anchor) > s.ban_still) {
@@ -174,11 +201,11 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
             anchor,
             armed: false,
             timer: setTimeout(() => {
-              if (!rest) return;
+              if (!rest || !press) return;
               rest.armed = true;
               step = s.steps.length - 1;
-              hapticStep();
-              draw(anchor, false);
+              if (!offRow) hapticCommit();
+              draw(anchor);
             }, s.ban_dwell_ms),
           };
         }
@@ -190,27 +217,31 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
         step = next;
         if (next != null && !offRow) hapticStep();
       }
-      draw(slide, offRow);
+      draw(slide);
     };
 
     const onUp = (e: PointerEvent) => {
       if (!press || e.pointerId !== press.id) return;
-      const s = live.current.slider;
-      const offRow = rowRect != null && s != null && (e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash);
-      end(!offRow);
+      const s = press.slider;
+      if (s && rowRect) offRow = e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash;
+      end(true);
     };
-    const onCancel = () => end(false);
+    const onCancel = (e: PointerEvent) => {
+      if (press && e.pointerId !== press.id) return;
+      end(false);
+    };
     const onTouchMove = (e: TouchEvent) => {
       if (engaged) e.preventDefault();
     };
     const onHidden = () => document.visibilityState === 'hidden' && end(false);
+    const onBlur = () => end(false);
 
     list.addEventListener('pointerdown', onDown);
     list.addEventListener('pointermove', onMove);
     list.addEventListener('pointerup', onUp);
     list.addEventListener('pointercancel', onCancel);
     list.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('blur', onCancel);
+    window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onHidden);
     return () => {
       end(false);
@@ -219,28 +250,38 @@ export function SwipeModerator({ listRef, slider, broadcasterId, targetFor, fanA
       list.removeEventListener('pointerup', onUp);
       list.removeEventListener('pointercancel', onCancel);
       list.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('blur', onCancel);
+      window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onHidden);
     };
   }, [listRef]);
 
   const host = listRef.current;
-  if (!view || !slider || !host) return null;
-  return createPortal(<SwipeOverlay view={view} slider={slider} />, host);
+  if (!view || !shown || !host) return null;
+  return createPortal(<SwipeOverlay view={view} slider={shown} />, host);
 }
 
+/** The list fades its top edge; the chip stays below that. */
+const LIST_TOP_CLEAR = 30;
+const CHIP_RISE = 34;
+
 function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
+  const chipRef = useRef<HTMLDivElement>(null);
+  const [chipWidth, setChipWidth] = useState(140);
   const step = view.offRow ? null : view.step;
+  const lit = step != null && !view.resting;
   const tint = step != null ? stepTint(slider.steps[step]) : 'var(--color-text-secondary)';
-  const words =
-    step == null
-      ? slider.cancel_words
-      : view.resting
-        ? `${slider.steps[step].label}, ${slider.hold_ban_words}`
-        : slider.steps[step].chip;
-  // Above the finger, or under the row when the row sits at the top of the list.
-  const chipAbove = view.top > 44;
-  const chipX = Math.min(Math.max(0, view.slide - 60), view.width - 140);
+  const words = step == null ? slider.cancel_words : view.resting ? slider.hold_ban_words : slider.steps[step].chip;
+  // Measured after each change of words, so the chip centers on the finger.
+  useEffect(() => {
+    if (chipRef.current) setChipWidth(chipRef.current.offsetWidth);
+  }, [words]);
+  // The ruler starts where the thumb landed.
+  const at = (x: number) => slider.start + x;
+  const finger = at(view.slide);
+  const chipX = Math.min(Math.max(4, finger - chipWidth / 2), view.width - chipWidth - 4);
+  // Above the row, kept clear of the list's faded top: near the top it comes
+  // down over the row rather than under the finger, where the thumb covers it.
+  const chipTop = Math.max(-CHIP_RISE, LIST_TOP_CLEAR - view.top);
   return (
     <div
       className="pointer-events-none absolute z-30"
@@ -251,10 +292,10 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
         <div className="absolute inset-x-1 inset-y-0.5 rounded-[10px] border border-white/[0.08] bg-surface">
           {slider.steps.map((s, i) => {
             const zoneEnd = i + 1 < slider.starts.length ? slider.starts[i + 1] : slider.end;
-            const center = (slider.starts[i] + zoneEnd) / 2;
-            const lit = i === step;
+            const center = at((slider.starts[i] + zoneEnd) / 2) - 4;
+            const on = lit && i === step;
             // glass-exempt: the lit step's tint over the rail, a color cue that must stay translucent.
-            const pill = lit ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined;
+            const pill = on ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined;
             return (
               <span
                 key={`${s.action}-${s.seconds ?? i}`}
@@ -268,7 +309,7 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
         </div>
       ) : (
         // glass-exempt: the pull's wash over the message, which must keep the message readable through it.
-        <div className="absolute inset-y-0 left-0" style={{ width: view.slide, background: `color-mix(in srgb, ${tint} 18%, transparent)` }} />
+        <div className="absolute inset-y-0" style={{ left: at(0), width: view.slide, background: `color-mix(in srgb, ${tint} 18%, transparent)` }} />
       )}
       {slider.style === 'preview' && (
         <div className="absolute inset-x-0 bottom-0 h-[3px]">
@@ -279,22 +320,24 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
               <span
                 key={`t-${i}`}
                 className="absolute top-0 h-[3px] rounded-full"
-                style={{ left: start + 1, width: Math.max(2, zoneEnd - start - 2), background: stepTint(s), opacity: start <= view.slide ? 1 : 0.32 }}
+                style={{ left: at(start) + 1, width: Math.max(2, zoneEnd - start - 2), background: stepTint(s), opacity: start <= view.slide ? 1 : 0.32 }}
               />
             );
           })}
         </div>
       )}
       <div
-        className="absolute flex h-7 min-w-[120px] items-center justify-center whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
+        ref={chipRef}
+        className="absolute flex h-7 items-center justify-center whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
         style={{
           left: chipX,
-          top: chipAbove ? -34 : view.height + 6,
-          borderColor: `color-mix(in srgb, ${tint} 55%, transparent)`,
-          color: step == null ? 'var(--color-text-secondary)' : 'var(--color-text-primary)',
+          top: chipTop,
+          maxWidth: view.width - 8,
+          borderColor: view.resting ? 'color-mix(in srgb, var(--color-error) 55%, transparent)' : `color-mix(in srgb, ${tint} 55%, transparent)`,
+          color: lit ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
         }}
       >
-        {words}
+        <span className="truncate">{words}</span>
         {view.resting && (
           <span
             className="absolute bottom-[2px] left-1.5 h-[2px] rounded-full bg-error"
