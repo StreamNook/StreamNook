@@ -424,6 +424,7 @@ allow = [
   "get_badge_earn_guide",
   "fetch_badge_metadata",
   "fetch_link_preview",
+  "link_preview_expected",
   "save_emote_by_id",
   "load_emote_by_id",
   "save_emotes_to_cache",

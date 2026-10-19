@@ -993,7 +993,7 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
                 }));
             }
             MessageSegment::Emoji { content, emoji_url } => items.push(Item::Emoji { text: content.clone(), url: emoji_url.clone() }),
-            MessageSegment::Link { content, url } => items.push(Item::Link {
+            MessageSegment::Link { content, url, .. } => items.push(Item::Link {
                 label: if prefs.shorten_links { link_label(content) } else { content.clone() },
                 url: url.clone(),
             }),

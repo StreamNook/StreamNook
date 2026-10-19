@@ -7,6 +7,7 @@
 // allowed to auto-expand (a trusted-domain allowlist) on the web-rendered rows.
 
 import { Logger } from '../utils/logger';
+import type { LinkCardShape } from './twitchChat';
 
 export type LinkPreviewKind =
   | 'youtube'
@@ -221,4 +222,33 @@ export function fetchLinkPreview(url: string): Promise<LinkPreview | null> {
 
   inflight.set(url, promise);
   return promise;
+}
+
+/** Rust's answer to "which card does this link's shape get", kept per URL. */
+const expectedCards = new Map<string, LinkCardShape | null>();
+
+/** What is known already, so a card that was seen before draws its room at once. */
+export function linkPreviewExpectedNow(url: string): LinkCardShape | null | undefined {
+  return expectedCards.get(url);
+}
+
+/**
+ * The card this link's shape all but always gets ("media" for a video or clip,
+ * else "card"), or null when it may have none (Rust's `link_preview_expected`).
+ * Only a link with an expected card holds that room while loading, so one that
+ * turns out to have no preview never flashes a placeholder and then vanishes.
+ * The iPhone reserves room by the same rule. A chat link segment carries the
+ * answer already (`card`); this is for links met anywhere else. Never throws.
+ */
+export async function linkPreviewExpected(url: string): Promise<LinkCardShape | null> {
+  const known = expectedCards.get(url);
+  if (known !== undefined) return known;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const shape = (await invoke<LinkCardShape | null>('link_preview_expected', { url })) ?? null;
+    expectedCards.set(url, shape);
+    return shape;
+  } catch {
+    return null;
+  }
 }

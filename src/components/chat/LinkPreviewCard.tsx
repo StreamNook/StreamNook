@@ -14,10 +14,13 @@ import { playTwitchMediaInMain } from '../../utils/playTwitchMediaInMain';
 import { openExternal } from '../../utils/openExternal';
 import {
   fetchLinkPreview,
+  linkPreviewExpected,
+  linkPreviewExpectedNow,
   prettyUrlLabel,
   trustableHost,
   type LinkPreview,
 } from '../../services/linkPreviewService';
+import type { LinkCardShape } from '../../services/twitchChat';
 
 // Twitch clips and VODs deep-link into the in-app player (the user's stated
 // preference) rather than opening the browser. start_stream (via playMedia)
@@ -132,6 +135,252 @@ function formatViews(n: number): string {
   return `${n}`;
 }
 
+// --- Fixed card frames ------------------------------------------------------
+// Every kind Rust can reserve draws inside a fixed frame: each line sits in a
+// line box of its own height, a clamped block always holds all of its lines,
+// and a picture has a fixed size or aspect. So a card's height never depends
+// on what it says, and the loading skeleton (the same frame with bars in it)
+// holds exactly the room the card resolves to. No UI moves down.
+const FRAME = 'glass-panel no-live-blur mt-1 block w-full max-w-md overflow-hidden text-left';
+const CARD = `${FRAME} cursor-pointer transition-colors hover:bg-white/[0.03]`;
+// One 11px line (a byline or site name), and one 14px title line.
+const BYLINE = 'flex h-4 min-w-0 items-center gap-1.5 text-[11px] leading-4';
+const TITLE = 'flex h-5 min-w-0 items-center text-sm leading-5 text-textPrimary';
+// The tweet's text and picture area: two text lines and a picture, or seven
+// text lines when there is no picture. Same height either way.
+const TWEET_BODY = 152;
+
+/** One line of text that ends in an ellipsis rather than wrapping. */
+const Line = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <span className={`min-w-0 truncate ${className}`}>{children}</span>
+);
+
+/** A skeleton's stand-in for a line of text. */
+const Bar = ({ w }: { w: string }) => <div className={`h-2.5 ${w} flex-shrink-0 rounded bg-white/5`} />;
+
+/** Skeleton bars filling a fixed multi-line block. */
+const Bars = ({ count }: { count: number }) => (
+  <div className="flex h-full flex-col justify-center gap-1.5">
+    {Array.from({ length: count }, (_, i) => (
+      <Bar key={i} w={i === count - 1 ? 'w-1/2' : 'w-full'} />
+    ))}
+  </div>
+);
+
+const PlayBadge = () => (
+  <span className="absolute inset-0 flex items-center justify-center">
+    <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/60">
+      <Play size={22} className="ml-0.5 text-white" fill="currentColor" />
+    </span>
+  </span>
+);
+
+type Slot = React.ReactNode;
+
+/** youtube, clip, vod: a 16:9 picture, then the byline and ONE title line. */
+function VideoShape({ picture, byline, title }: { picture?: Slot; byline?: Slot; title?: Slot }) {
+  return (
+    <>
+      <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
+        {picture}
+      </div>
+      <div className="px-3 py-2">
+        <div className={`${BYLINE} text-textSecondary`}>{byline}</div>
+        <div className={`mt-0.5 ${TITLE} font-medium`}>{title}</div>
+      </div>
+    </>
+  );
+}
+
+/** generic: an 80px row, the picture beside the site, one title line and a
+ *  two-line description. */
+function GenericShape({ picture, site, title, description }: { picture?: Slot; site?: Slot; title?: Slot; description?: Slot }) {
+  return (
+    <div className="flex h-20 items-center">
+      {picture}
+      <div className="min-w-0 flex-1 px-3">
+        <div className={`${BYLINE} text-textSecondary`}>{site}</div>
+        <div className={`${TITLE} font-medium`}>{title}</div>
+        <div className="h-7 overflow-hidden text-xs leading-[14px] text-textSecondary">{description}</div>
+      </div>
+    </div>
+  );
+}
+
+/** spotify: a 64px row, the cover beside the byline and two title lines. */
+function SpotifyShape({ picture, byline, title }: { picture?: Slot; byline?: Slot; title?: Slot }) {
+  return (
+    <div className="flex h-16 items-center">
+      {picture}
+      <div className="min-w-0 flex-1 px-3">
+        <div className={BYLINE}>{byline}</div>
+        <div className="mt-0.5 h-10 overflow-hidden text-sm font-medium leading-5 text-textPrimary">{title}</div>
+      </div>
+    </div>
+  );
+}
+
+/** steam: the capsule art at its own aspect, the byline, one title line and a
+ *  two-line blurb. */
+function SteamShape({ picture, byline, title, description }: { picture?: Slot; byline?: Slot; title?: Slot; description?: Slot }) {
+  return (
+    <>
+      <div className="relative w-full bg-black/40" style={{ aspectRatio: '460 / 215' }}>
+        {picture}
+      </div>
+      <div className="px-3 py-2">
+        <div className={BYLINE}>{byline}</div>
+        <div className={`mt-0.5 ${TITLE} font-medium`}>{title}</div>
+        <div className="mt-0.5 h-8 overflow-hidden text-xs leading-4 text-textSecondary">{description}</div>
+      </div>
+    </>
+  );
+}
+
+/** discord: the server icon beside the byline, the name and the counts line,
+ *  with the Join pill at the end. */
+function DiscordShape({ icon, byline, title, counts, join }: { icon?: Slot; byline?: Slot; title?: Slot; counts?: Slot; join?: Slot }) {
+  return (
+    <div className="p-3">
+      <div className="flex h-14 items-center gap-3">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <div className={BYLINE} style={{ color: '#5865F2' }}>
+            {byline}
+          </div>
+          <div className={`${TITLE} font-semibold`}>{title}</div>
+          <div className="mt-1 flex h-4 items-center gap-x-3 overflow-hidden whitespace-nowrap text-[11px] leading-4 text-textSecondary">
+            {counts}
+          </div>
+        </div>
+        {join}
+      </div>
+    </div>
+  );
+}
+
+/** youtube_channel and instagram: the avatar beside its lines, then a
+ *  three-line bio. `headerHeight` fits the lines the kind has. */
+function ProfileShape({ avatar, lines, headerHeight, description }: { avatar?: Slot; lines: Slot; headerHeight: number; description?: Slot }) {
+  return (
+    <div className="p-3">
+      <div className="flex items-center gap-2.5" style={{ height: headerHeight }}>
+        {avatar}
+        <div className="min-w-0 flex-1">{lines}</div>
+      </div>
+      <div className="mt-2 h-12 overflow-hidden text-xs leading-4 text-textSecondary">{description}</div>
+    </div>
+  );
+}
+
+const XGlyph = () => (
+  <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 text-textSecondary" fill="currentColor" aria-hidden>
+    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+  </svg>
+);
+
+/** tweet: the author row, then a fixed text and picture area. */
+function TweetShape({ avatar, title, author, body }: { avatar?: Slot; title?: Slot; author?: Slot; body?: Slot }) {
+  return (
+    <div className="p-3">
+      <div className="flex h-9 items-center gap-2">
+        {avatar}
+        <div className="min-w-0 flex-1">
+          <div className={`${TITLE} font-semibold`}>{title}</div>
+          <div className="flex h-4 min-w-0 items-center text-xs leading-4 text-textSecondary">{author}</div>
+        </div>
+        <XGlyph />
+      </div>
+      <div className="mt-2 overflow-hidden" style={{ height: TWEET_BODY }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
+/** The loading card for a reserved kind: that kind's frame with bars in it. */
+function ReservedShape({ kind }: { kind: LinkCardShape }) {
+  const square = (size: string, round = '') => <div className={`${size} flex-shrink-0 bg-white/5 ${round}`} />;
+  switch (kind) {
+    case 'youtube':
+    case 'clip':
+    case 'vod':
+      return <VideoShape byline={<Bar w="w-1/3" />} title={<Bar w="w-2/3" />} />;
+    case 'spotify':
+      return <SpotifyShape picture={square('h-16 w-16')} byline={<Bar w="w-1/3" />} title={<Bars count={2} />} />;
+    case 'steam':
+      return <SteamShape byline={<Bar w="w-1/4" />} title={<Bar w="w-2/3" />} description={<Bars count={2} />} />;
+    case 'discord':
+      return (
+        <DiscordShape
+          icon={square('h-11 w-11', 'rounded-2xl')}
+          byline={<Bar w="w-1/4" />}
+          title={<Bar w="w-1/2" />}
+          counts={<Bar w="w-1/3" />}
+          join={square('h-8 w-16', 'rounded-lg')}
+        />
+      );
+    case 'youtube_channel':
+      return (
+        <ProfileShape
+          avatar={square('h-11 w-11', 'rounded-full')}
+          headerHeight={44}
+          lines={
+            <>
+              <div className={BYLINE}>
+                <Bar w="w-1/4" />
+              </div>
+              <div className={`mt-0.5 ${TITLE}`}>
+                <Bar w="w-1/2" />
+              </div>
+            </>
+          }
+          description={<Bars count={3} />}
+        />
+      );
+    case 'instagram':
+      return (
+        <ProfileShape
+          avatar={square('h-11 w-11', 'rounded-full')}
+          headerHeight={52}
+          lines={
+            <>
+              <div className={BYLINE}>
+                <Bar w="w-1/4" />
+              </div>
+              <div className={TITLE}>
+                <Bar w="w-1/2" />
+              </div>
+              <div className={BYLINE}>
+                <Bar w="w-1/3" />
+              </div>
+            </>
+          }
+          description={<Bars count={3} />}
+        />
+      );
+    case 'tweet':
+      return (
+        <TweetShape
+          avatar={square('h-9 w-9', 'rounded-full')}
+          title={<Bar w="w-1/3" />}
+          author={<Bar w="w-1/4" />}
+          body={<Bars count={4} />}
+        />
+      );
+    case 'generic':
+    default:
+      return (
+        <GenericShape
+          picture={square('h-20 w-20')}
+          site={<Bar w="w-1/4" />}
+          title={<Bar w="w-2/3" />}
+          description={<Bars count={2} />}
+        />
+      );
+  }
+}
+
 /**
  * A single inline link-preview card. Resolves lazily (only fetches once the row
  * scrolls near the viewport) and renders a fixed-height skeleton while loading.
@@ -149,12 +398,16 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   showChip = true,
   trusted = true,
   resolved,
+  expectedCard,
 }: {
   url: string;
   showChip?: boolean;
   trusted?: boolean;
   /** An already-fetched preview. The card renders it and fetches nothing. */
   resolved?: LinkPreview;
+  /** The card this link's shape gets, as its chat segment says (null: maybe none);
+   *  undefined when the caller does not know, and the card asks Rust. */
+  expectedCard?: LinkCardShape | null;
 }) {
   // undefined = unresolved, null = no preview, object = card. Nothing is cached
   // (chat links are ephemeral), so every card starts unresolved and fetches once.
@@ -167,8 +420,26 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // click (the click-to-load chip below) so an arbitrary pasted link is never
   // fetched passively — that would reveal the user's IP to the linked host.
   const [loadRequested, setLoadRequested] = useState(trusted);
+  // The card this link's shape all but always gets (Rust's answer, carried on the
+  // chat segment). Only then does the loading card hold that room; any other
+  // link shows a card once it has one, so one with no preview never flashes a
+  // placeholder and vanishes.
+  const [expected, setExpected] = useState<LinkCardShape | null | undefined>(() =>
+    expectedCard !== undefined ? expectedCard : linkPreviewExpectedNow(url),
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requested = useRef(resolved !== undefined);
+
+  useEffect(() => {
+    if (resolved !== undefined || expected !== undefined) return;
+    let cancelled = false;
+    void linkPreviewExpected(url).then((answer) => {
+      if (!cancelled) setExpected(answer);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, resolved, expected]);
 
   useEffect(() => {
     // Untrusted links don't auto-fetch; loadPreview() drives them on click.
@@ -332,22 +603,19 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     );
   }
 
-  // Not resolved yet: a low-profile skeleton that doubles as the observe target.
+  // Not resolved yet. A link whose card is all but certain shows a low-profile
+  // skeleton holding the card's room; any other link only an invisible line. The
+  // same element either way, so it stays the observe target.
   if (preview === undefined) {
+    // Clean mode hides the inline link, so a link with no card expected shows
+    // its link chip while it loads rather than nothing.
+    if (expected === null && showChip) return <div ref={containerRef}>{fallback}</div>;
+    // An expected card holds exactly its kind's frame. No card expected: an
+    // empty, zero-height observe target, so nothing moves when the answer lands.
+    if (!expected) return <div ref={containerRef} className="w-full" style={{ height: 0 }} aria-hidden />;
     return (
-      <div
-        ref={containerRef}
-        className="glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden"
-        style={{ height: 56, opacity: 0.5 }}
-        aria-hidden
-      >
-        <div className="flex h-full items-center gap-3 px-3">
-          <div className="h-10 w-10 flex-shrink-0 rounded bg-white/5" />
-          <div className="flex-1 space-y-2">
-            <div className="h-2.5 w-1/3 rounded bg-white/5" />
-            <div className="h-2.5 w-2/3 rounded bg-white/5" />
-          </div>
-        </div>
+      <div ref={containerRef} className={FRAME} style={{ opacity: 0.5 }} aria-hidden>
+        <ReservedShape kind={expected} />
       </div>
     );
   }
@@ -372,39 +640,37 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   const site = preview.site_name || hostOf(url);
 
   // --- YouTube: thumbnail with a play affordance + title/author -------------
-  if (preview.kind === 'youtube' && preview.image && !imageFailed) {
+  // A missing or broken thumbnail keeps the 16:9 box, so the card never changes
+  // shape (it used to fall through to the generic card).
+  if (preview.kind === 'youtube') {
+    const showImage = !!preview.image && !imageFailed;
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
-          <img
-            src={preview.image}
-            alt={preview.title ?? 'YouTube video'}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="h-full w-full object-cover"
-            onError={() => setImageFailed(true)}
-          />
-          <span className="absolute inset-0 flex items-center justify-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/60">
-              <Play size={22} className="ml-0.5 text-white" fill="currentColor" />
-            </span>
-          </span>
-        </div>
-        <div className="px-3 py-2">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-textSecondary">
-            <YouTubeGlyph size={13} />
-            <span className="font-semibold text-textPrimary">YouTube</span>
-            {preview.author && <span className="truncate">· {preview.author}</span>}
-          </div>
-          {preview.title && (
-            <div className="text-sm font-medium text-textPrimary" style={clamp(2)}>
-              {preview.title}
-            </div>
-          )}
-        </div>
+      <div {...cardProps} className={CARD}>
+        <VideoShape
+          picture={
+            <>
+              {showImage && (
+                <img
+                  src={preview.image as string}
+                  alt={preview.title ?? 'YouTube video'}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                  onError={() => setImageFailed(true)}
+                />
+              )}
+              <PlayBadge />
+            </>
+          }
+          byline={
+            <>
+              <YouTubeGlyph size={13} />
+              <span className="flex-shrink-0 font-semibold text-textPrimary">YouTube</span>
+              {preview.author && <Line>· {preview.author}</Line>}
+            </>
+          }
+          title={preview.title && <Line>{preview.title}</Line>}
+        />
       </div>,
     );
   }
@@ -414,36 +680,32 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // the generic card's top-pinned left thumbnail.) Opens in the browser.
   if (preview.kind === 'youtube_channel') {
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="flex items-center gap-2.5">
-          {preview.author_avatar && !imageFailed && (
-            <img
-              src={preview.author_avatar}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-11 w-11 flex-shrink-0 rounded-full object-cover"
-              onError={() => setImageFailed(true)}
-            />
-          )}
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-textSecondary">
-              <YouTubeGlyph size={13} />
-              <span className="font-semibold">YouTube</span>
-            </div>
-            {preview.title && (
-              <div className="truncate text-sm font-semibold text-textPrimary">{preview.title}</div>
-            )}
-          </div>
-        </div>
-        {preview.description && (
-          <div className="mt-2 text-xs text-textSecondary" style={clamp(3)}>
-            {preview.description}
-          </div>
-        )}
+      <div {...cardProps} className={CARD}>
+        <ProfileShape
+          headerHeight={44}
+          avatar={
+            preview.author_avatar && !imageFailed ? (
+              <img
+                src={preview.author_avatar}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="h-11 w-11 flex-shrink-0 rounded-full object-cover"
+                onError={() => setImageFailed(true)}
+              />
+            ) : undefined
+          }
+          lines={
+            <>
+              <div className={`${BYLINE} text-textSecondary`}>
+                <YouTubeGlyph size={13} />
+                <span className="font-semibold">YouTube</span>
+              </div>
+              <div className={`mt-0.5 ${TITLE} font-semibold`}>{preview.title && <Line>{preview.title}</Line>}</div>
+            </>
+          }
+          description={preview.description && <div style={clamp(3)}>{preview.description}</div>}
+        />
       </div>,
     );
   }
@@ -451,40 +713,38 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // --- Instagram profile (via SearchAPI): avatar + name + @handle + bio -------
   if (preview.kind === 'instagram') {
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="flex items-center gap-2.5">
-          {preview.author_avatar && !imageFailed && (
-            <img
-              src={preview.author_avatar}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-11 w-11 flex-shrink-0 rounded-full object-cover"
-              onError={() => setImageFailed(true)}
-            />
-          )}
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-textSecondary">
-              <SocialLogo platform="instagram" size={13} />
-              <span className="font-semibold">Instagram</span>
-              {typeof preview.member_count === 'number' && (
-                <span className="text-textSecondary/70">· {formatViews(preview.member_count)} followers</span>
-              )}
-            </div>
-            {preview.title && (
-              <div className="truncate text-sm font-semibold text-textPrimary">{preview.title}</div>
-            )}
-            {preview.author && <div className="truncate text-xs text-textSecondary">{preview.author}</div>}
-          </div>
-        </div>
-        {preview.description && (
-          <div className="mt-2 text-xs text-textSecondary" style={clamp(3)}>
-            {preview.description}
-          </div>
-        )}
+      <div {...cardProps} className={CARD}>
+        <ProfileShape
+          headerHeight={52}
+          avatar={
+            preview.author_avatar && !imageFailed ? (
+              <img
+                src={preview.author_avatar}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="h-11 w-11 flex-shrink-0 rounded-full object-cover"
+                onError={() => setImageFailed(true)}
+              />
+            ) : undefined
+          }
+          lines={
+            <>
+              <div className={`${BYLINE} text-textSecondary`}>
+                <SocialLogo platform="instagram" size={13} />
+                <span className="flex-shrink-0 font-semibold">Instagram</span>
+                {typeof preview.member_count === 'number' && (
+                  <Line className="text-textSecondary/70">· {formatViews(preview.member_count)} followers</Line>
+                )}
+              </div>
+              <div className={`${TITLE} font-semibold`}>{preview.title && <Line>{preview.title}</Line>}</div>
+              <div className="flex h-4 min-w-0 items-center text-xs leading-4 text-textSecondary">
+                {preview.author && <Line>{preview.author}</Line>}
+              </div>
+            </>
+          }
+          description={preview.description && <div style={clamp(3)}>{preview.description}</div>}
+        />
       </div>,
     );
   }
@@ -539,54 +799,49 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   }
 
   // --- Twitch clip / VOD: 16:9 thumbnail + duration badge + channel/views ----
-  // Opens in the in-app player (see activate()).
-  if ((preview.kind === 'clip' || preview.kind === 'vod') && preview.image && !imageFailed) {
-    const hasMeta = !!preview.description || typeof preview.view_count === 'number';
+  // Opens in the in-app player (see activate()). The video frame has one byline,
+  // so "Clipped by" and the views ride on it after the channel; a missing
+  // thumbnail keeps the 16:9 box.
+  if (preview.kind === 'clip' || preview.kind === 'vod') {
+    const showImage = !!preview.image && !imageFailed;
+    const meta = [
+      preview.author,
+      preview.description,
+      typeof preview.view_count === 'number' ? `${formatViews(preview.view_count)} views` : null,
+    ].filter(Boolean);
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
-          <img
-            src={preview.image}
-            alt={preview.title ?? (preview.kind === 'vod' ? 'Twitch VOD' : 'Twitch clip')}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="h-full w-full object-cover"
-            onError={() => setImageFailed(true)}
-          />
-          <span className="absolute inset-0 flex items-center justify-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/60">
-              <Play size={22} className="ml-0.5 text-white" fill="currentColor" />
-            </span>
-          </span>
-          {typeof preview.duration === 'number' && preview.duration > 0 && (
-            <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
-              {formatMediaDuration(preview.duration)}
-            </span>
-          )}
-        </div>
-        <div className="px-3 py-2">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-textSecondary">
-            <span className="font-semibold" style={{ color: '#9146FF' }}>
-              Twitch
-            </span>
-            {preview.author && <span className="truncate">· {preview.author}</span>}
-          </div>
-          {preview.title && (
-            <div className="text-sm font-medium text-textPrimary" style={clamp(2)}>
-              {preview.title}
-            </div>
-          )}
-          {hasMeta && (
-            <div className="mt-0.5 truncate text-[11px] text-textSecondary">
-              {preview.description}
-              {preview.description && typeof preview.view_count === 'number' ? ' · ' : ''}
-              {typeof preview.view_count === 'number' ? `${formatViews(preview.view_count)} views` : ''}
-            </div>
-          )}
-        </div>
+      <div {...cardProps} className={CARD}>
+        <VideoShape
+          picture={
+            <>
+              {showImage && (
+                <img
+                  src={preview.image as string}
+                  alt={preview.title ?? (preview.kind === 'vod' ? 'Twitch VOD' : 'Twitch clip')}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                  onError={() => setImageFailed(true)}
+                />
+              )}
+              <PlayBadge />
+              {typeof preview.duration === 'number' && preview.duration > 0 && (
+                <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
+                  {formatMediaDuration(preview.duration)}
+                </span>
+              )}
+            </>
+          }
+          byline={
+            <>
+              <span className="flex-shrink-0 font-semibold" style={{ color: '#9146FF' }}>
+                Twitch
+              </span>
+              {meta.length > 0 && <Line>· {meta.join(' · ')}</Line>}
+            </>
+          }
+          title={preview.title && <Line>{preview.title}</Line>}
+        />
       </div>,
     );
   }
@@ -600,151 +855,160 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     const members = preview.member_count;
     const hasCounts = typeof online === 'number' || typeof members === 'number';
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center gap-3 p-3 text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-2xl bg-white/[0.04]">
-          {preview.image && !imageFailed ? (
-            <img
-              src={preview.image}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-              onError={() => setImageFailed(true)}
-            />
-          ) : (
-            <div
-              className="flex h-full w-full items-center justify-center text-white"
-              style={{ backgroundColor: '#5865F2' }}
-            >
-              <DiscordGlyph size={20} />
+      <div {...cardProps} className={CARD}>
+        <DiscordShape
+          icon={
+            <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-2xl bg-white/[0.04]">
+              {preview.image && !imageFailed ? (
+                <img
+                  src={preview.image}
+                  alt=""
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                  onError={() => setImageFailed(true)}
+                />
+              ) : (
+                <div
+                  className="flex h-full w-full items-center justify-center text-white"
+                  style={{ backgroundColor: '#5865F2' }}
+                >
+                  <DiscordGlyph size={20} />
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[11px]" style={{ color: '#5865F2' }}>
-            <DiscordGlyph size={13} />
-            <span className="font-semibold">Discord</span>
-          </div>
-          {preview.title && (
-            <div className="truncate text-sm font-semibold text-textPrimary">{preview.title}</div>
-          )}
-          {hasCounts && (
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-textSecondary">
-              {typeof online === 'number' && (
-                <span className="flex items-center gap-1.5">
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-60" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+          }
+          byline={
+            <>
+              <DiscordGlyph size={13} />
+              <span className="font-semibold">Discord</span>
+            </>
+          }
+          title={preview.title && <Line>{preview.title}</Line>}
+          counts={
+            hasCounts && (
+              <>
+                {/* One line: a count that does not fit ends in an ellipsis. */}
+                {typeof online === 'number' && (
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="relative flex h-2 w-2 flex-shrink-0">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-60" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+                    </span>
+                    <Line>
+                      <span className="font-semibold text-textPrimary">{online.toLocaleString()}</span> Online
+                    </Line>
                   </span>
-                  <span className="font-semibold text-textPrimary">{online.toLocaleString()}</span> Online
-                </span>
-              )}
-              {typeof members === 'number' && (
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-textMuted/50" />
-                  <span className="font-semibold text-textPrimary">{members.toLocaleString()}</span> Members
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-        <span className="discord-join-button flex flex-shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold text-white">
-          <DiscordGlyph size={14} />
-          Join
-        </span>
+                )}
+                {typeof members === 'number' && (
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="h-2 w-2 flex-shrink-0 rounded-full bg-textMuted/50" />
+                    <Line>
+                      <span className="font-semibold text-textPrimary">{members.toLocaleString()}</span> Members
+                    </Line>
+                  </span>
+                )}
+              </>
+            )
+          }
+          join={
+            <span className="discord-join-button flex flex-shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold text-white">
+              <DiscordGlyph size={14} />
+              Join
+            </span>
+          }
+        />
       </div>,
     );
   }
 
   // --- Steam: capsule art + title + price + blurb ---------------------------
+  // A missing capsule keeps its box with the Steam mark in it.
   if (preview.kind === 'steam') {
     const showImage = !!preview.image && !imageFailed;
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
-      >
-        {showImage && (
-          <div className="relative w-full bg-black/40" style={{ aspectRatio: '460 / 215' }}>
-            <img
-              src={preview.image as string}
-              alt={preview.title ?? 'Steam'}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-              onError={() => setImageFailed(true)}
-            />
-            {preview.author && (
-              <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-semibold text-white">
-                {preview.author}
+      <div {...cardProps} className={CARD}>
+        <SteamShape
+          picture={
+            showImage ? (
+              <>
+                <img
+                  src={preview.image as string}
+                  alt={preview.title ?? 'Steam'}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                  onError={() => setImageFailed(true)}
+                />
+                {preview.author && (
+                  <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+                    {preview.author}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="absolute inset-0 flex items-center justify-center" style={{ color: '#66c0f4' }}>
+                <SteamGlyph size={28} />
               </span>
-            )}
-          </div>
-        )}
-        <div className="px-3 py-2">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[11px]">
-            <span style={{ color: '#66c0f4' }}>
-              <SteamGlyph size={13} />
-            </span>
-            <span className="font-semibold" style={{ color: '#66c0f4' }}>
-              Steam
-            </span>
-            {!showImage && preview.author && (
-              <span className="text-textSecondary">· {preview.author}</span>
-            )}
-          </div>
-          {preview.title && (
-            <div className="text-sm font-medium text-textPrimary" style={clamp(2)}>
-              {preview.title}
-            </div>
-          )}
-          {preview.description && (
-            <div className="mt-0.5 text-xs text-textSecondary" style={clamp(2)}>
-              {preview.description}
-            </div>
-          )}
-        </div>
+            )
+          }
+          byline={
+            <>
+              <span className="flex-shrink-0" style={{ color: '#66c0f4' }}>
+                <SteamGlyph size={13} />
+              </span>
+              <span className="flex-shrink-0 font-semibold" style={{ color: '#66c0f4' }}>
+                Steam
+              </span>
+              {!showImage && preview.author && <Line className="text-textSecondary">· {preview.author}</Line>}
+            </>
+          }
+          title={preview.title && <Line>{preview.title}</Line>}
+          description={preview.description && <div style={clamp(2)}>{preview.description}</div>}
+        />
       </div>,
     );
   }
 
   // --- Spotify: cover art + title + content type ----------------------------
+  // A missing cover keeps its square with the Spotify mark in it.
   if (preview.kind === 'spotify') {
     const showImage = !!preview.image && !imageFailed;
     return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
-      >
-        {showImage && (
-          <img
-            src={preview.image as string}
-            alt=""
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="h-16 w-16 flex-shrink-0 object-cover"
-            onError={() => setImageFailed(true)}
-          />
-        )}
-        <div className="min-w-0 flex-1 px-3 py-2">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[11px]">
-            <span style={{ color: '#1DB954' }}>
-              <SpotifyGlyph size={13} />
-            </span>
-            <span className="font-semibold" style={{ color: '#1DB954' }}>
-              Spotify
-            </span>
-            {preview.description && <span className="text-textSecondary">· {preview.description}</span>}
-          </div>
-          {preview.title && (
-            <div className="text-sm font-medium text-textPrimary" style={clamp(2)}>
-              {preview.title}
-            </div>
-          )}
-        </div>
+      <div {...cardProps} className={CARD}>
+        <SpotifyShape
+          picture={
+            showImage ? (
+              <img
+                src={preview.image as string}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="h-16 w-16 flex-shrink-0 object-cover"
+                onError={() => setImageFailed(true)}
+              />
+            ) : (
+              <span
+                className="flex h-16 w-16 flex-shrink-0 items-center justify-center"
+                style={{ color: '#1DB954', backgroundColor: 'rgba(29, 185, 84, 0.12)' }}
+              >
+                <SpotifyGlyph size={24} />
+              </span>
+            )
+          }
+          byline={
+            <>
+              <span className="flex-shrink-0" style={{ color: '#1DB954' }}>
+                <SpotifyGlyph size={13} />
+              </span>
+              <span className="flex-shrink-0 font-semibold" style={{ color: '#1DB954' }}>
+                Spotify
+              </span>
+              {preview.description && <Line className="text-textSecondary">· {preview.description}</Line>}
+            </>
+          }
+          title={preview.title && <div style={clamp(2)}>{preview.title}</div>}
+        />
       </div>,
     );
   }
@@ -771,59 +1035,52 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // --- Tweet / X post ------------------------------------------------------
   if (preview.kind === 'tweet') {
     const showImage = !!preview.image && !imageFailed;
-    return wrap(
-      <div
-        {...cardProps}
-        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
-      >
-        <div className="flex items-center gap-2">
-          {preview.author_avatar && (
-            <img
-              src={preview.author_avatar}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-9 w-9 flex-shrink-0 rounded-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
-            />
-          )}
-          <div className="min-w-0 flex-1 leading-tight">
-            {preview.title && (
-              <div className="truncate text-sm font-semibold text-textPrimary">{preview.title}</div>
-            )}
-            {preview.author && (
-              <div className="truncate text-xs text-textSecondary">{preview.author}</div>
-            )}
-          </div>
-          <svg
-            viewBox="0 0 24 24"
-            className="h-4 w-4 flex-shrink-0 text-textSecondary"
-            fill="currentColor"
-            aria-hidden
-          >
-            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-          </svg>
+    // The body is one fixed area: two text lines over the picture, or seven
+    // text lines when there is none, so a long post or a picture never grows it.
+    const text = (lines: number) =>
+      preview.description && (
+        <div className="whitespace-pre-wrap break-words text-sm leading-5 text-textPrimary" style={clamp(lines)}>
+          {preview.description}
         </div>
-        {preview.description && (
-          <div
-            className="mt-2 whitespace-pre-wrap break-words text-sm text-textPrimary"
-            style={clamp(8)}
-          >
-            {preview.description}
-          </div>
-        )}
-        {showImage && (
-          <img
-            src={preview.image as string}
-            alt=""
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="mt-2 max-h-72 w-full rounded-lg object-cover"
-            onError={() => setImageFailed(true)}
-          />
-        )}
+      );
+    return wrap(
+      <div {...cardProps} className={CARD}>
+        <TweetShape
+          avatar={
+            preview.author_avatar && (
+              <img
+                src={preview.author_avatar}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="h-9 w-9 flex-shrink-0 rounded-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            )
+          }
+          title={preview.title && <Line>{preview.title}</Line>}
+          author={preview.author && <Line>{preview.author}</Line>}
+          body={
+            showImage ? (
+              <>
+                <div className="h-10 overflow-hidden">{text(2)}</div>
+                <img
+                  src={preview.image as string}
+                  alt=""
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="mt-2 w-full rounded-lg object-cover"
+                  style={{ height: TWEET_BODY - 48 }}
+                  onError={() => setImageFailed(true)}
+                />
+              </>
+            ) : (
+              text(7)
+            )
+          }
+        />
       </div>,
     );
   }
@@ -867,33 +1124,24 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   if (!hasText && !showImage) return fallback;
 
   return wrap(
-    <div
-      {...cardProps}
-      className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
-    >
-      {showImage && (
-        <img
-          src={preview.image as string}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="h-20 w-20 flex-shrink-0 object-cover"
-          onError={() => setImageFailed(true)}
-        />
-      )}
-      <div className="min-w-0 flex-1 px-3 py-2">
-        {site && <div className="truncate text-[11px] text-textSecondary">{site}</div>}
-        {preview.title && (
-          <div className="text-sm font-medium text-textPrimary" style={clamp(2)}>
-            {preview.title}
-          </div>
-        )}
-        {preview.description && (
-          <div className="mt-0.5 text-xs text-textSecondary" style={clamp(2)}>
-            {preview.description}
-          </div>
-        )}
-      </div>
+    <div {...cardProps} className={CARD}>
+      <GenericShape
+        picture={
+          showImage && (
+            <img
+              src={preview.image as string}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="h-20 w-20 flex-shrink-0 object-cover"
+              onError={() => setImageFailed(true)}
+            />
+          )
+        }
+        site={site && <Line>{site}</Line>}
+        title={preview.title && <Line>{preview.title}</Line>}
+        description={preview.description && <div style={clamp(2)}>{preview.description}</div>}
+      />
     </div>,
   );
 });

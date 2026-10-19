@@ -2197,6 +2197,7 @@ pub fn run() {
             fetch_badge_metadata,
             // Link preview commands
             fetch_link_preview,
+            link_preview_expected,
             // Cache commands
             save_emote_by_id,
             load_emote_by_id,
