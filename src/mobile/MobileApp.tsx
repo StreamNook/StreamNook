@@ -187,10 +187,15 @@ const MobileApp: React.FC = () => {
               </motion.div>
             </AnimatePresence>
             {chatsKept && (
+              // Hidden by class, not by the attribute alone: `[hidden]` and the
+              // `flex` utility weigh the same and utilities come later, so the
+              // attribute never hid it and its glass kept painting over the
+              // tab in front. `inert` keeps every layer out of reach too.
               <div
                 ref={chatsRef}
                 hidden={!chatsShown}
-                className="absolute inset-0 flex flex-col"
+                inert={!chatsShown}
+                className={`absolute inset-0 flex-col ${chatsShown ? 'flex' : 'hidden'}`}
                 style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
               >
                 <ChatsScreen shown={chatsShown} />

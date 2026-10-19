@@ -590,6 +590,15 @@ export const MobileChatPane: React.FC<{
     press.release();
   }, [press]);
 
+  // Out of sight, nothing of this room stays up: the fan and the sheets draw
+  // outside the pane, so hiding the pane would not hide them.
+  useEffect(() => {
+    if (!paused) return;
+    closeFan();
+    setSheetUser(null);
+    setAddChatOpen(false);
+  }, [paused, closeFan]);
+
   const runFanAction = useCallback(
     (action: FanAction, timeoutSecs?: number) => {
       const t = fanTarget;

@@ -239,6 +239,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     roomState?.shared_chat ??
     null;
   const [groupOpen, setGroupOpen] = useState(false);
+  // Leaving Chats closes its sheets: they draw outside the hidden screen.
+  useEffect(() => {
+    if (shown) return;
+    setAddOpen(false);
+    setGroupOpen(false);
+  }, [shown]);
   const leading = group ? (
     <button
       onClick={() => setGroupOpen(true)}
