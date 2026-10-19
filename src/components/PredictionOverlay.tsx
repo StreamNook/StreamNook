@@ -124,6 +124,8 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const showConfirm = confirming && canPredict && bet !== null;
   const failureKey = `${betKey ?? ''}|${amountInput}`;
   const failureLine = failure && failure.key === failureKey ? failure.line : null;
+  // The amount the field holds, for marking a preset chip as the one chosen.
+  const typedAmount = Number(amountInput.replace(/\D/g, '')) || null;
 
   // Ask Rust what this bet would say whenever the side, the amount or the card
   // changes (the pool moves the "win up to" line). Asking spends nothing.
@@ -345,7 +347,10 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                       key={preset.label}
                       onClick={() => setAmountInput(String(preset.amount))}
                       className={`px-1.5 py-1.5 text-xs font-medium rounded transition-colors border ${
-                        bet?.amount === preset.amount
+                        // Chosen only while the field holds exactly this
+                        // amount: a typed 500 marks no chip, even before
+                        // Rust's answer for it lands.
+                        bet?.amount === preset.amount && typedAmount === preset.amount
                           ? 'bg-transparent border-accent-on-surface text-accent-on-surface'
                           : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
                       }`}
