@@ -231,7 +231,8 @@ struct ChatEmotePicker: View {
                                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: max(1, section.columns)),
                                           spacing: 8) {
                                     ForEach(section.emotes) { cell in
-                                        EmoteCell(cell: cell, wide: section.columns < 7) {
+                                        EmoteCell(cell: cell, wide: section.columns < 7,
+                                                  animate: model.session.style.animatesEmotes) {
                                             model.insert(cell.name)
                                         } favorite: {
                                             Task { model.show(await picker.toggleFavorite(cell)) }
@@ -367,12 +368,14 @@ struct ChatEmotePicker: View {
 private struct EmoteCell: View {
     let cell: PickerCell
     let wide: Bool
+    /// The chat's "Animate emotes" setting, as the desktop picker follows it.
+    let animate: Bool
     let pick: () -> Void
     let favorite: () -> Void
 
     var body: some View {
         Button(action: pick) {
-            EmoteThumb(url: cell.url, height: 32, wide: wide)
+            EmoteThumb(url: cell.url, height: 32, wide: wide, animate: animate)
                 .padding(wide ? 4 : 6)
                 .frame(maxWidth: .infinity, minHeight: 32)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(ring.opacity(0.45), lineWidth: ring == .clear ? 0 : 1))
@@ -456,39 +459,18 @@ private struct EmoteCard: View {
 }
 
 /// An emote image at a fixed height and its own width (wide emotes stay wide), through the
-/// shared image pipeline.
+/// shared image pipeline. An animated one moves on the shared clock, every frame of it decoded
+/// once for every copy on screen, and only while it is on screen.
 struct EmoteThumb: View {
     let url: String
     var height: CGFloat = 32
     var wide = false
-    @Environment(\.displayScale) private var scale
-    @State private var image: CGImage?
+    /// False draws the first frame (the chat's "Animate emotes" setting, in the picker).
+    var animate = true
 
     var body: some View {
-        Group {
-            if let image {
-                Image(decorative: image, scale: scale)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                Color.clear
-            }
-        }
-        .frame(maxWidth: wide ? .infinity : height, maxHeight: height)
-        .frame(height: height)
-        .task(id: url) {
-            let pixels = Int(height * scale)
-            let tiered = ChatImageURL.thumbnail(url, points: height)
-            if let hit = ImagePipeline.shared.cached(tiered, pixelHeight: pixels, animated: false) {
-                image = hit.first
-                return
-            }
-            image = nil
-            let decoded: DecodedImage? = await withCheckedContinuation { continuation in
-                ImagePipeline.shared.load(tiered, pixelHeight: pixels, animated: false) { continuation.resume(returning: $0) }
-            }
-            image = decoded?.first
-        }
+        CosmeticImage(ChatImageURL.thumbnail(url, points: height), animate: animate, pointHeight: height)
+            .frame(maxWidth: wide ? .infinity : height, maxHeight: height)
+            .frame(height: height)
     }
 }
