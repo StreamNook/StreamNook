@@ -46,6 +46,7 @@ pub mod identity;
 pub mod justlog;
 pub mod layout;
 pub mod link_preview;
+pub mod fonts;
 pub mod logs;
 pub mod media_glow;
 pub mod mod_log_storage;

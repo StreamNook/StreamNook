@@ -51,6 +51,8 @@ public struct SettingsLook: Decodable, Sendable, Equatable {
     public var glassBlur: Bool?
     public var setupComplete: Bool?
     public var font: String?
+    /// The typed family the Custom font draws (`font` "custom").
+    public var fontCustom: String?
     public var motionMode: String?
 
     enum CodingKeys: String, CodingKey {
@@ -59,6 +61,7 @@ public struct SettingsLook: Decodable, Sendable, Equatable {
         case glassBlur = "glass_blur"
         case setupComplete = "setup_complete"
         case font
+        case fontCustom = "font_custom"
         case motionMode = "motion_mode"
     }
 

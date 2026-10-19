@@ -158,7 +158,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   // Tools
   { name: 'echo', usage: '/echo <text>', description: 'Print a line in this chat that only you see', category: 'Everyone' , local: true },
   { name: 'copy', usage: '/copy <text>', description: 'Copy text to your clipboard', category: 'Everyone' , local: true, details: 'Handy inside your own commands, for example to copy a link you post often.' },
-  { name: 'tts', aliases: ['espeak'], usage: '/tts <text>', description: 'Read text aloud on this computer', category: 'Everyone' , local: true },
+  { name: 'tts', aliases: ['espeak'], usage: '/tts <text>', description: 'Read text aloud on this device', category: 'Everyone' , local: true },
   { name: 'screenshot', usage: '/screenshot', description: 'Save the current stream picture to Pictures\\StreamNook', category: 'Everyone' , local: true, desktopOnly: true },
   { name: 'addstreamhighlight', usage: '/addstreamhighlight [note]', description: 'Note this moment of the stream in your highlights file', category: 'Everyone' , local: true, examples: ['/addstreamhighlight', '/addstreamhighlight insane clutch'], details: 'Saves the time, the stream uptime, the title and your note. /openstreamhighlights opens the list.' },
   { name: 'openstreamhighlights', usage: '/openstreamhighlights', description: 'Open your stream highlights file', category: 'Everyone' , local: true, desktopOnly: true },

@@ -169,6 +169,8 @@ final class AppModel {
             let json = try await core.invoke("load_settings", args: [:])
             let settings = try JSONDecoder().decode(SettingsLook.self, from: Data(json.utf8))
             look.apply(settings)
+            let core = core
+            Task { await Typeface.loadCustom(fontID: settings.font, family: settings.fontCustom, core: core) }
             await loadTheme()
             if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
                 watch.savedQuality = prefs.quality
