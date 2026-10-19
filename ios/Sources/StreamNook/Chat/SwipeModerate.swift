@@ -22,6 +22,8 @@ final class SwipeModerator {
     private var banArmed = false
     private var banTimer: Timer?
     private var banAnchor: CGFloat = 0
+    /// The step zone under the finger, before Ban's rest is applied: a buzz is a change of zone.
+    private var zone: Int?
     private let tick = UISelectionFeedbackGenerator()
     private let thud = UIImpactFeedbackGenerator(style: .rigid)
 
@@ -49,22 +51,29 @@ final class SwipeModerator {
     /// The finger moved: `pull` points right of where it went down, `y` in the row's space.
     func track(pull: CGFloat, y: CGFloat) {
         let slide = CGFloat(slider.clamp(Double(pull)))
-        let wasOff = offRow
         offRow = y < rowFrame.minY - slider.leash || y > rowFrame.maxY + slider.leash
-        var next = slider.step(at: Double(slide), keeping: step)
-        // Ban arms only after a still rest in its zone; until then the step before it shows.
-        if let n = next, slider.steps[n].isBan {
+        // While Ban's rest runs, Ban is the step its edge rule keeps, so a finger trembling on
+        // the edge does not start the rest over.
+        let banIndex = slider.steps.count - 1
+        let keeping = banTimer != nil && banIndex >= 0 ? banIndex : step
+        let here = slider.step(at: Double(slide), keeping: keeping)
+        var next = here
+        // Ban arms only after a still rest in its zone, on the row; until then the step before it shows.
+        if let n = next, slider.steps[n].isBan, !offRow {
             if banTimer == nil || abs(slide - banAnchor) > slider.banStill {
                 startBanRest(at: slide)
             }
             if !banArmed { next = n > 0 ? n - 1 : nil }
         } else {
             stopBanRest()
+            if let n = next, slider.steps[n].isBan { next = n > 0 ? n - 1 : nil }
         }
-        if next != step || wasOff != offRow {
-            if next != step, next != nil, !offRow { tick.selectionChanged(); tick.prepare() }
-            step = next
+        // A buzz marks a new zone under the finger, never Ban arming or disarming (that has its own).
+        if here != zone {
+            if here != nil, !offRow { tick.selectionChanged(); tick.prepare() }
+            zone = here
         }
+        step = next
         draw(slide: slide)
     }
 
@@ -72,15 +81,18 @@ final class SwipeModerator {
         banTimer?.invalidate()
         banArmed = false
         banAnchor = slide
-        banTimer = Timer.scheduledTimer(withTimeInterval: Double(slider.banDwellMs) / 1000, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: Double(slider.banDwellMs) / 1000, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, !self.offRow else { return }
                 self.banArmed = true
                 self.step = self.slider.steps.count - 1
-                if !self.offRow { self.thud.impactOccurred() }
+                self.thud.impactOccurred()
                 self.draw(slide: self.banAnchor)
             }
         }
+        // Common modes: a finger on the screen keeps the run loop out of the default mode.
+        RunLoop.main.add(timer, forMode: .common)
+        banTimer = timer
         // The fill bar starts once the chip has its new width (drawn right after this).
         DispatchQueue.main.async { [weak self] in
             guard let self, self.resting else { return }

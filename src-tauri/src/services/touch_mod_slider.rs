@@ -17,15 +17,24 @@
 //!   past the end neither bans nor lands on the longest timeout;
 //! - a step changes only `hysteresis` past its edge;
 //! - a finger more than `leash` above or below the message cancels.
+//!
+//! The thumb can land anywhere on the row, so the room right of it varies.
+//! The cancel zone and the step size stay the same from press to press, so the
+//! hand learns them; what gives way when the room is short is, in order: the
+//! longest timeouts (down to the first), then the step size, then the cancel
+//! zone (never below `DEAD_FLOOR_PT`), then Delete. Ban always stays last and
+//! reachable. A press with no room even for that gets no steps, only "Start
+//! further left", so nothing can land past the edge of the screen.
 
 use serde::Serialize;
 
 use crate::services::moderation::{slider_steps_for, ModStep, StepAction};
 
 /// Pull this far before the first step; less is the cancel zone, as wide as
-/// desktop's so a reply-length swipe never deletes. A narrow room takes a
-/// quarter of its width instead.
+/// desktop's so a reply-length swipe never deletes.
 const DEAD_ZONE_PT: f32 = 72.0;
+/// A short room narrows the cancel zone last, and never below this.
+const DEAD_FLOOR_PT: f32 = 48.0;
 /// Room per step by the Length setting, wider than desktop's for a finger.
 const STEP_PT_SHORT: f32 = 28.0;
 const STEP_PT_MEDIUM: f32 = 34.0;
@@ -46,8 +55,8 @@ const HYSTERESIS_PT: f32 = 4.0;
 const LEASH_PT: f32 = 120.0;
 /// The horizontal pull that claims the touch from the list's scroll.
 const ENGAGE_PT: f32 = 10.0;
-/// Room kept free at the row's right edge.
-const RIGHT_MARGIN_PT: f32 = 24.0;
+/// Room kept free at the row's right edge, where a thumb cannot reach.
+const RIGHT_MARGIN_PT: f32 = 16.0;
 
 /// One step as the chip and the track show it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -104,35 +113,58 @@ fn step_room(length: &str) -> f32 {
     }
 }
 
-/// Step-lengths the steps span: one per step, plus the gap before Ban.
-fn step_units(steps: &[ModStep]) -> f32 {
-    let ends_in_ban = steps.last().is_some_and(|s| s.action == StepAction::Ban);
-    steps.len() as f32 + if ends_in_ban { BAN_GAP_STEPS as f32 + 0.5 } else { 0.0 }
+fn ends_in_ban(steps: &[ModStep]) -> bool {
+    steps.last().is_some_and(|s| s.action == StepAction::Ban)
 }
 
-/// The ruler for `steps` with `room` points right of the thumb: (dead,
-/// spacing, starts, end), each a pull from where the thumb landed.
-pub fn layout(steps: &[ModStep], room: f32, length: &str) -> (f32, f32, Vec<f32>, f32) {
-    let dead = DEAD_ZONE_PT.min((room * 0.25).round()).max(1.0);
-    let units = step_units(steps).max(1.0);
-    let fit = (room - dead - RIGHT_MARGIN_PT) / units;
-    let spacing = step_room(length).min(fit).max(STEP_FLOOR_PT);
+/// The ruler for `steps` with this cancel zone and step size: (starts, end),
+/// each a pull from where the thumb landed.
+pub fn layout(steps: &[ModStep], dead: f32, spacing: f32) -> (Vec<f32>, f32) {
     let last = steps.len().saturating_sub(1);
+    let ban = ends_in_ban(steps);
     let starts: Vec<f32> = steps
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            let at = if s.action == StepAction::Ban && i == last { i + BAN_GAP_STEPS } else { i };
+        .map(|(i, _)| {
+            let at = if ban && i == last { i + BAN_GAP_STEPS } else { i };
             dead + at as f32 * spacing
         })
         .collect();
-    let last_zone = if steps.last().is_some_and(|s| s.action == StepAction::Ban) {
-        (1.5 * spacing).max(BAN_ZONE_MIN_PT)
-    } else {
-        spacing
-    };
+    let last_zone = if ban { (1.5 * spacing).max(BAN_ZONE_MIN_PT) } else { spacing };
     let end = starts.last().map_or(dead, |s| s + last_zone);
-    (dead, spacing, starts, end)
+    (starts, end)
+}
+
+/// The steps that fit `room` points right of the thumb, with the cancel zone
+/// and step size they get (see the module notes for what gives way first).
+/// `None` when not even the first timeout and Ban fit.
+pub fn fit(steps: &[ModStep], room: f32, length: &str) -> Option<(Vec<ModStep>, f32, f32)> {
+    let fits = |kept: &[ModStep], dead: f32, spacing: f32| layout(kept, dead, spacing).1 + RIGHT_MARGIN_PT <= room;
+    let mut kept = steps.to_vec();
+    let (mut dead, mut spacing) = (DEAD_ZONE_PT, step_room(length));
+    // The longest timeouts first, keeping the first.
+    while !fits(&kept, dead, spacing) && kept.iter().filter(|s| s.action == StepAction::Timeout).count() > 1 {
+        let longest = kept.iter().rposition(|s| s.action == StepAction::Timeout).expect("counted above");
+        kept.remove(longest);
+    }
+    loop {
+        while !fits(&kept, dead, spacing) && spacing > STEP_FLOOR_PT {
+            spacing = (spacing - 1.0).max(STEP_FLOOR_PT);
+        }
+        while !fits(&kept, dead, spacing) && dead > DEAD_FLOOR_PT {
+            dead = (dead - 1.0).max(DEAD_FLOOR_PT);
+        }
+        if fits(&kept, dead, spacing) {
+            return (!kept.is_empty()).then_some((kept, dead, spacing));
+        }
+        // Delete goes last of all, while a timeout or Ban is left.
+        match kept.iter().position(|s| s.action == StepAction::Delete) {
+            Some(i) if kept.len() > 1 => {
+                kept.remove(i);
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// The step under a pull of `slide` points: `None` in the cancel zone. The
@@ -196,15 +228,26 @@ fn touch_steps(steps: &[ModStep], name: &str) -> Vec<TouchStep> {
 /// points wide, on `name`'s message. Pure, for tests.
 pub fn build(steps: &[ModStep], row_width: f32, start: f32, name: &str, length: &str, style: &str, enabled: bool) -> TouchSlider {
     let start = start.clamp(0.0, (row_width - 1.0).max(0.0));
-    let (dead, spacing, starts, end) = layout(steps, row_width - start, length);
+    let room = row_width - start;
     let quick_seconds = steps.iter().find_map(|s| (s.action == StepAction::Timeout).then_some(s.seconds).flatten()).unwrap_or(600);
+    // Too near the right edge for any step: the pull runs with no steps and
+    // says where to start instead, so a release there does nothing.
+    let (kept, dead, spacing, cancel_words) = match fit(steps, room, length) {
+        Some((kept, dead, spacing)) => (kept, dead, spacing, "Let go to cancel"),
+        None => (Vec::new(), DEAD_FLOOR_PT, STEP_FLOOR_PT, "Start further left to moderate"),
+    };
+    let (starts, end) = if kept.is_empty() {
+        (Vec::new(), (room - RIGHT_MARGIN_PT).max(1.0))
+    } else {
+        layout(&kept, dead, spacing)
+    };
     TouchSlider {
         enabled: enabled && !steps.is_empty(),
         style: match style {
             "rail" | "capsule" => style.to_string(),
             _ => "preview".to_string(),
         },
-        steps: touch_steps(steps, name.trim()),
+        steps: touch_steps(&kept, name.trim()),
         dead,
         spacing,
         starts,
@@ -214,7 +257,7 @@ pub fn build(steps: &[ModStep], row_width: f32, start: f32, name: &str, length: 
         hysteresis: HYSTERESIS_PT,
         leash: LEASH_PT,
         engage: ENGAGE_PT,
-        cancel_words: "Let go to cancel".into(),
+        cancel_words: cancel_words.into(),
         hold_ban_words: "Hold for Ban, let go to cancel".into(),
         nudge_words: "Swipe right on a message to moderate it".into(),
         start,
@@ -348,19 +391,52 @@ mod tests {
         assert_eq!(s.steps[4].chip, "Ban Gus");
     }
 
+    fn default_steps() -> Vec<ModStep> {
+        slider_steps(Platform::Twitch, &SliderConfig { delete: true, timeouts: crate::services::moderation::DEFAULT_SLIDER_TIMEOUTS.to_vec(), ban: true })
+    }
+
     #[test]
-    fn a_thumb_landing_mid_row_still_reaches_ban() {
-        // The ruler fits the room right of the thumb, so every step stays reachable.
-        let s = build(&steps(), 393.0, 200.0, "", "medium", "preview", true);
-        assert!(s.end <= 193.0, "Ban zone ends inside the room: {}", s.end);
-        assert!(s.spacing >= STEP_FLOOR_PT);
+    fn wherever_the_thumb_lands_ban_stays_reachable_and_the_ruler_keeps_its_sizes() {
+        for width in [393.0, 402.0] {
+            for start in [16.0, 120.0, 200.0] {
+                let s = build(&default_steps(), width, start, "", "medium", "preview", true);
+                let room = width - start;
+                let ban = s.steps.len() - 1;
+                assert_eq!(s.steps[ban].label, "Ban", "Ban stays last ({width}, {start})");
+                assert_eq!(s.steps[0].label, "Delete", "Delete stays ({width}, {start})");
+                assert_eq!(s.steps[1].seconds, Some(60), "the first timeout stays ({width}, {start})");
+                assert!(s.starts[ban] + BAN_ZONE_MIN_PT <= room, "Ban fits ({width}, {start}): {:?}", s.starts);
+                assert!(s.end + RIGHT_MARGIN_PT <= room, "the pull stops in the room ({width}, {start})");
+                assert_eq!(s.dead, 72.0, "the cancel zone keeps its size ({width}, {start})");
+            }
+        }
+        // Landing near the left, the step size is the Length setting's, every time.
+        let a = build(&default_steps(), 393.0, 16.0, "", "medium", "preview", true);
+        let b = build(&default_steps(), 393.0, 60.0, "", "medium", "preview", true);
+        assert_eq!((a.spacing, b.spacing), (34.0, 34.0));
+        // The longest timeouts give way first.
+        let labels: Vec<&str> = a.steps.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels.first(), Some(&"Delete"));
+        assert!(!labels.contains(&"1w"), "1w is the first to go: {labels:?}");
+    }
+
+    #[test]
+    fn too_near_the_right_edge_the_pull_has_no_steps_and_says_where_to_start() {
+        let s = build(&default_steps(), 393.0, 300.0, "", "medium", "preview", true);
+        assert!(s.steps.is_empty());
+        assert!(s.enabled, "the pull still shows its chip");
+        assert_eq!(s.cancel_words, "Start further left to moderate");
+        assert!(s.end <= 93.0);
+        assert_eq!(step_at(&[], s.dead, s.spacing, 80.0), None);
     }
 
     #[test]
     fn a_narrow_row_squeezes_the_steps_but_never_below_the_floor() {
         let s = build(&steps(), 200.0, 0.0, "", "long", "rail", true);
-        assert_eq!(s.dead, 50.0);
-        assert!(s.spacing >= STEP_FLOOR_PT);
+        assert_eq!(s.dead, 72.0);
+        assert_eq!(s.steps.len(), 3, "Delete, 1m and Ban");
+        assert!(s.spacing >= STEP_FLOOR_PT && s.spacing < STEP_PT_LONG);
+        assert!(s.end + RIGHT_MARGIN_PT <= 200.0);
         assert_eq!(s.style, "rail");
         let odd = build(&steps(), 390.0, 0.0, "", "medium", "sideways", true);
         assert_eq!(odd.style, "preview");
@@ -369,7 +445,7 @@ mod tests {
     #[test]
     fn the_cancel_zone_the_gap_before_ban_and_ban() {
         let st = steps();
-        let (dead, spacing, _, _) = layout(&st, 390.0, "medium");
+        let (dead, spacing) = (72.0, 34.0);
         assert_eq!(step_at(&st, dead, spacing, 10.0), None);
         assert_eq!(step_at(&st, dead, spacing, 76.0), Some(0));
         assert_eq!(step_at(&st, dead, spacing, 176.0), Some(3));

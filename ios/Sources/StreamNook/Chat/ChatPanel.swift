@@ -433,6 +433,16 @@ struct SwipeHint: View {
             Text("Swipe right on a message to moderate it")
                 .font(.snCaption)
                 .foregroundStyle(.primary)
+            // The X's place; the X itself sits over the pill so it alone takes a touch.
+            Color.clear.frame(width: 18, height: 18)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .glassEffect()
+        // Only the X takes a touch: a swipe on the row under the pill still starts.
+        .allowsHitTesting(false)
+        .overlay(alignment: .trailing) {
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -440,11 +450,8 @@ struct SwipeHint: View {
                     .padding(4)
             }
             .accessibilityLabel("Dismiss the swipe hint")
+            .padding(.trailing, 6)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .padding(.vertical, 5)
-        .glassEffect()
         .transition(.opacity)
     }
 }

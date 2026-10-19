@@ -824,10 +824,11 @@ export const MobileChatPane: React.FC<{
         />
         {swipeOn && !hintLearned && (
           <div className="pointer-events-none absolute left-0 right-0 top-2 z-10 flex justify-center">
-            <div className="glass-badge pointer-events-auto flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1 text-[12px] text-textPrimary">
+            {/* Only the X takes a touch: a swipe on the row under the pill still starts. */}
+            <div className="glass-badge flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1 text-[12px] text-textPrimary">
               <HandPointing size={14} weight="bold" className="text-accent" />
               Swipe right on a message to moderate it
-              <button type="button" onClick={learnSwipe} aria-label="Dismiss the swipe hint" className="p-1 text-textMuted">
+              <button type="button" onClick={learnSwipe} aria-label="Dismiss the swipe hint" className="pointer-events-auto p-1 text-textMuted">
                 <X size={11} weight="bold" />
               </button>
             </div>

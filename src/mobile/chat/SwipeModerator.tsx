@@ -49,7 +49,7 @@ interface Props {
   sliderFor: (width: number, startX: number, name: string) => Promise<TouchSlider | null>;
   /** The long-press fan owns the finger once armed. */
   fanArmed: () => boolean;
-  /** A swipe ran (the one-time hint goes). */
+  /** A swipe started (the one-time hint goes). */
   onDone: () => void;
 }
 
@@ -74,6 +74,8 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
     } | null = null;
     let engaged = false;
     let step: number | null = null;
+    /** The step zone under the finger, before Ban's rest is applied. */
+    let zone: number | null = null;
     let offRow = false;
     let rest: { timer: ReturnType<typeof setTimeout>; anchor: number; armed: boolean } | null = null;
     let rowRect: DOMRect | null = null;
@@ -117,11 +119,11 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
             action: stepAction(armedStep, p.messageId),
             useSavedReason: armedStep.action !== 'delete',
           });
-          live.current.onDone();
         }
       }
       engaged = false;
       step = null;
+      zone = null;
       offRow = false;
       setView(null);
     };
@@ -178,7 +180,7 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
           return;
         }
         // Sideways and rightward claims the finger, once the core has laid the slider out.
-        if (!s?.enabled || dx < engage || dx < Math.abs(dy) * 1.5) return;
+        if (!s?.enabled || dx < engage || dx < Math.abs(dy)) return;
         engaged = true;
         // The pull may leave the list; its release still comes here.
         try {
@@ -188,12 +190,21 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
         }
         rowRect = press.row.getBoundingClientRect();
         listRect = list.getBoundingClientRect();
+        // The gesture is found: the one-time hint goes now, before the chip could meet it.
+        live.current.onDone();
       }
       if (!s) return;
       const slide = Math.min(Math.max(0, dx), s.end - 0.5);
       offRow = rowRect != null && (e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash);
-      let next = stepKeeping(s, slide, step);
-      if (next != null && s.steps[next].action === 'ban') {
+      // While Ban's rest runs, Ban is the step its edge rule keeps, so a finger
+      // trembling on the edge does not start the rest over.
+      const here = stepKeeping(s, slide, rest ? s.steps.length - 1 : step);
+      let next = here;
+      if (next != null && s.steps[next].action === 'ban' && offRow) {
+        // Off the row Ban never rests or arms.
+        stopRest();
+        next = next > 0 ? next - 1 : null;
+      } else if (next != null && s.steps[next].action === 'ban') {
         if (!rest || Math.abs(slide - rest.anchor) > s.ban_still) {
           stopRest();
           const anchor = slide;
@@ -213,10 +224,12 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       } else {
         stopRest();
       }
-      if (next !== step) {
-        step = next;
-        if (next != null && !offRow) hapticStep();
+      // A buzz marks a new zone under the finger, never Ban arming or disarming (that has its own).
+      if (here !== zone) {
+        if (here != null && !offRow) hapticStep();
+        zone = here;
       }
+      step = next;
       draw(slide);
     };
 

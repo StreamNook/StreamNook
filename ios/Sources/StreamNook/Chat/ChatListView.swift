@@ -583,7 +583,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     var swipeAllowed: ((ChatRowLayout) -> Bool)?
     /// The slider for a press `startX` points into a row, and the release action, for that row.
     var prepareSwipe: ((ChatRowLayout, _ width: CGFloat, _ startX: CGFloat) async -> PreparedSwipe?)?
-    /// A finished swipe (the hint goes once one has run).
+    /// A swipe started (the hint goes once one has).
     var onSwipeDone: (() -> Void)?
     /// The long press that opens the fan; it gives way sooner to a sideways drift while swiping is on.
     private let press = UILongPressGestureRecognizer()
@@ -618,26 +618,35 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
 
     override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard g === swipePan else { return true }
-        guard !readOnly, swipe == nil, fan == nil, let ready = touchPress?.prepared, ready.slider.enabled else { return false }
-        let v = swipePan.velocity(in: scroll)
+        guard !readOnly, swipe == nil, fan == nil, let held = touchPress else { return false }
+        // The core's slider may still be on its way; only a press it turned down is refused here.
+        if let ready = held.prepared, !ready.slider.enabled { return false }
         let t = swipePan.translation(in: scroll)
-        // Rightward and clearly sideways: a vertical scroll or a leftward drag is the list's.
-        guard v.x > 0, abs(v.x) > abs(v.y) * 1.5, t.x >= ready.slider.engage * 0.5 else { return false }
-        return true
+        // Only a mainly vertical move (the list's scroll) or a leftward one is refused.
+        return t.x > 0 && abs(t.x) >= abs(t.y)
+    }
+
+    /// How far right of where the thumb went down the finger is now.
+    private func pull(_ g: UIGestureRecognizer, _ held: (row: Row, cell: ChatRowCell, startX: CGFloat, prepared: PreparedSwipe?)) -> CGFloat {
+        g.location(in: scroll).x - (held.cell.frame.minX + held.startX)
     }
 
     @objc private func swiped(_ g: UIPanGestureRecognizer) {
         switch g.state {
-        case .began:
-            guard let held = touchPress, let ready = held.prepared else { return }
-            swipe = SwipeModerator(slider: ready.slider, cell: held.cell, in: scroll, visibleTop: scroll.contentOffset.y,
-                                   commit: ready.commit)
+        case .began, .changed:
+            guard let held = touchPress else { return }
             scroll.isScrollEnabled = false
-            swipe?.track(pull: g.translation(in: scroll).x, y: g.location(in: scroll).y)
-        case .changed:
-            swipe?.track(pull: g.translation(in: scroll).x, y: g.location(in: scroll).y)
+            // The overlay starts once the core's slider is here; until then the finger just pulls.
+            if swipe == nil, let ready = held.prepared {
+                guard ready.slider.enabled else { return endSwipe() }
+                swipe = SwipeModerator(slider: ready.slider, cell: held.cell, in: scroll, visibleTop: scroll.contentOffset.y,
+                                       commit: ready.commit)
+                // The gesture is found: the one-time hint goes now, before the chip could meet it.
+                onSwipeDone?()
+            }
+            swipe?.track(pull: pull(g, held), y: g.location(in: scroll).y)
         case .ended:
-            if swipe?.release() == true { onSwipeDone?() }
+            _ = swipe?.release()
             endSwipe()
         default:
             endSwipe()
