@@ -205,7 +205,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // A streak share the banner armed: the next send goes to it instead of to
   // chat, with whatever is typed (nothing typed is fine).
   const armedShare = useRef<ArmedShare | null>(null);
-  const [shareArmed, setShareArmed] = useState(false);
+  const [shareArmed, setShareArmed] = useState<'watch' | 'resub' | null>(null);
   // Whether the field has the keyboard: while it does, the commands button is
   // the way to put the keyboard away (scrolling the chat never does).
   const [typing, setTyping] = useState(false);
@@ -289,7 +289,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const flash = points.gain;
   const clearFlash = points.clearGain;
 
-  const canSend = !!text.trim() || shareArmed;
+  const canSend = !!text.trim() || !!shareArmed;
 
   const send = async () => {
     if (armedShare.current) {
@@ -482,6 +482,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // end; the chat menu names it in full.
   const placeholder = gating.warning
     ? gating.warning.prompt
+    : shareArmed
+    ? // The armed share rides the next send: the field says what it is for.
+      `Add a message to your ${shareArmed === 'watch' ? 'watch streak' : 'resub'}`
     : gating.blocked
     ? (gating.reason ?? 'Chat restricted')
     : slowWait > 0

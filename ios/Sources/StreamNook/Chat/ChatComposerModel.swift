@@ -179,6 +179,10 @@ final class ChatComposerModel {
     /// once, by its icon in the field; the chat menu names it in full.
     var placeholder: String {
         if let blockedReason { return blockedReason }
+        // The armed share rides the next send: the field says what it is for.
+        if let what = session.rooms?.armedShare(in: session.channel) {
+            return what == "watch" ? "Add a message to your watch streak" : "Add a message to your resub"
+        }
         return session.style.hidePlaceholder ? "" : "Send a message"
     }
 

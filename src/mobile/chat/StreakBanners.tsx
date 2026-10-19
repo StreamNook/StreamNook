@@ -53,8 +53,9 @@ interface Props {
   channelId: string | null;
   /** Set while a share is armed, for the composer's send. */
   armedRef: React.MutableRefObject<ArmedShare | null>;
-  /** Whether a share is armed: the composer can send with nothing typed. */
-  onArmedChange: (armed: boolean) => void;
+  /** Which share is armed, if any: the composer says so and can send with
+   *  nothing typed. */
+  onArmedChange: (armed: 'watch' | 'resub' | null) => void;
   focusComposer: () => void;
 }
 
@@ -203,7 +204,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
   const armed = step && step.room === room && step.kind === 'armed' ? step.what : null;
   useEffect(() => {
     armedRef.current = armed ? (text: string) => send(armed, text) : null;
-    onArmedChange(!!armed);
+    onArmedChange(armed);
     return () => {
       armedRef.current = null;
     };

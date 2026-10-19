@@ -1832,7 +1832,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     : twitchSignInOwed
     ? 'Sign in again to chat'
     : isWatchStreakMode
-    ? "Add a message (optional)..."
+    ? 'Add a message to your watch streak'
+    : isResubMode
+    ? 'Add a message to your resub'
     : roomModePrompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
@@ -1845,7 +1847,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       : 'Read-only'
     : twitchSignInOwed
     ? 'Sign in'
-    : isWatchStreakMode
+    : isWatchStreakMode || isResubMode
     ? 'Message'
     : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
