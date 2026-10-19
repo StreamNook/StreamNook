@@ -2511,8 +2511,76 @@
    "hidden_on_ios": true
   },
   {
-   "page": "chat",
-   "section": "Moderation",
+   "page": "moderation",
+   "section": "Swipe to Moderate",
+   "title": "Swipe to moderate",
+   "paths": [
+    "chat_design.mod_slider"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Swipe right on a message in a channel you moderate to delete it, time its sender out or ban them. Pull further for a longer timeout.",
+   "aliases": [
+    "swipe",
+    "mod slider",
+    "slide to timeout",
+    "mod",
+    "moderator"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "Swipe to Moderate",
+   "title": "Style",
+   "paths": [
+    "chat_design.mod_slider_style"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "preview",
+    "rail",
+    "capsule"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "Swipe to Moderate",
+   "title": "Length",
+   "paths": [
+    "chat_design.mod_slider_length"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "swipe distance",
+    "reach"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "Swipe to Moderate",
+   "title": "Steps",
+   "paths": [
+    "chat_design.mod_slider_delete",
+    "chat_design.mod_slider_timeouts",
+    "chat_design.mod_slider_ban"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "What the swipe offers, mildest first: delete, the timeout lengths, then ban.",
+   "aliases": [
+    "timeout steps",
+    "swipe lengths",
+    "delete",
+    "ban"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "User Cards",
    "title": "Timeout lengths",
    "paths": [
     "moderation.timeout_presets"
@@ -2529,8 +2597,8 @@
    ]
   },
   {
-   "page": "chat",
-   "section": "Moderation",
+   "page": "moderation",
+   "section": "User Cards",
    "title": "Card buttons",
    "paths": [
     "moderation.card_actions"

@@ -51,6 +51,7 @@ enum Symbol {
     static let player = "play.circle"
     static let adFree = "checkmark.shield"
     static let chat = "bubble.left.and.bubble.right"
+    static let moderation = "shield"
     static let theme = "paintpalette"
     static let notifications = "bell"
     static let cache = "internaldrive"

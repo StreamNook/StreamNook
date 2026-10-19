@@ -10,7 +10,6 @@ import { useAccountRosterStore } from '../../stores/accountRosterStore';
 // It hides rows whose backing feature does not exist on Android, so the phone
 // settings stop offering knobs that quietly do nothing.
 import { IS_MOBILE } from '../../utils/platform';
-import ModerationCardSettings from './ModerationCardSettings';
 import PanelChannelList from '../plugins/PanelChannelList';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
@@ -3388,8 +3387,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       <RemindersSettings />
 
-      {/* The phones' user card buttons; desktop sets its lengths on the Moderation tab. */}
-      {IS_MOBILE && <ModerationCardSettings />}
 
       <UserOverridesSettings />
     </div>

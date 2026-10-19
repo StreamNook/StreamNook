@@ -6,7 +6,7 @@ import { useMobileNavStore } from '../navStore';
 
 /** Mirrors Rust `settings_catalog::CatalogRow`. */
 export interface CatalogRow {
-  /** `player`, `adFree`, `chat`, `theme`, `notifications`, `cache`, `support`. */
+  /** `player`, `adFree`, `chat`, `moderation`, `theme`, `notifications`, `cache`, `support`. */
   page: string;
   section: string;
   title: string;
@@ -25,6 +25,7 @@ const PAGE_VIEW: Record<string, string> = {
   player: 'Player',
   adFree: 'Ad-free',
   chat: 'Chat',
+  moderation: 'Moderation',
   theme: 'Theme',
   notifications: 'Notifications',
   cache: 'Cache',

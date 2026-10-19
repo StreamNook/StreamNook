@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Palette,
   PlayCircle,
+  Shield,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -31,6 +32,9 @@ const PANELS: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   // these settings have no desktop panel to live in.
   'Ad-free': lazy(() => import('./AdFreeSettings')),
   Chat: lazy(() => import('../../components/settings/ChatSettings')),
+  // The phone's own: swipe to moderate and the user card's buttons. Desktop's
+  // Moderation tab holds its hover dock, line buttons and mod logs instead.
+  Moderation: lazy(() => import('../../components/settings/ModerationCardSettings')),
   Theme: lazy(() => import('../../components/settings/ThemeSettings')),
   // Mobile gets its own notifications panel: the desktop one configures
   // toasts and the Dynamic Island, which do not exist here.
@@ -61,6 +65,12 @@ export const SETTINGS_ROWS: {
     description: 'How streams are served and which relays are used',
   },
   { id: 'Chat', label: 'Chat', icon: MessageSquare, description: 'Chat design and behavior' },
+  {
+    id: 'Moderation',
+    label: 'Moderation',
+    icon: Shield,
+    description: 'Swipe to moderate and user card buttons',
+  },
   { id: 'Theme', label: 'Theme', icon: Palette, description: 'Color theme, glass, and fonts' },
   {
     id: 'Notifications',

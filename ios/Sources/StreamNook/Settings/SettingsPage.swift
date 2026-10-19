@@ -13,6 +13,7 @@ struct SettingsPage: View {
                     switch section {
                     case .player: PlayerPanel()
                     case .chat: ChatSettingsPanel()
+                    case .moderation: ModerationSettings()
                     case .adFree: AdFreePanel()
                     case .notifications: NotificationsPanel()
                     case .cache: CachePanel()

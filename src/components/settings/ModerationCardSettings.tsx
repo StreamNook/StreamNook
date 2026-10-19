@@ -1,4 +1,4 @@
-// Chat > Moderation on the phone: swiping a message to moderate it (on or
+// Settings > Moderation on the phone: swiping a message to moderate it (on or
 // off, its look, its reach and its steps), the four timeout lengths on a user
 // card (the desktop hover dock's first four, so one edit changes both) and the
 // viewer's own card buttons. Rust keeps every list (`edit_mod_slider_timeouts`,
@@ -303,7 +303,7 @@ const ModerationCardSettings = () => {
   return (
     <>
     <SwipeModerateSettings />
-    <SettingsSection label="Moderation" description="The buttons on a user card in channels you moderate.">
+    <SettingsSection label="User Cards" description="The buttons on a user card in channels you moderate.">
       <SettingsRow title="Timeout lengths" description="Tap one to change it. Every quick timeout uses the same four.">
         <div className="flex gap-[7px]">
           {four.map((seconds, index) => (
