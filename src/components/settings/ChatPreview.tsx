@@ -30,8 +30,8 @@ import { HoverModButtons } from '../chat/HoverModButtons';
 import { Copy, PushPin } from 'phosphor-react';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { lineButtons, type LineButton } from '../chat/modLine';
-import { bindLineStrips, useLineArt, type LineArt } from '../chat/lineArt';
-import { useLineConfig, useModSliderSteps } from '../../services/moderation';
+import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons, type LineArt } from '../chat/lineArt';
+import { useLineConfig, useModSliderSteps, useSliderConfig } from '../../services/moderation';
 
 // A few lines of sample chat for the settings page, drawn with the viewer's own
 // chat design (text size, spacing, dividers, stripes, timestamps, name style)
@@ -329,32 +329,60 @@ const LINE_SAMPLES: { who: Chatter; text: string }[] = [
   { who: MOSSY, text: 'gg, that boss had no chance' },
 ];
 
-/** Sample chat with the real line buttons on every line: the same picture
- *  and the same pointer reading as chat. A click only names the action;
- *  nothing is sent from a preview. */
+/** Sample chat with the real line buttons: the same picture, the same
+ *  pointer reading, the same On hover push and the same scroll over a
+ *  timeout as chat. A click only names the action; nothing is sent from a
+ *  preview. */
 export const ModLinePreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
   const design = previewDesignOf(stored);
   const steps = useModSliderSteps('twitch', useLineConfig());
-  const buttons = useMemo(() => (steps && steps.length > 0 ? lineButtons(steps) : null), [steps]);
-  const art = useLineArt(buttons, design.font_size);
+  const sliderSteps = useModSliderSteps('twitch', useSliderConfig());
+  const ladder = useMemo(() => sliderSteps?.filter((s) => s.action === 'timeout') ?? [], [sliderSteps]);
+  const { buttons, nudge, reset, around } = useLineButtons(steps, ladder);
+  const setButtons = useMemo(() => (steps && steps.length > 0 ? lineButtons(steps) : null), [steps]);
+  const fit = useMemo(
+    () => [...ladder, ...(steps ?? []).filter((s) => s.action === 'timeout')].map((s) => s.label),
+    [ladder, steps],
+  );
+  const art = useLineArt(buttons, design.font_size, fit, setButtons);
+  const show = stored?.mod_line_show === 'always' ? 'always' : 'hover';
   const [clicked, setClicked] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const artRef = useRef<{ art: LineArt; buttons: LineButton[] } | null>(null);
+  const wheelRef = useRef({ nudge, reset, around });
   useLayoutEffect(() => {
     artRef.current = art && buttons ? { art, buttons } : null;
+    wheelRef.current = { nudge, reset, around };
   });
   useEffect(() => {
     const el = hostRef.current;
     if (!el) return;
-    return bindLineStrips(el, () => artRef.current, (hit) =>
+    const unbind = bindLineStrips(el, () => artRef.current, (hit) =>
       setClicked(`clicked ${hit.label} on ${hit.request.targetName ?? 'that chatter'}'s line`),
     );
+    const unbindWheel = bindLineWheel(
+      el,
+      () => artRef.current,
+      (index, dir) => wheelRef.current.nudge(index, dir),
+      () => wheelRef.current.reset(),
+      (index) => wheelRef.current.around(index),
+    );
+    return () => {
+      unbind();
+      unbindWheel();
+    };
   }, []);
   return (
     <SettingPreview
-      caption={clicked ? `${clicked}; nothing is sent from the preview` : 'one click on a line\'s button acts on that chatter'}
+      caption={
+        clicked
+          ? `${clicked}; nothing is sent from the preview`
+          : show === 'hover'
+            ? 'point at a line for its buttons; scroll over the timeout to change its length'
+            : 'one click on a line\'s button acts on that chatter; scroll over the timeout to change its length'
+      }
     >
-      <div ref={hostRef} style={art?.vars}>
+      <div ref={hostRef} style={art?.vars} data-line-show={show}>
         <PreviewChat design={design}>
           {LINE_SAMPLES.map((s, i) => (
             <Row key={s.who.name}>

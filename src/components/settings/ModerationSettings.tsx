@@ -40,7 +40,7 @@ const hoverOf = (style: unknown) => style !== 'none';
 /** One plain sentence per edge, so the row says what the picked one does. */
 const EDGE_DESCRIPTION: Record<ModEdge, string> = {
   slider: 'Press the dotted handle on a message\'s left edge and drag right: Delete, then longer timeouts, then Ban, which waits for a short pause. Let go to apply. Drag back, move off the message or press Esc to cancel.',
-  buttons: 'Delete, a timeout and Ban as small buttons at the start of every message, one click each.',
+  buttons: 'Delete, a timeout and Ban as small buttons at the start of a message, one click each. Scroll over the timeout to make it longer or shorter.',
   off: 'Nothing on the left edge. Use the hover buttons below, or the keyboard.',
 };
 
@@ -211,6 +211,22 @@ const ModerationSettings = () => {
             <>
               <ModLinePreview stored={cd} />
               <SubControls>
+                <SubControl
+                  title="Show"
+                  onReset={resetFor('chat_design.mod_line_show')}
+                  control={
+                    <SegmentedSelect<'hover' | 'always'>
+                      value={cd?.mod_line_show === 'always' ? 'always' : 'hover'}
+                      onChange={(v) =>
+                        updateSettings({ ...settings, chat_design: { ...settings.chat_design!, mod_line_show: v } })
+                      }
+                      options={[
+                        { value: 'hover', label: 'On hover' },
+                        { value: 'always', label: 'Always' },
+                      ]}
+                    />
+                  }
+                />
                 <SubControl
                   title="Buttons"
                   stacked

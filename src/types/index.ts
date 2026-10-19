@@ -397,6 +397,9 @@ export interface ChatDesignSettings {
   mod_line_delete?: boolean;
   mod_line_timeouts?: number[];
   mod_line_ban?: boolean;
+  // When the line buttons show: 'hover' (default; only on the line under the
+  // pointer, pushing its text over) or 'always' (on every line).
+  mod_line_show?: 'hover' | 'always';
 }
 
 export interface HighlightPhrase {

@@ -5622,6 +5622,67 @@ html[data-watching] .drops-progress-inline {
   user-select: none;
   -webkit-user-select: none;
 }
+/* Show: On hover. Only the line under the pointer shows its buttons, and
+   they push its text over; every other line keeps no room for them. The
+   strip keeps its height either way, so a line never changes height. */
+[data-line-show='hover'] .chat-message-row:not(:hover) .sn-mod-line {
+  width: 0;
+  margin-right: 0;
+}
+[data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+  animation: sn-line-in 120ms ease-out;
+}
+@keyframes sn-line-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+    animation: none;
+  }
+}
+/* The line buttons' scroll notes (chat/lineArt.ts bindLineWheel): while the
+   pointer is on a line's buttons, the length a scroll up reaches sits just
+   above the timeout and the one a scroll down reaches just below, like the
+   next rungs of a picker wheel. Labels, not buttons: they take no pointer.
+   One pair for the page, fixed to the screen and placed by transform. */
+.sn-line-hint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 70;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease-out;
+}
+.sn-line-hint.is-on {
+  opacity: 1;
+}
+.sn-line-hint-note {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding-inline: 5px 6px;
+  border-radius: 9999px;
+  background-color: var(--color-background-tertiary);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle), var(--elev-2);
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  will-change: transform;
+}
+/* An explicit rule: a class's display would otherwise win over [hidden]. */
+.sn-line-hint-note[hidden] {
+  display: none;
+}
+
 /* The step chips compress in place rather than wrap (fitHeaderDensity). */
 .sn-steps:is([data-density='1'], [data-density='2']) {
   gap: 4px;

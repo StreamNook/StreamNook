@@ -421,6 +421,10 @@ pub struct ChatDesignSettings {
     /// The line buttons end with Ban.
     #[serde(default = "default_true")]
     pub mod_line_ban: bool,
+    /// When the line buttons show: "hover" (only on the line under the
+    /// pointer, pushing its text over) or "always" (on every line).
+    #[serde(default = "default_mod_line_show")]
+    pub mod_line_show: String,
     /// "hsl_loop" (default) walks a chatter's color toward the readable side
     /// of the theme; "off" renders it as Twitch sent it.
     #[serde(default = "default_name_color_adjustment")]
@@ -602,6 +606,9 @@ fn default_mod_slider_length() -> String {
 fn default_mod_slider_style() -> String {
     "preview".to_string()
 }
+fn default_mod_line_show() -> String {
+    "hover".to_string()
+}
 fn default_mod_slider_timeouts() -> Vec<u32> {
     crate::services::moderation::DEFAULT_SLIDER_TIMEOUTS.to_vec()
 }
@@ -696,6 +703,7 @@ impl Default for ChatDesignSettings {
             mod_line_delete: true,
             mod_line_timeouts: default_mod_line_timeouts(),
             mod_line_ban: true,
+            mod_line_show: default_mod_line_show(),
         }
     }
 }

@@ -1648,6 +1648,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
+    title: 'Show',
+    parent: 'Message edge',
+    description: 'When the line buttons show: On hover puts them on the line under your pointer only, pushing its text over; Always keeps them on every line. Scroll over a timeout button to walk its length through your slider Steps. Also called hover line buttons.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
     title: 'Buttons',
     parent: 'Message edge',
     description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They run from mildest to harshest, left to right.'
