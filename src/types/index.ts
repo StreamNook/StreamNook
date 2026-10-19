@@ -865,7 +865,10 @@ export interface CustomThemePalette {
   accent: CustomThemeColor;
   accentHover: CustomThemeColor;
   accentMuted: CustomThemeColor;
-  
+  /** Written by Rust on load (theme_palette::lift_custom_themes): the accent
+   *  floored to 3:1 on the theme's raised surface. Absent on an older save. */
+  accentOnSurface?: CustomThemeColor;
+
   // Border colors
   border: CustomThemeColor;
   borderLight: CustomThemeColor;

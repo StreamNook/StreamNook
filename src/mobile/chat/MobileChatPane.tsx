@@ -66,14 +66,20 @@ let lastBuzzed: string | null = null;
  * `paused`: the pane is mounted but out of sight (the Chats tab behind another
  * tab). It reads no room, so arriving messages render nothing until it shows.
  *
+ * `top`: what sits between the tab strip and the list (the watch screen's
+ * poll, prediction and drop stack). In the flow, so it takes room from the
+ * list rather than painting over it, and under the tabs, since it belongs to
+ * the room on screen.
+ *
  * The stream tab is pointed at the player by `useChatsLifecycle`, once, in the
  * shell: a pane only exists while it is on screen.
  */
-export const MobileChatPane: React.FC<{ readOnly?: boolean; strip?: boolean; paused?: boolean }> = ({
-  readOnly = false,
-  strip = true,
-  paused = false,
-}) => {
+export const MobileChatPane: React.FC<{
+  readOnly?: boolean;
+  strip?: boolean;
+  paused?: boolean;
+  top?: React.ReactNode;
+}> = ({ readOnly = false, strip = true, paused = false, top }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -685,6 +691,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean; strip?: boolean; pau
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {strip && <ChatTabStrip />}
+      {top}
       <div
         ref={listRef}
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
