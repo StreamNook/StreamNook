@@ -391,6 +391,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.scope_blend_header_marks_once();
     settings.move_room_modes_to_prompt_once();
     settings.adopt_first_run_look_once();
+    settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
     Ok(settings)
 }

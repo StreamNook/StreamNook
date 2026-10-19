@@ -493,9 +493,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     username_separator: stored?.username_separator ?? (stored?.username_colon ? 'colon' : 'none'),
     username_style: stored?.username_style ?? 'plain',
     username_accent_source: stored?.username_accent_source ?? 'user',
-    mod_action_style: stored?.mod_action_style ?? (stored?.drag_moderation_enabled === false ? 'buttons' : 'both'),
-    mod_drag_layout: stored?.mod_drag_layout ?? 'column',
-    mod_pin_style: stored?.mod_pin_style ?? 'both',
+    mod_action_style: stored?.mod_action_style ?? 'buttons',
     emote_scale: stored?.emote_scale ?? 1,
     animate_emotes: stored?.animate_emotes ?? 'always',
     show_chat_gifs: stored?.show_chat_gifs ?? true,
@@ -548,14 +546,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_text_color: stored?.mention_text_color,
     chat_dock_switcher: stored?.chat_dock_switcher,
     username_colon: stored?.username_colon,
-    drag_moderation_enabled: stored?.drag_moderation_enabled,
   };
   const badgeProviderHidden = (id: string) => cd.hidden_badge_providers.includes(id);
   const toggleBadgeProvider = (id: string) =>
     void editSettingsList('chat_design.hidden_badge_providers', { op: 'toggle', value: id });
 
   // The stored group goes first so a field `cd` does not list (the ones the
-  // Moderation tab owns: grab cursor, slider steps, bucket timeout) survives a
+  // Moderation tab owns: slider steps and length, line buttons) survives a
   // save from this tab instead of falling back to its default.
   const setDesign = (patch: Partial<typeof cd>) => {
     updateSettings({

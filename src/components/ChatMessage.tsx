@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef, memo, useSyncExternalStore, type JSX } from 'react';
+import React, { useMemo, useState, useEffect, memo, useSyncExternalStore, type JSX } from 'react';
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
@@ -19,7 +19,6 @@ import { computePaintStyle, getBadgeImageUrl, pickPaintLayerImage, queueCosmetic
 import { StyledChatName } from './chat/StyledChatName';
 import { ChatBadgeIcons, type ResolvedTwitchBadge } from './chat/ChatBadgeIcons';
 import { visibleChatterBadges } from '../utils/chatterBadges';
-import { useDragModerationStore } from '../stores/dragModerationStore';
 import { usePinStore } from '../stores/pinStore';
 import { getCosmeticsWithFallback } from '../services/cosmeticsCache';
 import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/badgeService';
@@ -381,7 +380,7 @@ import { BackendChatMessage } from '../services/twitchChat';
 import { SevenTvAvatar } from './SevenTvAvatar';
 
 import { Logger } from '../utils/logger';
-import { holdChatRow, moderateWithToast, useModTimeoutSteps, type ModRequest } from '../services/moderation';
+import { moderateWithToast, useModTimeoutSteps, type ModRequest } from '../services/moderation';
 import { CaretDown, Clock, Copy, Prohibit, PushPin, PushPinSlash, Trash, X } from 'phosphor-react';
 import { ModSlider } from './chat/ModSlider';
 import { ModLineButtons } from './chat/ModLineButtons';
@@ -791,12 +790,6 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const chatHighlights = useAppStore((s) => s.settings.chat_highlights);
   const chatEvents = useAppStore((s) => s.settings.chat_events);
   const currentUser = useAppStore((s) => s.currentUser);
-  // Whole-message pickup attaches transient window listeners; this ref holds the
-  // current teardown so an unmount can run it if the row is removed mid-press
-  // (a virtualized chat can unmount a held row before any terminal pointer event
-  // fires, which would otherwise leak the listeners and this row's closure).
-  const pickupTeardownRef = useRef<(() => void) | null>(null);
-  useEffect(() => () => pickupTeardownRef.current?.(), []);
   // Re-render this row when the StreamNook registry updates (async load / new signup)
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getStreamNookRegistryVersion);
   const parsed = useMemo(() => {
@@ -1333,14 +1326,6 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     ? 'var(--color-accent)'
     : (effectiveColor || 'var(--color-accent)');
 
-  // How per-message mod actions are offered: classic click buttons, the
-  // drag-to-moderate grab handle, or both. Migrates the old boolean.
-  const modActionStyle = chatDesign?.mod_action_style
-    ?? (chatDesign?.drag_moderation_enabled === false ? 'buttons' : 'both');
-  // Drag-to-moderate is mod-only: every action tile is a mod action. The
-  // pickup starts only from the handle on the row's left edge, so everyone,
-  // mods included, keeps normal chat on the rest of the row (select text,
-  // drag, scroll, click links, right-click to reply).
   // Authority is home-only. `isModerator` and `broadcasterId` both describe the
   // channel being watched, so offering a mod action on a row from one of the
   // streamer's OTHER platforms would aim this channel's credentials at another
@@ -1367,83 +1352,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       <ProviderLogo provider={sourceMark} size={sourceMarkPx} />
     </span>
   ) : null;
-  const bodyDragEnabled = canModerateThisRow && (modActionStyle === 'drag' || modActionStyle === 'both');
-  const showModButtons = modActionStyle === 'buttons' || modActionStyle === 'both';
+  // The hover buttons (Ban, Delete, a timeout in the corner of the row).
+  const showModButtons = chatDesign?.mod_action_style !== 'none';
   // This row offers the hover dock. The row says so on itself, so the list
   // can hold still from the moment the pointer reaches the row.
   const dockOffered = canModerateThisRow && showModButtons && !!broadcasterId;
-  // The inline Pin button is ALWAYS available to moderators so a pin can never go
-  // missing. The Pin Action setting only controls whether a Pin tile ALSO shows
-  // in the drag-to-moderate gesture (handled in ModerationDragLayer).
+  // The inline Pin button is always there for moderators.
   const showInlinePin = canModerateThisRow;
   // Is THIS message the one currently pinned? If so the inline control flips from
   // Pin to Unpin (and the same message can't show a redundant "pin" affordance).
   const thisMessageId = parsed.tags.get('id');
   const isThisPinned = usePinStore((s) => (!!thisMessageId && s.pinnedIds.includes(thisMessageId)));
-  // While a mod drag is holding THIS message, sweep + tint it so it's clear
-  // which message is about to be acted on.
-  const draggedMessageId = useDragModerationStore((s) => s.dragged?.messageId);
-  const isBeingDragged = !!draggedMessageId && draggedMessageId === parsed.tags.get('id');
-
-  // Handle pickup: pressing the left-edge handle and dragging past a small
-  // threshold lifts the chatter into the drag-to-moderate tiles. It used to
-  // start anywhere on the row, which took text selection, dragging and
-  // scrolling away from moderators on every message.
-  const handleBodyPickup = (e: React.PointerEvent) => {
-    if (!bodyDragEnabled || e.button !== 0) return;
-    const row = (e.currentTarget as HTMLElement).parentElement;
-    if (!row) return;
-    e.preventDefault();
-    // Non-Twitch providers (Kick, YouTube) have no `user-id` tag; the chatter's id
-    // rides on `providerUserId`. Twitch keeps the IRC tag.
-    const dragUserId = parsed.provider === 'twitch' ? parsed.tags.get('user-id') : providerUserId;
-    if (!dragUserId || !broadcasterId) return;
-    // Hold the list from the press so a fast chat cannot scroll this row away
-    // before the pickup threshold; the list lets go when the button comes up.
-    holdChatRow(row, true);
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const onMove = (me: PointerEvent) => {
-      if (Math.hypot(me.clientX - startX, me.clientY - startY) < 6) return;
-      teardown();
-      useDragModerationStore.getState().startDrag(
-        {
-          userId: dragUserId,
-          login: parsed.username,
-          displayName: parsed.displayName || parsed.tags.get('display-name') || parsed.username,
-          color: effectiveColor,
-          messageId: parsed.tags.get('id') || undefined,
-          broadcasterId,
-          provider: parsed.provider,
-          channel: parsed.channel?.replace(/^youtube:/, ''),
-          isModerator: canModerateThisRow,
-          canPunish: canActOnChatter,
-          moderationState:
-            moderationContext?.type === 'ban'
-              ? 'ban'
-              : moderationContext?.type === 'timeout'
-                ? 'timeout'
-                : null,
-        },
-        me.clientX,
-        me.clientY,
-      );
-    };
-    const onUp = () => teardown();
-    function teardown() {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-      pickupTeardownRef.current = null;
-    }
-    // pointercancel covers gestures the browser takes over (touch scroll, pen),
-    // which fire INSTEAD of pointerup; the ref lets an unmount tear down too.
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    pickupTeardownRef.current = teardown;
-  };
-
   const renderSegment = (
     segment: EmoteSegment,
     key: string,
@@ -3377,7 +3296,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
         } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
-        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
+        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''}`}
       style={{
         ...messageStyle,
         ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
@@ -3411,6 +3330,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           : {}),
       }}
       data-mod-dock={dockOffered ? 'true' : undefined}
+      // A row whose edge offers the slider or the line buttons: the list holds
+      // still from the moment the pointer reaches it, hover buttons or not, so
+      // a fast chat cannot slide another row under the edge on the way there.
+      data-mod-row={showModSlider || showModLine ? 'true' : undefined}
       onContextMenu={handleRowContextMenu}
       onPointerEnter={(e) => {
         if (!hoverArmed) setHoverArmed(true);
@@ -3439,37 +3362,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         <AtmosphereBackground atm={atmosphere} variant="chat" />
       ) : null}
 
-      {/* Held-in-drag marker: a faint accent wash + a repeating light sweep so
-          you're sure which message is in your cursor. */}
-      {isBeingDragged && (
-        <>
-          <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-20 bg-accent/10" />
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-20"
-            style={{
-              background: 'linear-gradient(105deg, transparent 42%, rgba(255,255,255,0.18) 50%, transparent 58%)',
-              animation: 'sn-held-sweep 2s ease-in-out infinite',
-            }}
-          />
-        </>
-      )}
-
-      {/* The left-edge handle, the only place a mod gesture starts: with
-          Message edge on Slider it is the slider's grip; on Tiles it lifts the
-          chatter to the tiles. One edge at a time, so the setting always says
-          what is there. An accent bar fades in on hover over a 12 px strip
-          that wears the grab cursor. Full-height accent + soft shadow so it
-          pops over the Atmosphere and on any theme. */}
+      {/* The slider, on the row's left edge (ModSlider). Mounted once the row
+          is hovered, so idle rows carry none of it. */}
       {hoverArmed && showModSlider && (
         <ModSlider provider={parsed.provider ?? 'twitch'} target={modTarget()} messageId={thisMessageId} />
-      )}
-      {hoverArmed && bodyDragEnabled && chatDesign?.mod_slider === false && !lineButtonsOn && (
-        // The slider's grip look (globals.css .sn-mod-grip), so both edges
-        // read the same; mounted once the row is hovered, like the slider.
-        <div aria-hidden="true" data-mod-edge="true" className="sn-mod-grip" onPointerDown={handleBodyPickup}>
-          <div className="sn-mod-grip-bar pointer-events-none" />
-        </div>
       )}
 
       {/* Built-in event label (first-time chatter, returning, self, raid) */}
@@ -3767,7 +3663,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
                 />
                 <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
-                  <span style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
+                  {/* data-mod-body: the text the slider's Preview style strikes through. */}
+                  <span data-mod-body style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
                     {' '}{isRewardEventRow && <span className="text-textSecondary">redeemed </span>}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>
                   {redemptionCost && (

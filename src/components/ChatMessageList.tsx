@@ -38,8 +38,8 @@ const PHONE_TOP_FADE: React.CSSProperties = {
 const MOD_HOLD_GRACE_MS = 250;
 
 /** Where a mod action starts, besides the line buttons: a row that offers the
- *  hover dock (ChatMessage marks it), and the slider grip or tile handle. */
-const MOD_TARGET_SELECTOR = '[data-mod-dock], [data-mod-edge]';
+ *  hover dock or the slider (ChatMessage marks both), and the slider grip. */
+const MOD_TARGET_SELECTOR = '[data-mod-dock], [data-mod-row], [data-mod-edge]';
 
 function isOnModTarget(target: EventTarget | null): boolean {
   return target instanceof Element && (isOnLineStrip(target) || target.closest(MOD_TARGET_SELECTOR) !== null);
@@ -890,6 +890,9 @@ const ChatMessageList = memo(function ChatMessageList({
           ref={contentRef}
           className={`flex flex-col min-h-full justify-end${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
           style={headerSpaceReserved ? undefined : { paddingTop: headerInset }}
+          // How much of the list's top the floating header covers; the mod
+          // slider's chip goes under a line that close to it.
+          data-header-inset={headerSpaceReserved ? 0 : headerInset}
           data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
         >
           {messages.map((message, index) => {
