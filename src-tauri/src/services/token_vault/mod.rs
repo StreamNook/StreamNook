@@ -23,7 +23,9 @@
 //! briefly unavailable (a Secret Service that starts after the app) therefore
 //! leaves its files unreadable for that run rather than lost, and a file sealed
 //! under the file key moves to the credential store's key once the store
-//! answers.
+//! answers. A file no key on this install can open (restored by a backup
+//! without the key that sealed it) is deleted instead: that is a fresh,
+//! signed-out start, never a sign-in to repair.
 //!
 //! The first vault access in a run migrates the whole data dir in one pass (see
 //! `migrate_dir`), so no legacy or plaintext copy waits for its service to be
@@ -76,9 +78,11 @@ pub fn store_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     store(&SystemKeys, path, &serde_json::to_vec(value)?)
 }
 
-/// Read the credential at `path`. `Ok(None)` means there is no file. An error
-/// means a file exists but could not be opened (its key is unavailable this run,
-/// or it is damaged); callers treat that as signed out and must not delete it.
+/// Read the credential at `path`. `Ok(None)` means there is no file, or there
+/// was one no key on this install can ever open (see `Lost`), which is deleted
+/// so it reads as a fresh, signed-out start. An error means a file exists but
+/// could not be opened this run (its credential store has not answered);
+/// callers treat that as signed out and must not delete it.
 pub fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     ensure_migrated();
     load(&SystemKeys, path)?
@@ -276,9 +280,44 @@ fn key_for_tag(keys: &dyn Keys, tag: u8) -> Result<Key> {
         TAG_OS => keys
             .os(false)
             .ok_or_else(|| anyhow!("the OS credential store did not supply the vault key")),
-        TAG_FILE => keys.file(false),
+        // Nothing but a write on this install creates the key file, and it is
+        // never deleted while a file sealed under it remains, so a file key
+        // that is missing outright is gone for good.
+        TAG_FILE => keys.file(false).map_err(|e| {
+            if is_not_found(&e) {
+                anyhow!(Lost(format!("its key file is missing: {e:#}")))
+            } else {
+                e
+            }
+        }),
         other => Err(anyhow!("unknown vault key tag {other}")),
     }
+}
+
+/// A sealed file that no key on this install will ever open: its key file is
+/// missing, or the key that answered for its tag does not open it. That is
+/// what a backup or a phone-to-phone transfer leaves when it restores the
+/// credentials without the key that sealed them (a Keychain key is held to
+/// one device, and Android backup carries no sign-in at all). Unlike a
+/// credential store that has not answered yet, waiting does not help, so the
+/// file is deleted and reads as no credential.
+#[derive(Debug)]
+struct Lost(String);
+
+impl std::fmt::Display for Lost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Lost {}
+
+fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == ErrorKind::NotFound)
+    })
 }
 
 fn random_key() -> Result<Key> {
@@ -341,7 +380,8 @@ fn store(keys: &dyn Keys, path: &Path, plain: &[u8]) -> Result<()> {
 
 /// The plaintext of the credential at `path`, or `None` without a file. A
 /// legacy file is decoded and sealed in place; a file sealed under the file key
-/// moves to the credential store's key when that answers.
+/// moves to the credential store's key when that answers; a `Lost` file is
+/// deleted.
 fn load(keys: &dyn Keys, path: &Path) -> Result<Option<Vec<u8>>> {
     let raw = match fs::read(path) {
         Ok(raw) => raw,
@@ -350,7 +390,18 @@ fn load(keys: &dyn Keys, path: &Path) -> Result<Option<Vec<u8>>> {
     };
 
     if is_sealed(&raw) {
-        let (tag, plain) = open(&raw, file_name(path), |tag| key_for_tag(keys, tag))?;
+        let (tag, plain) = match open(&raw, file_name(path), |tag| key_for_tag(keys, tag)) {
+            Ok(opened) => opened,
+            Err(e) if e.downcast_ref::<Lost>().is_some() => {
+                warn!(
+                    "[VAULT] {} can never be opened on this install ({e}); deleted it, so it reads as signed out",
+                    path.display()
+                );
+                remove(path)?;
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         if tag == TAG_FILE && keys.os(true).is_some() {
             match store(keys, path, &plain) {
                 Ok(()) => debug!(
@@ -440,7 +491,7 @@ fn open(raw: &[u8], name: &[u8], key_for: impl Fn(u8) -> Result<Key>) -> Result<
                 aad: &aad,
             },
         )
-        .map_err(|_| anyhow!("sealed credential failed authentication"))?;
+        .map_err(|_| anyhow!(Lost("its key does not open it".into())))?;
     Ok((tag, plain))
 }
 
@@ -540,8 +591,8 @@ fn ensure_migrated() {
 /// Bring every credential in `dir` to the current format: import each plaintext
 /// cookie mirror into its credential when that slot is empty, then delete it;
 /// seal legacy files; move files under the file key to the credential store's
-/// key; delete temp files a crashed write left behind. A file that cannot be
-/// opened is left exactly as it is.
+/// key; delete temp files a crashed write left behind. A file whose key has not
+/// answered is left exactly as it is; one no key will ever open is deleted.
 fn migrate_dir(keys: &dyn Keys, dir: &Path) {
     for (jar, slot) in legacy::COOKIE_JARS {
         let jar_path = dir.join(jar);
@@ -664,7 +715,8 @@ mod tests {
             if key.is_none() && create {
                 *key = Some(random_key().unwrap());
             }
-            key.ok_or_else(|| anyhow!("no key file"))
+            // Shaped like the real reader's error for a missing key file.
+            key.ok_or_else(|| anyhow::Error::new(std::io::Error::from(ErrorKind::NotFound)).context("no key file"))
         }
     }
 
@@ -869,6 +921,59 @@ mod tests {
 
         keys.os_up.store(true, Ordering::SeqCst);
         assert_eq!(load(&keys, &path).unwrap().unwrap(), b"{\"t\":3}");
+    }
+
+    #[test]
+    fn a_file_sealed_under_another_installs_key_is_deleted() {
+        let dir = TempDir::new("restored_os");
+        let path = dir.0.join(".twitch_token");
+        store(&TestKeys::new(true), &path, b"{\"t\":4}").unwrap();
+
+        // The files came back from a backup; the Keychain key did not, so this
+        // install made its own.
+        let here = TestKeys::new(true);
+        here.os(true);
+        assert_eq!(load(&here, &path).unwrap(), None, "reads as signed out");
+        assert!(!path.exists(), "deleted, not kept to retry");
+    }
+
+    #[test]
+    fn a_file_whose_key_file_is_missing_is_deleted() {
+        let dir = TempDir::new("restored_file");
+        let path = dir.0.join(".kick_token");
+        store(&TestKeys::new(false), &path, b"{\"k\":5}").unwrap();
+        assert_eq!(tag_of(&path), TAG_FILE);
+
+        // Restored without `.token_vault_key`.
+        let here = TestKeys::new(false);
+        assert_eq!(load(&here, &path).unwrap(), None);
+        assert!(!path.exists());
+
+        // The migration pass clears them the same way.
+        store(&TestKeys::new(false), &path, b"{\"k\":5}").unwrap();
+        migrate_dir(&TestKeys::new(true), &dir.0);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_key_file_that_cannot_be_read_yet_is_not_taken_for_a_missing_one() {
+        // Half-written by a racing first write, say: there is a key, just not
+        // readable this instant.
+        struct ShortKeyFile;
+        impl Keys for ShortKeyFile {
+            fn os(&self, _create: bool) -> Option<Key> {
+                None
+            }
+            fn file(&self, _create: bool) -> Result<Key> {
+                Err(anyhow!("{KEY_FILE_NAME} does not hold a 256-bit key"))
+            }
+        }
+        let dir = TempDir::new("short_key");
+        let path = dir.0.join(".kick_token");
+        write_private(&path, &seal(&KEY, TAG_FILE, file_name(&path), b"{}").unwrap()).unwrap();
+
+        assert!(load(&ShortKeyFile, &path).is_err(), "unreadable this run");
+        assert!(path.exists(), "kept for a later run");
     }
 
     // ----- cached credentials
