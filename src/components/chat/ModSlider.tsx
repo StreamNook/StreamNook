@@ -183,17 +183,35 @@ function withHysteresis(drag: DragState, slide: number, next: number): number {
   return slide <= drag.ruler[cur] - HYSTERESIS_PX ? next : cur;
 }
 
-/** True when the pointer has too little room above it in its list for the
- *  chip: the scrolling list's top, plus whatever the chat header floating
- *  over it covers. */
-function chipBelow(row: HTMLElement, pointerY: number): boolean {
-  const inset = Number(row.closest<HTMLElement>('[data-header-inset]')?.dataset.headerInset ?? 0) || 0;
+/** True when the chip has no clear room above the pointer, so it goes below.
+ *  Asks the page what is really drawn where the chip would sit: anything that
+ *  is not the chat list itself there (the chat header and whatever it holds,
+ *  a pinned message, a pane's border, the window's edge) means no room. The
+ *  list's own top and the header inset it reserves are checked too, for
+ *  overlays that let the pointer through. */
+function chipBelow(row: HTMLElement, pointerX: number, pointerY: number): boolean {
+  const top = pointerY - CHIP_ROOM_PX;
+  if (top < 0) return true;
+  let list: HTMLElement | null = null;
   for (let el = row.parentElement; el; el = el.parentElement) {
     if (getComputedStyle(el).overflowY !== 'visible') {
-      return pointerY - el.getBoundingClientRect().top - inset < CHIP_ROOM_PX;
+      list = el;
+      break;
     }
   }
-  return pointerY < CHIP_ROOM_PX;
+  if (list) {
+    const inset = Number(row.closest<HTMLElement>('[data-header-inset]')?.dataset.headerInset ?? 0) || 0;
+    if (top < list.getBoundingClientRect().top + inset) return true;
+  }
+  // Along the chip's top edge, over the stretch of the row it starts in
+  // (it is kept inside the row, so never left of its edge).
+  const rect = row.getBoundingClientRect();
+  for (const dx of [8, 48, 96]) {
+    const x = Math.min(Math.max(pointerX, rect.left) + dx, rect.right - 4);
+    const hit = document.elementFromPoint(x, top + 2);
+    if (!hit || (list ? !list.contains(hit) : !row.parentElement?.contains(hit))) return true;
+  }
+  return false;
 }
 
 function actionFor(step: ModStep, messageId: string | undefined): ModAction | null {
@@ -489,7 +507,7 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
       ticks: ruler.map((x) => origin + x),
       trackStart: origin + dead,
       trackEnd: origin + end,
-      below: chipBelow(row, e.clientY),
+      below: chipBelow(row, e.clientX, e.clientY),
     });
     row.style.setProperty('--mod-origin', `${origin}px`);
     row.style.setProperty('--mod-row-w', `${rect.width}px`);
