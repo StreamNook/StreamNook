@@ -665,7 +665,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             swipe?.track(pull: pull(g, held), y: g.location(in: scroll).y)
         case .ended:
             let ran = swipe?.release() ?? false
-            chatLog.notice("[swipe] released: \(ran ? "ran the armed step" : swipe == nil ? "no slider drawn" : "cancelled", privacy: .public)")
+            let outcome = ran ? "ran the armed step" : swipe == nil ? "no slider drawn" : "cancelled"
+            chatLog.notice("[swipe] released: \(outcome, privacy: .public)")
             endSwipe()
         default:
             endSwipe()
