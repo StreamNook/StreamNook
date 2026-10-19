@@ -14,6 +14,14 @@ public struct SwipeStep: Decodable, Sendable, Equatable {
 
     public var isBan: Bool { action == "ban" }
 
+    public init(action: String, seconds: Int?, label: String, chip: String, tone: Double?) {
+        self.action = action
+        self.seconds = seconds
+        self.label = label
+        self.chip = chip
+        self.tone = tone
+    }
+
     /// What `moderate_chatter` takes for this step on a message.
     public func action(messageID: String) -> [String: Any] {
         switch action {
@@ -43,12 +51,14 @@ public struct SwipeSlider: Decodable, Sendable, Equatable {
     public var cancelWords: String
     public var holdBanWords: String
     public var nudgeWords: String
+    /// Where the thumb landed, from the row's left edge: the ruler starts here.
+    public var start: Double
     public var quickSeconds: Int
 
     enum CodingKeys: String, CodingKey {
         case enabled, style, steps, dead, spacing, starts, end, banDwellMs = "ban_dwell_ms", banStill = "ban_still",
              hysteresis, leash, engage, cancelWords = "cancel_words", holdBanWords = "hold_ban_words",
-             nudgeWords = "nudge_words", quickSeconds = "quick_seconds"
+             nudgeWords = "nudge_words", start, quickSeconds = "quick_seconds"
     }
 
     /// The step under a pull of `slide` points, nil in the cancel zone. The gap before Ban keeps
@@ -99,9 +109,12 @@ public struct RoomModAction: Codable, Sendable, Equatable, Identifiable {
 }
 
 extension CoreBridge {
-    /// The swipe slider for a row `width` points wide.
-    public func swipeSlider(width: Double) async throws -> SwipeSlider {
-        try await invoke("get_touch_mod_slider", args: ["provider": "twitch", "rowWidth": width], as: SwipeSlider.self)
+    /// The swipe slider for a press `startX` points from the left of a row `width` points wide, on
+    /// `name`'s message (the chip names them).
+    public func swipeSlider(width: Double, startX: Double = 0, name: String = "") async throws -> SwipeSlider {
+        try await invoke("get_touch_mod_slider", args: [
+            "provider": "twitch", "rowWidth": width, "startX": startX, "targetName": name,
+        ], as: SwipeSlider.self)
     }
 
     /// A room's recent moderator actions, newest first.
@@ -122,8 +135,7 @@ extension CoreBridge {
     /// A typed length ("45m", "1h30m", "2d") as a step, or the core's words for why not.
     public func parseTimeout(_ text: String) async throws -> SwipeStep {
         let raw = try await invoke("parse_mod_timeout", args: ["text": text])
-        struct Step: Decodable { var action: String; var seconds: Int?; var label: String }
-        let step = try JSONDecoder().decode(Step.self, from: Data(raw.utf8))
+        let step = try JSONDecoder().decode(ParsedStep.self, from: Data(raw.utf8))
         return SwipeStep(action: step.action, seconds: step.seconds, label: step.label, chip: step.label, tone: nil)
     }
 
@@ -138,12 +150,9 @@ extension CoreBridge {
     }
 }
 
-extension SwipeStep {
-    public init(action: String, seconds: Int?, label: String, chip: String, tone: Double?) {
-        self.action = action
-        self.seconds = seconds
-        self.label = label
-        self.chip = chip
-        self.tone = tone
-    }
+/// A typed length as the core answers it (`ModStep`).
+private struct ParsedStep: Decodable {
+    var action: String
+    var seconds: Int?
+    var label: String
 }

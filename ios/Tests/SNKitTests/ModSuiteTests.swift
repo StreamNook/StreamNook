@@ -14,8 +14,8 @@ import Testing
         let slider = try await core().swipeSlider(width: 390)
         #expect(slider.enabled)
         #expect(slider.steps.map(\.label) == ["Delete", "1m", "10m", "1h", "Ban"])
-        #expect(slider.starts == [56, 90, 124, 158, 226])
-        #expect(slider.steps[2].chip == "Time out 10m")
+        #expect(slider.starts == [72, 106, 140, 174, 242])
+        #expect(slider.steps[2].chip == "Time out Grumpy_Gus 10m")
         #expect(slider.steps[0].tone == nil)
     }
 
@@ -23,21 +23,21 @@ import Testing
     @Test func stepsUnderThePullMatchRust() async throws {
         let slider = try await core().swipeSlider(width: 390)
         #expect(slider.step(at: 10) == nil)
-        #expect(slider.step(at: 60) == 0)
-        #expect(slider.step(at: 160) == 3)
-        #expect(slider.step(at: 200) == 3, "the gap before Ban still shows 1h")
-        #expect(slider.step(at: 230) == 4)
-        #expect(slider.clamp(400) == 276.5, "the pull stops at the end of Ban's zone")
+        #expect(slider.step(at: 76) == 0)
+        #expect(slider.step(at: 176) == 3)
+        #expect(slider.step(at: 216) == 3, "the gap before Ban still shows 1h")
+        #expect(slider.step(at: 246) == 4)
+        #expect(slider.clamp(400) == 292.5, "the pull stops at the end of Ban's zone")
         #expect(slider.clamp(-20) == 0)
     }
 
     /// The same edges as Rust's `hysteresis_holds_a_step_near_its_edge`.
     @Test func hysteresisHoldsAStepNearItsEdge() async throws {
         let slider = try await core().swipeSlider(width: 390)
-        #expect(slider.step(at: 91, keeping: 0) == 0)
-        #expect(slider.step(at: 95, keeping: 0) == 1)
-        #expect(slider.step(at: 88, keeping: 1) == 1)
-        #expect(slider.step(at: 85, keeping: 1) == 0)
+        #expect(slider.step(at: 107, keeping: 0) == 0)
+        #expect(slider.step(at: 111, keeping: 0) == 1)
+        #expect(slider.step(at: 104, keeping: 1) == 1)
+        #expect(slider.step(at: 101, keeping: 1) == 0)
         #expect(slider.step(at: 20, keeping: 1) == nil)
     }
 

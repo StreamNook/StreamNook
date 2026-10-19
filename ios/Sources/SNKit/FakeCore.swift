@@ -143,7 +143,7 @@ public final class FakeCore: CoreBridge {
             return "null"
         case "get_chatter_mod_history", "acknowledge_chat_warning", "resolve_automod_message", "get_chatter_card_tools",
              "get_touch_mod_slider", "get_room_mod_log", "get_automod_queue", "edit_mod_slider_timeouts", "parse_mod_timeout",
-             "add_blocked_term", "nuke_active", "nuke_stop",
+             "add_blocked_term", "remove_blocked_term", "nuke_active", "nuke_stop",
              "moderate_chatter", "set_user_note", "set_chat_user_override":
             // Moderation never reaches Twitch from the fake: canned answers only.
             return try FakeModTools.answer(cmd, args)

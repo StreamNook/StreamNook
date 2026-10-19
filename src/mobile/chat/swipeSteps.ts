@@ -29,6 +29,8 @@ export interface TouchSlider {
   cancel_words: string;
   hold_ban_words: string;
   nudge_words: string;
+  /** Where the thumb landed, from the row's left edge: the ruler starts here. */
+  start: number;
   quick_seconds: number;
 }
 

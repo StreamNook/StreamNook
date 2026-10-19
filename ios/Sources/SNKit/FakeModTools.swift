@@ -58,16 +58,16 @@ public enum FakeModTools {
         return [
             "enabled": true, "style": "preview",
             "steps": [
-                step("delete", nil, "Delete", "Delete message", NSNull()),
-                step("timeout", 60, "1m", "Time out 1m", 0.0),
-                step("timeout", 600, "10m", "Time out 10m", 0.325),
-                step("timeout", 3600, "1h", "Time out 1h", 0.65),
-                step("ban", nil, "Ban", "Ban", 1.0),
+                step("delete", nil, "Delete", "Delete Grumpy_Gus\u{2019}s message", NSNull()),
+                step("timeout", 60, "1m", "Time out Grumpy_Gus 1m", 0.0),
+                step("timeout", 600, "10m", "Time out Grumpy_Gus 10m", 0.325),
+                step("timeout", 3600, "1h", "Time out Grumpy_Gus 1h", 0.65),
+                step("ban", nil, "Ban", "Ban Grumpy_Gus", 1.0),
             ],
-            "dead": 56.0, "spacing": 34.0, "starts": [56.0, 90.0, 124.0, 158.0, 226.0], "end": 277.0,
+            "dead": 72.0, "spacing": 34.0, "starts": [72.0, 106.0, 140.0, 174.0, 242.0], "end": 293.0,
             "ban_dwell_ms": 350, "ban_still": 10.0, "hysteresis": 4.0, "leash": 120.0, "engage": 10.0,
-            "cancel_words": "Let go to cancel", "hold_ban_words": "hold for Ban", "nudge_words": "Swipe right to act",
-            "quick_seconds": 60,
+            "cancel_words": "Let go to cancel", "hold_ban_words": "Hold for Ban, let go to cancel",
+            "nudge_words": "Swipe right on a message to moderate it", "start": 0.0, "quick_seconds": 60,
         ]
     }
 
@@ -99,6 +99,7 @@ public enum FakeModTools {
         case "get_chatter_mod_history": value = history
         case "get_touch_mod_slider": value = swipeSlider
         case "nuke_active", "nuke_stop": value = 0
+        case "remove_blocked_term": return "null"
         case "add_blocked_term": value = ["id": "fake-term", "text": args["text"] as? String ?? ""] as [String: Any]
         case "get_room_mod_log": value = roomLog(args["channel"] as? String ?? "zackrawrr")
         case "get_automod_queue": value = [heldRow(args["channel"] as? String ?? "zackrawrr")]

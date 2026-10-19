@@ -2,19 +2,21 @@ import SNKit
 import UIKit
 
 /// Swipe right on a message to moderate it: the desktop mod slider with a finger. The core lays
-/// out the ruler and says every word (`SwipeSlider`); this follows the finger, draws the chosen
-/// style over the row, buzzes on each step, and on release hands the armed step back.
+/// out the ruler for this press, from where the thumb landed, and says every word with the
+/// chatter's name in it (`SwipeSlider`); this follows the finger, draws the chosen style over the
+/// row, buzzes on each step, and on release runs the armed step.
 ///
-/// One move, one direction: the pull only goes right. Short of the dead zone, or with the finger
+/// One move, one direction: the pull only goes right. Short of the cancel zone, or with the finger
 /// strayed `leash` points above or below the message, the chip says "Let go to cancel" and a
 /// release does nothing. Ban sits at the end of the pull and arms only after the finger rests
-/// there; until then the slider shows (and a release applies) the step before it.
+/// there; a release before it arms cancels, so a flick past the end does nothing at all.
 @MainActor
 final class SwipeModerator {
     let slider: SwipeSlider
     let cell: ChatRowCell
     let rowFrame: CGRect
     private let overlay: SwipeModOverlay
+    private let commit: (SwipeStep) -> Void
     private(set) var step: Int?
     private var offRow = false
     private var banArmed = false
@@ -23,27 +25,34 @@ final class SwipeModerator {
     private let tick = UISelectionFeedbackGenerator()
     private let thud = UIImpactFeedbackGenerator(style: .rigid)
 
-    init(slider: SwipeSlider, cell: ChatRowCell, in host: UIView) {
+    /// `visibleTop` is the list's scroll offset: the chip keeps inside what is on screen.
+    init(slider: SwipeSlider, cell: ChatRowCell, in host: UIView, visibleTop: CGFloat, commit: @escaping (SwipeStep) -> Void) {
         self.slider = slider
         self.cell = cell
+        self.commit = commit
         rowFrame = cell.frame
-        overlay = SwipeModOverlay(slider: slider, row: cell.frame)
+        overlay = SwipeModOverlay(slider: slider, row: cell.frame, visibleTop: visibleTop)
         host.addSubview(overlay)
         tick.prepare()
+        thud.prepare()
     }
+
+    /// Ban's rest is running: a release now cancels.
+    private var resting: Bool { banTimer != nil && !banArmed }
 
     /// The step a release would apply, nil when it would cancel.
     var armed: SwipeStep? {
-        guard !offRow, let step else { return nil }
+        guard !offRow, !resting, let step else { return nil }
         return slider.steps[step]
     }
 
     /// The finger moved: `pull` points right of where it went down, `y` in the row's space.
     func track(pull: CGFloat, y: CGFloat) {
         let slide = CGFloat(slider.clamp(Double(pull)))
+        let wasOff = offRow
         offRow = y < rowFrame.minY - slider.leash || y > rowFrame.maxY + slider.leash
         var next = slider.step(at: Double(slide), keeping: step)
-        // Ban arms only after a still rest in its zone.
+        // Ban arms only after a still rest in its zone; until then the step before it shows.
         if let n = next, slider.steps[n].isBan {
             if banTimer == nil || abs(slide - banAnchor) > slider.banStill {
                 startBanRest(at: slide)
@@ -52,9 +61,9 @@ final class SwipeModerator {
         } else {
             stopBanRest()
         }
-        if next != step {
+        if next != step || wasOff != offRow {
+            if next != step, next != nil, !offRow { tick.selectionChanged(); tick.prepare() }
             step = next
-            if next != nil, !offRow { tick.selectionChanged(); tick.prepare() }
         }
         draw(slide: slide)
     }
@@ -63,15 +72,19 @@ final class SwipeModerator {
         banTimer?.invalidate()
         banArmed = false
         banAnchor = slide
-        overlay.dwell(seconds: Double(slider.banDwellMs) / 1000)
         banTimer = Timer.scheduledTimer(withTimeInterval: Double(slider.banDwellMs) / 1000, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.banArmed = true
                 self.step = self.slider.steps.count - 1
-                self.thud.impactOccurred()
+                if !self.offRow { self.thud.impactOccurred() }
                 self.draw(slide: self.banAnchor)
             }
+        }
+        // The fill bar starts once the chip has its new width (drawn right after this).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.resting else { return }
+            self.overlay.dwell(seconds: Double(self.slider.banDwellMs) / 1000)
         }
     }
 
@@ -86,24 +99,37 @@ final class SwipeModerator {
         let words: String
         if offRow || step == nil {
             words = slider.cancelWords
-        } else if let step, banTimer != nil, !banArmed {
-            words = "\(slider.steps[step].label), \(slider.holdBanWords)"
+        } else if resting {
+            words = slider.holdBanWords
         } else {
             words = slider.steps[step!].chip
         }
-        let tint = offRow ? nil : step.map { SwipeModOverlay.tint(slider.steps[$0]) }
-        overlay.show(slide: slide, step: offRow ? nil : step, words: words, tint: tint)
+        let live = !offRow && step != nil
+        let tint = live ? SwipeModOverlay.tint(slider.steps[step!]) : nil
+        overlay.show(slide: slide, step: live ? step : nil, words: words, tint: tint, quiet: resting)
         switch slider.style {
         case "capsule":
             cell.transform = CGAffineTransform(translationX: slide, y: 0)
         case "preview":
-            cell.alpha = (step != nil && !offRow) ? 0.45 : 1
+            cell.alpha = live && !resting ? 0.45 : 1
         default:
             break
         }
     }
 
-    /// The finger lifted or the touch was taken away; springs the row back.
+    /// The finger lifted: runs the armed step and answers whether anything ran.
+    func release() -> Bool {
+        guard let step = armed else { return false }
+        if step.isBan || step.action == "timeout" {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        } else {
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        }
+        commit(step)
+        return true
+    }
+
+    /// Springs the row back and takes the overlay away.
     func finish() {
         stopBanRest()
         overlay.dismiss()
@@ -114,12 +140,15 @@ final class SwipeModerator {
     }
 }
 
-/// What a swipe draws over its row: the step's wash from the edge to the finger and a track of
-/// every step along the bottom (Preview), a bar naming every step (Rail), or a capsule that rolls
-/// through them (Capsule); plus the chip that says what a release does.
+/// What a swipe draws over its row, from where the thumb landed: the step's wash up to the finger
+/// and a track of every step along the bottom (Preview), a bar naming every step (Rail), or the
+/// row sliding aside (Capsule); plus the chip that says what a release does.
 final class SwipeModOverlay: UIView {
     private let slider: SwipeSlider
     private let row: CGRect
+    private let visibleTop: CGFloat
+    /// The room above the row this overlay keeps for its chip.
+    private static let headroom: CGFloat = 60
     private let wash = CALayer()
     private let track = CALayer()
     private var segments: [CALayer] = []
@@ -136,13 +165,17 @@ final class SwipeModOverlay: UIView {
         return ChatTheme.warning.mixed(with: ChatTheme.error, amount: CGFloat(tone))
     }
 
-    init(slider: SwipeSlider, row: CGRect) {
+    /// Where a pull of `x` points sits, from the row's left edge.
+    private func at(_ x: Double) -> CGFloat { CGFloat(slider.start + x) }
+
+    init(slider: SwipeSlider, row: CGRect, visibleTop: CGFloat) {
         self.slider = slider
         self.row = row
-        super.init(frame: row.insetBy(dx: 0, dy: -60))
+        self.visibleTop = visibleTop
+        super.init(frame: row.insetBy(dx: 0, dy: -Self.headroom))
         isUserInteractionEnabled = false
         clipsToBounds = false
-        let local = CGRect(x: 0, y: 60, width: row.width, height: row.height)
+        let local = CGRect(x: 0, y: Self.headroom, width: row.width, height: row.height)
         if slider.style == "rail" {
             rail.frame = local.insetBy(dx: 4, dy: 2)
             rail.backgroundColor = ChatTheme.surface
@@ -161,20 +194,20 @@ final class SwipeModOverlay: UIView {
                 label.textColor = Self.tint(step)
                 label.textAlignment = .center
                 let zone = (i + 1 < slider.starts.count ? slider.starts[i + 1] : slider.end) - slider.starts[i]
-                let center = slider.starts[i] + zone / 2
+                let center = at(slider.starts[i] + zone / 2) - rail.frame.minX
                 label.frame = CGRect(x: center - 30, y: 0, width: 60, height: rail.bounds.height)
                 rail.addSubview(label)
                 railLabels.append(label)
             }
         } else {
-            wash.frame = CGRect(x: 0, y: local.minY, width: 0, height: local.height)
+            wash.frame = CGRect(x: at(0), y: local.minY, width: 0, height: local.height)
             layer.addSublayer(wash)
             if slider.style == "preview" {
                 track.frame = CGRect(x: 0, y: local.maxY - 3, width: local.width, height: 3)
                 layer.addSublayer(track)
                 for (i, step) in slider.steps.enumerated() {
-                    let start = slider.starts[i]
-                    let end = i + 1 < slider.starts.count ? slider.starts[i + 1] : slider.end
+                    let start = at(slider.starts[i])
+                    let end = at(i + 1 < slider.starts.count ? slider.starts[i + 1] : slider.end)
                     let segment = CALayer()
                     segment.frame = CGRect(x: start + 1, y: 0, width: max(2, end - start - 2), height: 3)
                     segment.cornerRadius = 1.5
@@ -203,7 +236,8 @@ final class SwipeModOverlay: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(slide: CGFloat, step: Int?, words: String, tint: UIColor?) {
+    /// `quiet`: Ban's rest is running, so the chip reads as a warning, not an armed step.
+    func show(slide: CGFloat, step: Int?, words: String, tint: UIColor?, quiet: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let ink = tint ?? ChatTheme.textSecondary
@@ -213,7 +247,7 @@ final class SwipeModOverlay: UIView {
             segment.opacity = slider.starts[i] <= Double(slide) ? 1 : 0.32
         }
         CATransaction.commit()
-        if let step, step < railLabels.count {
+        if let step, step < railLabels.count, !quiet {
             railPill.isHidden = false
             railPill.backgroundColor = ink.withAlphaComponent(0.22)
             railPill.frame = railLabels[step].frame.insetBy(dx: 2, dy: 5)
@@ -222,14 +256,17 @@ final class SwipeModOverlay: UIView {
         }
         chip.text = words
         chip.sizeToFit()
-        let width = chip.bounds.width + 22
-        let x = min(max(0, slide - width / 2), bounds.width - width)
-        // Above the finger, or under the row when the row sits at the top of the list.
-        let above = row.minY > 70
-        let y = above ? 60 - 34 : 60 + row.height + 6
+        let width = min(chip.bounds.width + 22, bounds.width - 8)
+        let finger = at(Double(slide))
+        let x = min(max(4, finger - width / 2), bounds.width - width - 4)
+        // Above the row, kept inside what the list shows: near the top it comes down over the
+        // row instead of going under the finger, where the thumb would cover it. The list fades
+        // its top 12 to 30 points, so the chip stays clear of that.
+        let listTop = visibleTop - (row.minY - Self.headroom)
+        let y = max(Self.headroom - 34, listTop + 30)
         chipBox.frame = CGRect(x: x, y: y, width: width, height: 28)
         chip.frame = chipBox.bounds
-        chipBox.layer.borderColor = ink.withAlphaComponent(0.55).cgColor
+        chipBox.layer.borderColor = (quiet ? ChatTheme.error.withAlphaComponent(0.55) : ink.withAlphaComponent(0.55)).cgColor
         chip.textColor = tint == nil ? ChatTheme.textSecondary : ChatTheme.textPrimary
     }
 
@@ -240,15 +277,14 @@ final class SwipeModOverlay: UIView {
             dwellBar.frame = .zero
             return
         }
-        dwellBar.frame = CGRect(x: 6, y: chipBox.bounds.height - 3, width: 0, height: 2)
+        let full = max(0, chipBox.bounds.width - 12)
+        dwellBar.anchorPoint = CGPoint(x: 0, y: 0.5)
+        dwellBar.bounds = CGRect(x: 0, y: 0, width: full, height: 2)
+        dwellBar.position = CGPoint(x: 6, y: chipBox.bounds.height - 3)
         let grow = CABasicAnimation(keyPath: "bounds.size.width")
         grow.fromValue = 0
-        grow.toValue = max(0, chipBox.bounds.width - 12)
+        grow.toValue = full
         grow.duration = seconds
-        grow.fillMode = .forwards
-        grow.isRemovedOnCompletion = false
-        dwellBar.anchorPoint = CGPoint(x: 0, y: 0.5)
-        dwellBar.position = CGPoint(x: 6, y: chipBox.bounds.height - 2)
         dwellBar.add(grow, forKey: "dwell")
     }
 

@@ -261,13 +261,11 @@ enum ChatDrive {
             guard let session = currentSession, let list = currentList else { return true }
             if session.roomID == nil { session.roomID = "1" }
             session.moderatorTools = true
-            if list.swipeSlider == nil {
-                list.swipeSlider = try? await session.core.swipeSlider(width: Double(list.bounds.width))
-            }
+            list.swipeEnabled = true
             if value == "release" {
-                list.debugSwipe(pull: 0, release: true)
+                await list.debugSwipe(pull: 0, release: true)
             } else {
-                list.debugSwipe(pull: CGFloat(Double(value) ?? 120), release: false)
+                await list.debugSwipe(pull: CGFloat(Double(value) ?? 120), release: false)
             }
         case "chatmodsheet":
             guard let session = currentSession else { return true }

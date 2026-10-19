@@ -18,7 +18,16 @@ final class ModerationSheetModel {
     private(set) var heldNote: String?
     private(set) var logNote: String?
     private(set) var phraseNote: String?
+    /// The phrase just blocked, while its Undo is offered.
+    private(set) var blocked: String?
     var phrase = ""
+    /// Actions that arrived while the sheet is open, waiting behind the "N new" pill so rows never
+    /// move under a thumb aiming at Unban.
+    private(set) var incoming: [RoomModAction] = []
+    /// Held messages just decided, shown with their outcome for a moment before they go.
+    private(set) var decided: [String: String] = [:]
+    /// An Unban or Lift waiting for its confirmation.
+    var liftPending: RoomModAction?
 
     @ObservationIgnored private let core: CoreBridge
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
@@ -49,9 +58,8 @@ final class ModerationSheetModel {
                 guard !Task.isCancelled else { return }
                 guard let entry = try? JSONDecoder().decode(RoomModAction.self, from: Data(event.payloadJSON.utf8)),
                       entry.channel == channel, let self else { continue }
-                var log = self.log ?? []
-                if !log.contains(where: { $0.id == entry.id }) { log.insert(entry, at: 0) }
-                self.log = log
+                let known = (self.log ?? []).contains { $0.id == entry.id } || self.incoming.contains { $0.id == entry.id }
+                if !known { self.incoming.insert(entry, at: 0) }
             }
         })
     }
@@ -61,7 +69,14 @@ final class ModerationSheetModel {
         tasks.removeAll()
     }
 
+    /// Shows the actions waiting behind the pill.
+    func showIncoming() {
+        log = incoming + (log ?? [])
+        incoming = []
+    }
+
     func reload() async {
+        incoming = []
         held = (try? await core.heldQueue(channel: channel)) ?? []
         log = (try? await core.roomModLog(channel: channel)) ?? []
         nukes = (try? await core.invoke("nuke_active", args: ["channel": channel], as: Int.self)) ?? 0
@@ -73,6 +88,11 @@ final class ModerationSheetModel {
         do {
             try await core.resolveHeld(messageID: message.messageID, allow: allow)
             heldNote = nil
+            // The row says what happened for a moment, so the next row's buttons do not slide
+            // under the thumb that just tapped.
+            decided[message.id] = allow ? "Allowed" : "Denied"
+            try? await Task.sleep(for: .seconds(1.5))
+            decided[message.id] = nil
             held?.removeAll { $0.id == message.id }
         } catch {
             heldNote = ChatComposerModel.words(error)
@@ -101,7 +121,22 @@ final class ModerationSheetModel {
         do {
             _ = try await core.invoke("add_blocked_term", args: ["broadcasterId": roomID, "text": text])
             phraseNote = "Blocked \u{201C}\(text)\u{201D}"
+            blocked = text
             phrase = ""
+        } catch {
+            phraseNote = ChatComposerModel.words(error)
+        }
+    }
+
+    /// Takes the phrase just blocked off the list again.
+    func unblock() async {
+        guard let text = blocked else { return }
+        busy = "phrase"
+        defer { busy = nil }
+        do {
+            _ = try await core.invoke("remove_blocked_term", args: ["broadcasterId": roomID, "text": text])
+            phraseNote = "Unblocked \u{201C}\(text)\u{201D}"
+            blocked = nil
         } catch {
             phraseNote = ChatComposerModel.words(error)
         }
@@ -127,6 +162,12 @@ struct ModerationSheet: View {
         return f
     }()
 
+    private var liftTitle: String {
+        guard let entry = model.liftPending else { return "" }
+        let name = entry.target ?? "them"
+        return entry.action == "timeout" ? "Lift \(name)\u{2019}s timeout?" : "Unban \(name)?"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -144,6 +185,14 @@ struct ModerationSheet: View {
         }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
+        .confirmationDialog(liftTitle, isPresented: Binding(get: { model.liftPending != nil },
+                                                            set: { if !$0 { model.liftPending = nil } }),
+                            titleVisibility: .visible) {
+            Button(model.liftPending?.action == "timeout" ? "Lift timeout" : "Unban") {
+                if let entry = model.liftPending { Task { await model.lift(entry) } }
+                model.liftPending = nil
+            }
+        }
     }
 
     // MARK: Held by AutoMod
@@ -164,11 +213,19 @@ struct ModerationSheet: View {
                             .font(.sn(14))
                             .foregroundStyle(SN.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 8) {
-                            decideButton("Allow", tint: SN.success, message: message, allow: true)
-                            decideButton("Deny", tint: SN.error, message: message, allow: false)
+                        if let outcome = model.decided[message.id] {
+                            Text(outcome)
+                                .font(.sn(13, 600))
+                                .foregroundStyle(outcome == "Allowed" ? SN.success : SN.error)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .padding(.top, 2)
+                        } else {
+                            HStack(spacing: 8) {
+                                decideButton("Allow", tint: SN.success, message: message, allow: true)
+                                decideButton("Deny", tint: SN.error, message: message, allow: false)
+                            }
+                            .padding(.top, 2)
                         }
-                        .padding(.top, 2)
                     }
                     .padding(.vertical, 4)
                 }
@@ -201,8 +258,19 @@ struct ModerationSheet: View {
     @ViewBuilder
     private var logSection: some View {
         Section {
+            if !model.incoming.isEmpty {
+                Button {
+                    withAnimation(.snappy) { model.showIncoming() }
+                } label: {
+                    Label("\(model.incoming.count) new", systemImage: "arrow.up")
+                        .font(.sn(13, 600))
+                        .foregroundStyle(SN.accent)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderless)
+            }
             if let log = model.log {
-                if log.isEmpty {
+                if log.isEmpty, model.incoming.isEmpty {
                     Text("No moderator actions since you opened this chat.").font(.snRowDetail).foregroundStyle(SN.textMuted)
                 }
                 ForEach(log) { entry in
@@ -218,7 +286,7 @@ struct ModerationSheet: View {
                         }
                         Spacer(minLength: 8)
                         if entry.liftable, entry.targetID != nil {
-                            Button(entry.action == "timeout" ? "Lift" : "Unban") { Task { await model.lift(entry) } }
+                            Button(entry.action == "timeout" ? "Lift" : "Unban") { model.liftPending = entry }
                                 .font(.sn(13, 600))
                                 .foregroundStyle(SN.accent)
                                 .buttonStyle(.borderless)
@@ -271,7 +339,16 @@ struct ModerationSheet: View {
         } header: {
             Text("Room")
         } footer: {
-            if let note = model.phraseNote { ListFooter(text: note) }
+            if let note = model.phraseNote {
+                HStack(spacing: 8) {
+                    ListFooter(text: note)
+                    if model.blocked != nil {
+                        Button("Undo") { Task { await model.unblock() } }
+                            .font(.sn(12.5, 600))
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
         }
     }
 }
