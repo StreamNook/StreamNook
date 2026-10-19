@@ -7,6 +7,8 @@ public final class FakeFixtures: Sendable {
     private struct State {
         var signedIn: Bool
         var settings: [String: String]
+        /// The paths a write changed, which the settings pages' reset arrows follow.
+        var changed: Set<String> = []
     }
 
     private let state: Mutex<State>
@@ -36,6 +38,88 @@ public final class FakeFixtures: Sendable {
 
     static let user = TwitchUser(id: "424242", login: "nookviewer", displayName: "NookViewer")
 
+    /// The paths written since launch and not reset: what `get_settings_view` lists as changed.
+    public var changedPaths: [String] { state.withLock { $0.changed }.sorted() }
+
+    /// The saved settings as one object.
+    private func settingsRoot() -> [String: Any] {
+        state.withLock { $0.settings }.reduce(into: [String: Any]()) { root, pair in
+            root[pair.key] = try? JSONSerialization.jsonObject(with: Data(pair.value.utf8), options: [.fragmentsAllowed])
+        }
+    }
+
+    /// Saves the top-level keys `paths` touched from `root`, dropping a key that became empty.
+    private func store(_ root: [String: Any], touching paths: [String]) {
+        let tops = Set(paths.compactMap { $0.split(separator: ".").first.map(String.init) })
+        state.withLock { state in
+            for top in tops {
+                if let value = root[top], let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]) {
+                    state.settings[top] = String(decoding: data, as: UTF8.self)
+                } else {
+                    state.settings[top] = nil
+                }
+            }
+        }
+    }
+
+    /// Sets (or with nil removes) the value at a dotted path, making the groups above it.
+    static func set(_ root: inout [String: Any], _ path: String, _ value: Any?) {
+        var parts = path.split(separator: ".").map(String.init)
+        guard !parts.isEmpty else { return }
+        let first = parts.removeFirst()
+        if parts.isEmpty {
+            root[first] = value
+            return
+        }
+        var group = root[first] as? [String: Any] ?? [:]
+        set(&group, parts.joined(separator: "."), value)
+        root[first] = group
+    }
+
+    /// Whether two list items are the same value, compared as the JSON they save as.
+    private static func same(_ a: Any, _ b: Any) -> Bool {
+        let encode = { (value: Any) in try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]) }
+        return encode(a).map { $0 == encode(b) } ?? false
+    }
+
+    /// One `edit_settings_list` edit on a list, as the core applies it.
+    static func edited(_ list: [Any], _ edit: [String: Any]) -> [Any] {
+        let id = edit["id"] as? String
+        let index = edit["index"] as? Int
+        func targets(_ offset: Int, _ item: Any) -> Bool {
+            if let index { return offset == index }
+            if let id { return (item as? [String: Any])?["id"] as? String == id }
+            return false
+        }
+        switch edit["op"] as? String {
+        case "add":
+            return list + [edit["item"] ?? ["id": UUID().uuidString]]
+        case "remove":
+            if let value = edit["value"] { return list.filter { !same($0, value) } }
+            return list.enumerated().filter { !targets($0.offset, $0.element) }.map(\.element)
+        case "update":
+            let patch = edit["patch"] as? [String: Any] ?? [:]
+            return list.enumerated().map { offset, item in
+                guard targets(offset, item), var row = item as? [String: Any] else { return item }
+                for (key, value) in patch { row[key] = value is NSNull ? nil : value }
+                return row
+            }
+        case "toggle":
+            guard let value = edit["value"] else { return list }
+            let had = list.contains { same($0, value) }
+            return had ? list.filter { !same($0, value) } : list + [value]
+        case "move":
+            guard let from = list.enumerated().first(where: { targets($0.offset, $0.element) })?.offset,
+                  let to = edit["to"] as? Int else { return list }
+            var moved = list
+            let item = moved.remove(at: from)
+            moved.insert(item, at: max(0, min(to, moved.count)))
+            return moved
+        default:
+            return list
+        }
+    }
+
     /// The answer to `cmd`, or nil when the fixtures do not know it.
     func answer(_ cmd: String, _ args: [String: Any]) throws -> String? {
         switch cmd {
@@ -50,6 +134,30 @@ public final class FakeFixtures: Sendable {
             }
             state.withLock { $0.settings.merge(encoded) { $1 } }
             return "null"
+        case "set_settings_fields":
+            guard let changes = args["changes"] as? [String: Any] else { return "null" }
+            var root = settingsRoot()
+            for (path, value) in changes { Self.set(&root, path, value is NSNull ? nil : value) }
+            store(root, touching: Array(changes.keys))
+            state.withLock { $0.changed.formUnion(changes.keys) }
+            return "null"
+        case "reset_settings":
+            guard let paths = args["paths"] as? [String] else { return "null" }
+            var root = settingsRoot()
+            for path in paths { Self.set(&root, path, nil) }
+            store(root, touching: paths)
+            state.withLock { state in
+                state.changed = state.changed.filter { c in !paths.contains { c == $0 || c.hasPrefix($0 + ".") || $0.hasPrefix(c + ".") } }
+            }
+            return "null"
+        case "edit_settings_list":
+            guard let path = args["path"] as? String, let edit = args["edit"] as? [String: Any] else { return "[]" }
+            var root = settingsRoot()
+            let list = Self.edited(SettingsPath.value(in: root, path) as? [Any] ?? [], edit)
+            Self.set(&root, path, list)
+            store(root, touching: [path])
+            state.withLock { _ = $0.changed.insert(path) }
+            return try FakeCore.json(list)
         case "get_boot_state":
             let (setupDone, signedIn) = state.withLock { ($0.settings["setup_complete"] == "true", $0.signedIn) }
             return try FakeCore.json(["needs_setup": !setupDone, "signed_in": signedIn,

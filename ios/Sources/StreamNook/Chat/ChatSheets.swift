@@ -118,6 +118,16 @@ struct ChatMenuSheet: View {
                             }
                             .accessibilityValue(mentions.unreadTotal > 0 ? "\(mentions.unreadTotal) unread" : "")
                         }
+                        // A pin folded out of sight by Pinned Messages > Style: Hidden opens here (the
+                        // desktop's is the pin in its chat header).
+                        if rooms.hiddenPinWaiting {
+                            Button {
+                                dismiss()
+                                withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.2)) { rooms.pinsOpen = true }
+                            } label: {
+                                Label("Pinned message", systemImage: "pin")
+                            }
+                        }
                     }
                     Button {
                         dismiss()

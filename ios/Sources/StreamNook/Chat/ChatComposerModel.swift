@@ -247,7 +247,7 @@ final class ChatComposerModel {
                 failure = Failure(text: text, why: result.dropReason ?? "the room refused it")
                 return false
             }
-            await showOwnRow(text: message, reply: reply)
+            await showOwnRow(text: message, reply: reply, id: result.messageID)
             lastSent = text
             startSlowCountdown()
             failure = nil
@@ -369,14 +369,16 @@ final class ChatComposerModel {
         }
     }
 
-    /// Twitch never echoes your own message, so the core builds your row with the same parser.
-    private func showOwnRow(text: String, reply: ChatMessage?) async {
+    /// Twitch never echoes your own message, so the core builds your row with the same parser. It
+    /// carries the id Twitch gave the message when the send answered with one, so Delete, reply
+    /// and pin reach it; only a send that gave no id keeps a provisional `local-` one.
+    private func showOwnRow(text: String, reply: ChatMessage?, id: String?) async {
         guard let userJSON = try? await session.core.invoke("get_user_info", "{}"),
               let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) else { return }
         var args: [String: Any] = [
             "channel": session.channel,
             "text": text,
-            "local_id": "local-\(UUID().uuidString)",
+            "local_id": id.flatMap { $0.isEmpty ? nil : $0 } ?? "local-\(UUID().uuidString)",
             "sender_id": user.id,
             "sender_login": user.login,
             "sender_display_name": user.displayName,

@@ -218,7 +218,8 @@ fn settings_value() -> Value {
         .unwrap_or(Value::Null)
 }
 
-async fn own_user_id() -> String {
+/// The signed-in Twitch account's user id.
+pub async fn own_user_id() -> String {
     if let Some(account) = crate::services::account_store::AccountStore::primary() {
         return account.user_id;
     }

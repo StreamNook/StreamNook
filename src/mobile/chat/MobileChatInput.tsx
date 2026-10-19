@@ -49,6 +49,7 @@ import { formatShortCount } from '../../utils/streamStats';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { ManageChannelSheet } from './ManageChannelSheet';
 import { ModerationSheet } from './ModerationSheet';
+import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -168,6 +169,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [manageOpen, setManageOpen] = useState(false);
   const [moderationOpen, setModerationOpen] = useState(false);
+  // A pin folded away by Pinned Messages > Style: Hidden opens from the menu.
+  const pins = usePinsOpen();
+  const hiddenPinWaiting = useHiddenPinWaiting();
   const text = drafts[roomKey] ?? '';
   const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
     setDrafts((d) => {
@@ -978,6 +982,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
         onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
         onModeration={channel && channelId && isTwitch && isModerator ? () => setModerationOpen(true) : undefined}
+        onShowPinned={hiddenPinWaiting ? () => pins.setOpen(true) : undefined}
         onCloseChat={onCloseChat}
       />
       {channel && channelId && isTwitch && isModerator && (

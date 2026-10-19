@@ -135,6 +135,125 @@ pub fn remove(app: &AppHandle, tag: &str, group: &str) {
     let _ = (app, tag, group);
 }
 
+/// What the operating system says about StreamNook showing its notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Granted,
+    Denied,
+    /// The system has not asked yet.
+    NotAsked,
+}
+
+impl Permission {
+    /// The words the frontend reads, the same the phones use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Permission::Granted => "granted",
+            Permission::Denied => "denied",
+            Permission::NotAsked => "default",
+        }
+    }
+}
+
+/// Whether StreamNook may show system notifications. Only macOS asks: with
+/// `ask` it shows its prompt when it never has. Windows and Linux never ask,
+/// so they answer granted (Windows can still switch an app off in its own
+/// settings, which a desktop app cannot read without an AUMID of its own).
+pub async fn permission(ask: bool) -> Permission {
+    #[cfg(target_os = "macos")]
+    {
+        mac_permission::permission(ask).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ask;
+        Permission::Granted
+    }
+}
+
+/// The system's own notification settings, where a refusal is undone.
+pub fn settings_url() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("x-apple.systempreferences:com.apple.preference.notifications")
+    } else if cfg!(windows) {
+        Some("ms-settings:notifications")
+    } else {
+        None
+    }
+}
+
+/// macOS's notification permission, through UNUserNotificationCenter. The
+/// Objective-C objects never cross an await, so the futures stay `Send`.
+#[cfg(target_os = "macos")]
+mod mac_permission {
+    use std::ptr::NonNull;
+    use std::sync::Mutex;
+
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSBundle, NSError};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
+    };
+    use tokio::sync::oneshot;
+
+    use super::Permission;
+
+    /// UNUserNotificationCenter raises, which aborts the process, when the
+    /// binary is not inside an app bundle (a `tauri dev` run). Nothing asks
+    /// there, so it counts as granted.
+    fn in_app_bundle() -> bool {
+        let bundle = NSBundle::mainBundle();
+        bundle.bundleIdentifier().is_some() && bundle.bundlePath().to_string().ends_with(".app")
+    }
+
+    fn read_status() -> oneshot::Receiver<UNAuthorizationStatus> {
+        let (tx, rx) = oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let handler = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+            // SAFETY: the system hands the handler a live settings object.
+            let status = unsafe { settings.as_ref() }.authorizationStatus();
+            if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+                let _ = tx.send(status);
+            }
+        });
+        UNUserNotificationCenter::currentNotificationCenter().getNotificationSettingsWithCompletionHandler(&handler);
+        rx
+    }
+
+    fn request() -> oneshot::Receiver<bool> {
+        let (tx, rx) = oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let handler = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
+            if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+                let _ = tx.send(granted.as_bool());
+            }
+        });
+        let options = UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound | UNAuthorizationOptions::Badge;
+        UNUserNotificationCenter::currentNotificationCenter()
+            .requestAuthorizationWithOptions_completionHandler(options, &handler);
+        rx
+    }
+
+    pub async fn permission(ask: bool) -> Permission {
+        if !in_app_bundle() {
+            return Permission::Granted;
+        }
+        let status = read_status().await.unwrap_or(UNAuthorizationStatus::NotDetermined);
+        if status == UNAuthorizationStatus::NotDetermined {
+            if !ask {
+                return Permission::NotAsked;
+            }
+            return if request().await.unwrap_or(false) { Permission::Granted } else { Permission::Denied };
+        }
+        if status == UNAuthorizationStatus::Denied {
+            Permission::Denied
+        } else {
+            Permission::Granted
+        }
+    }
+}
+
 /// Shows a rich sample under the dev identity, for hand-run tests.
 #[cfg(all(test, windows))]
 pub(crate) fn show_sample(notice: &MirroredNotice, rich: &RichToast, faces: &[Option<PathBuf>]) -> Result<(), String> {
@@ -606,6 +725,19 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_macos_asks_for_permission() {
+        // Windows and Linux never ask; on macOS a test binary sits outside an
+        // app bundle, which never asks either.
+        assert_eq!(tauri::async_runtime::block_on(permission(false)), Permission::Granted);
+        if !cfg!(target_os = "macos") {
+            assert_eq!(tauri::async_runtime::block_on(permission(true)), Permission::Granted);
+        }
+        let words = [Permission::Granted, Permission::Denied, Permission::NotAsked].map(Permission::as_str);
+        assert_eq!(words, ["granted", "denied", "default"]);
+        assert_eq!(settings_url().is_some(), cfg!(any(windows, target_os = "macos")));
+    }
 
     #[test]
     fn image_key_is_stable_and_short() {

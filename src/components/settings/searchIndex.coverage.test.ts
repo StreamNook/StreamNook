@@ -78,6 +78,18 @@ interface Rendered {
   parent?: string;
 }
 
+// Rows drawn from a list Rust keeps, whose titles the source never names:
+// Notifications' "Notify me about" rows are the alert types desktop sends
+// (src-tauri/src/services/alert_types.json), with the list's own titles.
+const alertTypes = JSON.parse(
+  readFileSync(new URL('../../../src-tauri/src/services/alert_types.json', import.meta.url), 'utf8'),
+) as { types: { title: string; platforms: string[] }[] };
+const LISTED_ROWS: Record<string, Rendered[]> = {
+  Notifications: alertTypes.types
+    .filter((t) => t.platforms.includes('desktop'))
+    .map((t) => ({ section: 'Notify me about', title: t.title })),
+};
+
 /** A row title as search matches it: a title that shows its value
  *  (`Spacing: ${n}px`) is found by the words before the value. */
 const titleKey = (raw: string): string => raw.split('${')[0].replace(/[:\s]+$/, '').trim();
@@ -134,7 +146,9 @@ const sameParent = (entry: string | undefined, rendered: string | undefined) =>
   rendered === ANY_PARENT ? !!entry : (entry ?? '') === (rendered ?? '');
 
 for (const [tab, files] of Object.entries(TAB_FILES)) {
-  const { rows, sections, source } = renderedTree(files);
+  const tree = renderedTree(files);
+  const { sections, source } = tree;
+  const rows = [...tree.rows, ...(LISTED_ROWS[tab] ?? [])];
   const skip = UNINDEXED[tab] ?? {};
   const visible = rows.filter(
     (r) => !skip.sections?.includes(r.section) && !skip.titles?.includes(r.title),
@@ -188,6 +202,9 @@ for (const [tab, files] of Object.entries(TAB_FILES)) {
       const seen = new Set<string>();
       const dupes: string[] = [];
       for (const r of rows) {
+        // Lines under a row drawn from a list sit under different rows the
+        // source cannot tell apart (a "Try one" under each of two types).
+        if (r.parent === ANY_PARENT) continue;
         const k = `${r.section}\u0000${r.parent ?? ''}\u0000${r.title}`;
         if (seen.has(k)) dupes.push(`${r.section} > ${r.parent ? `${r.parent} > ` : ''}${r.title}`);
         seen.add(k);

@@ -255,6 +255,17 @@ enum ChatDrive {
             currentList?.debugFan(select: bucket, reach: parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 0)
         case "chatfanend":
             currentList?.debugEndFan()
+        case "chatrole":
+            // Read-only: what this room thinks of the viewer, and what the newest rows allow.
+            guard let session = currentSession else {
+                chatLog.notice("[swipe] chatrole: no chat open")
+                return true
+            }
+            chatLog.notice("[swipe] chatrole \(session.channel, privacy: .public): role \(session.role, privacy: .public), moderator \(session.isModerator), broadcaster \(session.isBroadcaster), mod tools \(session.moderatorTools), viewer \(session.viewerID.isEmpty ? "unknown" : session.viewerID, privacy: .public), room id \(session.roomID ?? "unknown", privacy: .public)")
+            for message in session.pipeline.recentMessages(Int(value) ?? 6) {
+                let why = session.swipeRefusal(message) ?? "swipeable"
+                chatLog.notice("[swipe] chatrole row \(message.id, privacy: .public) by \(message.username, privacy: .public): \(String(describing: session.reach(for: message)), privacy: .public); \(why, privacy: .public)")
+            }
         case "chatmod":
             currentSession?.moderatorTools = value != "off"
         case "chatswipe":
@@ -310,7 +321,7 @@ enum ChatDrive {
                 "\($0.channel)\($0.pinnedToStream ? "*" : "")=\(rooms.sessions[$0.channel]?.rowCount ?? -1)"
             }.joined(separator: ",")
             let streaks = rooms.activeStreaks
-            log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen)")
+            log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen) pinsShown \(rooms.pinsShown) pinMenu \(rooms.hiddenPinWaiting) pinStyle \(rooms.activeSession?.style.pinnedCollapsedStyle ?? "-", privacy: .public)")
         case "chatlifecycle":
             let filter = value.replacingOccurrences(of: "_", with: " ")
             guard let json = try? await model.core.invoke("get_chat_lifecycle_log", "{}"),

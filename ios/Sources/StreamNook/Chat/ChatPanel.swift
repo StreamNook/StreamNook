@@ -110,7 +110,7 @@ struct ChatPanel: View {
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
                 // Under the tab strip (or under inline pins), a short fade instead of a hard cut.
                 .mask {
-                    let pinned = !overlay && !(rooms?.activePins.isEmpty ?? true)
+                    let pinned = !overlay && (rooms?.pinsShown ?? false)
                     let mentionCard = !overlay && rooms?.mentionCards[session.channel] != nil
                     let cards = mentionCard || (votes.map { !$0.slots.isEmpty } ?? false)
                     if pinned || cards || (!overlay && rooms?.showsStrip == true) {
@@ -130,7 +130,7 @@ struct ChatPanel: View {
                 }
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
-                        if let rooms, !overlay, !rooms.activePins.isEmpty {
+                        if let rooms, !overlay, rooms.pinsShown {
                             PinnedBanner(pins: rooms.activePins,
                                          expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
                                 .padding(.horizontal, 10)
@@ -152,10 +152,10 @@ struct ChatPanel: View {
                         if let votes {
                             LiveVotesStack(model: votes, drop: drop)
                                 .padding(.horizontal, 10)
-                                .padding(.top, rooms?.activePins.isEmpty ?? true ? topGap : 0)
+                                .padding(.top, rooms?.pinsShown ?? false ? 0 : topGap)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { votesBox = $0 }
                         }
-                        if !overlay, session.moderatorTools, session.roomID != nil, !hintLearned {
+                        if !overlay, session.moderatorTools, session.style.swipeModerate, session.roomID != nil, !hintLearned {
                             SwipeHint { hintLearned = true }
                                 .padding(.top, 8)
                         }
@@ -211,7 +211,7 @@ struct ChatPanel: View {
     /// The room the inline pins and votes take above the list, and 4 points of air under them.
     private var inlineTop: CGFloat {
         guard pinsInline, !overlay else { return 0 }
-        let pins = rooms?.activePins.isEmpty ?? true ? 0 : pinsBox
+        let pins = rooms?.pinsShown ?? false ? pinsBox : 0
         let cards = (votes.map { !$0.slots.isEmpty } ?? false) ? votesBox : 0
         let total = pins + cards + (pins > 0 && cards > 0 ? 4 : 0)
         return total > 0 ? total + 4 : 0
@@ -310,7 +310,14 @@ struct ChatListHost: UIViewRepresentable {
             if twitch { buckets.append(.profile) }
             buckets.append(.copy)
             if session.moderatorTools, twitch, session.roomID != nil {
-                buckets += [.delete, .timeout, .ban, .pin]
+                // Delete, Timeout and Ban only while Hold menu buttons is on (Settings > Moderation),
+                // and only those Twitch allows on this message: Delete alone on the viewer's own.
+                if session.style.holdModButtons {
+                    let reach = session.reach(for: message)
+                    if reach.canDelete { buckets.append(.delete) }
+                    if reach.canTimeout { buckets += [.timeout, .ban] }
+                }
+                buckets.append(.pin)
             }
             let color = ChatTheme.color(message.metadata.view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
             return (buckets, message.shownName, color)
@@ -330,9 +337,13 @@ struct ChatListHost: UIViewRepresentable {
                   let message = session.pipeline.message(layout.id), message.provider == "twitch", !message.isSystem,
                   message.tags["system-msg"] == nil
             else { return false }
-            // Never another moderator, the broadcaster or staff (the viewer's own rows carry their badge too).
-            let protected: Set<String> = ["moderator", "broadcaster", "staff", "admin", "global_mod", "lead_moderator"]
-            return !message.badges.contains { protected.contains($0.name) }
+            // Only where Twitch allows something on this message: the viewer's own in a room they
+            // moderate (Delete), never the broadcaster's (the core decides the steps).
+            return session.reach(for: message) != .nothing
+        }
+        list.swipeRefusal = { layout in
+            if layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")) { return "a held message" }
+            return session.swipeRefusal(session.pipeline.message(layout.id))
         }
         // A press on a moderatable row: the core's slider for where the thumb landed, and the
         // chatter captured now, so a release acts on the person pressed even if their message
@@ -342,7 +353,10 @@ struct ChatListHost: UIViewRepresentable {
             let core = session.core
             let slider: SwipeSlider
             do {
-                slider = try await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName)
+                slider = try await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName,
+                                                    targetID: message.userID,
+                                                    badges: message.badges.map { "\($0.name)/\($0.version)" },
+                                                    channel: session.channel)
             } catch {
                 chatLog.notice("[swipe] slider failed: \(String(describing: error), privacy: .public)")
                 return nil

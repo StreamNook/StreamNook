@@ -297,6 +297,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Speed: Gauge,
   'Vary repeats': Shuffle,
   'Swipe to moderate': Hand,
+  'Hold menu buttons': LayoutGrid,
   'Timeout lengths': TimerReset,
   'Card buttons': Gavel,
   'Paste upload': ClipboardPaste,
@@ -359,7 +360,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   Emotes: { Animation: Sparkle, Size: Maximize2, Spacing: MoveHorizontal },
   'Tab Completion': { Emotes: Keyboard },
   'Repeated Messages': { Mode: Repeat2 },
-  'Swipe to Moderate': { Style: Paintbrush, Length: MoveHorizontal, Steps: ListOrdered },
+  'Moderating Messages': { Style: Paintbrush, Length: MoveHorizontal, Steps: ListOrdered },
   'Highlight Appearance': { Style: PaintBucket },
   'Settings file': { Export: Share, Import: Download },
   Mentions: {

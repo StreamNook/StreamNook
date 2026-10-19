@@ -14,6 +14,7 @@ import { SegmentedSelect, SettingsRow, SettingsSection, SettingsSubGroup } from 
 import { Toggle } from '../ui/Toggle';
 import { parseModTimeout } from '../../services/moderation';
 import { EntryInput } from './entryInput';
+import { useSettingReset } from './settingReset';
 
 const PATH = 'moderation.card_actions';
 const DEFAULT_LENGTHS = [1, 600, 3600, 86400];
@@ -134,10 +135,13 @@ function LengthSelect({
 const setFields = (changes: Record<string, unknown>) =>
   invoke('set_settings_fields', { changes }).catch((err) => Logger.warn('[Moderation] setting not saved:', err));
 
-/** Swipe to Moderate: on or off, its style and reach, and its steps. */
+/** Moderating Messages: the swipe (its style, reach and steps) and the hold
+ *  menu's Delete, Timeout and Ban, each on or off. */
 function SwipeModerateSettings() {
   const design = useAppStore((s) => s.settings.chat_design);
+  const resetFor = useSettingReset();
   const on = design?.mod_slider ?? true;
+  const hold = design?.mod_hold_buttons ?? true;
   const timeouts = design?.mod_slider_timeouts ?? [60, 300, 600, 1800, 3600, 86400, 604800];
   const withDelete = design?.mod_slider_delete ?? true;
   const withBan = design?.mod_slider_ban ?? true;
@@ -154,18 +158,20 @@ function SwipeModerateSettings() {
   const chip = 'flex h-8 items-center gap-1 rounded-full px-3 text-[13px] font-semibold';
   return (
     <SettingsSection
-      label="Swipe to Moderate"
-      description="Swipe right on a message in a channel you moderate to delete it, time its sender out or ban them."
+      label="Moderating Messages"
+      description="Two ways to delete, time out or ban from a message in a channel you moderate. With both off, the user card’s Moderate row still has every action."
     >
       <SettingsRow
         title="Swipe to moderate"
-        description="Pull further for a longer timeout. Ban is at the end and needs a short hold; let go early to cancel."
+        description="Swipe right on a message; pull further for a longer timeout. Ban needs a short hold."
         control={<Toggle enabled={on} onChange={() => void setFields({ 'chat_design.mod_slider': !on })} />}
+        onReset={resetFor(['chat_design.mod_slider', true])}
       />
       {on && (
         <SettingsSubGroup>
           <SettingsRow
             title="Style"
+            onReset={resetFor(['chat_design.mod_slider_style', 'preview'])}
             control={
               <SegmentedSelect
                 value={(design?.mod_slider_style as 'preview' | 'rail' | 'capsule') ?? 'preview'}
@@ -180,6 +186,7 @@ function SwipeModerateSettings() {
           />
           <SettingsRow
             title="Length"
+            onReset={resetFor(['chat_design.mod_slider_length', 'medium'])}
             control={
               <SegmentedSelect
                 value={(design?.mod_slider_length as 'short' | 'medium' | 'long') ?? 'medium'}
@@ -253,6 +260,12 @@ function SwipeModerateSettings() {
           </SettingsRow>
         </SettingsSubGroup>
       )}
+      <SettingsRow
+        title="Hold menu buttons"
+        description="Delete, Timeout and Ban in the press-and-hold menu."
+        control={<Toggle enabled={hold} onChange={() => void setFields({ 'chat_design.mod_hold_buttons': !hold })} />}
+        onReset={resetFor(['chat_design.mod_hold_buttons', true])}
+      />
     </SettingsSection>
   );
 }

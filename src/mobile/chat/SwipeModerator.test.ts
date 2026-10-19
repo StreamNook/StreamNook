@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
+import { messageReach, stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
 
 // Rust's own test ruler (touch_mod_slider.rs): Delete, 1m, 10m, 1h, a gap, Ban on a 390 px row.
 const slider: TouchSlider = {
@@ -52,5 +52,21 @@ describe('swipe slider steps (same pulls as Rust)', () => {
     expect(stepAction(slider.steps[4], 'm1')).toEqual({ kind: 'ban' });
     expect(stepTint(slider.steps[4])).toBe('var(--color-error)');
     expect(stepTint(slider.steps[3])).toContain('65%');
+  });
+});
+
+describe('what a message allows (Twitch rules)', () => {
+  it('lets a moderator delete their own message and nothing more', () => {
+    expect(messageReach('moderator', '7', '7', ['moderator/1'])).toBe('delete_only');
+  });
+  it('never acts on the broadcaster, not even in their own room', () => {
+    expect(messageReach('broadcaster', '1', '1', [])).toBe('nothing');
+    expect(messageReach('moderator', '7', '1', ['broadcaster/1'])).toBe('nothing');
+  });
+  it('keeps moderators apart, except for the broadcaster', () => {
+    expect(messageReach('moderator', '7', '8', ['moderator/1'])).toBe('nothing');
+    expect(messageReach('broadcaster', '1', '8', ['moderator/1'])).toBe('no_delete');
+    expect(messageReach('moderator', '7', '9', ['subscriber/12'])).toBe('all');
+    expect(messageReach(null, '7', '9', [])).toBe('nothing');
   });
 });

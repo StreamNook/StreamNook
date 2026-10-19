@@ -267,15 +267,30 @@ pub fn build(steps: &[ModStep], row_width: f32, start: f32, name: &str, length: 
 
 /// The slider for a press `start_x` points from the left of a message
 /// `row_width` points wide, from the viewer's saved steps, Length and Style;
-/// `target_name` names the chatter in the chip.
+/// `target_name` names the chatter in the chip. With the message's sender
+/// (`target_id`, `target_badges`) and the room (`channel`, its login) the
+/// steps are only those Twitch allows on it (`moderation::message_reach`):
+/// Delete alone on the viewer's own message, none on the broadcaster's.
 #[tauri::command]
-pub fn get_touch_mod_slider(
+pub async fn get_touch_mod_slider(
     provider: Option<String>,
     row_width: f64,
     start_x: Option<f64>,
     target_name: Option<String>,
+    target_id: Option<String>,
+    target_badges: Option<Vec<String>>,
+    channel: Option<String>,
 ) -> TouchSlider {
-    let steps = slider_steps_for(provider.as_deref(), None);
+    let mut steps = slider_steps_for(provider.as_deref(), None);
+    let mut reachable = true;
+    if let (Some(target), Some(channel)) = (target_id.filter(|t| !t.is_empty()), channel.filter(|c| !c.is_empty())) {
+        use crate::services::moderation::{message_reach, steps_within, MessageReach};
+        let role = crate::services::chat_send_limiter::budget(&channel).role;
+        let viewer = crate::services::chatter_card::own_user_id().await;
+        let reach = message_reach(role, &viewer, &target, &target_badges.unwrap_or_default());
+        steps = steps_within(steps, reach);
+        reachable = reach != MessageReach::Nothing;
+    }
     let (length, style, enabled) = crate::services::providers::setting(|s| {
         (s.chat_design.mod_slider_length.clone(), s.chat_design.mod_slider_style.clone(), s.chat_design.mod_slider)
     })
@@ -287,7 +302,7 @@ pub fn get_touch_mod_slider(
         target_name.as_deref().unwrap_or(""),
         &length,
         &style,
-        enabled,
+        enabled && reachable,
     )
 }
 

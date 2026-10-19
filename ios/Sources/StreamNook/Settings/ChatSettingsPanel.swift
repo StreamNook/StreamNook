@@ -13,6 +13,7 @@ struct ChatSettingsPanel: View {
         pollsAndPredictions
         chatsTab
         events
+        pinnedMessages
         layout
         names
         mentions
@@ -111,6 +112,20 @@ struct ChatSettingsPanel: View {
                     }
                 }
                 .padding(.top, 12)
+            }
+        }
+    }
+
+    // MARK: Pinned messages
+
+    private var pinnedMessages: some View {
+        SettingsBlock(title: "Pinned Messages", detail: "How a pinned message shows at the top of chat.") {
+            ToggleRow(title: "Collapsed", path: "chat_design.pinned_start_collapsed", fallback: true,
+                      detail: "Shows the pinned message as a compact one-line bar when you enter a channel.",
+                      help: "Tap the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely: Hidden keeps it out of chat until you open it from the chat menu.",
+                      showsNestedWhenOff: true) {
+                NestedChoice(title: "Style", path: "chat_design.pinned_collapsed_style",
+                             choices: [Choice("Bar", "bar"), Choice("Hidden", "hidden")], fallback: "bar")
             }
         }
     }
