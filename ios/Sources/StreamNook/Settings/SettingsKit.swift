@@ -289,8 +289,11 @@ struct NestedLine<Control: View>: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
+                // The name keeps its one line; a long menu label beside it ends in "..." first.
                 HStack(spacing: 12) {
                     SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen, font: .sn(12.5, 500), logo: logo)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
                     Spacer(minLength: 8)
                     control
                 }

@@ -6,10 +6,22 @@
 // from host components. It has to: the host stylesheet only holds the classes
 // the host itself uses, so markup a plugin styles on its own renders bare.
 
-import { useRef, useState, type ReactNode } from 'react';
+import {
+  cloneElement,
+  createContext,
+  isValidElement,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Plus, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
-import { ResetArrow } from '../settings/_primitives';
+import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
 import { IS_MOBILE } from '../../utils/platform';
 
 /** A long settings page that scrolls on its own, with the section rail beside
@@ -117,7 +129,10 @@ export function InlineSlider({
   onChange: (value: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    // On the phone the track flexes: beside a name it keeps a modest natural
+    // width, and on a line of its own it spans the line, with the value in a
+    // fixed column so the two never overlap.
+    <div className={IS_MOBILE ? 'flex w-full items-center gap-2' : 'flex items-center gap-2'}>
       <input
         type="range"
         min={min}
@@ -127,7 +142,7 @@ export function InlineSlider({
         disabled={disabled}
         aria-label={label}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-32 accent-accent"
+        className={IS_MOBILE ? 'min-w-0 flex-1 basis-28 accent-accent' : 'w-32 accent-accent'}
       />
       <span className="w-12 text-right text-[12px] tabular-nums text-textMuted">{format(value)}</span>
     </div>
@@ -137,8 +152,30 @@ export function InlineSlider({
 /** A row's own sub-controls (the settings under a choice like Custom), set in
  *  under a rule so they read as part of that row. Put SubControls inside. */
 export function SubControls({ children }: { children: ReactNode }) {
-  return <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>;
+  // On the phone the group's sliders decide together: when one has to go under
+  // its name, they all do, so their tracks start at the same place.
+  const [stackedSliders, setStackedSliders] = useState<ReadonlySet<string>>(new Set());
+  const report = useCallback((id: string, stacked: boolean) => {
+    setStackedSliders((prev) => {
+      if (prev.has(id) === stacked) return prev;
+      const next = new Set(prev);
+      if (stacked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const group = useMemo(() => ({ report, anySliderStacked: stackedSliders.size > 0 }), [report, stackedSliders]);
+  return (
+    <SubControlGroup.Provider value={group}>
+      <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>
+    </SubControlGroup.Provider>
+  );
 }
+
+const SubControlGroup = createContext<{
+  report: (id: string, stacked: boolean) => void;
+  anySliderStacked: boolean;
+} | null>(null);
 
 /** One line in SubControls: its name, and its control on the right. `stacked`
  *  puts the control under the name at full width, for a control too wide to
@@ -177,6 +214,9 @@ export function SubControl({
       </div>
     );
   }
+  if (IS_MOBILE) {
+    return <PhoneSubControl title={title} control={control} disabled={disabled} onReset={onReset} />;
+  }
   return (
     <div
       className={`flex items-center justify-between gap-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}
@@ -185,6 +225,88 @@ export function SubControl({
     >
       {name}
       <div className="shrink-0">{control}</div>
+    </div>
+  );
+}
+
+/** A sub-line on the phone: its name never shrinks or wraps, and a control
+ *  that cannot share the line with it goes under the name, a segmented one at
+ *  full width. The control's natural width is measured while it sits beside
+ *  the name and remembered, so the layout cannot flip back and forth. */
+function PhoneSubControl({
+  title,
+  control,
+  disabled,
+  onReset,
+}: {
+  title: string;
+  control: ReactNode;
+  disabled: boolean;
+  onReset?: () => void;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLDivElement>(null);
+  const partRef = useRef<HTMLSpanElement>(null);
+  const natural = useRef(0);
+  const under = useRef(false);
+  const [ownStack, setOwnStack] = useState(false);
+  const id = useId();
+  const group = useContext(SubControlGroup);
+  const isSlider = isValidElement(control) && control.type === InlineSlider;
+  const isSegmented = isValidElement(control) && control.type === SegmentedSelect;
+  const report = group?.report;
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const fit = () => {
+      const nameEl = nameRef.current;
+      const part = partRef.current;
+      if (!nameEl || !part) return;
+      // The control's natural width is only readable while it sits beside the
+      // name (its group can put it under too); the name sizes to its own text
+      // either way (w-fit). A segmented control is read by its track's own box:
+      // its sliding thumb can still sit where a full-width layout put it, which
+      // would inflate scrollWidth.
+      if (!under.current) {
+        const track = part.firstElementChild;
+        natural.current = isSegmented && track ? track.getBoundingClientRect().width : part.scrollWidth;
+      }
+      setOwnStack(nameEl.scrollWidth + 16 + natural.current > row.clientWidth);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, [isSegmented]);
+  useLayoutEffect(() => {
+    if (!report || !isSlider) return;
+    report(id, ownStack);
+    return () => report(id, false);
+  }, [report, isSlider, id, ownStack]);
+  const stack = ownStack || (isSlider && !!group?.anySliderStacked);
+  useLayoutEffect(() => {
+    under.current = stack;
+  }, [stack]);
+  const shown =
+    stack && isValidElement<{ fullWidth?: boolean }>(control) && control.type === SegmentedSelect
+      ? cloneElement(control, { fullWidth: true })
+      : control;
+  return (
+    <div
+      ref={rowRef}
+      className={`${stack ? 'space-y-2' : 'flex items-center gap-4'} ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+      // A settings search result can land on a nested line, as on a row.
+      data-setting-row={title}
+    >
+      <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[14px] font-medium text-textPrimary">
+        {title}
+        {onReset && <ResetArrow onReset={onReset} />}
+      </div>
+      <div className={stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'}>
+        <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
+          {shown}
+        </span>
+      </div>
     </div>
   );
 }
