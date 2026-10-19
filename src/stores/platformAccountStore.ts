@@ -43,6 +43,9 @@ export interface PlatformAccountState {
   /** The @handle, where a platform has one apart from the display name (TikTok,
    *  whose nicknames can be stylized past recognition). */
   handle: string | null;
+  /** This build can sign in to it here (Rust's roster says). Until the roster
+   *  answers nothing is offered, so a phone never shows a sign-in that fails. */
+  canSignIn: boolean;
   /** A connect/disconnect is in flight. Blocks a second one. */
   busy: boolean;
   /** What the connect flow is doing right now, shown instead of the subtitle. */
@@ -68,6 +71,7 @@ interface PlatformAccountStore {
 
 const IDLE: PlatformAccountState = {
   connected: false,
+  canSignIn: false,
   name: null,
   avatarUrl: null,
   id: null,
@@ -120,9 +124,10 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
   const applyRow = (provider: PlatformId, row: RosterAccount | undefined) => {
     if (!row) return;
     const connected = row.status === 'connected';
+    const canSignIn = row.can_sign_in === true;
     if (!connected) {
       const wasConnected = get()[provider].connected;
-      patch(provider, { connected, name: null, avatarUrl: null, id: null, handle: null });
+      patch(provider, { connected, canSignIn, name: null, avatarUrl: null, id: null, handle: null });
       // Deliberately NOT clearProvider here. A session dying mid-run must not
       // blank the sidebar: Kick liveness never needed the login (the sweep
       // runs on an app token) and the follow list survives backend-side for
@@ -136,6 +141,7 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     }
     patch(provider, {
       connected,
+      canSignIn,
       name: row.name,
       avatarUrl: row.avatar_url,
       id: row.account_id,

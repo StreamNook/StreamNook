@@ -28,12 +28,18 @@ import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 const PLATFORMS: PlatformId[] = ['kick', 'youtube', 'tiktok'];
 
 export default function PlatformAccountRows() {
+  // Only what this build can sign in to, plus anything already connected (so it
+  // can still be signed out).
+  const kick = usePlatformAccountStore((s) => s.kick.canSignIn || s.kick.connected);
+  const youtube = usePlatformAccountStore((s) => s.youtube.canSignIn || s.youtube.connected);
+  const tiktok = usePlatformAccountStore((s) => s.tiktok.canSignIn || s.tiktok.connected);
+  const offered: Record<PlatformId, boolean> = { kick, youtube, tiktok };
   return (
     <div className="space-y-1.5">
       <p className="text-[11px] font-medium uppercase tracking-wide text-textMuted">
         Other platforms
       </p>
-      {PLATFORMS.map((p) => (
+      {PLATFORMS.filter((p) => offered[p]).map((p) => (
         <PlatformRow key={p} provider={p} />
       ))}
       <p className="text-xs text-textMuted">

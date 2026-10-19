@@ -249,6 +249,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
     const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
     const tiktokConnected = usePlatformAccountStore((s) => s.tiktok.connected);
+    // Only the sign-ins this build can run were offered (Rust's roster says which).
+    const kickOffered = usePlatformAccountStore((s) => s.kick.canSignIn);
+    const youtubeOffered = usePlatformAccountStore((s) => s.youtube.canSignIn);
+    const tiktokOffered = usePlatformAccountStore((s) => s.tiktok.canSignIn);
 
     const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState } = useAppStore();
     const unlistenRefs = useRef<Array<() => void>>([]);
@@ -1155,15 +1159,15 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
 
             case 8: {
                 // Every sign-in the wizard offered, by name and logo: the accounts
-                // step offers Kick, YouTube and TikTok beside Twitch.
+                // step offers, beside Twitch, the platforms this build can sign in to.
                 const platformRow = (provider: ProviderId, ok: boolean) =>
                     ({ ok, label: PROVIDERS[provider].label, provider });
                 const rows: Array<{ ok: boolean; pending?: boolean; label: string; provider?: ProviderId }> = [
                     platformRow('twitch', status.mainAuthenticated),
                     { ok: status.dropsAuthenticated, label: 'Drops sign-in' },
-                    platformRow('kick', kickConnected),
-                    platformRow('youtube', youtubeConnected),
-                    platformRow('tiktok', tiktokConnected),
+                    ...(kickOffered || kickConnected ? [platformRow('kick', kickConnected)] : []),
+                    ...(youtubeOffered || youtubeConnected ? [platformRow('youtube', youtubeConnected)] : []),
+                    ...(tiktokOffered || tiktokConnected ? [platformRow('tiktok', tiktokConnected)] : []),
                     // Whisper import is a step mobile never shows, so reporting
                     // it as "skipped" on the summary named something the phone
                     // had not offered to do in the first place, which reads as a

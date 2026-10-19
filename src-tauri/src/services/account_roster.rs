@@ -51,6 +51,17 @@ pub struct RosterAccount {
     /// Why this account has to sign in again, when StreamNook signed it out
     /// itself. Only Twitch carries one today (`twitch_signin`).
     pub reason: Option<SignInReason>,
+    /// This build can sign in to it here. YouTube and TikTok sign in through a desktop webview
+    /// only, so the phones offer them nowhere until their own sign-in lands.
+    pub can_sign_in: bool,
+}
+
+/// Whether this build can run `id`'s sign-in.
+pub fn can_sign_in(id: &str) -> bool {
+    match id {
+        "youtube" | "tiktok" => cfg!(desktop),
+        _ => true,
+    }
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
@@ -157,6 +168,7 @@ fn empty(id: &'static str, status: AccountStatus) -> RosterAccount {
         avatar_url: None,
         account_id: None,
         reason: None,
+        can_sign_in: can_sign_in(id),
     }
 }
 
@@ -203,6 +215,7 @@ async fn platform_row(id: &'static str) -> RosterAccount {
         avatar_url,
         account_id,
         reason: None,
+        can_sign_in: can_sign_in(id),
     }
 }
 
@@ -230,6 +243,7 @@ fn twitch_row_from(identity: Option<UserInfo>, reason: Option<SignInReason>) -> 
             avatar_url: user.profile_image_url,
             account_id: Some(user.id),
             reason: None,
+            can_sign_in: true,
         },
         None => empty("twitch", AccountStatus::NotConnected),
     }
@@ -297,6 +311,13 @@ pub fn notify() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn youtube_and_tiktok_sign_in_only_where_the_build_can() {
+        assert!(can_sign_in("twitch") && can_sign_in("kick") && can_sign_in("twitch_drops"));
+        assert_eq!(can_sign_in("youtube"), cfg!(desktop));
+        assert_eq!(can_sign_in("tiktok"), cfg!(desktop));
+    }
 
     #[test]
     fn expired_clears_on_reconnect() {

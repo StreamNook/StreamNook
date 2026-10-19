@@ -807,6 +807,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const tiktokConnected = usePlatformAccountStore(
     (s) => provider === 'tiktok' && s.tiktok.connected,
   );
+  // The sign-in chips offer only what this build can sign in to (Rust's roster).
+  const youtubeCanSignIn = usePlatformAccountStore((s) => s.youtube.canSignIn);
+  const tiktokCanSignIn = usePlatformAccountStore((s) => s.tiktok.canSignIn);
   const connectPlatformAccount = usePlatformAccountStore((s) => s.connect);
   // YouTube exposes no "are you a mod" flag, so the backend probes a message's
   // context menu. This one is a REAL network probe, not a local read, so it stays
@@ -6038,7 +6041,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 />
               </div>
             )}
-            {isMainSurface && provider === 'youtube' && !youtubeConnected && (
+            {isMainSurface && provider === 'youtube' && !youtubeConnected && youtubeCanSignIn && (
               <div className="mt-2 flex justify-end">
                 <PlatformAccountChip
                   provider="youtube"
@@ -6047,7 +6050,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 />
               </div>
             )}
-            {isMainSurface && provider === 'tiktok' && !tiktokConnected && (
+            {isMainSurface && provider === 'tiktok' && !tiktokConnected && tiktokCanSignIn && (
               <div className="mt-2 flex justify-end">
                 <PlatformAccountChip
                   provider="tiktok"

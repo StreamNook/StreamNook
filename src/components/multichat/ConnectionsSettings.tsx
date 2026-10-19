@@ -69,6 +69,14 @@ export default function ConnectionsSettings() {
   const kickFollowCount = follows.filter((f) => f.provider === 'kick').length;
   const youtubeFollowCount = follows.filter((f) => f.provider === 'youtube').length;
 
+  // A platform whose sign-in this build cannot run, and that is not connected,
+  // has nothing to do here (YouTube and TikTok sign in on desktop only).
+  const offered = (p: ProviderId): boolean => {
+    if (p === 'youtube') return youtube.canSignIn || youtube.connected;
+    if (p === 'tiktok') return tiktok.canSignIn || tiktok.connected;
+    return true;
+  };
+
   const statusFor = (p: ProviderId): Status => {
     if (p === 'twitch') return 'native';
     if (p === 'kick') return kickConnected ? 'connected' : 'disconnected';
@@ -118,7 +126,7 @@ export default function ConnectionsSettings() {
       </p>
 
       <div className="hairline-y overflow-hidden rounded-lg border border-borderSubtle">
-        {PROVIDER_IDS.map((p) => {
+        {PROVIDER_IDS.filter((p) => offered(p)).map((p) => {
           const meta = PROVIDERS[p];
           const status = statusFor(p);
           return (
