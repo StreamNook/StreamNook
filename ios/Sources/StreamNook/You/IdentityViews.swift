@@ -127,9 +127,11 @@ struct BrandTile: View {
     var size: CGFloat = 44
 
     var body: some View {
+        // The operating system marks have no brand color; their tile takes the text's.
+        let tint = platform.color ?? SN.textPrimary
         Circle()
-            .fill(platform.color.opacity(0.14))
-            .overlay { Circle().strokeBorder(platform.color.opacity(0.22), lineWidth: 1) }
+            .fill(tint.opacity(0.14))
+            .overlay { Circle().strokeBorder(tint.opacity(0.22), lineWidth: 1) }
             .overlay { PlatformMark(platform: platform, size: size * (platform == .sevenTV ? 0.3 : 0.42)) }
             .frame(width: size, height: size)
     }

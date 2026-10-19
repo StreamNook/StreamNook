@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 /// A platform's or badge service's own logo beside its name, from the desktop's art: the vector
-/// marks `ProviderLogo` draws (Twitch, Kick, 7TV, BTTV, FFZ) in their brand color, the rest as the
-/// bundled images in `Logos/` (YouTube, TikTok, Chatterino, Homies, Moltorino, Chatsen, Chatty,
-/// DankChat, StreamNook).
+/// marks `ProviderLogo` draws (Twitch, Kick, 7TV, BTTV, FFZ) in their brand color, the operating
+/// systems' one-color marks (`SystemMark`), the rest as the bundled images in `Logos/` (YouTube,
+/// TikTok, Chatterino, Homies, Moltorino, Chatsen, Chatty, DankChat, StreamNook).
 struct BrandLogo: View {
     let id: String
     var size: CGFloat = 16
@@ -13,6 +13,11 @@ struct BrandLogo: View {
         switch id {
         case "twitch", "kick", "7tv", "seventv", "bttv", "ffz":
             ProviderLogo(provider: id == "seventv" ? "7tv" : id, size: size, tinted: true)
+        // One color, in the title's own.
+        case "windows": SystemMark(platform: .windows, size: size).foregroundStyle(SN.textPrimary)
+        case "apple", "macos", "ios": SystemMark(platform: .apple, size: size).foregroundStyle(SN.textPrimary)
+        case "linux": SystemMark(platform: .linux, size: size).foregroundStyle(SN.textPrimary)
+        case "android": SystemMark(platform: .android, size: size).foregroundStyle(SN.textPrimary)
         default:
             if let image = Self.image(id) {
                 Image(uiImage: image).resizable().interpolation(.high).scaledToFit()

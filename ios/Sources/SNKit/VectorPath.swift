@@ -2,8 +2,8 @@ import Foundation
 
 /// SVG path data read into drawing steps, so logo artwork the desktop draws from SVG can be
 /// drawn natively at any size. Reads moves, lines, horizontal and vertical lines, cubic and
-/// quadratic curves (with their smooth forms) and closes, absolute and relative. Arcs are not
-/// read: no logo the app draws uses one.
+/// quadratic curves (with their smooth forms), elliptical arcs (as cubic curves) and closes,
+/// absolute and relative.
 public enum VectorPath {
     public struct Point: Equatable, Sendable {
         public var x: Double
@@ -65,7 +65,7 @@ public enum VectorPath {
     }
 
     public static func parse(_ data: String) -> [Step] {
-        let tokens = tokens(data)
+        var tokens = tokens(data)
         var steps: [Step] = []
         var index = 0
         var command: Character = "M"
@@ -82,6 +82,14 @@ public enum VectorPath {
         func point(_ relative: Bool) -> Point {
             let p = Point(number(), number())
             return relative ? current + p : p
+        }
+        // An arc's flags are one digit each and may run into what follows ("0 01.5 2" is
+        // flags 0 and 1, then 1.5), so a flag takes one character and leaves the rest.
+        func flag() -> Bool {
+            guard index < tokens.count, let first = tokens[index].first else { return false }
+            let rest = tokens[index].dropFirst()
+            if rest.isEmpty { index += 1 } else { tokens[index] = String(rest) }
+            return first == "1"
         }
 
         while index < tokens.count {
@@ -149,10 +157,73 @@ public enum VectorPath {
                 current = to
                 lastQuad = c
                 lastCubic = nil
+            case "A", "a":
+                let rx = number(), ry = number(), rotation = number()
+                let large = flag(), sweep = flag()
+                let to = point(relative)
+                steps += arc(from: current, to: to, rx: rx, ry: ry, rotation: rotation, large: large, sweep: sweep)
+                current = to
+                lastCubic = nil
+                lastQuad = nil
             default:
                 // Unknown command: skip its token so the read always ends.
                 index += 1
             }
+        }
+        return steps
+    }
+
+    /// An elliptical arc as cubic curves of at most a quarter turn each, by the endpoint to center
+    /// conversion in the SVG spec (implementation notes, F.6.5 and F.6.6).
+    static func arc(from start: Point, to end: Point, rx: Double, ry: Double, rotation: Double,
+                    large: Bool, sweep: Bool) -> [Step] {
+        if start == end { return [] }
+        var rx = abs(rx), ry = abs(ry)
+        if rx == 0 || ry == 0 { return [.line(end)] }
+        let phi = rotation * .pi / 180
+        let cosPhi = cos(phi), sinPhi = sin(phi)
+        let dx = (start.x - end.x) / 2, dy = (start.y - end.y) / 2
+        let x1 = cosPhi * dx + sinPhi * dy
+        let y1 = -sinPhi * dx + cosPhi * dy
+        // Radii too small to reach the end grow just enough to.
+        let reach = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
+        if reach > 1 {
+            rx *= reach.squareRoot()
+            ry *= reach.squareRoot()
+        }
+        let num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1
+        let den = rx * rx * y1 * y1 + ry * ry * x1 * x1
+        let coef = (large != sweep ? 1.0 : -1.0) * max(0, num / den).squareRoot()
+        let cx1 = coef * rx * y1 / ry
+        let cy1 = -coef * ry * x1 / rx
+        let cx = cosPhi * cx1 - sinPhi * cy1 + (start.x + end.x) / 2
+        let cy = sinPhi * cx1 + cosPhi * cy1 + (start.y + end.y) / 2
+
+        func angle(_ ux: Double, _ uy: Double, _ vx: Double, _ vy: Double) -> Double {
+            atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+        }
+        let ux = (x1 - cx1) / rx, uy = (y1 - cy1) / ry
+        let vx = (-x1 - cx1) / rx, vy = (-y1 - cy1) / ry
+        let theta = angle(1, 0, ux, uy)
+        var delta = angle(ux, uy, vx, vy)
+        if !sweep, delta > 0 { delta -= 2 * .pi }
+        if sweep, delta < 0 { delta += 2 * .pi }
+
+        func point(_ a: Double) -> Point {
+            Point(cx + rx * cos(a) * cosPhi - ry * sin(a) * sinPhi, cy + rx * cos(a) * sinPhi + ry * sin(a) * cosPhi)
+        }
+        func tangent(_ a: Double) -> Point {
+            Point(-rx * sin(a) * cosPhi - ry * cos(a) * sinPhi, -rx * sin(a) * sinPhi + ry * cos(a) * cosPhi)
+        }
+        let count = max(1, Int((abs(delta) / (.pi / 2)).rounded(.up)))
+        let step = delta / Double(count)
+        let k = 4.0 / 3.0 * tan(step / 4)
+        var steps: [Step] = []
+        for i in 0..<count {
+            let a1 = theta + Double(i) * step, a2 = a1 + step
+            let p1 = point(a1), t1 = tangent(a1), t2 = tangent(a2)
+            let p2 = i == count - 1 ? end : point(a2)
+            steps.append(.cubic(Point(p1.x + k * t1.x, p1.y + k * t1.y), Point(p2.x - k * t2.x, p2.y - k * t2.y), p2))
         }
         return steps
     }
