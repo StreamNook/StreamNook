@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Clock, Prohibit, Trash, X } from 'phosphor-react';
+import { Clock, Prohibit, Trash } from 'phosphor-react';
 
 import { useAppStore } from '../../stores/AppStore';
 
@@ -118,7 +118,6 @@ interface Geometry {
   spacing: number;
   /** Each step's middle, from the row's left edge (rail). */
   centers: number[];
-  cancelCenter: number;
   /** Where each step starts and where the steps end, from the row's left
    *  edge (the preview's track). */
   ticks: number[];
@@ -236,14 +235,10 @@ function stepLabel(step: ModStep, suffix?: string): ReactNode {
   );
 }
 
-/** A release that does nothing, in words. */
+/** A release that does nothing, in words. Words only: an X in a pill reads
+ *  as a button, and nothing here can be pressed. */
 function cancelLabel(): ReactNode {
-  return (
-    <>
-      <X size={12} weight="bold" />
-      Let go to cancel
-    </>
-  );
+  return 'Let go to cancel';
 }
 
 /** A step's mark on the rail: Delete and Ban by icon (Ban named too, it has
@@ -503,7 +498,6 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
       origin,
       spacing,
       centers: ruler.map((x, i) => origin + x + (i === ruler.length - 1 ? lastZone : spacing) / 2),
-      cancelCenter: origin + dead / 2,
       ticks: ruler.map((x) => origin + x),
       trackStart: origin + dead,
       trackEnd: origin + end,
@@ -662,12 +656,6 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
       )}
       {layer && dragLook === 'rail' && (
         <div aria-hidden="true" className={`sn-mod-layer sn-mod-rail${railDots ? ' is-dots' : ''}`}>
-          <span
-            className={`sn-mod-rail-mark${step === CANCEL_ZONE ? ' is-on' : ''}`}
-            style={{ transform: `translateX(${layer.geom.cancelCenter}px)` }}
-          >
-            <X size={12} weight="bold" />
-          </span>
           {layer.steps.map((s, i) => (
             <span
               key={`${s.action}-${s.seconds ?? ''}`}
@@ -681,16 +669,15 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
           {/* A hairline under the pointer, so the rail feels held; the pill
               covers it. */}
           <span className="sn-mod-rail-needle" />
-          {/* The lit pill: centered on the armed step, it snaps there; on
-              the cancel mark while a release does nothing. */}
-          <span
-            className="sn-mod-rail-thumb"
-            style={{ transform: `translateX(${current && step != null ? layer.geom.centers[step] : layer.geom.cancelCenter}px)` }}
-          >
-            <span className="sn-mod-rail-thumb-in">
-              {current ? current.action === 'delete' ? <Trash size={12} weight="bold" /> : stepLabel(current) : <X size={12} weight="bold" />}
+          {/* The lit pill: centered on the armed step, it snaps there. None
+              while a release does nothing (the chip says so). */}
+          {current && step != null && (
+            <span className="sn-mod-rail-thumb" style={{ transform: `translateX(${layer.geom.centers[step]}px)` }}>
+              <span className="sn-mod-rail-thumb-in">
+                {current.action === 'delete' ? <Trash size={12} weight="bold" /> : stepLabel(current)}
+              </span>
             </span>
-          </span>
+          )}
         </div>
       )}
       {layer && dragLook === 'capsule' && (
@@ -699,13 +686,11 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
             {arming && <span key={armSeq} className="sn-mod-cap-dwell" style={{ animationDuration: `${BAN_DWELL_MS}ms` }} />}
             <span className="sn-mod-odo">
               <span className="sn-mod-odo-stack" style={{ transform: `translateY(${-((step ?? -1) < 0 ? 0 : (step ?? 0) + 1) * ODO_LINE_PX}px)` }}>
-                {/* Cancel is the X alone (the chip says it in words); Ban
+                {/* Cancel is a blank line (the chip says it in words); Ban
                     names who it bans, since the message has slid aside. */}
                 {[null, ...layer.steps].map((s, i) => (
                   <span key={i} className="sn-mod-odo-line">
-                    {!s ? (
-                      <X size={12} weight="bold" />
-                    ) : s.action === 'ban' && target.targetName ? (
+                    {!s ? null : s.action === 'ban' && target.targetName ? (
                       stepLabel(s, ` ${target.targetName}`)
                     ) : (
                       stepLabel(s)

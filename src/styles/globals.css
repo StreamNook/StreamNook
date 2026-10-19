@@ -5482,11 +5482,6 @@ html[data-watching] .drops-progress-inline {
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
-[data-mod-slide='rail']:not([data-mod-armed]) .sn-mod-rail-thumb-in {
-  background: color-mix(in srgb, var(--color-text-secondary) 22%, transparent);
-  color: var(--color-text-primary);
-  box-shadow: none;
-}
 .sn-mod-rail-needle {
   position: absolute;
   inset-block: 3px;
