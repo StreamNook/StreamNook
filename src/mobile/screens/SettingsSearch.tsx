@@ -2,15 +2,18 @@
 // while nothing is typed. Rust ranks the rows (`search_settings`, the same
 // catalog the iPhone reads: titles, aliases, sections and descriptions), so
 // this only draws the answer and opens the page a hit lives on.
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { createElement, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { ChevronRight } from 'lucide-react';
 import { useMobileNavStore } from '../navStore';
 import { SearchField } from '../ui/SearchField';
+import { GROUP_ICON, GROUP_ICON_STROKE, GroupCard, GroupIcon, GroupRow } from '../ui/GroupedList';
+import { useGroupRowFrame } from '../ui/groupSurface';
 import EmoteProviderLogo, { type EmoteProviderId } from '../../components/chat/EmoteProviderLogo';
 import { SETTINGS_ROWS } from './SettingsScreen';
-import { catalogRowKey, openCatalogRow, pageViewOf, rowPlace, type CatalogRow } from './settingsCatalog';
+import { settingIcon } from './settingsIcons';
+import { catalogRowKey, openCatalogRow, rowPlace, type CatalogRow } from './settingsCatalog';
 import { Logger } from '../../utils/logger';
 
 const EMOTE_LOGOS: readonly string[] = ['7tv', 'ffz', 'bttv'];
@@ -200,59 +203,76 @@ export const SettingsDirectory: React.FC = () => {
         />
       </div>
 
-      <div className="px-3" style={searching ? { minHeight: '100dvh' } : undefined}>
+      {/* The pages and the hits both sit on the grouped card the settings
+          pages use, so the list reads the same before and after a tap. */}
+      <div className="px-4" style={searching ? { minHeight: '100dvh' } : undefined}>
         {!trimmed ? (
-          SETTINGS_ROWS.map(({ id, label, icon: Icon, description }) => (
-            <button
-              key={id}
-              onClick={() => openSettings(id)}
-              className="w-full flex items-center gap-3 px-3 py-3 rounded-lg active:bg-surface-active text-left"
-            >
-              <Icon size={20} className="text-textSecondary shrink-0" />
-              <span className="flex-1 min-w-0">
-                <span className="block text-[15px] font-medium text-textPrimary">{label}</span>
-                <FittedLine text={description} className="text-[12.5px] text-textMuted" />
-              </span>
-              <ChevronRight size={16} className="text-textMuted shrink-0" />
-            </button>
-          ))
+          <GroupCard>
+            {SETTINGS_ROWS.map(({ id, label, icon, description }) => (
+              <GroupRow
+                key={id}
+                onClick={() => openSettings(id)}
+                icon={createElement(icon, {
+                  size: GROUP_ICON,
+                  strokeWidth: GROUP_ICON_STROKE,
+                  className: 'text-textSecondary',
+                })}
+                detail={<FittedLine text={description} className="" />}
+                trailing={
+                  <span className="flex h-6 shrink-0 items-center self-start">
+                    <ChevronRight size={16} className="text-textMuted" />
+                  </span>
+                }
+              >
+                {label}
+              </GroupRow>
+            ))}
+          </GroupCard>
         ) : shown === null ? null : shown.length === 0 && answered ? (
           <p className="px-6 py-6 text-center text-[14px] font-medium text-textSecondary">
             No setting matches &ldquo;{trimmed}&rdquo;.
           </p>
         ) : (
-          shown.map((row) => <SearchHit key={catalogRowKey(row)} row={row} onOpen={openHit} />)
+          <GroupCard>
+            {shown.map((row) => (
+              <SearchHit key={catalogRowKey(row)} row={row} onOpen={openHit} />
+            ))}
+          </GroupCard>
         )}
       </div>
     </div>
   );
 };
 
-/** One hit: its page's icon, the title (a brand mark leading it where the row
+/** One hit: the row's own glyph (the one it wears on its page; a nested line
+ *  wears its parent row's), the title (a brand mark leading it where the row
  *  is about one service), where it lives, and its one-line description. */
 const SearchHit: React.FC<{ row: CatalogRow; onOpen: (row: CatalogRow) => void }> = ({ row, onOpen }) => {
-  const view = pageViewOf(row.page);
-  const Icon = SETTINGS_ROWS.find((r) => r.id === view)?.icon;
+  const frame = useGroupRowFrame();
   return (
     <button
+      type="button"
       onClick={() => onOpen(row)}
-      className="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg active:bg-surface-active text-left"
+      className={`${frame} flex items-start gap-3 py-2.5 text-left active:opacity-70`}
     >
-      {/* Icon and chevron sit on the title's line, not the block's middle. */}
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-        {Icon && <Icon size={20} className="text-textSecondary" />}
-      </span>
+      {/* Glyph and chevron sit on the title's line, not the block's middle. */}
+      <GroupIcon className="text-textSecondary">
+        {createElement(settingIcon(row.section, row.under ?? row.title), {
+          size: GROUP_ICON,
+          strokeWidth: GROUP_ICON_STROKE,
+        })}
+      </GroupIcon>
       <span className="flex-1 min-w-0">
-        <span className="block truncate text-[15px] font-medium leading-5 text-textPrimary">
+        <span className="block truncate text-[15px] leading-6 text-textPrimary">
           <CatalogLogo logo={row.logo} />
           {row.title}
         </span>
         {/* Where it lives, in the description's quiet color: the title is the
             one bright line of a hit. */}
-        <FittedLine text={rowPlace(row)} className="text-[12.5px] font-medium text-textMuted" />
-        {row.detail && <FittedLine text={row.detail} className="text-[12.5px] text-textMuted" />}
+        <FittedLine text={rowPlace(row)} className="text-[13px] leading-[18px] font-medium text-textMuted" />
+        {row.detail && <FittedLine text={row.detail} className="text-[13px] leading-[18px] text-textMuted" />}
       </span>
-      <span className="flex h-5 shrink-0 items-center">
+      <span className="flex h-6 shrink-0 items-center">
         <ChevronRight size={16} className="text-textMuted" />
       </span>
     </button>
