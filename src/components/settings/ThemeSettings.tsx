@@ -639,9 +639,10 @@ const ThemeSettings = () => {
                         onReset={resetGlass}
                         control={<span className="text-[13px] text-textMuted font-mono">{liveGlass}%</span>}
                     >
-                        {/* Held to the width a settings slider is capped at, so
-                            Solid and Frosted glass sit under its two ends. */}
-                        <div className="space-y-1.5 max-w-[15rem]">{glassSlider}</div>
+                        {/* Full width under the row, as the phone's other
+                            sliders run; Solid and Frosted glass sit under its
+                            two ends. */}
+                        <div className="space-y-1.5">{glassSlider}</div>
                     </SettingsRow>
                     <SettingsRow
                         title="Font"

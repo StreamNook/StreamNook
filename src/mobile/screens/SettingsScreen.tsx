@@ -76,7 +76,7 @@ export const SETTINGS_ROWS: {
     icon: SlidersHorizontal,
     description: 'Everything you set differently from a fresh install',
   },
-  { id: 'Backup', label: 'Backup', icon: History, description: 'Daily copies of your settings, and restore' },
+  { id: 'Backup', label: 'Backup', icon: History, description: 'Daily copies, restore, and a file you can keep' },
   { id: "What's New", label: "What's New", icon: Sparkles, description: 'Recent releases' },
 ];
 

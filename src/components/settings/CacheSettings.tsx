@@ -23,8 +23,16 @@ const CacheSettings = () => {
         <SettingsRow
           title="Disk cache"
           onReset={resetFor(['cache.enabled', true])}
-          description="Loads emotes and badges from disk: a copy is stored on this device after the first download so later channel loads are near instant. Off means every launch fetches them again."
-          help="Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that."
+          description={
+            IS_MOBILE
+              ? 'Keeps emotes and badges on this phone so channels load near instantly.'
+              : 'Loads emotes and badges from disk: a copy is stored on this device after the first download so later channel loads are near instant. Off means every launch fetches them again.'
+          }
+          help={
+            IS_MOBILE
+              ? 'A copy is stored after the first download; off fetches them again on every launch. Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.'
+              : 'Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.'
+          }
           control={
             <Toggle
               enabled={settings.cache?.enabled ?? true}
@@ -62,7 +70,12 @@ const CacheSettings = () => {
 
         <SettingsRow
           title="Storage"
-          description="View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh."
+          description={
+            // The phone has no Open folder button: its cache is app-private.
+            IS_MOBILE
+              ? 'View cache info shows a count of what is on disk, and Clear cache deletes every stored emote and badge so they download fresh.'
+              : 'View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.'
+          }
           help="Clearing is safe and does not touch your settings or login. Chat will feel slower for the first visit to each channel while the cache refills."
         >
           <div className="flex gap-2">

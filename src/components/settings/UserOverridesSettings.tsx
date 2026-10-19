@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { clearUserOverride } from '../../utils/userChatOverrides';
 import { SettingsSection } from './_primitives';
 import type { UserChatOverride } from '../../types';
+import { IS_MOBILE } from '../../utils/platform';
 
 const UserOverridesSettings = () => {
   const overrides = useAppStore((s) => s.settings.chat_customization?.user_overrides);
@@ -26,7 +27,7 @@ const UserOverridesSettings = () => {
       {entries.length === 0 ? (
         <div className="bg-glass/30 rounded-lg px-4 py-6 text-center">
           <p className="text-sm text-textSecondary">
-            No overrides yet. Click any user's name in chat to open their profile card, then set a nickname.
+            No overrides yet. {IS_MOBILE ? 'Tap' : 'Click'} any user's name in chat to open their profile card, then set a nickname.
           </p>
         </div>
       ) : (
