@@ -28,6 +28,14 @@ public enum SettingsPath {
         guard let number = value as? NSNumber, String(cString: number.objCType) != "c" else { return nil }
         return number.doubleValue
     }
+
+    /// A picked choice's text as the number a numeric setting stores: a whole number as an Int, since
+    /// the core reads `300.0` as no `u32` and refuses the whole save. Nil when the text is no number.
+    public static func number(_ text: String) -> Any? {
+        guard let value = Double(text) else { return nil }
+        if value.rounded() == value, let whole = Int(exactly: value) { return whole }
+        return value
+    }
 }
 
 /// One edit to a settings list, in the shape the core's `edit_settings_list` reads.

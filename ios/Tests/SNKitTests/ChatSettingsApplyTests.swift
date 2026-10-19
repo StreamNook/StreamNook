@@ -101,6 +101,18 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
         #expect(filtered.hiddenEvents == ["twitch:raid"])
     }
 
+    /// A numeric choice ("Text weight", the alert check interval) saves as the number the core's
+    /// field holds: a whole number as an Int, since the core refuses `300.0` for a `u32` and with it
+    /// the whole save.
+    @Test func aNumericChoiceSavesAsAWholeNumber() throws {
+        let weight = try #require(SettingsPath.number("300"))
+        #expect(weight as? Int == 300)
+        let encoded = try JSONSerialization.data(withJSONObject: ["chat_design.font_weight": weight])
+        #expect(String(decoding: encoded, as: UTF8.self) == #"{"chat_design.font_weight":300}"#)
+        #expect(SettingsPath.number("1.5") as? Double == 1.5)
+        #expect(SettingsPath.number("slide") == nil)
+    }
+
     /// Event rows of a hidden kind are hidden on their platform only; ordinary messages never are.
     @Test func hiddenEventKindsMatchByPlatformAndCategory() {
         let gift = ChatMessage(id: "1", username: "a", content: "", tags: ["msg-id": "submysterygift"])

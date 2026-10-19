@@ -136,7 +136,8 @@ struct ChatSettingsPanel: View {
             ChoiceRow(title: "Text weight", path: "chat_design.font_weight",
                       choices: [Choice("Light (300)", "300"), Choice("Normal (400)", "400"), Choice("Medium (500)", "500"),
                                 Choice("Semi-Bold (600)", "600"), Choice("Bold (700)", "700")],
-                      fallback: "400", menu: true, detail: "How heavy the message text is, from light to bold.", accessibility: "Font weight")
+                      fallback: "400", menu: true, numeric: true,
+                      detail: "How heavy the message text is, from light to bold.", accessibility: "Font weight")
             ChoiceRow(title: "Message animation", path: "chat_design.message_entrance",
                       choices: [Choice("Instant", "none"), Choice("Fade", "fade"), Choice("Slide", "slide"), Choice("Rise", "rise")],
                       fallback: "slide",

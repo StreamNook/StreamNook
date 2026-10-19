@@ -52,6 +52,8 @@ struct ChoiceRow<Nested: View>: View {
     let choices: [Choice]
     var fallback: String?
     var menu = false
+    /// The setting is a number: the picked choice is stored as one, never as its text.
+    var numeric = false
     var detail: String?
     var help: String?
     var detailFor: ((String?) -> String)?
@@ -65,10 +67,11 @@ struct ChoiceRow<Nested: View>: View {
         WideRow(title: title, detail: detailFor?(raw) ?? detail, help: help, paths: resetPaths ?? [path]) {
             Group {
                 if menu {
-                    SettingMenu(path: path, choices: choices, fallback: fallback, accessibility: accessibility ?? title)
+                    SettingMenu(path: path, choices: choices, fallback: fallback, accessibility: accessibility ?? title,
+                                numeric: numeric)
                 } else {
                     SettingSegmentsBound(path: path, choices: choices, fallback: fallback,
-                                         accessibility: accessibility ?? title, shown: shown)
+                                         accessibility: accessibility ?? title, shown: shown, numeric: numeric)
                 }
             }
             .padding(.top, 12)
@@ -86,11 +89,11 @@ struct ChoiceRow<Nested: View>: View {
 
 extension ChoiceRow where Nested == EmptyView {
     init(title: String, path: String, choices: [Choice], fallback: String? = nil, menu: Bool = false,
-         detail: String? = nil, help: String? = nil, detailFor: ((String?) -> String)? = nil,
+         numeric: Bool = false, detail: String? = nil, help: String? = nil, detailFor: ((String?) -> String)? = nil,
          accessibility: String? = nil, shown: ((String?) -> String?)? = nil, resetPaths: [String]? = nil) {
-        self.init(title: title, path: path, choices: choices, fallback: fallback, menu: menu, detail: detail, help: help,
-                  detailFor: detailFor, accessibility: accessibility, shown: shown, resetPaths: resetPaths,
-                  nested: { EmptyView() })
+        self.init(title: title, path: path, choices: choices, fallback: fallback, menu: menu, numeric: numeric,
+                  detail: detail, help: help, detailFor: detailFor, accessibility: accessibility, shown: shown,
+                  resetPaths: resetPaths, nested: { EmptyView() })
     }
 }
 
