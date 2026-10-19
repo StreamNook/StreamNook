@@ -14,6 +14,8 @@ final class WalletModel {
     private(set) var pops: [Pop] = []
     private(set) var claimingChest = false
     var sheetOpen = false
+    /// Show gains is Bonus chest only; the button keeps it in step with the room's chat style.
+    var chestOnly = false
     /// A reward whose detail the sheet opens on (drive steps).
     var pendingReward: String?
     /// Wallets on screen, by login (drive steps).
@@ -84,6 +86,7 @@ final class WalletModel {
         }
         guard seq > seen, let gain else { return }
         seenSeq = seq
+        guard gain.floats(chestOnly: chestOnly) else { return }
         pops.append(Pop(id: seq, amount: gain.amount))
     }
 

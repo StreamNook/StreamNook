@@ -88,6 +88,7 @@ struct WalletButton: View {
         }
         .buttonStyle(.plain)
         .onChange(of: wallet.pops.first?.id) { _, id in if id != nil { pulse += 1 } }
+        .onChange(of: session.style.walletGainsChestOnly, initial: true) { _, only in wallet.chestOnly = only }
         .accessibilityLabel(label(wallet))
         .accessibilityHint(wallet.chestWaiting ? "Collects the bonus chest and opens the wallet" : "Opens the wallet")
     }

@@ -102,4 +102,17 @@ import Testing
         #expect(!style(#"{"hide_points_balance":true}"#).walletBalanceShown)
         #expect(!style(#"{"show_points_balance_inline":true,"hide_points_balance":true}"#).walletBalanceShown)
     }
+
+    @Test func showGainsBonusChestOnlyFloatsJustTheChest() {
+        let chest = WalletGain(seq: 2, amount: 50, reason: "from the bonus chest", chest: true)
+        let watching = WalletGain(seq: 3, amount: 10, reason: "for watching", chest: false)
+        let chestOnly = style(#"{"wallet_gains":"chest"}"#)
+        #expect(chestOnly.walletGainsChestOnly)
+        #expect(chest.floats(chestOnly: chestOnly.walletGainsChestOnly))
+        #expect(!watching.floats(chestOnly: chestOnly.walletGainsChestOnly))
+        // Every gain is the default, and what any other saved value reads as.
+        #expect(!style("{}").walletGainsChestOnly)
+        #expect(!style(#"{"wallet_gains":"all"}"#).walletGainsChestOnly)
+        #expect(watching.floats(chestOnly: false))
+    }
 }
