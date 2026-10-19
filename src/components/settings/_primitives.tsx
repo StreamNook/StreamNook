@@ -181,7 +181,7 @@ const PhoneSettingsRow = ({
               looked-up tag reads to the compiler as a component made in render. */}
           {createElement(glyph, { size: GROUP_ICON, strokeWidth: GROUP_ICON_STROKE })}
         </GroupIcon>
-        <div className="col-start-2 row-start-1 min-w-0 text-[15px] leading-6 text-textPrimary">
+        <div className="col-start-2 row-start-1 min-w-0 text-[14px] leading-6 text-textPrimary">
           {/* Dropped 2px under the baseline so a 14px mark centers on the
               title's capitals rather than riding above them. */}
           {logo && (
@@ -206,9 +206,9 @@ const PhoneSettingsRow = ({
         </div>
         {control && <div className="col-start-3 row-start-1 shrink-0">{control}</div>}
         {description && (
-          <p className="col-start-2 mt-0.5 text-[13px] leading-[18px] text-textSecondary">{description}</p>
+          <p className="col-start-2 mt-0.5 text-[12px] leading-4 text-textSecondary">{description}</p>
         )}
-        {help && helpOpen && <p className="col-start-2 mt-1 text-[13px] leading-[18px] text-textMuted">{help}</p>}
+        {help && helpOpen && <p className="col-start-2 mt-1 text-[12px] leading-4 text-textMuted">{help}</p>}
         {children && <div className={`col-start-2 mt-3 ${control ? 'col-span-2' : ''}`}>{children}</div>}
       </div>
     </div>
