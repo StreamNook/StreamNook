@@ -42,6 +42,8 @@ import { WindowCaptionButtons } from './titlebar/WindowCaptionButtons';
 import { Logger } from '../utils/logger';
 import { ANNOUNCEMENTS_BASELINE_PENDING_KEY } from './AnnouncementsBanner';
 import PlatformAccountRows from './settings/PlatformAccountRows';
+import { ProviderLogo } from './ProviderLogo';
+import { PROVIDERS, type ProviderId } from '../types/providers';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 
 const STEP_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
@@ -241,11 +243,12 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         mainAuthenticated: false,
     });
     const [error, setError] = useState<string | null>(null);
-    // How many of the other platforms are connected, for the summary row. Field
-    // selector so an unrelated account field doesn't re-render the wizard.
-    const platformsConnected = usePlatformAccountStore(
-        (s) => (s.kick.connected ? 1 : 0) + (s.youtube.connected ? 1 : 0),
-    );
+    // Which of the platforms offered beside Twitch are connected, for the summary:
+    // each is named with its logo. Field selectors so an unrelated account field
+    // doesn't re-render the wizard.
+    const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
+    const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
+    const tiktokConnected = usePlatformAccountStore((s) => s.tiktok.connected);
 
     const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState } = useAppStore();
     const unlistenRefs = useRef<Array<() => void>>([]);
@@ -1151,10 +1154,16 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 );
 
             case 8: {
-                const rows: Array<{ ok: boolean; pending?: boolean; label: string }> = [
+                // Every sign-in the wizard offered, by name and logo: the accounts
+                // step offers Kick, YouTube and TikTok beside Twitch.
+                const platformRow = (provider: ProviderId, ok: boolean) =>
+                    ({ ok, label: PROVIDERS[provider].label, provider });
+                const rows: Array<{ ok: boolean; pending?: boolean; label: string; provider?: ProviderId }> = [
+                    platformRow('twitch', status.mainAuthenticated),
                     { ok: status.dropsAuthenticated, label: 'Drops sign-in' },
-                    { ok: status.mainAuthenticated, label: 'Twitch sign-in' },
-                    { ok: platformsConnected > 0, label: 'Other platforms' },
+                    platformRow('kick', kickConnected),
+                    platformRow('youtube', youtubeConnected),
+                    platformRow('tiktok', tiktokConnected),
                     // Whisper import is a step mobile never shows, so reporting
                     // it as "skipped" on the summary named something the phone
                     // had not offered to do in the first place, which reads as a
@@ -1190,7 +1199,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                     key={row.label}
                                     className="flex items-center justify-between px-4 py-2.5 rounded-lg glass-panel"
                                 >
-                                    <span className="text-sm text-textSecondary">{row.label}</span>
+                                    <span className="flex items-center gap-2 text-sm text-textSecondary">
+                                        {row.provider && <ProviderLogo provider={row.provider} size={15} />}
+                                        {row.label}
+                                    </span>
                                     {row.ok ? (
                                         <Check size={15} className="text-success" />
                                     ) : row.pending ? (
