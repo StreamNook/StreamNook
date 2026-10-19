@@ -758,5 +758,8 @@ allow = [
   "get_chatter_mod_history",
   "get_chatter_card_tools",
   "set_card_timeout_length",
+  "get_touch_mod_slider",
+  "edit_mod_slider_timeouts",
+  "get_room_mod_log",
   "save_stream_screenshot",
 ]

@@ -2615,6 +2615,9 @@ pub fn run() {
             services::mod_history::get_chatter_mod_history,
             services::chatter_card::get_chatter_card_tools,
             services::chatter_card::set_card_timeout_length,
+            services::touch_mod_slider::get_touch_mod_slider,
+            services::touch_mod_slider::edit_mod_slider_timeouts,
+            services::room_mod_log::get_room_mod_log,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

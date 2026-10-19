@@ -99,6 +99,7 @@ provider-live-update
 provider-send-unconfirmed
 provider-stream-layout
 provider-stream-offline
+room-mod-log
 seventv-connected
 seventv-connected-account
 seventv-profile-pictures
