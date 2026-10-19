@@ -214,6 +214,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       setState('error');
     };
 
+    // A VOD (opened from the offline room, a channel's videos, or a rewind) as
+    // the core started it: a real timeline, not a live edge. It begins at the
+    // position Rust answered (the saved one when resume is on), and none of the
+    // live machinery below (the edge snap, the latency governor, the parts
+    // route) applies to it.
+    const vodStart = useAppStore.getState().vodPlayback;
+
     const build = (ll: boolean) => {
       lowLatency = ll;
       const current = settingsRef.current;
@@ -239,7 +246,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         nudgeMaxRetry: 3,
         maxFragLookUpTolerance: 0.5,
         liveSyncDuration: llTargetRaw + linkCushion(),
-        liveMaxLatencyDuration: 60,
+        liveMaxLatencyDuration: vodStart ? undefined : 60,
         // The core owns the stall reaction (link_adapt's cushion), so hls.js's
         // own one-second-per-stall ramp stays off, as on the desktop.
         liveSyncOnStallIncrease: 0,
@@ -247,7 +254,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         // quantized coarsely enough to be audible. The governor below does it
         // smoothly instead.
         maxLiveSyncPlaybackRate: 1,
-        liveDurationInfinity: true,
+        // Live is endless; a VOD (even one still recording) has a real, growing duration.
+        liveDurationInfinity: !vodStart,
+        // Where a VOD begins; -1 (live) lets hls.js pick the edge.
+        startPosition: vodStart ? (vodStart.start_position_secs ?? 0) : -1,
         manifestLoadingTimeOut: 10000,
         manifestLoadingMaxRetry: 3,
         manifestLoadingRetryDelay: 1000,
@@ -318,10 +328,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         playStarted = true;
         // Clamped into what is actually buffered so this can never seek into a
         // hole, and a no-op when the buffer is already inside the cushion, so
-        // it never drags anyone CLOSER to live than they asked to be.
-        const syncDur = hls.config.liveSyncDuration ?? llTargetRaw;
-        const target = Math.max(bufStart, bufEnd - syncDur);
-        if (target > video.currentTime + 0.5) video.currentTime = target;
+        // it never drags anyone CLOSER to live than they asked to be. A VOD has
+        // no edge to sync to: it plays from where it started.
+        if (!vodStart) {
+          const syncDur = hls.config.liveSyncDuration ?? llTargetRaw;
+          const target = Math.max(bufStart, bufEnd - syncDur);
+          if (target > video.currentTime + 0.5) video.currentTime = target;
+        }
 
         video.play().catch(() => {
           video.muted = true;
@@ -509,7 +522,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // playhead toward a behind-live target and is tuned tightly enough that
       // it needs the buffer floor to stay safe; the ordinary one just mops up
       // drift against the forward buffer.
-      stopGovernor = ll
+      // A VOD has no live edge to hold: no governor at all.
+      stopGovernor = vodStart
+        ? null
+        : ll
         ? startLatencyGovernor(hls, video, {
             label: 'mobile-ll',
             // Read live rather than captured, so moving the gap slider applies
@@ -584,10 +600,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // buffer, and would also hand playhead control to a controller the
       // governor is meant to own.
       let isLowLatencyChannel = false;
-      try {
-        isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
-      } catch {
-        /* command unavailable or the stream went away */
+      // A VOD is never on the parts route.
+      if (!vodStart) {
+        try {
+          isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
+        } catch {
+          /* command unavailable or the stream went away */
+        }
       }
       // Extra distance from the edge the core keeps after stalls on a poor
       // link (Rust link_adapt); zero on a good one.

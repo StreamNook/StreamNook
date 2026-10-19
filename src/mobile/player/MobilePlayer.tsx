@@ -13,6 +13,7 @@ import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
 import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngine';
+import { useVodProgressReporter } from '../../hooks/useVodProgressReporter';
 import { makeKey } from '../../utils/providerKey';
 import { setLiveVideo } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
@@ -106,6 +107,24 @@ export const MobilePlayer: React.FC<{
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
+  // VOD position checkpoints to Rust, as the desktop player sends them: Rust
+  // decides from the start's play stamp what each report may write (only a VOD
+  // the viewer opened files a position). Live, clips and idle attach nothing.
+  const vodPlayback = useAppStore((s) => s.vodPlayback);
+  const vodStream = useAppStore((s) => s.currentStream);
+  useVodProgressReporter(
+    videoRef,
+    vodPlayback
+      ? {
+          videoId: vodPlayback.video_id,
+          playId: vodPlayback.play_id,
+          channelLogin: vodPlayback.channel_login ?? vodStream?.user_login,
+          channelName: vodStream?.user_name,
+          title: vodPlayback.title ?? vodStream?.title,
+          thumbnailUrl: vodPlayback.thumbnail_url ?? vodStream?.thumbnail_url,
+        }
+      : null,
+  );
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
   // A channel that is not streaming, opened as its offline room.
