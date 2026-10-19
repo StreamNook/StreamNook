@@ -1,8 +1,8 @@
 import Foundation
 
-/// The chat settings a row and the list read (the `chat_design`, `chat_render` and
-/// `chat_input` blocks of the core's settings), with a phone's first-run values for anything
-/// absent.
+/// The chat settings a row and the list read (the `chat_design`, `chat_render`, `chat_input`
+/// and `chat_highlights` blocks of the core's settings), with a phone's first-run values for
+/// anything absent.
 public struct ChatStyle: Sendable, Equatable {
     public var fontSize: Double = 14
     public var fontWeight: Int = 400
@@ -56,6 +56,22 @@ public struct ChatStyle: Sendable, Equatable {
     /// Event kinds the viewer hid, "provider:category" (`chat_events.hidden_provider_events`).
     public var hiddenEvents: [String] = []
 
+    /// How highlight matches and built-in event highlights dress their row
+    /// (`chat_highlights.appearance.display_style`): "standard" (tint and bar), "minimal" (bar
+    /// only) or "none".
+    public var highlightDisplay = "standard"
+    /// The tint's strength at its left edge, 0 to 100 (`chat_highlights.appearance.opacity`).
+    public var highlightOpacity: Double = 20
+    /// A first-time chatter's row (`chat_highlights.built_in.first_time_chatter`): "wash" (the
+    /// tint and bar) or "ring" (an outline of the row instead).
+    public var firstTimeStyle = "wash"
+    /// A faint fill inside the ring.
+    public var firstTimeFill = false
+    /// The glint a live first-time row plays: "none" | "sheen" | "pulse" | "chase".
+    public var firstTimeAnimation = "none"
+    /// Whether the glint keeps cycling instead of playing once.
+    public var firstTimeAnimateRepeat = false
+
     /// Rows a room keeps, 50 to 300 on a phone.
     public var bufferCap = 100
     public var smoothScrollOnResume = true
@@ -99,6 +115,20 @@ public struct ChatStyle: Sendable, Equatable {
         }
         if let c = root["cosmetics"] as? [String: Any], let shadows = c["paint_shadows"] as? String {
             paintShadows = shadows
+        }
+        if let h = root["chat_highlights"] as? [String: Any] { applyHighlights(h) }
+    }
+
+    public mutating func applyHighlights(_ h: [String: Any]) {
+        if let a = h["appearance"] as? [String: Any] {
+            highlightDisplay = a["display_style"] as? String ?? highlightDisplay
+            highlightOpacity = (a["opacity"] as? NSNumber).map { min(max($0.doubleValue, 0), 100) } ?? highlightOpacity
+        }
+        if let b = h["built_in"] as? [String: Any], let f = b["first_time_chatter"] as? [String: Any] {
+            firstTimeStyle = f["style"] as? String ?? firstTimeStyle
+            firstTimeFill = f["fill"] as? Bool ?? firstTimeFill
+            firstTimeAnimation = f["animation"] as? String ?? firstTimeAnimation
+            firstTimeAnimateRepeat = f["animate_repeat"] as? Bool ?? firstTimeAnimateRepeat
         }
     }
 
@@ -147,6 +177,11 @@ public struct ChatStyle: Sendable, Equatable {
     /// Emotes animate unless the setting asks for stills; a touch never hovers, so `hover`
     /// draws stills too.
     public var animatesEmotes: Bool { animateEmotes == "always" }
+
+    /// The highlight tint's alpha at the row's left edge.
+    public var highlightAlpha: Double { highlightOpacity / 100 }
+    public var highlightShowsTint: Bool { highlightDisplay == "standard" }
+    public var highlightShowsBar: Bool { highlightDisplay != "none" }
 
     /// Vertical padding of a plain row: `max(4, spacing / 2)`.
     public var rowPadding: Double { max(4, messageSpacing / 2) }
