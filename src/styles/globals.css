@@ -8258,3 +8258,13 @@ html[data-motion="reduced"] .sn-tbt-pointer {
     transform: translate(58px, 2px);
   }
 }
+
+/* The phones' swipe slider: the bar under its chip fills while Ban's hold runs. */
+@keyframes sn-swipe-dwell {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}

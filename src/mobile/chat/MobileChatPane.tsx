@@ -38,6 +38,8 @@ import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 import { useMentionJump } from '../mentions/useMentionJump';
 import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
+import { SwipeModerator, type SwipeTarget, type TouchSlider } from './SwipeModerator';
+import { invoke } from '@tauri-apps/api/core';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -597,6 +599,59 @@ export const MobileChatPane: React.FC<{
     press.release();
   }, [press]);
 
+  // Swipe right on a message to moderate it. Rust lays the slider out for the
+  // list's width from the saved steps, Length and Style; read again when any
+  // of them changes.
+  const sliderSettings = useAppStore((s) => {
+    const d = s.settings.chat_design;
+    return `${d?.mod_slider}|${d?.mod_slider_style}|${d?.mod_slider_length}|${d?.mod_slider_delete}|${d?.mod_slider_ban}|${(d?.mod_slider_timeouts ?? []).join(',')}`;
+  });
+  const [touchSlider, setTouchSlider] = useState<TouchSlider | null>(null);
+  const [listWidth, setListWidth] = useState(0);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setListWidth(Math.round(entry.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!modToolsArmed || !broadcasterId || listWidth <= 0) {
+      setTouchSlider(null);
+      return;
+    }
+    let cancelled = false;
+    void invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth: listWidth })
+      .then((slider) => !cancelled && setTouchSlider(slider))
+      .catch((err) => Logger.debug('[Swipe] slider unavailable:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [modToolsArmed, broadcasterId, listWidth, sliderSettings]);
+
+  /** The chatter behind a row a moderator may swipe: never another moderator,
+   *  the broadcaster or staff (your own rows carry your badge too). */
+  const swipeTargetFor = useCallback(
+    (messageId: string): SwipeTarget | null => {
+      if (isHeldRowId(messageId)) return null;
+      for (const message of messages) {
+        if (getMessageId(message) !== messageId) continue;
+        try {
+          const parsed = parseMessage(message as string | BackendChatMessage);
+          const userId = parsed.tags.get('user-id') ?? '';
+          if (!userId || parsed.username === 'System') return null;
+          const badges = parsed.tags.get('badges') ?? '';
+          if (/(?:^|,)(?:moderator|broadcaster|staff|admin|global_mod|lead_moderator)\//.test(badges)) return null;
+          return { userId, name: parsed.tags.get('display-name') || parsed.username || '' };
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    },
+    [messages, getMessageId],
+  );
+
   // Out of sight, nothing of this room stays up: the fan and the sheets draw
   // outside the pane, so hiding the pane would not hide them.
   useEffect(() => {
@@ -793,6 +848,13 @@ export const MobileChatPane: React.FC<{
       <AddChatSheet open={addChatOpen} onClose={handleCloseAddChat} />
       {/* Long-press fan-out. Owns every per-message action now, for everyone:
           moderators simply get more buckets. */}
+      <SwipeModerator
+        listRef={listRef}
+        slider={touchSlider}
+        broadcasterId={broadcasterId}
+        targetFor={swipeTargetFor}
+        fanArmed={press.isArmed}
+      />
       <ChatFanOut
         target={fanTarget}
         isModerator={modToolsArmed}
@@ -807,6 +869,7 @@ export const MobileChatPane: React.FC<{
               : OTHER_PLATFORM_HIDES
         }
         onCommit={runFanAction}
+        quickSeconds={touchSlider?.quick_seconds}
         onCancel={closeFan}
       />
     </div>
