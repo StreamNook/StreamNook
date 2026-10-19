@@ -947,7 +947,8 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   // Notifications
   { tab: 'Notifications', keywords: 'notifications toast dynamic island sound alerts live whisper drops update channel points badge' },
   { tab: 'Notifications', section: 'Display', keywords: 'display notification methods dynamic island show in the dynamic island toasts toast popups position where toasts appear edge distance distance from the edge spacing corner' },
-  { tab: 'Notifications', section: 'Notification Types', keywords: 'notification types followed channels favorite channels whispers app updates claimed drops new drops channel points new badges gift subs earned rewards live going live whisper dm update available drops channel points badge favorite favorites favorite channel watchlist category' },
+  { tab: 'Notifications', section: 'Notify me about', keywords: 'notify me about notification types live channels followed channels favorite channels live mentions and replies whispers app updates drops claimed drops new drops channel points predictions new badges gift subs earned rewards going live whisper dm update available badge favorite favorites watchlist category' },
+  { tab: 'Notifications', section: 'Mentions', keywords: 'mentions counts as a mention name without @ display name highlight words muted chats mute unmute ping replies dynamic island notification history' },
   { tab: 'Notifications', section: 'Sound', keywords: 'sound play a sound tone which sound to play volume test notification send a test notification sound style ping audio' },
 
   // Cache

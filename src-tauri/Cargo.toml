@@ -335,12 +335,24 @@ tauri-plugin-updater = "2"
 # Login-keychain store for the token vault's key (the same items keyring 3 wrote).
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 block2 = "0.6"
+objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSObject",
     "NSString",
     "NSArray",
     "NSHTTPCookie",
+    "NSBundle",
+    "NSError",
+] }
+# The notification permission (services/system_notify.rs): macOS asks before
+# an app's first notification, and this is how the setup wizard asks only
+# once a type is turned on, and reads a refusal back.
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "UNUserNotificationCenter",
+    "UNNotificationSettings",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
     "std",

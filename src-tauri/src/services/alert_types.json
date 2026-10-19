@@ -28,6 +28,15 @@
    "platforms": ["desktop", "android", "ios"]
   },
   {
+   "id": "whispers",
+   "title": "Whispers",
+   "detail": "When someone whispers you",
+   "setting": "live_notifications.show_whisper_notifications",
+   "channel": "whispers",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
    "id": "drops",
    "title": "Drops",
    "detail": "Campaign progress and claimable rewards",
@@ -44,6 +53,51 @@
    "channel": "badges",
    "setup": false,
    "platforms": ["desktop", "android"]
+  },
+  {
+   "id": "gift_subs",
+   "title": "Gift subs",
+   "detail": "When someone gifts you a sub",
+   "setting": "live_notifications.show_gift_sub_notifications",
+   "channel": "gift-subs",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "twitch_rewards",
+   "title": "Earned rewards",
+   "detail": "When Twitch names a badge or drop reward you earned",
+   "setting": "live_notifications.show_twitch_reward_notifications",
+   "channel": "rewards",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "channel_points",
+   "title": "Channel points",
+   "detail": "Bonus chests, raids, watch streaks and prediction results",
+   "setting": "live_notifications.show_channel_points_notifications",
+   "channel": "channel-points",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "predictions",
+   "title": "Predictions",
+   "detail": "When a prediction opens on a channel you are watching",
+   "setting": "live_notifications.show_prediction_notifications",
+   "channel": "predictions",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "updates",
+   "title": "App updates",
+   "detail": "When a new StreamNook version is out",
+   "setting": "live_notifications.show_update_notifications",
+   "channel": "updates",
+   "setup": false,
+   "platforms": ["desktop"]
   }
  ]
 }
