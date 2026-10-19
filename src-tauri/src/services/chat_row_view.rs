@@ -1325,11 +1325,17 @@ pub fn event_key(msg: &ChatMessage) -> Option<String> {
     let msg_type = msg.metadata.msg_type.as_deref().or_else(|| msg.tags.get("msg-id").map(String::as_str));
     let mut category = msg_type.and_then(event_category);
     if category.is_none() && provider == "twitch" {
+        // A channel points redemption row names its reward in `sn-reward-title`
+        // (the overlay counts it the same way); a reward redeemed with text is
+        // that viewer's own message, not an event.
+        if msg.tags.get("sn-reward-title").is_some_and(|t| !t.is_empty()) {
+            category = Some("redemption");
+        }
         let bits = msg
             .metadata
             .bits_amount
             .unwrap_or_else(|| msg.tags.get("bits").and_then(|b| b.parse().ok()).unwrap_or(0));
-        if bits > 0 {
+        if category.is_none() && bits > 0 {
             category = Some("cheer");
         }
     }
@@ -1366,6 +1372,11 @@ mod tests {
         assert_eq!(event_key(&notice("twitch", None, &[], None)), None);
         assert_eq!(event_key(&notice("kick", None, &[], Some(5))), None);
         assert_eq!(event_key(&notice("twitch", Some("highlighted-message"), &[], None)), None);
+        // A channel points redemption row is one; a reward redeemed with text is not.
+        let redeemed = notice("twitch", None, &[("custom-reward-id", "r1"), ("sn-reward-title", "Hydrate")], None);
+        assert_eq!(event_key(&redeemed).as_deref(), Some("twitch:redemption"));
+        assert_eq!(event_key(&notice("twitch", None, &[("custom-reward-id", "r1")], None)), None);
+        assert_eq!(event_key(&notice("kick", None, &[("sn-reward-title", "Hydrate")], None)), None);
     }
 
     #[test]
