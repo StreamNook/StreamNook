@@ -254,6 +254,9 @@ struct ChatListHost: UIViewRepresentable {
         pipeline.replay()
         list.onWidthChange = { [weak list] width in
             pipeline.setWidth(width, scale: list?.traitCollection.displayScale ?? 3)
+            guard session.moderatorTools else { return }
+            let core = session.core
+            Task { @MainActor in list?.swipeSlider = try? await core.swipeSlider(width: Double(width)) }
         }
         list.onPausedChange = { paused in session.setPaused(paused) }
         list.onReply = { id in
@@ -319,6 +322,36 @@ struct ChatListHost: UIViewRepresentable {
                 }
             }
         }
+        // Swipe right on a message to moderate it (the core lays out the slider and words it).
+        list.swipeAllowed = { layout in
+            guard session.moderatorTools, session.roomID != nil, !layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")),
+                  let message = session.pipeline.message(layout.id), message.provider == "twitch", !message.isSystem
+            else { return false }
+            // Never another moderator, the broadcaster or staff (the viewer's own rows carry their badge too).
+            let protected: Set<String> = ["moderator", "broadcaster", "staff", "admin", "global_mod", "lead_moderator"]
+            return !message.badges.contains { protected.contains($0.name) }
+        }
+        list.onSwipeCommit = { step, layout in
+            guard let message = session.pipeline.message(layout.id), let room = session.roomID else { return }
+            let core = session.core
+            Task { @MainActor in
+                do {
+                    let outcome = try await core.moderate(action: step.action(messageID: message.id), broadcasterID: room,
+                                                          targetUserID: message.userID, targetName: message.shownName,
+                                                          useSavedReason: step.action != "delete")
+                    let undo: (@MainActor () -> Void)? = outcome.undoable ? {
+                        Task {
+                            _ = try? await core.moderate(action: ["kind": "unban", "timeout": step.action == "timeout"],
+                                                         broadcasterID: room, targetUserID: message.userID,
+                                                         targetName: message.shownName, useSavedReason: false)
+                        }
+                    } : nil
+                    onOutcome(ChatModActions.Outcome(text: outcome.message, success: true, undo: undo))
+                } catch {
+                    onOutcome(ChatModActions.Outcome(text: ChatComposerModel.words(error)))
+                }
+            }
+        }
         list.onFanCommit = { bucket, layout, seconds in
             guard let message = session.pipeline.message(layout.id) else { return }
             Task { @MainActor in
@@ -336,6 +369,14 @@ struct ChatListHost: UIViewRepresentable {
     func updateUIView(_ list: ChatListView, context: Context) {
         list.readOnly = readOnly
         list.setStyle(session.style)
+        // The swipe slider for this width, read again on every update so a settings change lands.
+        let width = list.bounds.width
+        if session.moderatorTools, width > 0 {
+            let core = session.core
+            Task { @MainActor [weak list] in list?.swipeSlider = try? await core.swipeSlider(width: Double(width)) }
+        } else {
+            list.swipeSlider = nil
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

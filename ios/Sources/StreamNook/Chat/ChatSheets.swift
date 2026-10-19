@@ -150,6 +150,21 @@ struct ChatMenuSheet: View {
                             }
                         }
                     }
+                    // The room's moderation in one place: what AutoMod holds, recent actions.
+                    if !session.isKick, session.roomID != nil, session.isModerator {
+                        Button {
+                            dismiss()
+                            model.moderationOpen = true
+                        } label: {
+                            HStack {
+                                Label("Moderation", systemImage: "shield.lefthalf.filled")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(SN.textMuted)
+                            }
+                        }
+                    }
                     // Only where the actions would succeed: Helix refuses them without mod powers here.
                     if session.isModerator {
                         Button {
@@ -200,7 +215,7 @@ struct ChatMenuSheet: View {
                     }
                 } footer: {
                     if session.isModerator, session.moderatorTools {
-                        ListFooter(text: "Long-press any message for delete, timeout and ban.")
+                        ListFooter(text: "Swipe right on a message to delete, time out or ban; long-press for more.")
                     }
                 }
             }

@@ -72,6 +72,13 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         press.allowableMovement = 10
         press.delegate = self
         scroll.addGestureRecognizer(press)
+        // Swipe right on a message to moderate it. The list's own scroll waits for this to fail,
+        // which it does at once unless the finger heads right over a row the viewer moderates.
+        swipePan.addTarget(self, action: #selector(swiped(_:)))
+        swipePan.delegate = self
+        swipePan.maximumNumberOfTouches = 1
+        scroll.addGestureRecognizer(swipePan)
+        scroll.panGestureRecognizer.require(toFail: swipePan)
 
         var config = UIButton.Configuration.glass()
         config.title = "Resume live"
@@ -155,7 +162,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     fileprivate func tick(_ link: CADisplayLink) {
         pacing.frame(link)
         ticks += 1
-        if let source {
+        // While a finger swipes a message the list holds still: new rows wait until it lifts.
+        if let source, swipe == nil {
             let batches = source.takeReady()
             if !batches.isEmpty { apply(batches) }
         }
@@ -495,7 +503,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                 } else {
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                 }
-                onFanCommit?(bucket, row, bucket == .timeout ? (fan.dialled ?? 600) : nil)
+                onFanCommit?(bucket, row, bucket == .timeout ? (fan.dialled ?? swipeSlider?.quickSeconds ?? 600) : nil)
             }
             endFan()
         default:
@@ -541,6 +549,81 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         false
     }
+
+    // MARK: Swipe to moderate
+
+    /// The slider for this list's width, from the core; nil while moderating is off here.
+    var swipeSlider: SwipeSlider?
+    /// Whether a row can be moderated with a swipe (a Twitch chatter the viewer may act on).
+    var swipeAllowed: ((ChatRowLayout) -> Bool)?
+    /// A released swipe with the step it armed.
+    var onSwipeCommit: ((SwipeStep, ChatRowLayout) -> Void)?
+    private let swipePan = UIPanGestureRecognizer()
+    private var swipe: SwipeModerator?
+    private var swipeRow: ChatRowLayout?
+
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === swipePan else { return true }
+        guard !readOnly, let slider = swipeSlider, slider.enabled, swipe == nil, fan == nil else { return false }
+        let v = swipePan.velocity(in: scroll)
+        // Rightward and clearly sideways: a vertical scroll or a leftward drag is the list's.
+        guard v.x > 0, abs(v.x) > abs(v.y) * 1.5 else { return false }
+        guard let (row, _) = row(at: swipePan.location(in: scroll)), swipeAllowed?(row.layout) == true else { return false }
+        return true
+    }
+
+    @objc private func swiped(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began:
+            guard let slider = swipeSlider, let (row, cell) = row(at: g.location(in: scroll)) else { return }
+            swipe = SwipeModerator(slider: slider, cell: cell, in: scroll)
+            swipeRow = row.layout
+            scroll.isScrollEnabled = false
+            swipe?.track(pull: g.translation(in: scroll).x, y: g.location(in: scroll).y)
+        case .changed:
+            swipe?.track(pull: g.translation(in: scroll).x, y: g.location(in: scroll).y)
+        case .ended:
+            if let step = swipe?.armed, let row = swipeRow {
+                if step.isBan || step.action == "timeout" {
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                } else {
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                }
+                onSwipeCommit?(step, row)
+            }
+            endSwipe()
+        default:
+            endSwipe()
+        }
+    }
+
+    private func endSwipe() {
+        swipe?.finish()
+        swipe = nil
+        swipeRow = nil
+        scroll.isScrollEnabled = true
+    }
+
+    #if DEBUG
+    /// Swipes the newest moderatable row `pull` points and holds it there, for screenshots;
+    /// `release` lets go (and so applies the armed step through the commit hook, which only a
+    /// FakeCore session wires to anything).
+    func debugSwipe(pull: CGFloat, release: Bool) {
+        if release {
+            if let step = swipe?.armed, let row = swipeRow { onSwipeCommit?(step, row) }
+            endSwipe()
+            return
+        }
+        guard let slider = swipeSlider,
+              let row = rows.last(where: { cells[$0.id] != nil && swipeAllowed?($0.layout) == true }),
+              let cell = cells[row.id] else { return }
+        if swipe == nil {
+            swipe = SwipeModerator(slider: slider, cell: cell, in: scroll)
+            swipeRow = row.layout
+        }
+        swipe?.track(pull: pull, y: cell.frame.midY)
+    }
+    #endif
 
     /// Scrolls until the row sits in the middle and flashes it; false when it left the buffer.
     func jump(to id: String) -> Bool {

@@ -1,13 +1,25 @@
 import SNKit
 import SwiftUI
 
-/// Settings > Chat > Moderation: the four timeout lengths on a user card (the desktop dock's
-/// first four, so one edit changes both) and the viewer's own card buttons. The core keeps the
-/// lists (`set_card_timeout_length`, `edit_settings_list`); the page sends one change at a time.
+/// Settings > Chat > Moderation: swiping a message to moderate it (on or off, its look, its reach
+/// and its steps), the four timeout lengths on a user card (the desktop dock's first four, so one
+/// edit changes both) and the viewer's own card buttons. The core keeps every list
+/// (`edit_mod_slider_timeouts`, `set_card_timeout_length`, `edit_settings_list`) and reads typed
+/// lengths (`parse_mod_timeout`); the page sends one change at a time.
 struct ModerationSettings: View {
     @Environment(SettingsStore.self) private var store
     @Environment(AppModel.self) private var model
     @State private var refusal: String?
+    @State private var stepsRefusal: String?
+    /// A "Custom length…" prompt: where its answer goes, and what was typed.
+    @State private var typing: TypedLengthTarget?
+    @State private var typed = ""
+    @State private var typedRefusal: String?
+
+    enum TypedLengthTarget: Equatable {
+        case step
+        case card(Int)
+    }
 
     static let path = "moderation.card_actions"
     /// Lengths offered for a chip or a timeout button, shortest first.
@@ -16,8 +28,24 @@ struct ModerationSettings: View {
         (43200, "12h"), (86400, "1d"), (259_200, "3d"), (604_800, "1w"), (1_209_600, "2w"),
     ]
 
+    /// A length as every step names it: one unit when it divides evenly ("10m", "1d"), else the two
+    /// largest parts ("1h 30m"), as the core's `duration_label` writes it.
     static func label(_ seconds: Int) -> String {
-        lengths.first { $0.0 == seconds }?.1 ?? "\(seconds)s"
+        let units: [(Int, String)] = [(604_800, "w"), (86_400, "d"), (3_600, "h"), (60, "m"), (1, "s")]
+        if let (size, unit) = units.first(where: { seconds >= $0.0 }), seconds % size == 0 {
+            return "\(seconds / size)\(unit)"
+        }
+        var parts: [String] = []
+        var rest = seconds
+        for (size, unit) in units where rest >= size && parts.count < 2 {
+            parts.append("\(rest / size)\(unit)")
+            rest %= size
+        }
+        return parts.isEmpty ? "0s" : parts.joined(separator: " ")
+    }
+
+    private var stepTimeouts: [Int] {
+        (store.value("chat_design.mod_slider_timeouts") as? [Any] ?? []).compactMap { SettingsPath.double($0).map { Int($0) } }
     }
 
     /// The four as the card shows them: the saved dock list's first four, topped up from the
@@ -33,12 +61,131 @@ struct ModerationSettings: View {
     }
 
     var body: some View {
+        swipeBlock
+        cardBlock
+            .alert("Custom length", isPresented: Binding(get: { typing != nil }, set: { if !$0 { typing = nil } })) {
+                TextField("45m", text: $typed)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Add") { Task { await submitTyped() } }
+                Button("Cancel", role: .cancel) { typing = nil }
+            } message: {
+                Text(typedRefusal ?? "Type a length like 45m, 2h or 3d, up to 14 days.")
+            }
+    }
+
+    // MARK: Swipe to moderate
+
+    private var swipeBlock: some View {
+        SettingsBlock(title: "Swipe to Moderate", detail: "Swipe right on a message in a channel you moderate to delete it, time its sender out or ban them.") {
+            ToggleRow(title: "Swipe to moderate", path: "chat_design.mod_slider", fallback: true,
+                      detail: "Pull further for a longer timeout. Ban is at the end and needs a short hold; let go early to cancel.") {
+                NestedChoice(title: "Style", path: "chat_design.mod_slider_style",
+                             choices: [Choice("Preview", "preview"), Choice("Rail", "rail"), Choice("Capsule", "capsule")],
+                             fallback: "preview")
+                NestedChoice(title: "Length", path: "chat_design.mod_slider_length",
+                             choices: [Choice("Short", "short"), Choice("Medium", "medium"), Choice("Long", "long")],
+                             fallback: "medium")
+            }
+            WideRow(title: "Steps", detail: "What the swipe offers, mildest first. Tap a length to take it out.",
+                    paths: ["chat_design.mod_slider_delete", "chat_design.mod_slider_timeouts", "chat_design.mod_slider_ban"]) {
+                VStack(alignment: .leading, spacing: 8) {
+                    FlowLayout(spacing: 7, lineSpacing: 7) {
+                        stepChip("Delete", on: store.bool("chat_design.mod_slider_delete", true)) {
+                            Task { await store.set("chat_design.mod_slider_delete", !store.bool("chat_design.mod_slider_delete", true)) }
+                        }
+                        ForEach(stepTimeouts, id: \.self) { seconds in
+                            stepChip(Self.label(seconds), on: true, removable: stepTimeouts.count > 1) {
+                                editStep("remove", seconds)
+                            }
+                        }
+                        if stepTimeouts.count < 8 {
+                            Menu {
+                                Button("Custom length\u{2026}") { typed = ""; typedRefusal = nil; typing = .step }
+                                ForEach(Self.lengths.filter { !stepTimeouts.contains($0.0) }, id: \.0) { length, label in
+                                    Button(label) { editStep("add", length) }
+                                }
+                            } label: {
+                                Label("Add", systemImage: "plus")
+                                    .font(.sn(13, 500))
+                                    .foregroundStyle(SN.accent)
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 32)
+                                    .overlay(Capsule().strokeBorder(SN.accent.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+                            }
+                        }
+                        stepChip("Ban", on: store.bool("chat_design.mod_slider_ban", true), danger: true) {
+                            Task { await store.set("chat_design.mod_slider_ban", !store.bool("chat_design.mod_slider_ban", true)) }
+                        }
+                    }
+                    if let stepsRefusal {
+                        Text(stepsRefusal).font(.sn(12)).foregroundStyle(SN.error)
+                    }
+                }
+                .padding(.top, 10)
+            }
+        }
+    }
+
+    private func stepChip(_ title: String, on: Bool, removable: Bool = false, danger: Bool = false,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(title).font(.sn(13, 600))
+                if removable { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(SN.textMuted) }
+            }
+            .foregroundStyle(on ? (danger ? SN.error : SN.textPrimary) : SN.textMuted)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .background(on ? (danger ? SN.error.opacity(0.14) : SN.surface) : Color.clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(on ? Color.clear : SN.textMuted.opacity(0.4)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(removable ? "Remove \(title)" : "\(title), \(on ? "on" : "off")")
+    }
+
+    private func editStep(_ op: String, _ seconds: Int) {
+        Task {
+            do {
+                _ = try await model.core.editSliderTimeouts(op, seconds: seconds)
+                stepsRefusal = nil
+                await store.refresh()
+            } catch {
+                stepsRefusal = ChatComposerModel.words(error)
+            }
+        }
+    }
+
+    /// Reads the typed length through the core and sends it where it was asked for; a refusal
+    /// keeps the prompt open with the core's words.
+    private func submitTyped() async {
+        guard let target = typing else { return }
+        do {
+            let step = try await model.core.parseTimeout(typed)
+            guard let seconds = step.seconds else { return }
+            typing = nil
+            switch target {
+            case .step: editStep("add", seconds)
+            case .card(let index): setLength(index, seconds)
+            }
+        } catch {
+            typedRefusal = ChatComposerModel.words(error)
+            typing = nil
+            // Ask again with the reason, keeping what was typed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { typing = target }
+        }
+    }
+
+    // MARK: User card
+
+    private var cardBlock: some View {
         SettingsBlock(title: "Moderation", detail: "The buttons on a user card in channels you moderate.") {
             WideRow(title: "Timeout lengths", detail: "Tap one to change it. Every quick timeout uses the same four.",
                     paths: ["moderation.timeout_presets"]) {
                 HStack(spacing: 7) {
                     ForEach(Array(four.enumerated()), id: \.offset) { index, seconds in
                         Menu {
+                            Button("Custom length\u{2026}") { typed = ""; typedRefusal = nil; typing = .card(index) }
                             ForEach(Self.lengths, id: \.0) { length, label in
                                 Button(label) { setLength(index, length) }
                                     .disabled(four.contains(length) && length != seconds)

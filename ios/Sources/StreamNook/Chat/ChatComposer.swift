@@ -77,6 +77,15 @@ private struct ComposerBar: View {
                     .presentationDetents([.large])
             }
         }
+        .sheet(isPresented: $model.moderationOpen) {
+            if let roomID = session.roomID {
+                ModerationSheet(model: ModerationSheetModel(channel: session.channel, roomID: roomID, core: session.core)) {
+                    // After this sheet has gone, so the two never present at once.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { model.manageOpen = true }
+                }
+                .presentationDetents([.medium, .large])
+            }
+        }
         .sheet(isPresented: $model.commandsOpen) {
             ChatCommandSheet(session: session) { name in
                 model.replaceWithCommand(name)
