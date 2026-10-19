@@ -10,7 +10,7 @@
 //! never touches the network, so the font holds offline. A family Google does
 //! not know gives no font at all, and the app falls back to its own quietly.
 
-use log::{debug, warn};
+use log::{info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -150,36 +150,69 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-async fn fetch_css(family: &str) -> Option<String> {
+/// Why a family has no font: Google does not know it, or Google (or the
+/// phone's connection) did not answer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Miss {
+    NotFound,
+    Unreachable,
+}
+
+/// What a typed family came to, as the phones show it: drawn, no such
+/// Google Font, or not reachable right now (asked again next time).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Lookup {
+    Ready { font: CustomFont },
+    NotFound,
+    Unreachable,
+}
+
+impl From<Result<CustomFont, Miss>> for Lookup {
+    fn from(got: Result<CustomFont, Miss>) -> Self {
+        match got {
+            Ok(font) => Lookup::Ready { font },
+            Err(Miss::NotFound) => Lookup::NotFound,
+            Err(Miss::Unreachable) => Lookup::Unreachable,
+        }
+    }
+}
+
+async fn fetch_css(family: &str) -> Result<String, Miss> {
     for weights in [true, false] {
-        let response = CLIENT.get(css2_url(family, weights)).send().await.ok()?;
-        if response.status().is_success() {
-            return response.text().await.ok();
+        let response = CLIENT.get(css2_url(family, weights)).send().await.map_err(|e| {
+            warn!("[CustomFont] {family}: Google Fonts did not answer: {e}");
+            Miss::Unreachable
+        })?;
+        let status = response.status();
+        if status.is_success() {
+            return response.text().await.map_err(|_| Miss::Unreachable);
         }
         // 400 means Google does not know the family (or, with weights, has
         // none of them); without weights it answers the family's own.
-        if response.status() != reqwest::StatusCode::BAD_REQUEST {
-            return None;
+        if status != reqwest::StatusCode::BAD_REQUEST {
+            warn!("[CustomFont] {family}: Google Fonts answered {status}");
+            return Err(Miss::Unreachable);
         }
     }
-    None
+    Err(Miss::NotFound)
 }
 
-async fn download(folder: &Path, family: &str) -> Option<CustomFont> {
+async fn download(folder: &Path, family: &str) -> Result<CustomFont, Miss> {
     let css = fetch_css(family).await?;
     let found = parse_css(&css);
     if found.is_empty() {
-        return None;
+        return Err(Miss::NotFound);
     }
-    std::fs::create_dir_all(folder).ok()?;
+    std::fs::create_dir_all(folder).map_err(|_| Miss::Unreachable)?;
     let mut faces = Vec::new();
     let mut index = Index { family: family.to_string(), faces: Vec::new() };
     for (weight, url) in found {
-        let response = CLIENT.get(&url).send().await.ok()?;
+        let Ok(response) = CLIENT.get(&url).send().await else { continue };
         if !response.status().is_success() {
             continue;
         }
-        let bytes = response.bytes().await.ok()?;
+        let Ok(bytes) = response.bytes().await else { continue };
         if bytes.is_empty() || bytes.len() > FACE_CAP {
             continue;
         }
@@ -193,56 +226,79 @@ async fn download(folder: &Path, family: &str) -> Option<CustomFont> {
         faces.push(CustomFace { weight, path: path.to_string_lossy().into_owned(), data: None });
     }
     if faces.is_empty() {
-        return None;
+        return Err(Miss::Unreachable);
     }
     // The index last, so a half-written set is never read as whole.
-    write_atomic(&folder.join(INDEX), &serde_json::to_vec(&index).ok()?).ok()?;
-    debug!("[CustomFont] kept {family} ({} faces)", faces.len());
-    Some(CustomFont { family: family.to_string(), faces })
+    let written = serde_json::to_vec(&index).ok().map(|json| write_atomic(&folder.join(INDEX), &json));
+    if !matches!(written, Some(Ok(()))) {
+        warn!("[CustomFont] could not keep the index for {family}");
+    }
+    info!("[CustomFont] {family}: downloaded {} faces", faces.len());
+    Ok(CustomFont { family: family.to_string(), faces })
 }
 
 /// The faces of a typed family: from disk when kept, else read once and kept.
-/// None for an empty name or a family Google does not know.
-pub async fn resolve(raw: &str) -> Option<CustomFont> {
+pub async fn resolve(raw: &str) -> Lookup {
     let family = sanitize(raw);
     if family.is_empty() {
-        return None;
+        return Lookup::NotFound;
     }
-    let folder = fonts_dir()?.join(slug(&family));
+    let Some(folder) = fonts_dir().map(|d| d.join(slug(&family))) else {
+        return Lookup::Unreachable;
+    };
     if let Some(kept) = read_index(&folder, &family) {
-        return Some(kept);
+        info!("[CustomFont] {family}: kept on disk ({} faces)", kept.faces.len());
+        return Lookup::Ready { font: kept };
     }
     let key = family.to_lowercase();
     if MISSES.lock().map(|m| m.contains(&key)).unwrap_or(false) {
-        return None;
+        return Lookup::NotFound;
     }
     let _one = FETCH.lock().await;
     if let Some(kept) = read_index(&folder, &family) {
-        return Some(kept);
+        return Lookup::Ready { font: kept };
     }
     let got = download(&folder, &family).await;
-    if got.is_none() {
+    // Only a family Google does not know is remembered; an unreachable one is
+    // asked again next time.
+    if got == Err(Miss::NotFound) {
+        info!("[CustomFont] {family}: no such Google Font");
         if let Ok(mut misses) = MISSES.lock() {
             misses.insert(key);
         }
     }
-    got
+    got.into()
 }
 
 /// The same with each face's file inlined, for the Android page.
-pub async fn resolve_with_data(raw: &str) -> Option<CustomFont> {
+pub async fn resolve_with_data(raw: &str) -> Lookup {
     use base64::Engine;
-    let mut font = resolve(raw).await?;
+    let mut font = match resolve(raw).await {
+        Lookup::Ready { font } => font,
+        other => return other,
+    };
     for face in &mut font.faces {
-        let bytes = std::fs::read(&face.path).ok()?;
+        let Ok(bytes) = std::fs::read(&face.path) else { return Lookup::Unreachable };
         face.data = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
     }
-    Some(font)
+    Lookup::Ready { font }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_answer_names_its_state() {
+        let ready = serde_json::to_value(Lookup::Ready {
+            font: CustomFont { family: "Poppins".into(), faces: vec![CustomFace { weight: 400, path: "/f/400.ttf".into(), data: None }] },
+        })
+        .unwrap();
+        assert_eq!(ready["state"], "ready");
+        assert_eq!(ready["font"]["faces"][0]["weight"], 400);
+        assert_eq!(serde_json::to_value(Lookup::NotFound).unwrap(), serde_json::json!({ "state": "not_found" }));
+        assert_eq!(serde_json::to_value(Lookup::Unreachable).unwrap(), serde_json::json!({ "state": "unreachable" }));
+    }
 
     #[test]
     fn a_typed_name_keeps_only_a_plain_family() {

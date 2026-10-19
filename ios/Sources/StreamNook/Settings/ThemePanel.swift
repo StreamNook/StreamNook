@@ -293,6 +293,7 @@ private struct FontCard: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(SN.borderSubtle, lineWidth: 1) }
                 .accessibilityLabel("Custom font name")
+            status(for: custom)
             FlowLayout(spacing: 6) {
                 ForEach(CustomFont.suggested, id: \.self) { name in
                     let on = CustomFont.sanitize(custom) == name
@@ -316,6 +317,34 @@ private struct FontCard: View {
         }
     }
 
+    /// One quiet line under the field for the family typed there: reading it, no such Google
+    /// Font, or Google Fonts out of reach. Once drawn, the tile and the app say so themselves.
+    /// The line keeps its height when empty, so the suggestions never move.
+    private func status(for custom: String) -> some View {
+        let typed = CustomFont.sanitize(custom)
+        let status = model.look.customFont
+        let mine = !typed.isEmpty && status.family?.caseInsensitiveCompare(typed) == .orderedSame
+        return HStack(spacing: 6) {
+            switch mine ? status : .idle {
+            case .loading(let family):
+                ProgressView().controlSize(.mini).tint(SN.textMuted)
+                Text("Loading \(family)\u{2026}")
+            case .notFound(let family):
+                Text("No Google Font named \(family)")
+            case .unreachable:
+                Text("Couldn't reach Google Fonts. Try again when you're online.")
+            case .idle, .ready:
+                Text(" ").accessibilityHidden(true)
+            }
+        }
+        .font(.sn(12))
+        .foregroundStyle(SN.textMuted)
+        .lineLimit(1)
+        .frame(minHeight: 16, alignment: .leading)
+        .animation(.easeOut(duration: 0.15), value: mine ? status : .idle)
+        .accessibilityElement(children: .combine)
+    }
+
     private func pick(_ id: String) async {
         saving?.cancel()
         await store.set("font", id)
@@ -324,7 +353,7 @@ private struct FontCard: View {
 
     private func type(_ text: String) {
         draft = text
-        save(text, after: .milliseconds(700))
+        save(text, after: .milliseconds(600))
     }
 
     /// Saves the family (and Custom as the font) once typing pauses; the font follows the save.
