@@ -210,12 +210,84 @@ struct StreakBanners: View {
         .clipped()
         .animation(SNMotion.run(Self.fold), value: streaks.resub?.id)
         .animation(SNMotion.run(Self.fold), value: streaks.watch?.milestoneID)
+        .animation(SNMotion.run(Self.fold), value: rooms.shareSteps)
     }
 
     /// What the composer holds, shared with the streak.
     private var composer: ChatComposerModel? { ComposerRegistry.shared.models[ObjectIdentifier(session)] }
 
-    private func resubBanner(_ resub: ResubNotice) -> some View {
+    /// Armed or sending: what happens next, and a way out until it is sent.
+    private func sharingRow<Icon: View>(_ what: String, title: String, step: ChatRooms.ShareStep,
+                                       @ViewBuilder icon: () -> Icon) -> some View {
+        HStack(spacing: 8) {
+            icon()
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.sn(12, 600)).foregroundStyle(SN.textPrimary)
+                Text(step == .sending ? "Sending\u{2026}" : "It sends with your next message")
+                    .font(.sn(11)).foregroundStyle(SN.textMuted)
+            }
+            .lineLimit(1)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            dismissButton(label: "Cancel share") { rooms.cancelShare(what) }
+                .disabled(step == .sending)
+                .opacity(step == .sending ? 0.4 : 1)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Twitch took it: said once, then the banner goes.
+    private func sharedRow(_ title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(SN.success)
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(title).font(.sn(12, 600)).foregroundStyle(SN.textPrimary).lineLimit(1)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    /// Twitch did not take it: one line under the banner's own words.
+    @ViewBuilder private func failedLine(_ what: String) -> some View {
+        if rooms.shareStep(what) == .failed {
+            Text("Didn't go through. Try again.")
+                .font(.sn(11, 500))
+                .foregroundStyle(SN.error)
+                .lineLimit(1)
+        }
+    }
+
+    /// Share pressed: the next send carries it, so the field is where the viewer goes next.
+    private func arm(_ what: String) {
+        rooms.armShare(what)
+        composer?.requestFocus(true)
+    }
+
+    @ViewBuilder private func resubBanner(_ resub: ResubNotice) -> some View {
+        let title = resub.isGift ? "gift sub" : "resub"
+        let star = Image(systemName: "star.fill").font(.system(size: 12)).foregroundStyle(SN.accent)
+            .frame(width: 14).accessibilityHidden(true)
+        switch rooms.shareStep("resub") {
+        case .shared:
+            sharedRow("Your \(title) is shared")
+        case .some(let step) where step == .armed || step == .sending:
+            sharingRow("resub", title: "Sharing your \(title)", step: step) { star }
+        default:
+            resubOffer(resub)
+        }
+    }
+
+    private func resubOffer(_ resub: ResubNotice) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "star.fill")
                 .font(.system(size: 12))
@@ -243,12 +315,11 @@ struct StreakBanners: View {
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(rooms.includeStreak ? .isSelected : [])
                 }
+                failedLine("resub")
             }
             .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            shareButton {
-                if await rooms.shareResub(message: composer?.draft ?? "") { composer?.draft = "" }
-            }
+            shareButton { arm("resub") }
             dismissButton(label: "Dismiss resub") { rooms.dismiss("resub") }
         }
         .padding(.leading, 10)
@@ -257,23 +328,39 @@ struct StreakBanners: View {
         .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func watchBanner(_ milestone: WatchStreakMilestone) -> some View {
+    /// Twitch's streak flame, in the theme's orange like the chat's streak rows.
+    private var flame: some View {
+        Image(systemName: Symbol.streak)
+            .font(.system(size: 13))
+            .foregroundStyle(SN.highlightOrange)
+            .frame(width: 14)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private func watchBanner(_ milestone: WatchStreakMilestone) -> some View {
+        switch rooms.shareStep("watch") {
+        case .shared:
+            sharedRow("Your watch streak is shared")
+        case .some(let step) where step == .armed || step == .sending:
+            sharingRow("watch", title: "Sharing your watch streak", step: step) { flame }
+        default:
+            watchOffer(milestone)
+        }
+    }
+
+    private func watchOffer(_ milestone: WatchStreakMilestone) -> some View {
         HStack(spacing: 8) {
-            // Twitch's streak flame, in the theme's orange like the chat's streak rows.
-            Image(systemName: Symbol.streak)
-                .font(.system(size: 13))
-                .foregroundStyle(SN.highlightOrange)
-                .frame(width: 14)
-                .accessibilityHidden(true)
-            (Text("Watch streak").font(.sn(12, 600)).foregroundStyle(SN.textPrimary)
-                + Text(milestone.streakCount.map { " · \($0) stream\($0 == 1 ? "" : "s")" } ?? "")
-                .font(.sn(12)).foregroundStyle(SN.textSecondary))
-                .lineLimit(1)
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            shareButton {
-                if await rooms.shareWatchStreak(message: composer?.draft ?? "") { composer?.draft = "" }
+            flame
+            VStack(alignment: .leading, spacing: 1) {
+                (Text("Watch streak").font(.sn(12, 600)).foregroundStyle(SN.textPrimary)
+                    + Text(milestone.streakCount.map { " · \($0) stream\($0 == 1 ? "" : "s")" } ?? "")
+                    .font(.sn(12)).foregroundStyle(SN.textSecondary))
+                    .lineLimit(1)
+                failedLine("watch")
             }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            shareButton { arm("watch") }
             dismissButton(label: "Dismiss watch streak") { rooms.dismiss("watch") }
         }
         .padding(.leading, 10)
@@ -283,9 +370,9 @@ struct StreakBanners: View {
     }
 
     /// The banner's one action: Share, on Liquid Glass tinted with the theme's accent.
-    private func shareButton(_ action: @escaping () async -> Void) -> some View {
+    private func shareButton(_ action: @escaping () -> Void) -> some View {
         Button {
-            Task { await action() }
+            action()
         } label: {
             Text("Share")
                 .font(.sn(12, 600))

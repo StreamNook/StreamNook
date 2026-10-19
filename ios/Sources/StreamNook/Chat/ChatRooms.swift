@@ -47,6 +47,11 @@ final class ChatRooms {
     private(set) var dismissed: Set<String> = []
     /// A share is running; both Share chips wait for it.
     private(set) var sharing = false
+    /// Where a streak share stands, by "room:watch" / "room:resub": armed for the room's next
+    /// send, sending, shared (said briefly before the banner goes) or failed (one line, the
+    /// banner and the typed text kept for another try).
+    enum ShareStep: Equatable { case armed, sending, shared, failed }
+    private(set) var shareSteps: [String: ShareStep] = [:]
     /// The resub share includes the sub streak (on by default).
     var includeStreak = true
     /// Rooms (by login) whose moderator tools were turned off this session.
@@ -592,41 +597,85 @@ final class ChatRooms {
     func dismiss(_ what: String) {
         guard let key = state.activeChannel else { return }
         dismissed.insert("\(key):\(what)")
+        shareSteps["\(key):\(what)"] = nil
     }
 
-    /// Shares the watch streak with the composer's text; answers whether it went (the draft is
-    /// then cleared by the caller).
+    /// Where this share stands in the room on screen.
+    func shareStep(_ what: String) -> ShareStep? {
+        guard let key = state.activeChannel else { return nil }
+        return shareSteps["\(key):\(what)"]
+    }
+
+    /// The share armed in a room, which its composer's next send carries.
+    func armedShare(in channel: String) -> String? {
+        ["resub", "watch"].first { shareSteps["\(channel):\($0)"] == .armed }
+    }
+
+    /// Share pressed: the room's next send carries this share. One at a time.
+    func armShare(_ what: String) {
+        guard let key = state.activeChannel else { return }
+        for kind in ["watch", "resub"] where shareSteps["\(key):\(kind)"] != .shared { shareSteps["\(key):\(kind)"] = nil }
+        shareSteps["\(key):\(what)"] = .armed
+    }
+
+    func cancelShare(_ what: String) {
+        guard let key = state.activeChannel else { return }
+        shareSteps["\(key):\(what)"] = nil
+    }
+
+    /// The composer's send while a share is armed: the share, with what is typed (or nothing).
+    /// Answers whether Twitch took it; the caller clears the draft only then.
+    func sendArmedShare(in channel: String, message: String) async -> Bool {
+        guard channel == state.activeChannel, let what = armedShare(in: channel) else { return false }
+        return what == "watch" ? await shareWatchStreak(message: message) : await shareResub(message: message)
+    }
+
+    /// Twitch took a share: said in its banner for a moment, then the banner goes (the token is
+    /// spent). Not taken: one line in the banner, which stays for another try.
+    private func settleShare(_ ok: Bool, room: String, what: String, clear: @escaping () -> Void) {
+        let key = "\(room):\(what)"
+        guard ok else {
+            shareSteps[key] = .failed
+            return
+        }
+        shareSteps[key] = .shared
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(2500))
+            guard let self, self.shareSteps[key] == .shared else { return }
+            // The banners fold it away on their own animation.
+            clear()
+            self.shareSteps[key] = nil
+        }
+    }
+
+    /// Shares the watch streak with the composer's text; answers whether Twitch took it.
     func shareWatchStreak(message: String) async -> Bool {
         guard let tab = active, let id = tab.channelID, let milestone = streaks[tab.channel]?.watch, !sharing else { return false }
+        let room = tab.channel
         sharing = true
+        shareSteps["\(room):watch"] = .sending
         defer { sharing = false }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let ok = (try? await core.invoke("share_watch_streak", args: [
             "channelId": id, "milestoneId": milestone.milestoneID, "message": text.isEmpty ? nil : text,
         ], as: Bool.self)) ?? false
-        if ok {
-            streaks[tab.channel]?.watch = nil
-        } else {
-            toasts?.show("Could not share that watch streak.")
-        }
+        settleShare(ok, room: room, what: "watch") { [weak self] in self?.streaks[room]?.watch = nil }
         return ok
     }
 
     /// Shares the resub with the composer's text, with or without the sub streak.
     func shareResub(message: String) async -> Bool {
         guard let tab = active, let resub = streaks[tab.channel]?.resub, !sharing else { return false }
+        let room = tab.channel
         sharing = true
+        shareSteps["\(room):resub"] = .sending
         defer { sharing = false }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let ok = (try? await core.invoke("use_resub_token", args: [
             "channelLogin": tab.login, "message": text.isEmpty ? nil : text, "includeStreak": includeStreak,
             "tokenId": resub.id,
         ], as: Bool.self)) ?? false
-        if ok {
-            streaks[tab.channel]?.resub = nil
-        } else {
-            toasts?.show("Could not share that resub.")
-        }
+        settleShare(ok, room: room, what: "resub") { [weak self] in self?.streaks[room]?.resub = nil }
         return ok
     }
 }

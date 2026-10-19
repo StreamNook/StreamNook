@@ -68,7 +68,13 @@ final class ChatComposerModel {
         wallet = session.isKick ? nil : WalletModel(login: session.channel, core: session.core)
     }
 
-    var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending && warning == nil }
+    var canSend: Bool {
+        // An armed streak share sends even with nothing typed.
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || shareArmed) && !sending && warning == nil
+    }
+
+    /// A streak share is armed in this room: the next send carries it.
+    var shareArmed: Bool { session.rooms?.armedShare(in: session.channel) != nil }
 
     /// A message Twitch did not take, kept in the draft with what went wrong, until it is sent
     /// again or discarded.
@@ -173,6 +179,10 @@ final class ChatComposerModel {
     /// once, by its icon in the field; the chat menu names it in full.
     var placeholder: String {
         if let blockedReason { return blockedReason }
+        // The armed share rides the next send: the field says what it is for.
+        if let what = session.rooms?.armedShare(in: session.channel) {
+            return what == "watch" ? "Add a message to your watch streak" : "Add a message to your resub"
+        }
         return session.style.hidePlaceholder ? "" : "Send a message"
     }
 
@@ -180,6 +190,11 @@ final class ChatComposerModel {
 
     func send() async {
         guard !sending, slowWait == 0 else { return }
+        if shareArmed, let rooms = session.rooms {
+            // Shared: the text went with it. Not: it stays for another try.
+            if await rooms.sendArmedShare(in: session.channel, message: draft) { draft = "" }
+            return
+        }
         if session.isKick {
             await sendKick()
             return
