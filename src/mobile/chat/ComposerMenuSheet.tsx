@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { MobileSheet } from '../ui/MobileSheet';
-import { GroupCard, GroupDivider, GroupFooter, GroupLabel, GroupRow } from '../ui/GroupedList';
+import { GroupCard, GroupFooter, GroupLabel, GroupRow } from '../ui/GroupedList';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
@@ -142,9 +142,8 @@ export const ComposerMenuSheet: React.FC<Props> = ({
 
   return (
     <MobileSheet open={open} onClose={onClose} title={activeLabel ?? 'Chat'} maxHeightFraction={0.5}>
-      {/* The settings pages are built from the same grouped pieces on a card;
-          here the sheet is the surface, so the rows sit straight on it. */}
-      <GroupCard surface="sheet">
+      {/* The same grouped pieces as the settings pages, as the iPhone menu
+          draws them: the room's modes above, the actions on one card. */}
         {/* Room state lives here rather than above the composer. Followers-only
             while you can still talk is context worth having, not a warning worth
             a permanent line over chat. Status, not actions: one quiet block, its
@@ -153,7 +152,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             name and what it means; the footer says where you stand when every
             mode spares you. */}
         {roomModes && roomModes.modes.length > 0 && (
-          <div className="px-2 pb-3 mb-1 border-b border-borderSubtle">
+          <div className="px-4 pb-3">
             <GroupLabel className="mb-2">This chat is in</GroupLabel>
             <div className="flex flex-col gap-2">
               {roomModes.modes.map((mode) => {
@@ -178,6 +177,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             )}
           </div>
         )}
+      <GroupCard>
         {/* Follow, at the top when you do not follow yet. */}
         {followRow && followSlot === 'top' && followRow}
 
@@ -279,13 +279,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           </GroupRow>
         )}
 
-        {isModerator && modToolsOn && (
-          <GroupFooter className="px-2 pb-1">Long-press any message for delete, timeout and ban.</GroupFooter>
-        )}
-
-        {/* The rows that take something away, last and set apart. */}
-        {(onCloseChat || (followRow && followSlot === 'bottom')) && <GroupDivider />}
-
+        {/* The rows that take something away come last. */}
         {onCloseChat && (
           <GroupRow
             onClick={() => {
@@ -301,6 +295,9 @@ export const ComposerMenuSheet: React.FC<Props> = ({
 
         {followRow && followSlot === 'bottom' && followRow}
       </GroupCard>
+      {isModerator && modToolsOn && (
+        <GroupFooter className="px-4 pt-2">Long-press any message for delete, timeout and ban.</GroupFooter>
+      )}
     </MobileSheet>
   );
 };
