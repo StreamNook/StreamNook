@@ -5507,18 +5507,11 @@ html[data-watching] .drops-progress-inline {
 
 /* --- Capsule: the message slides aside for a capsule. --- */
 /* Text pushed past the right edge is cut there, while the chip may still
-   reach over the line above or below (so a clip, not overflow: hidden). */
+   reach over the line above or below (so a clip, not overflow: hidden). No
+   fade mask: WebView2 masked the chip outside the row too, even with
+   mask-clip: no-clip, leaving it faded under the line's divider. */
 [data-mod-slide='capsule'] {
   clip-path: inset(-48px 0 -48px 0);
-}
-/* Where a mask can leave what lies outside the row alone, the text also
-   fades out before the cut. */
-@supports (mask-clip: no-clip) {
-  [data-mod-slide='capsule'] {
-    -webkit-mask-image: linear-gradient(to left, transparent, #000 24px);
-    mask-image: linear-gradient(to left, transparent, #000 24px);
-    mask-clip: no-clip;
-  }
 }
 [data-mod-slide='capsule'] > :not(.sn-mod-layer) {
   transform: translateX(var(--mod-slide, 0px));
