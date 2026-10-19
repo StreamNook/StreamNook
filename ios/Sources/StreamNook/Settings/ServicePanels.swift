@@ -171,7 +171,7 @@ struct NotificationsPanel: View {
                             .font(.sn(12)).foregroundStyle(SN.textSecondary)
                         SettingSegmentsBound(path: "live_notifications.background_interval_minutes",
                                              choices: [Choice("15 min", "15"), Choice("30 min", "30"), Choice("60 min", "60")],
-                                             fallback: "15", accessibility: "How often to check")
+                                             fallback: "15", accessibility: "How often to check", numeric: true)
                     }
                     .padding(14)
                 }
