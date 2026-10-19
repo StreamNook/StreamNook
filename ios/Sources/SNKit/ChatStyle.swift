@@ -35,9 +35,9 @@ public struct ChatStyle: Sendable, Equatable {
     public var mentionColor = "#ff4444"
     public var replyColor = "#ff6b6b"
     public var mentionAnimation = true
-    /// "normal" | "medium" | "semibold" | "bold"
+    /// "regular" | "medium" | "bold" (older saves may hold "normal" or "semibold")
     public var mentionWeight = "medium"
-    /// "inherit" | "italic" | "normal"
+    /// "inherit" | "never" | "always" (older saves may hold "normal" or "italic")
     public var mentionItalic = "inherit"
     /// "plain" | "pill"
     public var mentionStyle = "plain"
@@ -182,6 +182,28 @@ public struct ChatStyle: Sendable, Equatable {
     public var highlightAlpha: Double { highlightOpacity / 100 }
     public var highlightShowsTint: Bool { highlightDisplay == "standard" }
     public var highlightShowsBar: Bool { highlightDisplay != "none" }
+
+    /// How heavy an @name draws: `body` is the message text's own weight.
+    public enum MentionWeight: Sendable, Equatable { case body, medium, semibold, bold }
+
+    public var mentionWeightChoice: MentionWeight {
+        switch mentionWeight {
+        case "regular", "normal": .body
+        case "semibold": .semibold
+        case "bold": .bold
+        default: .medium
+        }
+    }
+
+    /// Whether an @name slants. Inherit follows the message (a /me row is italic as a whole);
+    /// never keeps it upright even there.
+    public func mentionSlants(inItalicMessage italic: Bool) -> Bool {
+        switch mentionItalic {
+        case "always", "italic": true
+        case "never", "normal": false
+        default: italic
+        }
+    }
 
     /// Vertical padding of a plain row: `max(4, spacing / 2)`.
     public var rowPadding: Double { max(4, messageSpacing / 2) }

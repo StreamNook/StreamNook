@@ -12,6 +12,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         var y: CGFloat
         var id: String { layout.id }
         var height: CGFloat { layout.height }
+        /// Whether the row wears the striped-rows background; given once and kept (see `restripe`).
+        var striped: Bool?
     }
 
     /// Batches made off the main thread, applied at the next display frame.
@@ -234,6 +236,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                 if paused, deltaAbove != 0 { adjustOffset(by: deltaAbove) }
             }
         }
+        if style.alternatingBackgrounds { restripe() }
         updateInsets()
         if !paused { pinToBottom() }
         layoutVisible()
@@ -241,6 +244,25 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             for id in newLive.suffix(3) { cells[id]?.arrive(style.messageEntrance) }
         }
         if mentioned { MentionBuzz.fire() }
+    }
+
+    /// Every other shown row wears the stripe. A row keeps its stripe once given one, so trimming
+    /// the oldest rows or loading older history never flips the rows already on screen; rows a
+    /// setting hides are skipped, as the desktop list leaves them out.
+    private func restripe() {
+        guard let anchor = rows.firstIndex(where: { $0.height > 0 && $0.striped != nil })
+                ?? rows.firstIndex(where: { $0.height > 0 }) else { return }
+        let base = rows[anchor].striped ?? false
+        var next = base
+        for i in anchor..<rows.count where rows[i].height > 0 {
+            rows[i].striped = next
+            next.toggle()
+        }
+        next = !base
+        for i in stride(from: anchor - 1, through: 0, by: -1) where rows[i].height > 0 {
+            rows[i].striped = next
+            next.toggle()
+        }
     }
 
     private func adjustOffset(by dy: CGFloat) {
@@ -295,6 +317,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         var i = low
         let scale = window?.screen.scale ?? traitCollection.displayScale
         let animate = style.animatesEmotes
+        // The theme's surface behind every other row (`.chat-striped` on desktop).
+        let stripe = style.alternatingBackgrounds ? ChatTheme.surface.cgColor : nil
         while i < rows.count, rows[i].y <= bottom {
             let row = rows[i]
             if row.height > 0 {
@@ -314,6 +338,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                     // Built only for VoiceOver: it reads the row from the chat queue.
                     cell.accessibilityCustomActions = UIAccessibility.isVoiceOverRunning ? accessibilityActions?(row.layout) : nil
                 }
+                cell.setStripe(row.striped == true ? stripe : nil)
                 if row.layout.decor.flash != nil, row.layout.live, !flashed.contains(row.id) {
                     flashed.insert(row.id)
                     cell.flash()

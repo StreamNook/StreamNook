@@ -70,3 +70,52 @@ import Testing
         #expect(before != after)
     }
 }
+
+/// How an @name in a message draws: `chat_design.mention_weight` and `mention_italic`.
+@Suite struct MentionLookTests {
+    private func design(_ fields: String) -> ChatStyle {
+        ChatStyle(settingsJSON: Data(#"{"chat_design":{\#(fields)}}"#.utf8))
+    }
+
+    @Test func theDefaultIsMediumAndFollowsTheMessage() {
+        let s = ChatStyle(settingsJSON: Data("{}".utf8))
+        #expect(s.mentionWeightChoice == .medium)
+        #expect(s.mentionSlants(inItalicMessage: true))
+        #expect(s.mentionSlants(inItalicMessage: false) == false)
+    }
+
+    @Test func theWeightsTheSettingsWriteAreRead() {
+        #expect(design(#""mention_weight":"regular""#).mentionWeightChoice == .body)
+        #expect(design(#""mention_weight":"medium""#).mentionWeightChoice == .medium)
+        #expect(design(#""mention_weight":"bold""#).mentionWeightChoice == .bold)
+    }
+
+    @Test func olderSavedWeightsStillRead() {
+        #expect(design(#""mention_weight":"normal""#).mentionWeightChoice == .body)
+        #expect(design(#""mention_weight":"semibold""#).mentionWeightChoice == .semibold)
+        #expect(design(#""mention_weight":"heavy""#).mentionWeightChoice == .medium)
+    }
+
+    @Test func theSlantsTheSettingsWriteAreRead() {
+        let always = design(#""mention_italic":"always""#)
+        #expect(always.mentionSlants(inItalicMessage: false))
+        #expect(always.mentionSlants(inItalicMessage: true))
+        // Never stays upright even inside a /me message.
+        let never = design(#""mention_italic":"never""#)
+        #expect(never.mentionSlants(inItalicMessage: true) == false)
+        #expect(never.mentionSlants(inItalicMessage: false) == false)
+        let inherit = design(#""mention_italic":"inherit""#)
+        #expect(inherit.mentionSlants(inItalicMessage: true))
+        #expect(inherit.mentionSlants(inItalicMessage: false) == false)
+    }
+
+    @Test func olderSavedSlantsStillRead() {
+        #expect(design(#""mention_italic":"italic""#).mentionSlants(inItalicMessage: false))
+        #expect(design(#""mention_italic":"normal""#).mentionSlants(inItalicMessage: true) == false)
+    }
+
+    @Test func stripedRowsAreRead() {
+        #expect(ChatStyle(settingsJSON: Data("{}".utf8)).alternatingBackgrounds == false)
+        #expect(design(#""alternating_backgrounds":true"#).alternatingBackgrounds)
+    }
+}

@@ -44,6 +44,12 @@ final class ChatRowCell: UIView {
         showGlint(layout)
     }
 
+    /// The striped-rows background: the layer's own color, under the bitmap and every decor
+    /// layer, so flipping it never redraws the row.
+    func setStripe(_ color: CGColor?) {
+        if layer.backgroundColor != color { layer.backgroundColor = color }
+    }
+
     /// The text bitmap straight on the view's layer, or over the author's Atmosphere when they
     /// wear one (a layer's own contents draw under its sublayers, so the text moves up a layer).
     private func showBitmap(_ bitmap: CGImage?, layout: ChatRowLayout, scale: CGFloat) {

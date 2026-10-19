@@ -297,6 +297,8 @@ struct ChatRowLayoutBuilder {
             if ring {
                 // The ring stands in for the wash whatever the Highlight Appearance says.
                 decor.ring = (color, style.firstTimeFill)
+                // A straight divider would cut across the ring's rounded corners.
+                decor.topHairline = nil
             } else {
                 if style.highlightShowsBar { decor.leadingBar = (color, RowGlint.barWidth) }
                 if style.highlightShowsTint { decor.fill = .tint(color, alpha: CGFloat(style.highlightAlpha)) }
