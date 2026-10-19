@@ -585,10 +585,9 @@
    "logo": null,
    "detail": "Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row.",
    "aliases": [
-    "look",
-    "hide pinned",
-    "hidden"
-   ]
+    "look"
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -693,9 +692,10 @@
    "logo": null,
    "detail": "",
    "aliases": [
-    "look"
-   ],
-   "hidden_on_ios": true
+    "look",
+    "hide pinned",
+    "hidden"
+   ]
   },
   {
    "page": "chat",
