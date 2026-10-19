@@ -17,7 +17,7 @@ enum Route: Hashable {
 /// The settings sections, in the You tab's order. One table drives the rows and the pages they
 /// open, so a row and its page cannot drift apart.
 enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
-    case player, adFree, chat, theme, notifications, cache, support, changed, backup, whatsNew
+    case player, adFree, chat, theme, notifications, cache, support, changed, backup
 
     var id: String { rawValue }
 
@@ -35,7 +35,6 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .support: "Support"
         case .changed: "Changed settings"
         case .backup: "Backup"
-        case .whatsNew: "What's New"
         }
     }
 
@@ -50,7 +49,6 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .support: "Logs, diagnostics, and feedback"
         case .changed: "Everything you set differently from a fresh install"
         case .backup: "Daily copies, restore, and a file you can keep"
-        case .whatsNew: "Recent releases"
         }
     }
 
@@ -65,7 +63,6 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .support: Symbol.support
         case .changed: "slider.horizontal.below.square.and.square.filled"
         case .backup: "clock.arrow.circlepath"
-        case .whatsNew: Symbol.whatsNew
         }
     }
 }

@@ -9,6 +9,9 @@ import SNKit
 @Observable @MainActor
 final class KickAccount {
     private(set) var account: RosterAccount?
+    /// The platforms this build can watch (roster `can_watch`), read with the Kick row since both
+    /// come from the one roster. Settings rows about a platform show only for these.
+    private(set) var watchable: [String] = []
     /// Kick channels on your follow list, imported or added by hand.
     private(set) var follows = 0
     /// Kick channels you are subscribed to, by slug.
@@ -60,6 +63,7 @@ final class KickAccount {
         guard let core else { return }
         if let roster = try? await core.invoke("get_account_roster", args: [:], as: AccountRoster.self) {
             account = roster.account("kick")
+            watchable = roster.watchable
         }
         if let list = try? await core.invoke("get_provider_follows", args: [:], as: [ProviderFollow].self) {
             let kick = list.filter { $0.provider == "kick" }

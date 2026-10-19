@@ -172,13 +172,13 @@ struct RowText {
             case .text(let text):
                 append(text, body, color, extra: common)
             case .mention(let text, let login, let mentionColor):
-                let mentionWeight: UIFont.Weight = switch style.mentionWeight {
-                case "normal": weight
-                case "semibold": .semibold
-                case "bold": .bold
-                default: .medium
+                let mentionWeight: UIFont.Weight = switch style.mentionWeightChoice {
+                case .body: weight
+                case .medium: .medium
+                case .semibold: .semibold
+                case .bold: .bold
                 }
-                let slanted = style.mentionItalic == "italic" || (style.mentionItalic == "inherit" && italic)
+                let slanted = style.mentionSlants(inItalicMessage: italic)
                 let tint = ChatTheme.color(style.mentionTextColor) ?? ChatTheme.color(mentionColor) ?? color
                 let tapIndex = taps.count
                 taps.append(.mention(login))

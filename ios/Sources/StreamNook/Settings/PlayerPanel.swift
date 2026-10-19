@@ -60,6 +60,14 @@ struct PlayerPanel: View {
             SliderRow(title: { "Start volume: \(Int(($0 * 100).rounded()))%" }, path: "video_player.volume", range: 0...1,
                       step: 0.01, fallback: 1, detail: "The volume every stream opens at before you adjust it.",
                       integer: false, accessibility: "Start volume")
+            ToggleRow(title: "Resume VODs", path: "video_player.resume_vod_playback", fallback: true,
+                      // The phones have no Continue Watching row, so their words leave it out.
+                      detail: "Reopening a past broadcast picks up where you left off.",
+                      help: "Off starts every VOD from the beginning. Only past broadcasts you open yourself are remembered, never a live stream you were watching. Device sync keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account for Twitch's own apps.") {
+                if store.bool("video_player.resume_vod_playback", true) {
+                    NestedToggle(title: "Device sync", path: "video_player.sync_vod_progress", fallback: true)
+                }
+            }
         }
 
         // Buffer is hidden on iPhone, so the section shows as Latency; its anchor and catalog name stay.

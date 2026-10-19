@@ -439,13 +439,15 @@ struct SettingSegmentsBound: View {
     var accessibility = ""
     /// Maps the stored value onto a choice (a saved `hover` reads as `never`).
     var shown: ((String?) -> String?)?
+    /// Stores a number rather than the choice's text.
+    var numeric = false
     var onChange: ((String) async -> Void)?
 
     var body: some View {
         let raw = store.value(path).map { "\($0)" } ?? fallback
         SettingSegments(choices: choices, selected: shown?(raw) ?? raw, accessibility: accessibility) { value in
             Task {
-                await store.set(path, value)
+                await store.set(path, numeric ? SettingsPath.number(value) : value as Any?)
                 await onChange?(value)
             }
         }
@@ -473,7 +475,7 @@ struct SettingMenu: View {
             Picker(accessibility, selection: Binding(
                 get: { raw ?? "" },
                 set: { value in
-                    Task { await store.set(path, numeric ? (Double(value) as Any) : value) }
+                    Task { await store.set(path, numeric ? SettingsPath.number(value) : value as Any?) }
                 }
             )) {
                 ForEach(choices) { Text($0.label).tag($0.value) }
@@ -517,12 +519,15 @@ struct SettingSlider: View {
     var body: some View {
         let stored = min(max(store.double(path, fallback), range.lowerBound), range.upperBound)
         HStack(spacing: 10) {
-            Slider(value: Binding(get: { live ?? stored }, set: { live = $0 }), in: range, step: step) { editing in
+            // A chat preview on the page follows the finger before the value is saved.
+            Slider(value: Binding(get: { live ?? stored }, set: { live = $0; ChatPreviewDraft.shared.set(path, $0) }),
+                   in: range, step: step) { editing in
                 guard !editing, let value = live else { return }
                 Task {
                     let saved: Any = integer ? Int(value.rounded()) : value
                     await store.set(path, saved)
                     live = nil
+                    ChatPreviewDraft.shared.set(path, nil)
                     await onRelease?(value)
                 }
             }

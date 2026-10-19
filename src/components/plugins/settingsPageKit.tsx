@@ -298,7 +298,7 @@ function PhoneSubControl({
       // A settings search result can land on a nested line, as on a row.
       data-setting-row={title}
     >
-      <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[14px] font-medium text-textPrimary">
+      <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[12.5px] font-medium text-textPrimary">
         {title}
         {onReset && <ResetArrow onReset={onReset} />}
       </div>

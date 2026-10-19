@@ -87,9 +87,10 @@ struct PendingWatchLink(Mutex<Option<String>>);
 
 /// Read a `streamnook://` (or streamnook.app) share link into the stream key the
 /// frontend's `startStream` takes: a bare login for Twitch, `provider:channel`
-/// otherwise. Building and parsing both live in `services::share_link`.
+/// otherwise. Building and parsing both live in `services::share_link`, which
+/// also refuses a platform this build cannot watch.
 fn parse_watch_link(url: &tauri::Url) -> Option<String> {
-    services::share_link::parse(url).map(|link| link.stream_key())
+    services::share_link::openable(url).map(|link| link.stream_key())
 }
 
 /// The link a share button copies for a stream. `channel` is the row's
@@ -395,6 +396,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.move_room_modes_to_prompt_once();
     settings.adopt_first_run_look_once();
     settings.lift_custom_theme_muted();
+    settings.map_legacy_event_keys();
     Ok(settings)
 }
 
@@ -1686,6 +1688,10 @@ pub fn run() {
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "android")]
+            share_settings_file,
+            #[cfg(target_os = "android")]
+            import_settings_text,
             #[cfg(target_os = "ios")]
             services::ios_sheet::open_drops_sheet,
             #[cfg(target_os = "ios")]
@@ -2132,6 +2138,7 @@ pub fn run() {
             lift_custom_theme,
             search_settings,
             get_changed_settings,
+            services::client_capabilities::get_client_capabilities,
             list_settings_backups,
             restore_settings_backup,
             get_settings_dir,

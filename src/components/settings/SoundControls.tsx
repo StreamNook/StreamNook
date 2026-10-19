@@ -1,4 +1,5 @@
 import { playSound } from '../../utils/notificationSound';
+import { IS_MOBILE } from '../../utils/platform';
 
 /** Volume as a percent of the sound's own level, shared by every place a sound
  *  is chosen so every slider means the same thing. Letting go of the slider
@@ -15,7 +16,8 @@ export function SoundVolume({
   label: string;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    // On the phone the track flexes to its line, as every phone slider does.
+    <div className={IS_MOBILE ? 'flex w-full items-center gap-2' : 'flex items-center gap-2'}>
       <input
         type="range"
         min={0}
@@ -25,7 +27,7 @@ export function SoundVolume({
         onChange={(e) => onChange(Number(e.target.value))}
         onPointerUp={() => playSound(sound, value)}
         onKeyUp={() => playSound(sound, value)}
-        className="w-32 accent-accent"
+        className={IS_MOBILE ? 'min-w-0 flex-1 basis-28 accent-accent' : 'w-32 accent-accent'}
         aria-label={label}
       />
       <span className="w-11 text-right text-[12px] tabular-nums text-textMuted">{value}%</span>

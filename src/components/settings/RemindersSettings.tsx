@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SegmentedSelect } from './_primitives';
+import { IS_MOBILE } from '../../utils/platform';
 import {
   useChannelSearch,
   type ChannelItem,
@@ -485,6 +486,7 @@ const RemindersSettings = () => {
 
             {/* Trigger picker */}
             <SegmentedSelect
+              fullWidth={IS_MOBILE}
               value={reminder.trigger}
               options={TRIGGER_OPTIONS}
               onChange={(v) => updateReminder(reminder.id, { trigger: v })}

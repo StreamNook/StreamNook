@@ -32,14 +32,31 @@ interface Props {
   onToggle: () => void;
   /** Broadcaster id, so subscriber and bits badges resolve to this channel. */
   channelId?: string;
+  /** Chat > Pinned Messages > Style: `hidden` folds a collapsed pin down to its pin icon. */
+  collapsedStyle?: 'bar' | 'hidden';
 }
 
 // Lifts an unpainted name off the glass; a 7TV paint brings its own shadow.
 const NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
 
-export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId }) => {
+export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId, collapsedStyle = 'bar' }) => {
   if (pins.length === 0) return null;
   const [first, ...rest] = pins;
+
+  // Hidden: no bar while collapsed, only the pin itself, which still opens it
+  // (the desktop keeps the same pin in its chat header).
+  if (!expanded && collapsedStyle === 'hidden') {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label="Show the pinned message"
+        className="sn-popover sn-popover--static pointer-events-auto self-start flex items-center justify-center w-7 h-7 active:opacity-80"
+      >
+        <PushPin size={12} weight="fill" className="text-accent" />
+      </button>
+    );
+  }
 
   return (
     // The single container. Everything below lives inside this one box.

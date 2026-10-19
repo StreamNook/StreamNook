@@ -33,6 +33,20 @@ enum ChatRowRenderer {
         case nil:
             break
         }
+        if let ring = decor.ring {
+            // A 1-point outline just inside the row's edge at 62% of the color, and an 8% fill
+            // inside it when asked.
+            let radius = RowGlint.ringRadius
+            if ring.fill {
+                ctx.setFillColor(ring.color.withAlphaComponent(0.08).cgColor)
+                ctx.addPath(UIBezierPath(roundedRect: box, cornerRadius: radius).cgPath)
+                ctx.fillPath()
+            }
+            ctx.setStrokeColor(ring.color.withAlphaComponent(0.62).cgColor)
+            ctx.setLineWidth(1)
+            ctx.addPath(UIBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), cornerRadius: radius - 0.5).cgPath)
+            ctx.strokePath()
+        }
         if let bar = decor.leadingBar {
             ctx.setFillColor(bar.color.cgColor)
             ctx.fill(CGRect(x: 0, y: 0, width: bar.width, height: size.height))

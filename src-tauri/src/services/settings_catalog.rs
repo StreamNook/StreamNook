@@ -1,4 +1,4 @@
-//! Every settings row the iPhone shows, with the paths it writes and the
+//! Every settings row the phones show, with the paths it writes and the
 //! words people search for it by. Settings search ranks rows against a query;
 //! the "changed from default" review lists the rows whose paths differ from a
 //! fresh install. The rows live in `settings_catalog.json` beside this file.
@@ -33,11 +33,33 @@ pub struct CatalogRow {
     /// desktop still show it.
     #[serde(default, skip_serializing)]
     pub hidden_on_ios: bool,
+    /// What this build must have for the row to be drawn at all: a
+    /// `client_capabilities` field (`combined_chat`), or `watch:<platform>`
+    /// for a row that only touches that platform. `|` between names means any
+    /// one of them. Search and the changed review skip the row on a build
+    /// without it, on every platform, so they hide exactly what the pages hide.
+    #[serde(default, skip_serializing)]
+    pub needs: Option<String>,
 }
 
-/// Whether a row is drawn on this platform's settings pages.
-fn shown(row: &CatalogRow, ios: bool) -> bool {
-    !(ios && row.hidden_on_ios)
+/// Whether this build has the capability `need` names.
+fn build_has(need: &str) -> bool {
+    match need.strip_prefix("watch:") {
+        Some(platform) => crate::services::account_roster::can_watch(platform),
+        None => crate::services::client_capabilities::has(need),
+    }
+}
+
+/// Whether a row is drawn on this platform's settings pages, given what the
+/// build has (`has` answers one capability name).
+fn shown(row: &CatalogRow, ios: bool, has: &dyn Fn(&str) -> bool) -> bool {
+    if ios && row.hidden_on_ios {
+        return false;
+    }
+    match row.needs.as_deref() {
+        Some(needs) => needs.split('|').map(str::trim).any(|n| has(n)),
+        None => true,
+    }
 }
 
 const IOS: bool = cfg!(target_os = "ios");
@@ -152,15 +174,15 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
 
 /// The rows that answer `query`, best first (at most `limit`).
 pub fn search(query: &str, limit: usize) -> Vec<CatalogRow> {
-    search_on(query, limit, IOS)
+    search_on(query, limit, IOS, &build_has)
 }
 
-fn search_on(query: &str, limit: usize, ios: bool) -> Vec<CatalogRow> {
+fn search_on(query: &str, limit: usize, ios: bool, has: &dyn Fn(&str) -> bool) -> Vec<CatalogRow> {
     let query = normalize(query);
     let mut hits: Vec<(u32, usize, &CatalogRow)> = rows()
         .iter()
         .enumerate()
-        .filter(|(_, row)| shown(row, ios))
+        .filter(|(_, row)| shown(row, ios, has))
         .filter_map(|(i, row)| {
             let s = score(row, &query);
             (s > 0).then_some((s, i, row))
@@ -179,14 +201,14 @@ fn row_changed(row: &CatalogRow, changed: &[String]) -> bool {
 
 /// The rows whose settings differ from a fresh install, in page order.
 pub fn changed_rows(changed: &[String]) -> Vec<CatalogRow> {
-    changed_rows_on(changed, IOS)
+    changed_rows_on(changed, IOS, &build_has)
 }
 
-fn changed_rows_on(changed: &[String], ios: bool) -> Vec<CatalogRow> {
+fn changed_rows_on(changed: &[String], ios: bool, has: &dyn Fn(&str) -> bool) -> Vec<CatalogRow> {
     let mut rows: Vec<(usize, usize, CatalogRow)> = rows()
         .iter()
         .enumerate()
-        .filter(|(_, row)| shown(row, ios) && row_changed(row, changed))
+        .filter(|(_, row)| shown(row, ios, has) && row_changed(row, changed))
         .map(|(i, row)| (PAGE_ORDER.iter().position(|p| *p == row.page).unwrap_or(PAGE_ORDER.len()), i, row.clone()))
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -249,17 +271,85 @@ mod tests {
         assert!(!t.contains(&"Spacing"));
     }
 
+    fn everything(_: &str) -> bool {
+        true
+    }
+
+    fn nothing(_: &str) -> bool {
+        false
+    }
+
     #[test]
     fn rows_hidden_on_the_iphone_stay_for_other_platforms() {
-        assert!(titles(&search_on("scrollbar marks", 5, false)).contains(&"Scrollbar marks"));
-        assert!(!titles(&search_on("scrollbar marks", 5, true)).contains(&"Scrollbar marks"));
+        assert!(titles(&search_on("scrollbar marks", 5, false, &everything)).contains(&"Scrollbar marks"));
+        assert!(!titles(&search_on("scrollbar marks", 5, true, &everything)).contains(&"Scrollbar marks"));
         let changed = ["chat_blend.platforms.kick".to_string(), "chat_design.font_size".to_string()];
-        assert!(titles(&changed_rows_on(&changed, false)).contains(&"Platforms"));
-        let ios = changed_rows_on(&changed, true);
+        assert!(titles(&changed_rows_on(&changed, false, &everything)).contains(&"Platforms"));
+        let ios = changed_rows_on(&changed, true, &everything);
         assert!(!titles(&ios).contains(&"Platforms"));
         assert!(titles(&ios).contains(&"Text size"));
         // The flag never reaches a client.
         let row = rows().iter().find(|r| r.hidden_on_ios).unwrap();
         assert!(serde_json::to_value(row).unwrap().get("hidden_on_ios").is_none());
+    }
+
+    #[test]
+    fn rows_a_build_lacks_are_hidden_from_search_and_changed() {
+        // A build without combined chat (a phone) finds none of its rows, on
+        // Android as well as the iPhone.
+        assert!(titles(&search_on("merged feed", 5, false, &everything)).contains(&"Merged feed"));
+        assert!(!titles(&search_on("merged feed", 5, false, &nothing)).contains(&"Merged feed"));
+        assert!(!titles(&search_on("scrollbar marks", 5, false, &nothing)).contains(&"Scrollbar marks"));
+        let changed = ["chat_blend.platforms.kick".to_string(), "chat_design.font_size".to_string()];
+        let lacking = changed_rows_on(&changed, false, &nothing);
+        assert!(!titles(&lacking).contains(&"Platforms"));
+        assert!(titles(&lacking).contains(&"Text size"), "a row with no needs always shows");
+
+        // One capability at a time: only the rows that need it go.
+        let no_youtube = |n: &str| n != "watch:youtube";
+        assert!(!titles(&search_on("currency", 5, false, &no_youtube)).contains(&"Currency"));
+        assert!(titles(&search_on("merged feed", 5, false, &no_youtube)).contains(&"Merged feed"));
+        // `|` is any of: pictures show while either platform can be watched.
+        let tiktok_only = |n: &str| n == "watch:tiktok";
+        assert!(titles(&search_on("pictures in chat", 5, false, &tiktok_only)).contains(&"Pictures in chat"));
+        assert!(!titles(&search_on("pictures in chat", 5, false, &nothing)).contains(&"Pictures in chat"));
+
+        // The flag never reaches a client either.
+        let row = rows().iter().find(|r| r.needs.is_some()).unwrap();
+        assert!(serde_json::to_value(row).unwrap().get("needs").is_none());
+    }
+
+    #[test]
+    fn every_need_names_a_real_capability() {
+        let known = ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary"];
+        for row in rows() {
+            for need in row.needs.iter().flat_map(|n| n.split('|')) {
+                let ok = known.contains(&need) || matches!(need, "watch:youtube" | "watch:tiktok" | "watch:twitch" | "watch:kick");
+                assert!(ok, "{} needs an unknown capability {need}", row.title);
+            }
+        }
+    }
+
+    #[test]
+    fn this_build_answers_needs_from_rust() {
+        assert_eq!(build_has("combined_chat"), cfg!(desktop));
+        assert_eq!(build_has("watch:youtube"), cfg!(desktop));
+        assert!(build_has("watch:kick"));
+    }
+
+    #[test]
+    fn rows_every_phone_draws_are_never_hidden() {
+        for title in ["Wallet balance", "Resume VODs", "VOD positions"] {
+            assert!(titles(&search_on(&title.to_lowercase(), 5, true, &nothing)).contains(&title), "{title}");
+        }
+        let wallet = rows().iter().find(|r| r.title == "Wallet balance").unwrap();
+        assert!(!wallet.detail.to_lowercase().contains("hover"), "phones have no hover");
+    }
+
+    #[test]
+    fn keep_screen_on_is_searchable_in_the_chats_tab_section() {
+        let hit = search_on("keep screen on", 3, false, &nothing);
+        assert_eq!(hit[0].title, "Keep screen on");
+        assert_eq!(hit[0].section, "Chats Tab");
     }
 }

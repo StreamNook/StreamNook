@@ -174,8 +174,23 @@ enum ChatFont {
         NotificationCenter.default.post(name: ChatTheme.changed, object: nil)
     }
 
-    /// The chat body's weight under the face in force.
-    static var bodyWeight: UIFont.Weight { current.withLock { $0.face.bodyWeight } >= 400 ? .regular : .light }
+    /// The chat body's weight: the face's own body weight moved by Text weight
+    /// (`chat_design.font_weight`, where 400 is Normal), so the default look holds and Light or Bold
+    /// move it, the same sum the desktop and Android draw. A face without that weight draws its
+    /// nearest (`font` clamps).
+    static func bodyWeight(textWeight: Int) -> UIFont.Weight {
+        let css = min(max(current.withLock { $0.face.bodyWeight } + textWeight - 400, 100), 900)
+        switch css {
+        case ..<150: return .ultraLight
+        case ..<250: return .thin
+        case ..<350: return .light
+        case ..<450: return .regular
+        case ..<550: return .medium
+        case ..<650: return .semibold
+        case ..<750: return .bold
+        default: return .heavy
+        }
+    }
 
     static func font(_ size: CGFloat, _ weight: UIFont.Weight) -> UIFont {
         let (face, generation) = current.withLock { $0 }

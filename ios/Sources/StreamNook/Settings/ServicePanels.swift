@@ -38,31 +38,39 @@ struct AdFreePanel: View {
                     Image(systemName: "bolt.slash")
                 }
             }
+            // Still behind a disclosure: the row says which list is in use, and the box to
+            // replace it only opens on purpose.
             SettingsBlock(title: "Relays") {
-                Button {
-                    withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
-                } label: {
-                    HStack {
-                        Label("Relays", systemImage: "point.3.connected.trianglepath.dotted")
-                        Spacer(minLength: 8)
+                let own = !store.string("video_player.ad_bypass_proxies").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                SettingRow(title: "Relays", detail: own ? "Your own list" : "The bundled list",
+                           paths: ["video_player.ad_bypass_proxies"], icon: "point.3.connected.trianglepath.dotted") {
+                    Button {
+                        withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { relaysOpen.toggle() }
+                    } label: {
                         Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(SN.textMuted)
                             .rotationEffect(.degrees(relaysOpen ? 90 : 0))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(relaysOpen ? "Shown" : "Hidden")
-                if relaysOpen {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
-                        Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
-                        SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
-                                         limit: 4000, monospaced: true, multiline: true)
+                    .buttonStyle(.plain)
+                    .padding(.vertical, -12)
+                    .padding(.trailing, -12)
+                    .accessibilityLabel(relaysOpen ? "Hide the relay list" : "Show the relay list")
+                } below: {
+                    if relaysOpen {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Leave this empty to use the bundled list, which is raced on every stream so the fastest one that answers wins. Enter your own addresses, one per line, only if you run or trust a specific relay.")
+                            Text("Your own list is used on its own. If none of them answer, the stream plays directly from Twitch with ads rather than falling back to the bundled relays.")
+                            SettingTextField(path: "video_player.ad_bypass_proxies", placeholder: "https://relay.example.com",
+                                             limit: 4000, monospaced: true, multiline: true)
+                        }
+                        .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 10)
+                        .transition(.opacity)
                     }
-                    .font(.sn(12.5)).foregroundStyle(SN.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
-                    .transition(.opacity)
+                } nested: {
+                    EmptyView()
                 }
             }
         }
@@ -555,11 +563,14 @@ struct SupportPanel: View {
     @Environment(AppModel.self) private var model
     @State private var invite: Invite?
     @State private var bannerIndex = 0
+    @State private var iconIndex = 0
 
     struct Invite: Decodable {
         let name: String?
         let description: String?
         let icon_url: String?
+        /// The server icon to try in order (animated, then the same icon still).
+        let icon_urls: [String]?
         let banner_urls: [String]
         let online: Int?
         let members: Int?
@@ -590,15 +601,18 @@ struct SupportPanel: View {
                     .padding(.top, 10)
             }
         }
-        SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them.") {
+        SettingsBlock(title: "Account Data", detail: "Signed in, StreamNook keeps a few things against your account. Chat messages and anything you type are not among them.") {
             SettingRow(title: "Channels and emotes",
                        detail: "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
                        help: "Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted.") { EmptyView() }
             SettingRow(title: "Version and platform",
-                       detail: "Records which build you are on, your operating system, and whether your updater is working.",
+                       detail: "Records which build you are on, your operating system, and whether update checks are getting through.",
                        help: "This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current.") { EmptyView() }
             SettingRow(title: "Linked accounts",
                        detail: "Records which other platforms you have connected, so they survive a reinstall.") { EmptyView() }
+            SettingRow(title: "VOD positions",
+                       detail: "With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.",
+                       help: "Only past broadcasts you open yourself, never live watching. Kept for 90 days. Turn off Device sync under Player > Resume VODs and nothing more is sent.") { EmptyView() }
         }
     }
 
@@ -667,18 +681,27 @@ struct SupportPanel: View {
         .clipped()
     }
 
+    /// The first icon that loads, then the Penrose mark; the same list Android tries.
     private var serverIcon: some View {
-        AsyncImage(url: invite?.icon_url.flatMap(URL.init(string:))) { phase in
+        let urls = invite?.icon_urls ?? invite?.icon_url.map { [$0] } ?? []
+        let url = iconIndex < urls.count ? URL(string: urls[iconIndex]) : nil
+        return AsyncImage(url: url) { phase in
             if let image = phase.image {
                 image.resizable().scaledToFill()
+            } else if phase.error != nil, iconIndex + 1 < urls.count {
+                iconFallback.onAppear { iconIndex += 1 }
             } else {
-                PenroseMark(width: 44).accessibilityHidden(true)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(SN.backgroundTertiary)
+                iconFallback
             }
         }
         .frame(width: 68, height: 68)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(SN.backgroundTertiary, lineWidth: 4) }
+    }
+
+    private var iconFallback: some View {
+        PenroseMark(width: 44).accessibilityHidden(true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(SN.backgroundTertiary)
     }
 
     private func export() async {

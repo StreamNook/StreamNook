@@ -32,6 +32,8 @@ struct ThemePanel: View {
                 .task(id: "\(store.string("oled_accent"))|\((store.value("custom_themes") as? [Any])?.count ?? 0)") { await load() }
             GlassinessCard()
             FontCard()
+            // While OLED is picked its accent sits with the theme rows, where the catalog files it.
+            if let catalog, current == catalog.oledID { OledAccentCard(accents: catalog.accents) }
         } header: {
             ListHeader(text: "Theme")
         }
@@ -42,18 +44,10 @@ struct ThemePanel: View {
             }
             ForEach(catalog.categories, id: \.id) { cat in
                 category(name: cat.name, description: cat.description,
-                         cards: catalog.themes.filter { $0.category == cat.id }, current: current,
-                         oledAccents: cat.id == "signature" && current == catalog.oledID ? catalog.accents : nil)
+                         cards: catalog.themes.filter { $0.category == cat.id }, current: current)
             }
         } else {
             Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20) }
-        }
-        Section {
-            Label {
-                Text("Create a custom theme to match your setup exactly.").font(.sn(12.5)).foregroundStyle(SN.textSecondary)
-            } icon: {
-                Image(systemName: "sparkles")
-            }
         }
     }
 
@@ -77,9 +71,8 @@ struct ThemePanel: View {
         }
     }
 
-    /// A category: its swatch grid on the card, its line under it, and the OLED accent beside the OLED theme.
-    private func category(name: String, description: String, cards: [Card], current: String,
-                          oledAccents: [(name: String, value: String)]? = nil) -> some View {
+    /// A category: its swatch grid on the card and its line under it.
+    private func category(name: String, description: String, cards: [Card], current: String) -> some View {
         Section {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(cards) { card in
@@ -92,7 +85,6 @@ struct ThemePanel: View {
                 }
             }
             .padding(.vertical, 6)
-            if let oledAccents { OledAccentCard(accents: oledAccents) }
         } header: {
             ListHeader(text: name)
         } footer: {

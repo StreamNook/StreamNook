@@ -20,7 +20,6 @@ struct SettingsPage: View {
                     case .support: SupportPanel()
                     case .changed: ChangedPanel()
                     case .backup: BackupPanel()
-                    default: EmptyNote(text: "\(section.title) settings are built next.", hint: nil)
                     }
                 } else {
                     ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)

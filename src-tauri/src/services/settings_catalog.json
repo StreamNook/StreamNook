@@ -193,6 +193,43 @@
   },
   {
    "page": "player",
+   "section": "Playback",
+   "title": "Resume VODs",
+   "paths": [
+    "video_player.resume_vod_playback"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Reopening a past broadcast picks up where you left off.",
+   "aliases": [
+    "continue",
+    "resume",
+    "vod position",
+    "where I left off",
+    "vod",
+    "continue watching",
+    "past broadcast"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Device sync",
+   "paths": [
+    "video_player.sync_vod_progress"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "Keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account.",
+   "aliases": [
+    "sync",
+    "cross device",
+    "vod",
+    "position"
+   ]
+  },
+  {
+   "page": "player",
    "section": "Latency & Buffering",
    "title": "Low latency",
    "paths": [
@@ -252,7 +289,7 @@
   },
   {
    "page": "player",
-   "section": "Song Identification",
+   "section": "Latency & Buffering",
    "title": "Target latency",
    "paths": [
     "video_player.ll_target_latency"
@@ -339,6 +376,23 @@
   },
   {
    "page": "chat",
+   "section": "Chats Tab",
+   "title": "Keep screen on",
+   "paths": [
+    "chats_keep_screen_on"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The screen stays on while the Chats tab is open, until 30 minutes pass without a touch.",
+   "aliases": [
+    "screen",
+    "sleep",
+    "awake",
+    "display"
+   ]
+  },
+  {
+   "page": "chat",
    "section": "Combined Chat",
    "title": "Merged feed",
    "paths": [
@@ -353,7 +407,8 @@
     "kick chat",
     "youtube chat"
    ],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "combined_chat"
   },
   {
    "page": "chat",
@@ -366,7 +421,8 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "combined_chat"
   },
   {
    "page": "chat",
@@ -379,7 +435,8 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "combined_chat"
   },
   {
    "page": "chat",
@@ -392,7 +449,8 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "combined_chat"
   },
   {
    "page": "chat",
@@ -405,7 +463,8 @@
    "logo": null,
    "detail": "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "watch:youtube"
   },
   {
    "page": "chat",
@@ -418,7 +477,8 @@
    "logo": null,
    "detail": "Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent.",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "watch:youtube"
   },
   {
    "page": "chat",
@@ -578,6 +638,19 @@
    "nested": false,
    "logo": null,
    "detail": "Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline.",
+   "aliases": [],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Wording",
+   "paths": [
+    "chat_events.event_templates"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used.",
    "aliases": [],
    "hidden_on_ios": true
   },
@@ -886,8 +959,7 @@
    "aliases": [
     "avatar",
     "pfp"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -916,7 +988,8 @@
    "logo": null,
    "detail": "On platforms that send one (YouTube, TikTok), the chatter's picture leads their message.",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "watch:youtube|watch:tiktok"
   },
   {
    "page": "chat",
@@ -1025,6 +1098,18 @@
    "title": "Shape",
    "paths": [
     "chat_design.mention_style"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Color",
+   "paths": [
+    "chat_design.mention_text_color"
    ],
    "nested": true,
    "logo": null,
@@ -1328,7 +1413,7 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "needs": "spell_dictionary"
   },
   {
    "page": "chat",
@@ -1365,6 +1450,42 @@
    "logo": null,
    "detail": "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.",
    "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Wallet balance",
+   "paths": [
+    "chat_input.hide_points_balance",
+    "chat_input.show_points_balance_inline"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Always shows your balance beside the wallet button in the message box. Hidden keeps just the icon, and the wallet shows your balance when you open it.",
+   "aliases": [
+    "points balance",
+    "channel points",
+    "bits",
+    "wallet"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Show gains",
+   "paths": [
+    "chat_input.wallet_gains"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "A +N shows beside your channel points when you earn some: for every gain, or only for a bonus chest.",
+   "aliases": [
+    "points",
+    "channel points",
+    "wallet",
+    "chest"
+   ],
+   "hidden_on_ios": true
   },
   {
    "page": "chat",
@@ -1486,7 +1607,8 @@
    "logo": null,
    "detail": "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one tap away.",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "chat_dock"
   },
   {
    "page": "chat",
@@ -1596,8 +1718,7 @@
    "detail": "",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1622,7 +1743,8 @@
    "logo": null,
    "detail": "Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back.",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "scrollbar_marks"
   },
   {
    "page": "chat",
@@ -1635,7 +1757,8 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "hidden_on_ios": true,
+   "needs": "scrollbar_marks"
   },
   {
    "page": "chat",
@@ -1666,45 +1789,6 @@
   },
   {
    "page": "chat",
-   "section": "Spam & Pyramid",
-   "title": "Color",
-   "paths": [
-    "chat_design.mention_text_color"
-   ],
-   "nested": true,
-   "logo": null,
-   "detail": "",
-   "aliases": []
-  },
-  {
-   "page": "chat",
-   "section": "Spam & Pyramid",
-   "title": "Points balance",
-   "paths": [
-    "chat_input.hide_points_balance",
-    "chat_input.show_points_balance_inline"
-   ],
-   "nested": false,
-   "logo": null,
-   "detail": "Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.",
-   "aliases": [],
-   "hidden_on_ios": true
-  },
-  {
-   "page": "chat",
-   "section": "Spam & Pyramid",
-   "title": "Wording",
-   "paths": [
-    "chat_events.event_templates"
-   ],
-   "nested": false,
-   "logo": null,
-   "detail": "Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used.",
-   "aliases": [],
-   "hidden_on_ios": true
-  },
-  {
-   "page": "chat",
    "section": "Links",
    "title": "Style",
    "paths": [
@@ -1716,8 +1800,7 @@
    "detail": "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
    "aliases": [
     "look"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1729,8 +1812,7 @@
    "nested": true,
    "logo": null,
    "detail": "",
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "chat",
@@ -1953,7 +2035,7 @@
    "paths": [],
    "nested": false,
    "logo": null,
-   "detail": "Records which build you are on, your operating system, and whether your updater is working.",
+   "detail": "Records which build you are on, your operating system, and whether update checks are getting through.",
    "aliases": []
   },
   {
@@ -1965,6 +2047,20 @@
    "logo": null,
    "detail": "Records which other platforms you have connected, so they survive a reinstall.",
    "aliases": []
+  },
+  {
+   "page": "support",
+   "section": "Account Data",
+   "title": "VOD positions",
+   "paths": [],
+   "nested": false,
+   "logo": null,
+   "detail": "With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.",
+   "aliases": [
+    "vod",
+    "privacy",
+    "continue watching"
+   ]
   },
   {
    "page": "adFree",
@@ -2402,7 +2498,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "The four timeout lengths on a user card in channels you moderate, also the hover dock's on desktop.",
+   "detail": "The four timeout lengths on a user card in channels you moderate, the same four wherever a quick timeout is offered.",
    "aliases": [
     "timeout",
     "presets",

@@ -169,15 +169,18 @@ final class ChatSession {
         self.paused = paused
     }
 
-    /// The core's chat settings, read once when the room opens.
+    /// The core's chat settings: read when the room opens and again after every settings change,
+    /// so a choice on the Chat page reaches a room that is already open (the open rooms live for
+    /// the whole session).
     private func loadSettings() {
-        let core = core
+        settingsTask?.cancel()
+        let styles = ChatStyleFeed.styles(core: core)
         settingsTask = Task { [weak self] in
-            guard let json = try? await core.invoke("get_settings", "{}") else { return }
-            let style = ChatStyle(settingsJSON: Data(json.utf8))
-            guard let self else { return }
-            self.style = style
-            self.pipeline.setStyle(style)
+            for await style in styles {
+                guard let self else { return }
+                self.style = style
+                self.pipeline.setStyle(style)
+            }
         }
     }
 

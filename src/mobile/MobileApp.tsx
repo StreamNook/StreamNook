@@ -42,6 +42,7 @@ import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
+import { useMentionPing } from '../hooks/useMentionPing';
 
 const TAB_ORDER = ['following', 'browse', 'chats', 'rewards', 'you'] as const;
 
@@ -61,6 +62,9 @@ const MobileApp: React.FC = () => {
   // The chats outside any one screen: the stream tab, the saved chats, and
   // leaving the rooms after a while in the background.
   useChatsLifecycle();
+  // Plays the mention and reply sounds Rust picks (Chat > Mentions & Replies),
+  // as the desktop's main window does.
+  useMentionPing();
 
   const isBooting = useAppStore((s) => s.isBooting);
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);

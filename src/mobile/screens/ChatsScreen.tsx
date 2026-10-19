@@ -88,7 +88,13 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const keepOn = useAppStore((s) => s.settings.chats_keep_screen_on ?? true);
   const startStream = useAppStore((s) => s.startStream);
   const [addOpen, setAddOpen] = useState(false);
-  const [pinsOpen, setPinsOpen] = useState(false);
+  // A pin opens or folds per channel: each channel starts as Chat > Pinned
+  // Messages > Collapsed says, and a tap holds until the chat switches.
+  const chatChannelId = useActiveChatChannelId();
+  const pinsStartCollapsed = useAppStore((s) => s.settings.chat_design?.pinned_start_collapsed) ?? true;
+  const pinnedStyle = useAppStore((s) => s.settings.chat_design?.pinned_collapsed_style) ?? 'bar';
+  const [pinsState, setPinsState] = useState<{ channel: string | null; open: boolean } | null>(null);
+  const pinsOpen = pinsState && pinsState.channel === chatChannelId ? pinsState.open : !pinsStartCollapsed;
   // The closed banner's height: the list starts under it. Opened, the banner
   // floats over the rows, so nothing below it moves.
   const pinsRef = useRef<HTMLDivElement | null>(null);
@@ -117,7 +123,6 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
     observer.observe(el);
     return () => observer.disconnect();
   }, [hasPins, pinsOpen]);
-  const chatChannelId = useActiveChatChannelId();
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
   const canWatch = !!active && active.live === true && !active.pinnedToStream;
@@ -350,7 +355,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
                   pins={pinned}
                   channelId={chatChannelId ?? undefined}
                   expanded={pinsOpen}
-                  onToggle={() => setPinsOpen((v) => !v)}
+                  onToggle={() => setPinsState({ channel: chatChannelId, open: !pinsOpen })}
+                  collapsedStyle={pinnedStyle}
                 />
               </div>
             )}

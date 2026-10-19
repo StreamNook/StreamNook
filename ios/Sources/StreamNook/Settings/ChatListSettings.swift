@@ -246,8 +246,40 @@ extension SettingsStore {
 struct LinkSettings: View {
     @Environment(SettingsStore.self) private var store
 
+    /// Off, a card under the link, or the card alone: two settings read as one choice.
+    private var mode: String {
+        guard store.bool("chat_design.link_previews", true) else { return "off" }
+        return store.bool("chat_design.link_preview_keep_link", false) ? "with_link" : "clean"
+    }
+
     var body: some View {
-        SettingsBlock(title: "Links", detail: "How links in chat look.") {
+        SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
+            LinksPreview()
+            WideRow(title: "Style",
+                    detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
+                    help: "StreamNook fetches the page from your phone to build the card, so the site sees a visit from you. Only trusted sites get a card. Popular sites are trusted out of the box; add more under Trusted sites.",
+                    paths: ["chat_design.link_previews", "chat_design.link_preview_keep_link"]) {
+                SettingSegments(choices: [Choice("Off", "off"), Choice("Card + Link", "with_link"), Choice("Clean", "clean")],
+                                selected: mode, accessibility: "Link style") { picked in
+                    Task {
+                        if picked == "off" {
+                            await store.set("chat_design.link_previews", false)
+                        } else {
+                            await store.set(["chat_design.link_previews": true,
+                                             "chat_design.link_preview_keep_link": picked == "with_link"])
+                        }
+                    }
+                }
+                .padding(.top, 12)
+            } nested: {
+                if mode != "off" {
+                    NestedSettings {
+                        NestedLine(title: "Trusted sites", paths: ["chat_design.link_preview_trusted_domains"], stacked: true) {
+                            TrustedSites()
+                        }
+                    }
+                }
+            }
             ToggleRow(title: "Short links", path: "chat_design.shorten_links", fallback: true,
                       detail: "Shows each link as a compact label, the site plus a short path, instead of the full raw URL.",
                       help: "The full link still opens on tap and shows when you press and hold.")
@@ -255,6 +287,31 @@ struct LinkSettings: View {
                      detail: "The color of links in chat. Leave it on the default to follow the theme.")
             ToggleRow(title: "Underline", path: "chat_design.link_underline", fallback: true,
                       detail: "Off leaves links colored but not underlined.")
+        }
+    }
+}
+
+/// The sites you trusted beyond the built-in list: their links expand into a card on their own.
+/// The core keeps each as its bare host and refuses anything that is not a site address.
+private struct TrustedSites: View {
+    @Environment(SettingsStore.self) private var store
+    private let path = "chat_design.link_preview_trusted_domains"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AddField(label: nil, placeholder: "example.com", keyboard: .URL) { host in
+                await store.add(path, host)
+            }
+            let hosts = store.strings(path)
+            if !hosts.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(hosts, id: \.self) { host in
+                        RemovableChip(text: host, removeLabel: "Stop trusting \(host)") {
+                            Task { _ = try? await store.edit(path, .removeValue(host)) }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -513,36 +570,41 @@ struct EventHighlightsSettings: View {
 
     var body: some View {
         SettingsBlock(title: "Event Highlights", detail: "Highlight messages from certain kinds of chatters. Works alongside your phrase highlights and never changes the mention or reply flash.") {
+            // Each rule's own default switch and color, as the core reads them.
             rule("first_time_chatter", "First-time chatters",
-                 "Highlight a user's first ever message in this channel.",
+                 "Highlight a user's first ever message in this channel.", on: true, color: "#a855f7",
                  help: "Style is a tinted wash with a bar down the left, or a ring around the message; Ring fill adds a faint color-matched fill inside it. Glint is a short highlight as the row lands (a sheen, a pulse, or a spark around the edge), and Loop keeps it going.")
-            rule("returning_chatter", "Returning chatters", "Highlight users coming back after a long absence.")
-            rule("self_message", "Your own messages", "Tint your own outgoing messages so they're easy to spot in fast chats.")
-            rule("raider", "Raid announcements", "Highlight the \"X is raiding with Y viewers\" notice row when a raid lands.")
+            rule("returning_chatter", "Returning chatters", "Highlight users coming back after a long absence.",
+                 on: false, color: "#22d3ee")
+            rule("self_message", "Your own messages", "Tint your own outgoing messages so they're easy to spot in fast chats.",
+                 on: false, color: "#facc15")
+            rule("raider", "Raid announcements", "Highlight the \"X is raiding with Y viewers\" notice row when a raid lands.",
+                 on: false, color: "#ef4444")
         }
     }
 
-    private func rule(_ key: String, _ title: String, _ detail: String, help: String? = nil) -> some View {
+    private func rule(_ key: String, _ title: String, _ detail: String, on: Bool, color: String,
+                      help: String? = nil) -> some View {
         let base = "chat_highlights.built_in.\(key)"
         return SettingRow(title: title, detail: detail, help: help, paths: ["\(base).enabled", "\(base).color"]) {
-            SettingToggle(path: "\(base).enabled", label: title)
+            SettingToggle(path: "\(base).enabled", fallback: on, label: title)
         } nested: {
-            if store.bool("\(base).enabled", true) {
+            if store.bool("\(base).enabled", on) {
                 NestedSettings {
-                    NestedColor(title: "Color", path: "\(base).color", unset: "#a855f7")
+                    NestedColor(title: "Color", path: "\(base).color", unset: color)
                     if key == "first_time_chatter" {
-                    NestedChoice(title: "Style", path: "\(base).style", choices: [Choice("Wash", "wash"), Choice("Ring", "ring")], fallback: "wash")
-                    if store.string("\(base).style", "wash") == "ring" {
-                        NestedToggle(title: "Ring fill", path: "\(base).fill")
-                    }
-                    NestedLine(title: "Glint", paths: ["\(base).animation"]) {
-                        SettingMenu(path: "\(base).animation",
-                                    choices: [Choice("None", "none"), Choice("Sheen", "sheen"), Choice("Pulse", "pulse"), Choice("Chase", "chase")],
-                                    fallback: "none", accessibility: "First-time glint", fullWidth: false)
-                    }
-                    if store.string("\(base).animation", "none") != "none" {
-                        NestedToggle(title: "Loop", path: "\(base).animate_repeat")
-                    }
+                        NestedChoice(title: "Style", path: "\(base).style", choices: [Choice("Wash", "wash"), Choice("Ring", "ring")], fallback: "wash")
+                        if store.string("\(base).style", "wash") == "ring" {
+                            NestedToggle(title: "Ring fill", path: "\(base).fill")
+                        }
+                        NestedLine(title: "Glint", paths: ["\(base).animation"]) {
+                            SettingMenu(path: "\(base).animation",
+                                        choices: [Choice("None", "none"), Choice("Sheen", "sheen"), Choice("Pulse", "pulse"), Choice("Chase", "chase")],
+                                        fallback: "none", accessibility: "First-time glint", fullWidth: false)
+                        }
+                        if store.string("\(base).animation", "none") != "none" {
+                            NestedToggle(title: "Loop", path: "\(base).animate_repeat")
+                        }
                     }
                 }
             }

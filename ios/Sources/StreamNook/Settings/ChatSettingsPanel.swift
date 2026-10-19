@@ -5,6 +5,7 @@ import SwiftUI
 /// settings. Sections that only hold a list editor live in ChatListSettings.
 struct ChatSettingsPanel: View {
     @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
     @AppStorage("sn-mention-haptic") private var mentionHaptic = "on"
 
     var body: some View {
@@ -90,22 +91,23 @@ struct ChatSettingsPanel: View {
 
     private var events: some View {
         SettingsBlock(title: "Chat Events", detail: "What live channel activity shows while you watch. Turn any of these off to keep chat clean.") {
+            EventRowsPreview()
             ToggleRow(title: "Redemptions", path: "show_channel_point_redemptions", fallback: true,
                       detail: "A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward.",
                       help: "Rewards that already post to chat are unaffected.")
             WideRow(title: "Platforms", detail: "Turn event kinds off per platform. Lit means shown.",
                     paths: ["chat_events.hidden_provider_events"]) {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Self.eventKinds, id: \.0) { platform, label, kinds in
+                    ForEach(ChatEventKinds.platforms(watchable: model.kick.watchable)) { platform in
                         HStack(alignment: .top, spacing: 8) {
                             HStack(spacing: 4) {
-                                BrandLogo(id: platform, size: 13)
-                                Text(label).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                                BrandLogo(id: platform.id, size: 13)
+                                Text(platform.label).font(.sn(12)).foregroundStyle(SN.textSecondary)
                             }
                             .frame(width: 84, alignment: .leading)
                             .padding(.top, 7)
                             SettingChips(path: "chat_events.hidden_provider_events",
-                                         chips: kinds.map { Choice($0.1, "\(platform):\($0.0)") })
+                                         chips: platform.kinds.map { Choice($0.label, $0.key) })
                         }
                     }
                 }
@@ -114,17 +116,11 @@ struct ChatSettingsPanel: View {
         }
     }
 
-    /// Twitch and Kick only: the iPhone has no YouTube or TikTok chat.
-    static let eventKinds: [(String, String, [(String, String)])] = [
-        ("twitch", "Twitch", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("bits", "Bits"), ("raids", "Raids"),
-                             ("milestones", "Milestones"), ("channel_points", "Channel points"), ("announcements", "Announcements")]),
-        ("kick", "Kick", [("subscriptions", "Subscriptions"), ("gifts", "Gifts"), ("follows", "Follows"), ("raids", "Raids")]),
-    ]
-
     // MARK: Layout, names, mentions
 
     private var layout: some View {
         SettingsBlock(title: "Message Layout", detail: "Spacing, text size, animation and timestamps.") {
+            MessageLayoutPreview()
             ToggleRow(title: "Dividers", path: "chat_design.show_dividers",
                       detail: "A thin line between messages so a fast chat is easier to scan.")
             ToggleRow(title: "Striped rows", path: "chat_design.alternating_backgrounds",
@@ -136,7 +132,8 @@ struct ChatSettingsPanel: View {
             ChoiceRow(title: "Text weight", path: "chat_design.font_weight",
                       choices: [Choice("Light (300)", "300"), Choice("Normal (400)", "400"), Choice("Medium (500)", "500"),
                                 Choice("Semi-Bold (600)", "600"), Choice("Bold (700)", "700")],
-                      fallback: "400", menu: true, detail: "How heavy the message text is, from light to bold.", accessibility: "Font weight")
+                      fallback: "400", menu: true, numeric: true,
+                      detail: "How heavy the message text is, from light to bold.", accessibility: "Font weight")
             ChoiceRow(title: "Message animation", path: "chat_design.message_entrance",
                       choices: [Choice("Instant", "none"), Choice("Fade", "fade"), Choice("Slide", "slide"), Choice("Rise", "rise")],
                       fallback: "slide",
@@ -156,6 +153,7 @@ struct ChatSettingsPanel: View {
 
     private var names: some View {
         SettingsBlock(title: "Names & Badges", detail: "How chatter names, badges and 7TV paints look.") {
+            NamesPreview()
             ChoiceRow(title: "Name style", path: "chat_design.username_style",
                       choices: [Choice("Plain", "plain"), Choice("Accent bar", "bar"), Choice("Chip / tag", "chip"),
                                 Choice("Brackets   [name]", "brackets"), Choice("Color dot", "dot")],
@@ -170,8 +168,10 @@ struct ChatSettingsPanel: View {
                                 fallback: "none", accessibility: "Name separator", fullWidth: false)
                 }
                 if store.string("chat_design.username_separator", "none") != "none" || store.string("chat_design.username_style", "plain") != "plain" {
+                    // An earlier build saved "accent", which nothing reads; it shows as the theme choice.
                     NestedChoice(title: "Prefix color", path: "chat_design.username_accent_source",
-                                 choices: [Choice("User color", "user"), Choice("Theme accent", "accent")], fallback: "user")
+                                 choices: [Choice("User color", "user"), Choice("Theme accent", "theme")], fallback: "user",
+                                 shown: { $0 == "accent" ? "theme" : $0 })
                 }
             }
             ToggleRow(title: "Readable colors", path: "chat_design.name_color_adjustment",
@@ -192,11 +192,17 @@ struct ChatSettingsPanel: View {
                     SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
-            // The picture source (7TV or Twitch) is not read on the iPhone yet, so only Animation shows.
-            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_animation",
-                      choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
-                      detail: "Animated 7TV profile pictures play, or hold their first frame.",
-                      shown: { $0 == "hover" ? "never" : $0 })
+            ProfilePicturePreview()
+            ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
+                      choices: [Choice("7TV", "seventv"), Choice("Twitch", "twitch")], fallback: "seventv",
+                      detail: "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
+                      help: "Twitch shows each platform's own picture (Kick included) and never asks 7TV for one; paints and badges stay. Animation has its own choice and does not follow Reduce Motion.") {
+                if store.string("cosmetics.profile_picture_source", "seventv") != "twitch" {
+                    NestedChoice(title: "Animation", path: "cosmetics.profile_picture_animation",
+                                 choices: [Choice("Animated", "always"), Choice("Still", "never")], fallback: "always",
+                                 shown: { $0 == "hover" ? "never" : $0 })
+                }
+            }
             ToggleRow(title: "@ prefix", path: "chat_design.show_at_sign", detail: "Writes every name as @name.")
             ChoiceRow(title: "Paint shadows", path: "cosmetics.paint_shadows",
                       choices: [Choice("All", "all"), Choice("One", "one"), Choice("None", "none")], fallback: "all",
@@ -212,6 +218,7 @@ struct ChatSettingsPanel: View {
 
     private var mentions: some View {
         SettingsBlock(title: "Mentions & Replies", detail: "How a message that mentions you, and a reply, stand out, and how an @name reads in chat.") {
+            MentionsPreview()
             SettingRow(title: "@name style", detail: "How an @mention reads in chat.",
                        help: "A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright.") {
                 EmptyView()
@@ -299,6 +306,7 @@ struct ChatSettingsPanel: View {
 
     private var input: some View {
         SettingsBlock(title: "Chat Input", detail: "Small conveniences in the box where you type, and which buttons sit around it.") {
+            ChatInputPreview()
             ToggleRow(title: "Duplicate sends", path: "chat_input.bypass_duplicate",
                       detail: "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
                       help: "Twitch normally blocks identical messages sent back to back. Handy for repeating an emote.")
@@ -311,6 +319,7 @@ struct ChatSettingsPanel: View {
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
                       detail: "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.")
+            WalletBalanceRow()
         }
     }
 
@@ -331,12 +340,13 @@ struct ChatSettingsPanel: View {
         SettingsBlock(title: "Channel Points", detail: "Bonus chest pickup on the channel you are watching.") {
             ToggleRow(title: "Bonus chests", path: "auto_claim_points_watching", fallback: true,
                       detail: "Collects the bonus chest on the stream you are watching the moment it appears.",
-                      help: "When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin.")
+                      help: "When this is off, a claim button appears on the points icon so you can grab it yourself. Only the channel you are watching is claimed.")
         }
     }
 
     private var behavior: some View {
         SettingsBlock(title: "Chat Behavior", detail: "Deleted messages, shared chat, scrolling, and how much chat is kept.") {
+            DeletedMessagePreview()
             // Five segments do not fit a phone's width at 13 pt, so this one is a menu.
             ChoiceRow(title: "Deleted messages", path: "chat_design.deleted_message_style",
                       choices: [Choice("Strikethrough", "strikethrough"), Choice("Dimmed", "dimmed"), Choice("Italic", "italic"),
@@ -356,11 +366,25 @@ struct ChatSettingsPanel: View {
 
     private var highlightAppearance: some View {
         SettingsBlock(title: "Highlight Appearance", detail: "Applies to every highlight type below: phrases, usernames, badges, and events.") {
-            SliderRow(title: { "Opacity: \(Int($0))%" }, path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
-                      fallback: 20, detail: "How bright a highlighted row's tint is; 20% matches the original look.",
-                      accessibility: "Highlight opacity")
+            ChoiceRow(title: "Style", path: "chat_highlights.appearance.display_style",
+                      choices: [Choice("Standard", "standard"), Choice("Minimal", "minimal"), Choice("None", "none")],
+                      fallback: "standard",
+                      help: "Opacity is how bright the row tint appears, in the Standard style only. 20% matches the original look.",
+                      detailFor: { Self.highlightStyleHints[$0 ?? "standard"] ?? "" },
+                      accessibility: "Highlight style") {
+                if store.string("chat_highlights.appearance.display_style", "standard") == "standard" {
+                    NestedSlider(title: "Opacity", path: "chat_highlights.appearance.opacity", range: 0...100, step: 5,
+                                 fallback: 20, readout: { "\(Int($0))%" })
+                }
+            }
         }
     }
+
+    static let highlightStyleHints = [
+        "standard": "Tinted row background plus colored left border.",
+        "minimal": "Colored left border only, no row tint.",
+        "none": "Nothing drawn on the row.",
+    ]
 
     private var spam: some View {
         SettingsBlock(title: "Spam & Pyramid", detail: "How /spam and /pyramid send their lines.") {
@@ -481,6 +505,30 @@ struct SettingTextField: View {
                 save?.cancel()
                 Task { await store.set(path, text) }
             }
+        }
+    }
+}
+
+/// Chat Input > Wallet balance: Always puts the short balance beside the wallet button, Hidden
+/// keeps just the icon. Same two keys as desktop and Android; a saved desktop On hover shows as
+/// Hidden, which is how the composer draws it, and is only rewritten when a choice is picked.
+private struct WalletBalanceRow: View {
+    @Environment(SettingsStore.self) private var store
+
+    var body: some View {
+        let always = store.bool("chat_input.show_points_balance_inline") && !store.bool("chat_input.hide_points_balance")
+        WideRow(title: "Wallet balance",
+                detail: "Always shows your balance beside the wallet button in the message box. Hidden keeps just the icon, and the wallet shows your balance when you open it.",
+                help: "The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers.",
+                paths: ["chat_input.hide_points_balance", "chat_input.show_points_balance_inline"]) {
+            SettingSegments(choices: [Choice("Always", "always"), Choice("Hidden", "hidden")],
+                            selected: always ? "always" : "hidden", accessibility: "Wallet balance") { mode in
+                Task {
+                    await store.set(["chat_input.hide_points_balance": mode == "hidden",
+                                     "chat_input.show_points_balance_inline": mode == "always"])
+                }
+            }
+            .padding(.top, 12)
         }
     }
 }

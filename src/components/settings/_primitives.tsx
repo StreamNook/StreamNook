@@ -29,6 +29,9 @@ interface SettingsSectionProps {
   /** The words drawn when the logo already names the brand ("Chat" beside
    *  YouTube's mark). `label` stays the section's name for anchors and search. */
   shownLabel?: string;
+  /** The phone's small action on the heading's line (Custom Commands' Show
+   *  reference), as the iPhone places it. The desktop does not draw it. */
+  accessory?: ReactNode;
 }
 
 export { sectionIdFromLabel };
@@ -44,16 +47,22 @@ const PhoneSettingsSection = ({
   bare = false,
   logo,
   shownLabel,
+  accessory,
 }: SettingsSectionProps) => (
   <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
-    <GroupLabel
-      as="h3"
-      className={`px-4 pb-2 ${logo ? 'flex items-center gap-1.5' : ''}`}
-      aria-label={shownLabel ? label : undefined}
-    >
-      {logo}
-      {shownLabel ?? label}
-    </GroupLabel>
+    {/* An accessory sits on the heading's line, centered on it. */}
+    <div className={accessory ? 'flex items-center justify-between gap-3 pr-2' : undefined}>
+      <GroupLabel
+        as="h3"
+        className={`px-4 ${accessory ? '' : 'pb-2'} ${logo ? 'flex items-center gap-1.5' : ''}`}
+        aria-label={shownLabel ? label : undefined}
+      >
+        {logo}
+        {shownLabel ?? label}
+      </GroupLabel>
+      {accessory}
+    </div>
+    {accessory && <div className="h-2" />}
     <SectionNameContext.Provider value={label}>
       {bare ? <div className="space-y-3">{children}</div> : <GroupCard>{children}</GroupCard>}
     </SectionNameContext.Provider>
@@ -202,7 +211,7 @@ const PhoneSettingsRow = ({
               looked-up tag reads to the compiler as a component made in render. */}
           {createElement(glyph, { size: GROUP_ICON, strokeWidth: GROUP_ICON_STROKE })}
         </GroupIcon>
-        <div className="col-start-2 row-start-1 min-w-0 text-[15px] leading-6 text-textPrimary">
+        <div className="col-start-2 row-start-1 min-w-0 text-[14px] leading-6 text-textPrimary">
           {/* Dropped 2px under the baseline so a 14px mark centers on the
               title's capitals rather than riding above them. */}
           {logo && (
@@ -231,9 +240,9 @@ const PhoneSettingsRow = ({
           </div>
         )}
         {description && (
-          <p className="col-start-2 mt-0.5 text-[13px] leading-[18px] text-textSecondary">{description}</p>
+          <p className="col-start-2 mt-0.5 text-[12px] leading-4 text-textSecondary">{description}</p>
         )}
-        {help && helpOpen && <p className="col-start-2 mt-1 text-[13px] leading-[18px] text-textMuted">{help}</p>}
+        {help && helpOpen && <p className="col-start-2 mt-1 text-[12px] leading-4 text-textMuted">{help}</p>}
         {hasControl && controlUnder && (
           <div className="col-start-2 mt-2 flex min-w-0 justify-end">
             <span ref={controlRef} className="inline-flex max-w-full flex-wrap justify-end gap-2">{control}</span>
