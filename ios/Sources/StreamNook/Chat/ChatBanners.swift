@@ -181,10 +181,10 @@ struct PaintedName: View {
 /// resub first (it is rarer and expires). Sharing posts the composer's text with it, consumes
 /// the token and hides the banner; dismissals hold for the session.
 ///
-/// They wear the glass the rooms strip's capsules wear (solid at Glassiness 0), a 12 point glyph
-/// in the leading column, what it is in bold with the detail quieter beside it, then the one
-/// glazed accent action (Share) and a quieter dismiss. They rise out of the composer's edge and
-/// fold back.
+/// They wear the Liquid Glass the rooms strip's capsules wear (solid at Glassiness 0), a 12 point
+/// glyph in the leading column, what it is in bold with the detail quieter beside it, then the
+/// one action (Share, Liquid Glass tinted with the accent) and a quieter dismiss. They rise out of
+/// the composer's edge and fold back.
 struct StreakBanners: View {
     let rooms: ChatRooms
     let session: ChatSession
@@ -282,7 +282,7 @@ struct StreakBanners: View {
         .snGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    /// The banner's one action: Share, the glazed accent button.
+    /// The banner's one action: Share, on Liquid Glass tinted with the theme's accent.
     private func shareButton(_ action: @escaping () async -> Void) -> some View {
         Button {
             Task { await action() }
@@ -292,7 +292,7 @@ struct StreakBanners: View {
                 .padding(.horizontal, 14)
                 .frame(height: 28)
         }
-        .buttonStyle(GlazeAccentButton())
+        .buttonStyle(AccentGlass())
         .disabled(rooms.sharing)
         .opacity(rooms.sharing ? 0.5 : 1)
     }
@@ -315,5 +315,19 @@ struct StreakBanners: View {
         if resub.isGift { return resub.gifter.map { "from \($0)" } }
         let n = resub.cumulativeMonths
         return "\(n) month\(n == 1 ? "" : "s")"
+    }
+}
+
+/// The one action on a glass banner: Liquid Glass tinted with the theme's accent, interactive under
+/// the finger (the desktop's glazed accent button), a solid accent capsule at Glassiness 0. Its
+/// text is white on a dark accent and near-black on a pale one.
+private struct AccentGlass: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Look.shared.palette.accent.luminance > 0.5 ? Color.black.opacity(0.88) : .white)
+            .snGlass(Capsule(), tint: SN.accent, interactive: true)
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

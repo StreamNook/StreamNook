@@ -97,33 +97,6 @@ private struct SNGlass<S: Shape>: ViewModifier {
     }
 }
 
-/// The one filled action on a glass surface (the desktop's ACCENT_BUTTON): a capsule of the accent
-/// mixed into black with white text, lit like the glaze rather than outlined: light along the top
-/// edge, a half point of bounce along the bottom, a dark half-point contour. It dims a little while
-/// pressed.
-struct GlazeAccentButton: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white)
-            .background {
-                Capsule().fill(SN.accentFill)
-                    .overlay {
-                        Capsule().strokeBorder(
-                            LinearGradient(stops: [.init(color: .white.opacity(0.18), location: 0),
-                                                   .init(color: .clear, location: 0.35),
-                                                   .init(color: .clear, location: 0.8),
-                                                   .init(color: .white.opacity(0.08), location: 1)],
-                                           startPoint: .top, endPoint: .bottom),
-                            lineWidth: 1)
-                    }
-                    .overlay { Capsule().stroke(.black.opacity(0.38), lineWidth: 0.5) }
-            }
-            .brightness(configuration.isPressed ? -0.05 : 0)
-            .contentShape(Capsule())
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
 /// Corner sizes. A corner inside another is the outer one less the gap between them, so the two
 /// curves run parallel (ios/docs/design-eye.md).
 enum SNRadius {
