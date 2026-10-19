@@ -815,6 +815,18 @@ mod accent_floor_tests {
     }
 
     #[test]
+    fn a_custom_accent_being_edited_gets_its_floor_at_once() {
+        // What the desktop editor sends while the accent is dragged: a pale cyan on a light card.
+        let mut p = json!({ "background": "#f6f6f8", "surface": "rgba(0, 0, 0, 0.05)", "accent": "#a5f3fc",
+                            "textPrimary": "#111111", "textSecondary": "#555555", "textMuted": "rgba(0, 0, 0, 0.6)" });
+        lift_text(&mut p);
+        assert!(track_ratio(&p, "accentOnSurface") >= ACCENT_CONTRAST_FLOOR);
+        p["accent"] = json!("#0e7490");
+        lift_text(&mut p);
+        assert_eq!(p["accentOnSurface"], "#0e7490", "an accent that already clears it comes back as written");
+    }
+
+    #[test]
     fn resolve_hands_every_shell_the_floored_accent() {
         let t = resolve("winters-glass", &[], None);
         assert!(t.palette["accentOnSurface"].is_string());

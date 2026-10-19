@@ -2266,6 +2266,7 @@ pub fn run() {
             predict,
             watch_channel_poll_view,
             chat_top_stack,
+            lift_theme_palette,
             redeem_channel_reward,
             redeem_reward,
             send_highlighted_message,
