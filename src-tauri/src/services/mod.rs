@@ -133,6 +133,7 @@ pub mod theme_palette;
 pub mod settings_backups;
 pub mod install_marker;
 pub mod settings_catalog;
+pub mod alert_types;
 pub mod client_capabilities;
 #[cfg(test)]
 mod ll_soak;

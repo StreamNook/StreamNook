@@ -74,6 +74,7 @@ import {
   Link2,
   List,
   ListChecks,
+  ListFilter,
   ListVideo,
   Maximize,
   Maximize2,
@@ -336,9 +337,10 @@ const BY_TITLE: Record<string, LucideIcon> = {
   // Notifications
   Notifications: Bell,
   'Live channels': Radio,
+  'Mentions and replies': AtSign,
   Drops: Package,
   'New badges': Medal,
-  'Which channels': ListChecks,
+  'Which channels': ListFilter,
   'Instant alerts': Zap,
   'How often to check': AlarmClock,
 };
@@ -356,8 +358,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   'Repeated Messages': { Mode: Repeat2 },
   'Highlight Appearance': { Style: PaintBucket },
   'Settings file': { Export: Share, Import: Download },
-  'Mentions and replies': {
-    'Notify me': AtSign,
+  Mentions: {
     'Counts as a mention': ListChecks,
     'Name without @': AtSign,
     'Display name': UserCheck,

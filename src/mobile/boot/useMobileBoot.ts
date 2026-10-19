@@ -40,6 +40,7 @@ import {
   syncBackgroundChecks,
 } from '../notifications';
 import { consumePendingChannel, consumePendingMention } from '../nativeBridge';
+import { alertOn, loadAlertTypes } from '../alertTypes';
 import { openMentionById } from '../mentions/mentionInbox';
 import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
 import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
@@ -293,9 +294,15 @@ export function useMobileBoot(): void {
       // nothing. Only when setup is already complete (a fresh install gets the
       // wizard's own prompt) and only when Android will still show the dialog:
       // once it has decided the refusal is permanent, asking again does nothing
-      // and the settings panel is the only honest route.
+      // and the settings panel is the only honest route. And only while some
+      // alert type is on: the wizard's Notifications step writes each type
+      // off unless chosen, and someone who chose none is never asked.
       void (async () => {
-        if (!useAppStore.getState().settings.setup_complete) return;
+        const types = await loadAlertTypes();
+        const { settings } = useAppStore.getState();
+        if (!settings.setup_complete) return;
+        const prefs = settings.live_notifications;
+        if (prefs?.enabled === false || !types.some((t) => alertOn(t, prefs))) return;
         if ((await getNotificationPermission()) !== 'default') return;
         await ensureNotificationPermission();
       })();

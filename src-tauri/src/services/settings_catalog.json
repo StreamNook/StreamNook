@@ -2180,136 +2180,20 @@
   },
   {
    "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Notify me",
-   "paths": [
-    "live_notifications.show_mention_notifications"
-   ],
-   "nested": false,
-   "detail": "When someone mentions or replies to you in a chat",
-   "logo": null,
-   "aliases": [
-    "mentions",
-    "replies",
-    "pings",
-    "@",
-    "mention notifications"
-   ]
-  },
-  {
-   "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Counts as a mention",
-   "paths": [],
-   "nested": false,
-   "detail": "Your @name always counts. These count too, in Mentions and for notifications.",
-   "logo": null,
-   "aliases": [
-    "mention rules",
-    "what counts",
-    "match"
-   ]
-  },
-  {
-   "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Name without @",
-   "paths": [
-    "mentions.match_bare_login"
-   ],
-   "nested": true,
-   "detail": "Your login written without the @ counts as a mention.",
-   "logo": null,
-   "aliases": [
-    "username",
-    "bare name",
-    "no at sign"
-   ]
-  },
-  {
-   "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Display name",
-   "paths": [
-    "mentions.match_display_name"
-   ],
-   "nested": true,
-   "detail": "Your display name counts as a mention when it differs from your login.",
-   "logo": null,
-   "aliases": [
-    "nickname",
-    "name"
-   ]
-  },
-  {
-   "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Highlight words",
-   "paths": [
-    "mentions.highlight_words"
-   ],
-   "nested": true,
-   "detail": "A message matching one of your highlight words notifies you and collects in Mentions.",
-   "logo": null,
-   "aliases": [
-    "highlight phrases",
-    "keywords"
-   ]
-  },
-  {
-   "page": "notifications",
-   "section": "Mentions and replies",
-   "title": "Muted chats",
-   "paths": [
-    "mentions.muted_channels"
-   ],
-   "nested": false,
-   "detail": "Mentions in these chats never notify you or reach the Mentions list.",
-   "logo": null,
-   "aliases": [
-    "mute chat",
-    "silence mentions",
-    "quiet chat"
-   ]
-  },
-  {
-   "page": "notifications",
    "section": "Notify me about",
    "title": "Live channels",
    "paths": [
     "live_notifications.show_live_notifications"
    ],
    "nested": false,
-   "detail": "Alert when a channel you follow starts streaming",
+   "detail": "When a channel you follow goes live",
    "logo": null,
-   "aliases": [],
-   "hidden_on_ios": true
-  },
-  {
-   "page": "notifications",
-   "section": "Notify me about",
-   "title": "Drops",
-   "paths": [
-    "live_notifications.show_drops_notifications"
+   "aliases": [
+    "go live",
+    "goes live",
+    "stream started"
    ],
-   "nested": false,
-   "detail": "Campaign progress and claimable rewards",
-   "logo": null,
-   "aliases": [],
-   "hidden_on_ios": true
-  },
-  {
-   "page": "notifications",
-   "section": "Notify me about",
-   "title": "New badges",
-   "paths": [
-    "live_notifications.show_badge_notifications"
-   ],
-   "nested": false,
-   "detail": "When a new global badge becomes available",
-   "logo": null,
-   "aliases": [],
-   "hidden_on_ios": true
+   "needs": "alert:live"
   },
   {
    "page": "notifications",
@@ -2326,7 +2210,128 @@
     "mute channel",
     "silence"
    ],
-   "hidden_on_ios": true
+   "needs": "alert:live"
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "Mentions and replies",
+   "paths": [
+    "live_notifications.show_mention_notifications"
+   ],
+   "nested": false,
+   "detail": "When someone mentions or replies to you",
+   "logo": null,
+   "aliases": [
+    "mentions",
+    "replies",
+    "pings",
+    "@",
+    "mention notifications"
+   ],
+   "needs": "alert:mentions"
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "Drops",
+   "paths": [
+    "live_notifications.show_drops_notifications"
+   ],
+   "nested": false,
+   "detail": "Campaign progress and claimable rewards",
+   "logo": null,
+   "aliases": [],
+   "needs": "alert:drops"
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "New badges",
+   "paths": [
+    "live_notifications.show_badge_notifications"
+   ],
+   "nested": false,
+   "detail": "When a new global badge becomes available",
+   "logo": null,
+   "aliases": [],
+   "needs": "alert:badges"
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions",
+   "title": "Counts as a mention",
+   "paths": [],
+   "nested": false,
+   "detail": "Your @name always counts. These count too, in Mentions and for notifications.",
+   "logo": null,
+   "aliases": [
+    "mention rules",
+    "what counts",
+    "match"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions",
+   "title": "Name without @",
+   "paths": [
+    "mentions.match_bare_login"
+   ],
+   "nested": true,
+   "detail": "Your login written without the @ counts as a mention.",
+   "logo": null,
+   "aliases": [
+    "username",
+    "bare name",
+    "no at sign"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions",
+   "title": "Display name",
+   "paths": [
+    "mentions.match_display_name"
+   ],
+   "nested": true,
+   "detail": "Your display name counts as a mention when it differs from your login.",
+   "logo": null,
+   "aliases": [
+    "nickname",
+    "name"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions",
+   "title": "Highlight words",
+   "paths": [
+    "mentions.highlight_words"
+   ],
+   "nested": true,
+   "detail": "A message matching one of your highlight words notifies you and collects in Mentions.",
+   "logo": null,
+   "aliases": [
+    "highlight phrases",
+    "keywords"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Mentions",
+   "title": "Muted chats",
+   "paths": [
+    "mentions.muted_channels"
+   ],
+   "nested": false,
+   "detail": "Mentions in these chats never notify you or reach the Mentions list.",
+   "logo": null,
+   "aliases": [
+    "mute chat",
+    "silence mentions",
+    "quiet chat"
+   ]
   },
   {
    "page": "notifications",

@@ -113,6 +113,17 @@ enum SettingIcons {
         "moderation.timeout_presets": "timer",
         "moderation.card_actions": "hand.raised",
         "chat_customization.user_overrides": "tag",
+        // Notifications: one per alert type the core can list, and the mention rules
+        "live_notifications.show_live_notifications": "dot.radiowaves.left.and.right",
+        "live_notifications.show_favorite_live_notifications": "star",
+        "live_notifications.show_mention_notifications": "at",
+        "live_notifications.show_drops_notifications": "shippingbox",
+        "live_notifications.show_badge_notifications": "medal",
+        "live_notifications.muted_live_channels": "line.3.horizontal.decrease.circle",
+        "mentions.match_bare_login": "at",
+        "mentions.match_display_name": "person.crop.circle.badge.checkmark",
+        "mentions.highlight_words": "highlighter",
+        "mentions.muted_channels": "bell.slash",
         // Cache, support, theme
         "cache.enabled": "internaldrive",
         "cache.expiry_days": "calendar.badge.clock",
@@ -137,5 +148,6 @@ enum SettingIcons {
         "Export": "square.and.arrow.up",
         "Import": "square.and.arrow.down",
         "Languages": "globe",
+        "Counts as a mention": "checklist",
     ]
 }

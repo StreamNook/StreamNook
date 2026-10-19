@@ -107,6 +107,8 @@ final class Navigator {
     var qualityPing = 0
     /// The first-run wizard page to show.
     var setupPage: SetupWizard.Page?
+    /// An alert type to turn on in the wizard's notifications page.
+    var setupAlert: String?
 
     init() {
         tab = MobileTab.stored(UserDefaults.standard.string(forKey: "sn-start-tab"))

@@ -6,18 +6,19 @@ import UserNotifications
 /// The iPhone's notifications while StreamNook runs. The core decides when a mention is worth
 /// announcing (the setting, streamer mode, a per-chat cooldown, replay age, the chat not being on
 /// screen) and says so with `mention-notify`; this posts it. It never asks for permission on its
-/// own: that happens when someone turns a notification setting on, or from the Notifications page.
+/// own: that happens when someone turns an alert on, in Settings or on the setup wizard's page.
 @MainActor
 enum MentionAlerts {
-    /// Posts the notification for an entry the core announced. Without a grant nothing is posted
-    /// and nothing is asked.
-    static func post(_ entry: MentionEntry) async {
+    /// Posts the notification for an entry the core announced, under the category the core's
+    /// alert list names. Without a grant nothing is posted and nothing is asked.
+    static func post(_ entry: MentionEntry, category: String? = nil) async {
         let center = UNUserNotificationCenter.current()
         guard allowed(await center.notificationSettings().authorizationStatus) else { return }
         NotificationRouter.install()
         let content = UNMutableNotificationContent()
         content.title = MentionText.notificationTitle(entry)
         content.body = entry.text
+        if let category { content.categoryIdentifier = category }
         // One stack per chat; the message id as the identifier, so a second delivery of the same
         // message replaces the first instead of showing twice.
         content.threadIdentifier = entry.room
@@ -40,6 +41,16 @@ enum MentionAlerts {
 
     static func allowed(_ status: UNAuthorizationStatus) -> Bool {
         status == .authorized || status == .provisional || status == .ephemeral
+    }
+
+    /// Where notifications stand for StreamNook now.
+    static func status() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    /// StreamNook's notification settings in the iPhone's Settings app.
+    static func openSettings() {
+        if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
     }
 }
 

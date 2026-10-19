@@ -250,6 +250,18 @@ export function syncBackgroundChecks(prefs: Partial<LiveNotificationSettings> | 
   }
 }
 
+/** What follows a change to the notification switches: the background checks,
+ *  and the push registration, held while the master and push toggles are both
+ *  on and dropped from the server otherwise. */
+export function applyDelivery(next: Partial<LiveNotificationSettings>): void {
+  syncBackgroundChecks(next);
+  if (next.enabled !== false && next.push_notifications !== false) {
+    void invoke('push_register').catch(() => {});
+  } else {
+    void invoke('push_unregister').catch(() => {});
+  }
+}
+
 export async function postSystemNotification(n: SystemNotification): Promise<void> {
   try {
     await invoke('plugin:notification|notify', {
