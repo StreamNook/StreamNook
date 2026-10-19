@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Clock, Prohibit, Trash, X } from 'phosphor-react';
 
 import { useAppStore } from '../../stores/AppStore';
@@ -54,10 +54,9 @@ const STEP_FLOOR_PX = 12;
 /** Ban sits this many extra step-lengths past the last timeout, so it is
  *  never reached by a pull that only overshot the longest timeout. */
 const BAN_GAP_STEPS = 1;
-/** Ban's zone ends: a pull past it is too far and lets go of nothing. */
+/** Ban's zone is at least this long. The pull stops at its end: the handle
+ *  goes no further, so there is no invisible line to overshoot. */
 const BAN_ZONE_MIN_PX = 28;
-/** Past the end the pull follows this far more, then stops. */
-const OVERPULL_PX = 12;
 const RETURN_MS = 220;
 /** Ban arms only after the pointer rests this long in its zone. Until then
  *  the slider shows the step before it and a release applies exactly that,
@@ -69,8 +68,9 @@ const BAN_STILL_PX = 6;
  *  line between two steps does not flicker between them. */
 const HYSTERESIS_PX = 3;
 /** The pointer may stray this far above or below the row; further away a
- *  release cancels. */
-const LEASH_PX = 48;
+ *  release cancels. Wide: a long pull to the right drifts up or down, and a
+ *  cancel there must take a deliberate move off the message. */
+const LEASH_PX = 120;
 /** Preview keeps the struck-through look this long after a release, so the
  *  line does not flash back before the platform's own removal arrives. */
 const APPLIED_HOLD_MS = 1500;
@@ -85,10 +85,9 @@ const ODO_LINE_PX = 14;
  *  list (under the floating header too), it goes below the pointer. */
 const CHIP_ROOM_PX = 34;
 
-/** Pulled, but a release does nothing: in the cancel zone, past Ban's end, or
- *  off the row. 0 and up is a step. */
+/** Pulled, but a release does nothing: in the cancel zone or off the row.
+ *  0 and up is a step. */
 const CANCEL_ZONE = -1;
-const TOO_FAR = -2;
 const OFF_ROW = -3;
 
 const CANCEL_TINT = 'var(--color-text-secondary)';
@@ -101,9 +100,8 @@ interface DragState {
   dead: number;
   spacing: number;
   ruler: number[];
-  /** Ban's zone ends here (a pull in px); null when the steps do not end in
-   *  Ban. */
-  banEnd: number | null;
+  /** The pull stops here: the end of Ban's zone, or of the last step. */
+  end: number;
   engaged: boolean;
   step: number;
   /** Running while the pull rests in Ban's zone before Ban arms. */
@@ -121,6 +119,11 @@ interface Geometry {
   /** Each step's middle, from the row's left edge (rail). */
   centers: number[];
   cancelCenter: number;
+  /** Where each step starts and where the steps end, from the row's left
+   *  edge (the preview's track). */
+  ticks: number[];
+  trackStart: number;
+  trackEnd: number;
   /** The chip sits under the pointer instead of over it. */
   below: boolean;
 }
@@ -159,12 +162,11 @@ function rulerFor(steps: ModStep[], dead: number, spacing: number): number[] {
   return steps.map((s, i) => dead + (s.action === 'ban' && i === last ? i + BAN_GAP_STEPS : i) * spacing);
 }
 
-/** The step under a pull of `slide` px, or CANCEL_ZONE / TOO_FAR. The gap
- *  before Ban keeps showing the step before it (or nothing, when Ban is the
- *  only step). */
+/** The step under a pull of `slide` px, or CANCEL_ZONE. The gap before Ban
+ *  keeps showing the step before it (or nothing, when Ban is the only
+ *  step). */
 function stepAt(steps: ModStep[], drag: DragState, slide: number): number {
   if (slide < drag.dead) return CANCEL_ZONE;
-  if (drag.banEnd != null && slide >= drag.banEnd) return TOO_FAR;
   const unit = Math.floor((slide - drag.dead) / drag.spacing);
   const last = steps.length - 1;
   if (steps[last]?.action !== 'ban') return Math.min(last, unit);
@@ -216,12 +218,12 @@ function stepLabel(step: ModStep, suffix?: string): ReactNode {
   );
 }
 
-/** What a release does nothing for, in words. */
-function cancelLabel(state: number): ReactNode {
+/** A release that does nothing, in words. */
+function cancelLabel(): ReactNode {
   return (
     <>
       <X size={12} weight="bold" />
-      {state === TOO_FAR ? 'Too far, let go to cancel' : 'Let go to cancel'}
+      Let go to cancel
     </>
   );
 }
@@ -248,8 +250,8 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
   const look: SliderStyle = storedStyle === 'rail' || storedStyle === 'capsule' ? storedStyle : 'preview';
   const stepPx = STEP_PX[length] ?? STEP_PX.medium;
   const steps = messageId ? allSteps : allSteps?.filter((s) => s.action !== 'delete') ?? null;
-  // null = idle; CANCEL_ZONE, TOO_FAR or OFF_ROW = pulled, a release does
-  // nothing; 0+ = the step.
+  // null = idle; CANCEL_ZONE or OFF_ROW = pulled, a release does nothing;
+  // 0+ = the step.
   const [step, setStep] = useState<number | null>(null);
   // True while the pull rests in Ban's zone and Ban is not armed yet.
   const [arming, setArming] = useState(false);
@@ -442,7 +444,8 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
     const spacing = Math.max(STEP_FLOOR_PX, Math.min(stepPx, fit));
     const ruler = rulerFor(steps, dead, spacing);
     const banStart = ruler[ruler.length - 1];
-    const banEnd = endsInBan ? banStart + Math.max(1.5 * spacing, BAN_ZONE_MIN_PX) : null;
+    const lastZone = endsInBan ? Math.max(1.5 * spacing, BAN_ZONE_MIN_PX) : spacing;
+    const end = banStart + lastZone;
     const origin = e.clientX - rect.left;
     // Alt+Tab or a hidden window mid-drag cancels.
     const onKey = (ke: KeyboardEvent) => {
@@ -471,7 +474,7 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
       dead,
       spacing,
       ruler,
-      banEnd,
+      end,
       engaged: false,
       step: CANCEL_ZONE,
       banTimer: null,
@@ -481,10 +484,11 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
     setGeom({
       origin,
       spacing,
-      centers: ruler.map((x, i) =>
-        origin + x + (banEnd != null && i === ruler.length - 1 ? (banEnd - banStart) / 2 : spacing / 2),
-      ),
+      centers: ruler.map((x, i) => origin + x + (i === ruler.length - 1 ? lastZone : spacing) / 2),
       cancelCenter: origin + dead / 2,
+      ticks: ruler.map((x) => origin + x),
+      trackStart: origin + dead,
+      trackEnd: origin + end,
       below: chipBelow(row, e.clientY),
     });
     row.style.setProperty('--mod-origin', `${origin}px`);
@@ -514,8 +518,8 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
       // once a step arms.
       setStep(CANCEL_ZONE);
     }
-    const end = drag.banEnd ?? drag.dead + stepUnits(steps) * drag.spacing;
-    const slide = Math.min(Math.max(0, dx), end + OVERPULL_PX);
+    // The handle stops at the end; a harder pull stays on the last step.
+    const slide = Math.min(Math.max(0, dx), drag.end - 0.5);
     row.style.setProperty('--mod-slide', `${slide}px`);
     row.style.setProperty('--mod-slide-n', String(slide));
     const offRow = e.clientY < drag.rect.top - LEASH_PX || e.clientY > drag.rect.bottom + LEASH_PX;
@@ -567,6 +571,22 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
     <span key={armSeq} className="sn-mod-dwell" style={{ animationDuration: `${BAN_DWELL_MS}ms` }} />
   ) : null;
   const railDots = !!geom && geom.spacing < RAIL_LABEL_MIN_PX;
+  // The preview track's segments, each step from its start to the next one's
+  // (the last timeout's runs up to Ban), a pixel apart.
+  const trackSegments =
+    geom && steps
+      ? steps.map((s, i) => {
+          const from = geom.ticks[i];
+          const to = i + 1 < geom.ticks.length ? geom.ticks[i + 1] : geom.trackEnd;
+          return (
+            <span
+              key={`${s.action}-${s.seconds ?? ''}`}
+              className="sn-mod-track-seg"
+              style={{ left: from - geom.trackStart, width: Math.max(1, to - from - 1), background: stepTint(steps, i) }}
+            />
+          );
+        })
+      : null;
   const lastIndex = (steps?.length ?? 0) - 1;
   // The chip: always in Preview; in the rail and the capsule only when a
   // release would do nothing, while Ban waits, or after a press that did not
@@ -576,7 +596,7 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
     : step == null
       ? null
       : step < 0
-        ? cancelLabel(step)
+        ? cancelLabel()
         : arming && current
           ? stepLabel(current, ', hold for Ban')
           : dragLook === 'preview' && current
@@ -586,9 +606,31 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
   return (
     <>
       {layer && dragLook === 'preview' && (
-        // A wash of the step's color from the edge to the pointer, behind the
-        // text.
-        <span aria-hidden="true" className="sn-mod-layer sn-mod-wash" />
+        <>
+          {/* A wash of the step's color from the edge to the pointer, behind
+              the text. */}
+          <span aria-hidden="true" className="sn-mod-layer sn-mod-wash" />
+          {/* The track along the bottom edge: one segment per step in that
+              step's color, faint ahead of the pointer and lit behind it, and
+              a cap where the pull stops. */}
+          <span
+            aria-hidden="true"
+            className="sn-mod-layer sn-mod-track"
+            style={
+              {
+                left: layer.geom.trackStart,
+                width: layer.geom.trackEnd - layer.geom.trackStart,
+                '--mod-track-from': `${layer.geom.trackStart - layer.geom.origin}px`,
+                '--mod-track-len': `${layer.geom.trackEnd - layer.geom.trackStart}px`,
+              } as CSSProperties
+            }
+          >
+            <span className="sn-mod-track-base">{trackSegments}</span>
+            <span className="sn-mod-track-lit">
+              <span className="sn-mod-track-lit-in">{trackSegments}</span>
+            </span>
+          </span>
+        </>
       )}
       {chipText != null && geom && (
         <span aria-hidden="true" className={`sn-mod-layer sn-mod-chip${geom.below ? ' is-below' : ''}`}>
@@ -627,7 +669,7 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
             className="sn-mod-rail-thumb"
             style={{ transform: `translateX(${current && step != null ? layer.geom.centers[step] : layer.geom.cancelCenter}px)` }}
           >
-            <span key={step} className="sn-mod-rail-thumb-in">
+            <span className="sn-mod-rail-thumb-in">
               {current ? current.action === 'delete' ? <Trash size={12} weight="bold" /> : stepLabel(current) : <X size={12} weight="bold" />}
             </span>
           </span>
