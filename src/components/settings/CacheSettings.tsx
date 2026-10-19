@@ -15,7 +15,8 @@ const CacheSettings = () => {
   const [cacheInfo, setCacheInfo] = useState<string | null>(null);
 
   return (
-    <div className="space-y-8">
+    // The phones share one section gap; the desktop keeps its wider one.
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       <SettingsSection
         label="Cache"
         description="Keeps emotes, badges, and channel details on disk so chat loads without fetching them again. Come here to check how much is stored or start fresh."
@@ -78,7 +79,8 @@ const CacheSettings = () => {
           }
           help="Clearing is safe and does not touch your settings or login. Chat will feel slower for the first visit to each channel while the cache refills."
         >
-          <div className="flex gap-2">
+          {/* The phone stacks them full width, as the iPhone does. */}
+          <div className={IS_MOBILE ? 'flex flex-col gap-2' : 'flex gap-2'}>
             <button
               onClick={async () => {
                 try {
@@ -109,7 +111,11 @@ const CacheSettings = () => {
                   useAppStore.getState().addToast('Failed to get cache statistics: ' + error, 'error');
                 }
               }}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-all"
+              className={
+                IS_MOBILE
+                  ? 'glass-button sn-touch w-full text-[13.5px] font-semibold text-textPrimary'
+                  : 'px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-all'
+              }
             >
               View cache info
             </button>
@@ -159,7 +165,11 @@ const CacheSettings = () => {
                   addToast('Failed to clear cache: ' + error, 'error');
                 }
               }}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-all"
+              className={
+                IS_MOBILE
+                  ? 'glass-button sn-touch w-full text-[13.5px] font-semibold text-error'
+                  : 'px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-all'
+              }
             >
               Clear cache
             </button>

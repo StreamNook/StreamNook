@@ -71,8 +71,21 @@ const UserCommandsSettings = () => {
     return dups;
   }, [commands]);
 
+  const referenceToggle = (
+    <button
+      onClick={() => setShowDocs((v) => !v)}
+      className={`inline-flex items-center gap-1.5 px-2 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0 ${
+        IS_MOBILE ? 'min-h-8' : 'py-1'
+      }`}
+    >
+      <BookOpen size={12} />
+      <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
+    </button>
+  );
+
   return (
-    <SettingsSection label="Custom Commands" bare>
+    // The phone puts Show reference on the heading's line, as the iPhone does.
+    <SettingsSection label="Custom Commands" bare accessory={IS_MOBILE ? referenceToggle : undefined}>
       <div className="flex items-start justify-between gap-3">
         {IS_MOBILE ? (
           // The iPhone page's words.
@@ -84,13 +97,7 @@ const UserCommandsSettings = () => {
             Define your own commands. A trigger of <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">lurk</code> with expansion <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">I&apos;m lurking, BRB</code> means typing <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">/lurk</code> sends that message instead.
           </p>
         )}
-        <button
-          onClick={() => setShowDocs((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0"
-        >
-          <BookOpen size={12} />
-          <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
-        </button>
+        {!IS_MOBILE && referenceToggle}
       </div>
 
       {showDocs && (

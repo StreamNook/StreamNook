@@ -712,7 +712,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   };
 
   return (
-    <div className="space-y-8">
+    // The phones share one section gap; the desktop keeps its wider one.
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       {/* Desktop only. This positions the MAIN app's chat panel (left / right /
           bottom / hidden) plus the hover-reveal that goes with it. The phone
           shell stacks the player over chat and has no edge to tuck against. */}
@@ -2549,7 +2550,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
           help={
             IS_MOBILE
-              ? 'Dictionary holds the words you have taught it. Remove one here if it went in by mistake.'
+              ? undefined
               : 'Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click.'
           }
           control={
@@ -2559,7 +2560,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         >
-          {(settings.chat_input?.spellcheck_enabled ?? true) && (
+          {/* A phone's keyboard checks spelling and never reads these words,
+              so the Dictionary is the desktop's alone. */}
+          {caps.spell_dictionary && (settings.chat_input?.spellcheck_enabled ?? true) && (
             <SubControls>
               <SubControl title="Dictionary" stacked control={<SpellcheckDictionary />} />
             </SubControls>

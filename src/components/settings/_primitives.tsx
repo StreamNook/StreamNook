@@ -29,6 +29,9 @@ interface SettingsSectionProps {
   /** The words drawn when the logo already names the brand ("Chat" beside
    *  YouTube's mark). `label` stays the section's name for anchors and search. */
   shownLabel?: string;
+  /** The phone's small action on the heading's line (Custom Commands' Show
+   *  reference), as the iPhone places it. The desktop does not draw it. */
+  accessory?: ReactNode;
 }
 
 export { sectionIdFromLabel };
@@ -44,16 +47,22 @@ const PhoneSettingsSection = ({
   bare = false,
   logo,
   shownLabel,
+  accessory,
 }: SettingsSectionProps) => (
   <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
-    <GroupLabel
-      as="h3"
-      className={`px-4 pb-2 ${logo ? 'flex items-center gap-1.5' : ''}`}
-      aria-label={shownLabel ? label : undefined}
-    >
-      {logo}
-      {shownLabel ?? label}
-    </GroupLabel>
+    {/* An accessory sits on the heading's line, centered on it. */}
+    <div className={accessory ? 'flex items-center justify-between gap-3 pr-2' : undefined}>
+      <GroupLabel
+        as="h3"
+        className={`px-4 ${accessory ? '' : 'pb-2'} ${logo ? 'flex items-center gap-1.5' : ''}`}
+        aria-label={shownLabel ? label : undefined}
+      >
+        {logo}
+        {shownLabel ?? label}
+      </GroupLabel>
+      {accessory}
+    </div>
+    {accessory && <div className="h-2" />}
     <SectionNameContext.Provider value={label}>
       {bare ? <div className="space-y-3">{children}</div> : <GroupCard>{children}</GroupCard>}
     </SectionNameContext.Provider>

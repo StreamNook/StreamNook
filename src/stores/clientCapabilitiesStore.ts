@@ -16,18 +16,22 @@ export interface ClientCapabilities {
   chat_dock: boolean;
   /** Highlight and mention marks on the chat scrollbar. */
   scrollbar_marks: boolean;
+  /** Words taught to the chat spellchecker (a phone spells with its keyboard). */
+  spell_dictionary: boolean;
 }
 
 const DESKTOP: ClientCapabilities = {
   combined_chat: true,
   chat_dock: true,
   scrollbar_marks: true,
+  spell_dictionary: true,
 };
 
 const NONE: ClientCapabilities = {
   combined_chat: false,
   chat_dock: false,
   scrollbar_marks: false,
+  spell_dictionary: false,
 };
 
 /** Until Rust answers: a phone starts with none, so a desktop-only row never

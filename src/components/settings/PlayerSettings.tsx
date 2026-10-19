@@ -147,7 +147,8 @@ const PlayerSettings = () => {
   };
 
   return (
-    <div className="space-y-8">
+    // The phones share one section gap; the desktop keeps its wider one.
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       <p className="text-sm text-textSecondary px-1">
         Most player controls (volume, quality, playback speed) are available directly in the video player.
         These settings control advanced streaming behavior.

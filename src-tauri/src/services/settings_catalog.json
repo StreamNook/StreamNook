@@ -1401,7 +1401,7 @@
    "logo": null,
    "detail": "",
    "aliases": [],
-   "hidden_on_ios": true
+   "needs": "spell_dictionary"
   },
   {
    "page": "chat",

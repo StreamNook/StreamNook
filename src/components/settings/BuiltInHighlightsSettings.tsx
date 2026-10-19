@@ -36,7 +36,7 @@ const ROWS: Array<{
   {
     key: 'first_time_chatter',
     label: 'First-time chatters',
-    hint: "Highlight a user's first ever message in this channel (Twitch first-msg tag). Already on by default with the purple gradient — toggle off or re-color from here.",
+    hint: "Highlight a user's first ever message in this channel (Twitch first-msg tag). Already on by default with the purple gradient; toggle off or re-color from here.",
     phoneHint: "Highlight a user's first ever message in this channel.",
     defaultColor: '#a855f7',
     defaultEnabled: true,

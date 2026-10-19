@@ -87,7 +87,7 @@ const SettingsBackup: React.FC = () => {
   };
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-6">
       <SettingsSection
         label="Daily copies"
         description="StreamNook keeps a copy of your settings each day you use it, for the last 7 days. If your settings ever fail to load, the newest copy is put back on its own."
