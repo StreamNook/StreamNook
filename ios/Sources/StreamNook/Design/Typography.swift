@@ -92,7 +92,7 @@ enum Typeface {
         let answer = try? await core.invoke("get_custom_font", args: ["family": family], as: CustomFont.Faces?.self)
         guard customAsked == family else { return }
         var registeredFaces: [Int: String] = [:]
-        for face in answer??.faces ?? [] {
+        for face in answer?.faces ?? [] {
             let url = URL(filePath: face.path) as CFURL
             // Registering a file twice in a run fails harmlessly; its names are read either way.
             CTFontManagerRegisterFontsForURL(url, .process, nil)
