@@ -693,6 +693,13 @@ pub async fn open_settings_folder(_app: AppHandle) -> Result<(), String> {
 /// app/UI customization and no account info.
 #[tauri::command]
 pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let json = portable_settings_json(&state)?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+    Ok(())
+}
+
+/// The backup file's text: every setting but this machine's session and login keys.
+fn portable_settings_json(state: &AppState) -> Result<String, String> {
     let settings = { state.settings.lock().unwrap().clone() };
     let mut value = serde_json::to_value(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
@@ -701,10 +708,56 @@ pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result
             obj.remove(*key);
         }
     }
-    let json = serde_json::to_string_pretty(&value)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
-    Ok(())
+    serde_json::to_string_pretty(&value).map_err(|e| format!("Failed to serialize settings: {}", e))
+}
+
+/// Settings > Backup > Settings file > Export on Android: the same file `export_settings` writes,
+/// put in the app cache, then saved to Downloads (`to = "downloads"`) or offered to the share
+/// sheet (`to = "share"`). Answers "saved" or "shared"; on Android 9 and older Downloads needs a
+/// storage permission the app does not hold, so a save falls back to the share sheet.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn share_settings_file(app: AppHandle, to: String, state: State<'_, AppState>) -> Result<String, String> {
+    use tauri::Manager;
+
+    const MIME: &str = "application/json";
+    let json = portable_settings_json(&state)?;
+    let dest = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("shared-settings")
+        .join("streamnook-settings.json");
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fs::write(&dest, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+    let name = format!("streamnook-settings-{}.json", chrono::Local::now().format("%Y-%m-%d"));
+    let result = match to.as_str() {
+        "downloads" => match crate::twitch_login_plugin::save_to_downloads(&app, &dest, &name, MIME)? {
+            true => "saved",
+            false => {
+                crate::twitch_login_plugin::share_file(&app, &dest, &name, MIME)?;
+                "shared"
+            }
+        },
+        "share" => {
+            crate::twitch_login_plugin::share_file(&app, &dest, &name, MIME)?;
+            "shared"
+        }
+        other => return Err(format!("unknown settings file destination: {}", other)),
+    };
+    Ok(result.to_string())
+}
+
+/// Settings > Backup > Settings file > Import on Android, from the text of the file the picker
+/// opened: a phone's file picker hands the page the file's contents, never a path.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn import_settings_text(app: AppHandle, json: String, state: State<'_, AppState>) -> Result<(), String> {
+    let incoming: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
+    apply_imported_settings(&app, &state, &incoming)
 }
 
 /// Apply a previously exported backup at `path`. Portable preferences from the

@@ -1671,6 +1671,10 @@ pub fn run() {
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "android")]
+            share_settings_file,
+            #[cfg(target_os = "android")]
+            import_settings_text,
             #[cfg(target_os = "ios")]
             services::ios_sheet::open_drops_sheet,
             #[cfg(target_os = "ios")]

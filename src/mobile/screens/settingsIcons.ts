@@ -37,6 +37,7 @@ import {
   CornerDownLeft,
   Crosshair,
   Database,
+  Download,
   Droplet,
   Droplets,
   Ear,
@@ -353,6 +354,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   'Tab Completion': { Emotes: Keyboard },
   'Repeated Messages': { Mode: Repeat2 },
   'Highlight Appearance': { Style: PaintBucket },
+  'Settings file': { Export: Share, Import: Download },
 };
 
 /** The glyph for a row that has none of its own. */
