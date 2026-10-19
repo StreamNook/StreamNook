@@ -1146,6 +1146,22 @@
   {
    "page": "chat",
    "section": "Mentions & Replies",
+   "title": "Keep tinted",
+   "paths": [
+    "chat_design.mention_hold"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "Hold the mention or reply color behind the whole message for as long as it is on screen, instead of only a flash.",
+   "aliases": [
+    "mention background",
+    "persistent highlight",
+    "tint whole message"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
    "title": "Vibration",
    "paths": [],
    "nested": false,

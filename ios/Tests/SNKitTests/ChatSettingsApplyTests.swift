@@ -47,7 +47,7 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
                 "show_timestamp_seconds": true, "username_style": "chip", "username_separator": "colon",
                 "username_accent_source": "theme", "show_at_sign": true, "mention_weight": "bold",
                 "mention_italic": "always", "mention_style": "pill", "mention_color": "#00ff00",
-                "mention_animation": false, "paint_mentions_in_body": false, "reply_color": "#0000ff",
+                "mention_animation": false, "mention_hold": true, "paint_mentions_in_body": false, "reply_color": "#0000ff",
                 "reply_style": "mention", "emoji_style": "google", "show_personal_emotes": false,
                 "animate_emotes": "never", "show_chat_gifs": false, "gif_scale": 1.5, "emote_scale": 2,
                 "emote_margin": 0.25, "giant_emotes": false, "giant_emote_align": "left",
@@ -68,7 +68,8 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
         #expect(s.showTimestamps && s.showTimestampSeconds && s.showAtSign)
         #expect(s.usernameStyle == "chip" && s.usernameSeparator == "colon" && s.usernameAccentSource == "theme")
         #expect(s.mentionWeight == "bold" && s.mentionItalic == "always" && s.mentionStyle == "pill")
-        #expect(s.mentionColor == "#00ff00" && !s.mentionAnimation && !s.paintMentionsInBody)
+        #expect(s.mentionColor == "#00ff00" && !s.mentionAnimation && s.mentionHold && !s.paintMentionsInBody)
+        #expect(!ChatStyle().mentionHold, "Keep tinted starts off, as on desktop")
         #expect(s.replyColor == "#0000ff" && s.replyStyle == "mention" && s.mentionTextColor == "#123456")
         #expect(s.emojiStyle == "google" && !s.showPersonalEmotes && s.animateEmotes == "never")
         #expect(!s.showChatGifs && s.gifScale == 1.5 && s.emoteScale == 2 && s.emoteMargin == 0.25)
@@ -99,6 +100,16 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
         core.write("chat_events", "hidden_provider_events", ["twitch:raid"])
         let filtered = try #require(await styles.next())
         #expect(filtered.hiddenEvents == ["twitch:raid"])
+    }
+
+    /// A highlight rule's Keep tinted rides on Rust's stamp; Rust leaves `hold` out when it is off.
+    @Test func aHighlightStampCarriesKeepTinted() throws {
+        let held = try JSONDecoder().decode(ChatHighlightStamp.self, from: Data(
+            ##"{"rule_id":"p1","kind":"phrase","color":"#fbbf24","cooldown_ms":3000,"hold":true}"##.utf8))
+        #expect(held.hold && held.color == "#fbbf24")
+        let flashOnly = try JSONDecoder().decode(ChatHighlightStamp.self, from: Data(
+            ##"{"rule_id":"p2","kind":"user","color":"#22d3ee","cooldown_ms":0}"##.utf8))
+        #expect(!flashOnly.hold)
     }
 
     /// A numeric choice ("Text weight", the alert check interval) saves as the number the core's

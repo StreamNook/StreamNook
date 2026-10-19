@@ -218,9 +218,12 @@ public struct ChatHighlightStamp: Codable, Sendable, Equatable {
     public var color: String
     public var soundID: String?
     public var cooldownMS: Int
+    /// Keep tinted: the row holds the rule's color while on screen instead of only flashing.
+    /// Absent when off.
+    public var hold: Bool
 
     enum CodingKeys: String, CodingKey {
-        case ruleID = "rule_id", kind, color, soundID = "sound_id", cooldownMS = "cooldown_ms"
+        case ruleID = "rule_id", kind, color, soundID = "sound_id", cooldownMS = "cooldown_ms", hold
     }
 
     public init(from decoder: Decoder) throws {
@@ -230,6 +233,7 @@ public struct ChatHighlightStamp: Codable, Sendable, Equatable {
         color = try c.decodeIfPresent(String.self, forKey: .color) ?? ""
         soundID = try c.decodeIfPresent(String.self, forKey: .soundID)
         cooldownMS = try c.decodeIfPresent(Int.self, forKey: .cooldownMS) ?? 0
+        hold = try c.decodeIfPresent(Bool.self, forKey: .hold) ?? false
     }
 }
 

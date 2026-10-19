@@ -50,10 +50,12 @@ final class ChatRowCell: UIView {
         if layer.backgroundColor != color { layer.backgroundColor = color }
     }
 
-    /// The text bitmap straight on the view's layer, or over the author's Atmosphere when they
-    /// wear one (a layer's own contents draw under its sublayers, so the text moves up a layer).
+    /// The text bitmap straight on the view's layer, or on a layer of its own when something
+    /// draws under it: the author's Atmosphere, or the arrival flash (a layer's own contents draw
+    /// under its sublayers, so the text moves up a layer).
     private func showBitmap(_ bitmap: CGImage?, layout: ChatRowLayout, scale: CGFloat) {
-        guard let look = layout.decor.atmosphere else {
+        let look = layout.decor.atmosphere
+        guard look != nil || layout.decor.flash != nil else {
             wash?.removeFromSuperlayer()
             textLayer?.removeFromSuperlayer()
             wash = nil
@@ -62,7 +64,6 @@ final class ChatRowCell: UIView {
             return
         }
         let size = CGSize(width: layout.width, height: layout.height)
-        let wash = wash ?? AtmosphereWashLayer()
         let text = textLayer ?? CALayer()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -72,12 +73,33 @@ final class ChatRowCell: UIView {
         text.frame = CGRect(origin: .zero, size: size)
         text.contents = bitmap
         layer.contents = nil
-        wash.show(look, cologne: layout.decor.cologne, size: size, scale: scale,
-                  animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
-        if wash.superlayer == nil { layer.insertSublayer(wash, at: 0) }
-        if text.superlayer == nil { layer.insertSublayer(text, above: wash) }
+        if let look {
+            let wash = wash ?? AtmosphereWashLayer()
+            wash.show(look, cologne: layout.decor.cologne, size: size, scale: scale,
+                      animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
+            // Over the flash, as a desktop row's own background sits under its Atmosphere.
+            if wash.superlayer == nil {
+                if let flashLayer, flashLayer.superlayer === layer {
+                    layer.insertSublayer(wash, above: flashLayer)
+                } else {
+                    layer.insertSublayer(wash, at: 0)
+                }
+            }
+            self.wash = wash
+        } else {
+            wash?.removeFromSuperlayer()
+            wash = nil
+        }
+        if text.superlayer == nil {
+            if let wash {
+                layer.insertSublayer(text, above: wash)
+            } else if let flashLayer, flashLayer.superlayer === layer {
+                layer.insertSublayer(text, above: flashLayer)
+            } else {
+                layer.insertSublayer(text, at: 0)
+            }
+        }
         CATransaction.commit()
-        self.wash = wash
         textLayer = text
     }
 
@@ -193,22 +215,30 @@ final class ChatRowCell: UIView {
         }
     }
 
-    /// The live highlight flash: from `alpha` of the colour to clear over two seconds.
+    /// The live highlight flash: the row's color under its text, tint and bar, stepping down to
+    /// clear over two seconds as desktop's keyframes do. Only the layer's opacity animates, on
+    /// the render server, so the row never redraws and the list keeps its frame rate. Motion off
+    /// (as desktop's) and Reduce Motion leave the row still.
     func flash() {
-        guard let flash = layout?.decor.flash, !UIAccessibility.isReduceMotionEnabled else { return }
+        guard let flash = layout?.decor.flash, flash.alphas.count > 1, Look.shared.motion != .off,
+              !UIAccessibility.isReduceMotionEnabled else { return }
         let overlay = flashLayer ?? CALayer()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         overlay.frame = bounds
         overlay.backgroundColor = flash.color.cgColor
         overlay.opacity = 0
-        if flashLayer == nil {
-            layer.insertSublayer(overlay, at: 0)
-            flashLayer = overlay
-        }
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = Float(flash.alpha)
-        fade.toValue = 0
-        fade.duration = 2
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        // At the bottom: under the Atmosphere and the text layer that holds the bar and tint.
+        if overlay.superlayer !== layer { layer.insertSublayer(overlay, at: 0) }
+        flashLayer = overlay
+        CATransaction.commit()
+        let steps = flash.alphas.count - 1
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = flash.alphas.map { Float($0) }
+        fade.keyTimes = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+        // CSS `ease-out`, applied to each step as a keyframe animation does.
+        fade.timingFunctions = Array(repeating: CAMediaTimingFunction(controlPoints: 0, 0, 0.58, 1), count: steps)
+        fade.duration = RowFlash.duration
         overlay.add(fade, forKey: "flash")
     }
 

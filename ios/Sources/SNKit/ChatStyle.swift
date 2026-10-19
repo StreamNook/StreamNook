@@ -35,6 +35,9 @@ public struct ChatStyle: Sendable, Equatable {
     public var mentionColor = "#ff4444"
     public var replyColor = "#ff6b6b"
     public var mentionAnimation = true
+    /// Keep tinted: a mention or reply to you holds its color behind the row while it is on
+    /// screen (`chat_design.mention_hold`), at the Highlight Appearance opacity.
+    public var mentionHold = false
     /// "regular" | "medium" | "bold" (older saves may hold "normal" or "semibold")
     public var mentionWeight = "medium"
     /// "inherit" | "never" | "always" (older saves may hold "normal" or "italic")
@@ -170,6 +173,7 @@ public struct ChatStyle: Sendable, Equatable {
         mentionColor = str("mention_color") ?? mentionColor
         replyColor = str("reply_color") ?? replyColor
         mentionAnimation = bool("mention_animation") ?? mentionAnimation
+        mentionHold = bool("mention_hold") ?? mentionHold
         mentionWeight = str("mention_weight") ?? mentionWeight
         mentionItalic = str("mention_italic") ?? mentionItalic
         mentionStyle = str("mention_style") ?? mentionStyle
