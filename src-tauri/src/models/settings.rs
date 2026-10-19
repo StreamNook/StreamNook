@@ -1126,6 +1126,12 @@ pub struct Settings {
     pub glass_blur: bool,
     #[serde(default)]
     pub setup_complete: bool,
+    /// These settings were written on an install that keeps the install
+    /// marker (`services::install_marker`). Backed up with the settings, so a
+    /// restore that finds it without the marker knows it came from elsewhere.
+    /// Backend-owned: a frontend save never writes it.
+    #[serde(default)]
+    pub install_marked: bool,
     /// Set once this install has been moved onto the first-run chat look (see
     /// `adopt_first_run_look_once`). Backend-owned: a frontend save never
     /// writes it, so a later choice of the old look is never flipped again.
@@ -1593,6 +1599,7 @@ impl Default for Settings {
             glass_transparency: None,
             glass_blur: default_glass_blur(),
             setup_complete: false, // New users need to complete setup
+            install_marked: false,
             first_run_look_adopted: true, // already starts with that look
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
@@ -1736,6 +1743,7 @@ impl Settings {
         self.drops = authoritative.drops.clone();
         self.channel_links = authoritative.channel_links.clone();
         self.first_run_look_adopted = authoritative.first_run_look_adopted;
+        self.install_marked = authoritative.install_marked;
     }
 
     /// One-time move of an existing install onto the first-run chat look,

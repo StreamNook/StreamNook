@@ -1056,6 +1056,11 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(dir) = app.path().app_data_dir() {
                 services::app_paths::set_base(dir);
+                // Before anything else writes there: what this launch found
+                // tells an update from a restore (services::install_marker).
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    services::install_marker::observe(&data);
+                }
             }
             // iOS backs up Application Support, so every cache goes under the
             // shell's Library/Caches instead; caches an older build left in
@@ -1095,7 +1100,16 @@ pub fn run() {
             // settings.json now that the path resolves and push the values into
             // the stores that were constructed from the defaults.
             #[cfg(mobile)]
-            if let Ok(loaded) = load_settings_from_file() {
+            if let Ok(mut loaded) = load_settings_from_file() {
+                // Settings restored from another install (a backup, a phone
+                // transfer) run the setup again rather than skip it.
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    if services::install_marker::reconcile(&data, &mut loaded) {
+                        if let Err(e) = commands::settings::write_settings_to_disk_sync(&loaded) {
+                            log::warn!("[Setup] could not save the install's setup state: {e}");
+                        }
+                    }
+                }
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);

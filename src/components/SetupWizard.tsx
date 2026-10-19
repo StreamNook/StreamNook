@@ -37,6 +37,7 @@ import {
 } from '../themes';
 import { getSidebarSettings, saveSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
 import { TwitchGlyph } from './ui/TwitchGlyph';
+import { TwitchSignInButton } from './ui/TwitchSignInButton';
 import { WindowCaptionButtons } from './titlebar/WindowCaptionButtons';
 
 import { Logger } from '../utils/logger';
@@ -1427,14 +1428,20 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                 Back
                             </button>
                         )}
-                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && (
+                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && primaryAction.variant === 'twitch' && (
+                            <TwitchSignInButton
+                                label={primaryAction.label}
+                                onClick={primaryAction.onClick}
+                                busy={primaryAction.disabled}
+                                className={IS_MOBILE ? 'w-full py-4 text-base' : 'px-5 py-2.5 text-sm'}
+                            />
+                        )}
+                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && primaryAction.variant !== 'twitch' && (
                             <button
                                 onClick={primaryAction.onClick}
                                 disabled={primaryAction.disabled}
                                 className={`flex items-center justify-center gap-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
-                                    primaryAction.variant === 'twitch'
-                                        ? 'bg-[#9146FF] text-white active:opacity-90'
-                                        // `no-live-blur`: this sits on the
+                                    // `no-live-blur`: this sits on the
                                         // wizard's flat panel, so the button's
                                         // backdrop filter has nothing varied to
                                         // sample -- it is a live compositing
@@ -1443,16 +1450,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                         // well inside the region an 8px backdrop
                                         // blur pulls from, so every frame of that
                                         // loop was dirtying this button's
-                                        // backdrop.
-                                        : 'glass-button no-live-blur text-textPrimary'
+                                    // backdrop.
+                                    'glass-button no-live-blur text-textPrimary'
                                 } ${IS_MOBILE ? 'w-full py-4 text-base' : 'px-5 py-2.5 text-sm'}`}
                             >
-                                {primaryAction.variant === 'twitch' &&
-                                    (primaryAction.disabled ? (
-                                        <Loader2 size={18} className="animate-spin" />
-                                    ) : (
-                                        <TwitchGlyph size={18} />
-                                    ))}
                                 {primaryAction.label}
                             </button>
                         )}
