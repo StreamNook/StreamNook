@@ -255,6 +255,17 @@ enum ChatDrive {
             currentList?.debugFan(select: bucket, reach: parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 0)
         case "chatfanend":
             currentList?.debugEndFan()
+        case "chatrole":
+            // Read-only: what this room thinks of the viewer, and what the newest rows allow.
+            guard let session = currentSession else {
+                chatLog.notice("[swipe] chatrole: no chat open")
+                return true
+            }
+            chatLog.notice("[swipe] chatrole \(session.channel, privacy: .public): role \(session.role, privacy: .public), moderator \(session.isModerator), broadcaster \(session.isBroadcaster), mod tools \(session.moderatorTools), viewer \(session.viewerID.isEmpty ? "unknown" : session.viewerID, privacy: .public), room id \(session.roomID ?? "unknown", privacy: .public)")
+            for message in session.pipeline.recentMessages(Int(value) ?? 6) {
+                let why = session.swipeRefusal(message) ?? "swipeable"
+                chatLog.notice("[swipe] chatrole row \(message.id, privacy: .public) by \(message.username, privacy: .public): \(String(describing: session.reach(for: message)), privacy: .public); \(why, privacy: .public)")
+            }
         case "chatmod":
             currentSession?.moderatorTools = value != "off"
         case "chatswipe":

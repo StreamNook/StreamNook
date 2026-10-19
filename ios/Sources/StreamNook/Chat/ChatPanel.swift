@@ -341,6 +341,10 @@ struct ChatListHost: UIViewRepresentable {
             // moderate (Delete), never the broadcaster's (the core decides the steps).
             return session.reach(for: message) != .nothing
         }
+        list.swipeRefusal = { layout in
+            if layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")) { return "a held message" }
+            return session.swipeRefusal(session.pipeline.message(layout.id))
+        }
         // A press on a moderatable row: the core's slider for where the thumb landed, and the
         // chatter captured now, so a release acts on the person pressed even if their message
         // has since left the buffer.

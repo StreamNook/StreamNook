@@ -694,10 +694,24 @@ export const MobileChatPane: React.FC<{
   const swipeTargetFor = useCallback(
     (messageId: string): SwipeTarget | null => {
       const found = reachOf(messageId);
-      return found && found.reach !== 'nothing' ? found.target : null;
+      if (found && found.reach !== 'nothing') return found.target;
+      // Why a press starts no swipe, for the app log (the iPhone logs the same).
+      const why = !found
+        ? 'no chatter on this row'
+        : `Twitch allows nothing on it (own ${found.target.userId === currentUser?.user_id}, role ${viewerRole ?? 'viewer'}, sender badges ${found.target.badges.join(',') || 'none'})`;
+      Logger.warn('[Swipe]', `down on ${messageId}: not swipeable: ${why}`);
+      return null;
     },
-    [reachOf],
+    [reachOf, viewerRole, currentUser?.user_id],
   );
+  // The room's resolved role, logged when it changes.
+  useEffect(() => {
+    if (!isTwitchRoom) return;
+    Logger.warn(
+      '[Swipe]',
+      `room ${activeTab?.login ?? activeChannel}: role ${viewerRole ?? 'viewer'}, viewer ${currentUser?.user_id || 'unknown'}, mod tools ${modToolsArmed ? 'on' : 'off'}, room id ${broadcasterId ?? 'unknown'}`,
+    );
+  }, [isTwitchRoom, viewerRole, modToolsArmed, broadcasterId, currentUser?.user_id, activeTab?.login, activeChannel]);
 
   // What the fan leaves out: by platform and the read-only overlay, and the mod
   // tiles while Hold menu buttons is off.
