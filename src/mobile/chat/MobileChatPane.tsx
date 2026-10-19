@@ -38,7 +38,8 @@ import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 import { useMentionJump } from '../mentions/useMentionJump';
 import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
-import { SwipeModerator, type SwipeTarget, type TouchSlider } from './SwipeModerator';
+import { SwipeModerator } from './SwipeModerator';
+import type { SwipeTarget, TouchSlider } from './swipeSteps';
 import { invoke } from '@tauri-apps/api/core';
 
 // How long a pause/resume transition is protected from being reversed. Matches

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './SwipeModerator';
+import { stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
 
 // Rust's own test ruler (touch_mod_slider.rs): Delete, 1m, 10m, 1h, a gap, Ban on a 390 px row.
 const slider: TouchSlider = {

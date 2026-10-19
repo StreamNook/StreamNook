@@ -16,72 +16,11 @@
 // finger is down, and a non-passive touchmove stops it scrolling under the pull.
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { holdChatRow, moderateWithToast, type ModAction } from '../../services/moderation';
+import { holdChatRow, moderateWithToast } from '../../services/moderation';
+import { stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
+
+export type { SwipeTarget, TouchSlider } from './swipeSteps';
 import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
-
-export interface TouchStep {
-  action: 'delete' | 'timeout' | 'ban';
-  seconds: number | null;
-  label: string;
-  chip: string;
-  tone: number | null;
-}
-
-export interface TouchSlider {
-  enabled: boolean;
-  style: 'preview' | 'rail' | 'capsule';
-  steps: TouchStep[];
-  dead: number;
-  spacing: number;
-  starts: number[];
-  end: number;
-  ban_dwell_ms: number;
-  ban_still: number;
-  hysteresis: number;
-  leash: number;
-  engage: number;
-  cancel_words: string;
-  hold_ban_words: string;
-  nudge_words: string;
-  quick_seconds: number;
-}
-
-export interface SwipeTarget {
-  userId: string;
-  name: string;
-}
-
-/** The step under a pull of `slide` px, null in the cancel zone (Rust `step_at`). */
-export function stepAt(s: TouchSlider, slide: number): number | null {
-  if (slide < s.dead || s.steps.length === 0 || s.spacing <= 0) return null;
-  const unit = Math.floor((slide - s.dead) / s.spacing);
-  const last = s.steps.length - 1;
-  if (s.steps[last].action !== 'ban') return Math.min(unit, last);
-  if (unit >= last + 1) return last;
-  if (last === 0) return null;
-  return Math.min(unit, last - 1);
-}
-
-/** The step to show, keeping `cur` until the pull is `hysteresis` past its edge (Rust `with_hysteresis`). */
-export function stepKeeping(s: TouchSlider, slide: number, cur: number | null): number | null {
-  const next = stepAt(s, slide);
-  if (cur == null || next == null || next === cur) return next;
-  if (next > cur) return slide >= s.starts[next] + s.hysteresis ? next : cur;
-  return slide <= s.starts[cur] - s.hysteresis ? next : cur;
-}
-
-/** A step's color: Delete a calm slate, timeouts amber toward red, Ban red. */
-export function stepTint(step: TouchStep): string {
-  if (step.action === 'ban') return 'var(--color-error)';
-  if (step.tone == null) return 'color-mix(in srgb, var(--color-text-secondary) 55%, #334155)';
-  return `color-mix(in srgb, var(--color-error) ${Math.round(step.tone * 100)}%, var(--color-warning))`;
-}
-
-export function stepAction(step: TouchStep, messageId: string): ModAction {
-  if (step.action === 'delete') return { kind: 'delete', messageId };
-  if (step.action === 'ban') return { kind: 'ban' };
-  return { kind: 'timeout', seconds: step.seconds ?? 600 };
-}
 
 interface View {
   /** The row, relative to the list element. */
@@ -314,11 +253,13 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
             const zoneEnd = i + 1 < slider.starts.length ? slider.starts[i + 1] : slider.end;
             const center = (slider.starts[i] + zoneEnd) / 2;
             const lit = i === step;
+            // glass-exempt: the lit step's tint over the rail, a color cue that must stay translucent.
+            const pill = lit ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined;
             return (
               <span
                 key={`${s.action}-${s.seconds ?? i}`}
                 className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[9px] px-2 py-0.5 text-[12px] font-semibold"
-                style={{ left: center, color: stepTint(s), background: lit ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined }}
+                style={{ left: center, color: stepTint(s), background: pill }}
               >
                 {s.label}
               </span>
@@ -326,6 +267,7 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
           })}
         </div>
       ) : (
+        // glass-exempt: the pull's wash over the message, which must keep the message readable through it.
         <div className="absolute inset-y-0 left-0" style={{ width: view.slide, background: `color-mix(in srgb, ${tint} 18%, transparent)` }} />
       )}
       {slider.style === 'preview' && (
