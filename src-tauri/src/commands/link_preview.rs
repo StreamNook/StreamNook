@@ -91,20 +91,36 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     crate::services::link_preview_cache::get(&url).await.ok_or_else(|| "No preview".to_string())
 }
 
-/// The card a link's shape all but always gets, so a shell holds that room while
-/// it loads: "media" for a video or clip (drawn 16:9), "card" for the other
-/// dedicated cards, None for a link that may have no card. A shell holds nothing
-/// for those, so a link with no preview never flashes a placeholder and vanishes.
+/// The card kind a link's shape all but always gets (the `kind` its preview will
+/// carry), so a shell holds exactly that card's room while it loads; None for a
+/// link that may have no card. A shell holds nothing for those, so a link with no
+/// preview never flashes a placeholder and vanishes. Mirrors `build_preview`.
 pub(crate) fn expected_card(url: &str) -> Option<&'static str> {
     let canonical = canonicalize_x(url);
     let url = canonical.as_str();
-    if youtube_id(url).is_some() || twitch_clip_id(url).is_some() || twitch_vod_id(url).is_some() {
-        Some("media")
-    } else if has_dedicated_card(url) {
-        Some("card")
+    Some(if youtube_id(url).is_some() {
+        "youtube"
+    } else if is_youtube_channel(url) {
+        "youtube_channel"
+    } else if is_youtube_page(url) {
+        "generic"
+    } else if tweet_ref(url).is_some() || x_profile_handle(url).is_some() {
+        "tweet"
+    } else if twitch_clip_id(url).is_some() {
+        "clip"
+    } else if twitch_vod_id(url).is_some() {
+        "vod"
+    } else if discord_invite_code(url).is_some() {
+        "discord"
+    } else if steam_app_id(url).is_some() {
+        "steam"
+    } else if spotify_kind(url).is_some() {
+        "spotify"
+    } else if instagram_handle(url).is_some() {
+        "instagram"
     } else {
-        None
-    }
+        return None;
+    })
 }
 
 /// `expected_card` for a link the shell met outside a chat segment (one that
@@ -1994,7 +2010,7 @@ mod tests {
         ] {
             assert!(is_youtube_page(url), "{url}");
             assert!(has_dedicated_card(url), "{url}");
-            assert_eq!(expected_card(url), Some("card"), "{url}");
+            assert_eq!(expected_card(url), Some("generic"), "{url}");
         }
         for url in [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -2012,12 +2028,17 @@ mod tests {
 
     #[test]
     fn the_expected_card_says_which_room_to_hold() {
-        assert_eq!(expected_card("https://youtu.be/dQw4w9WgXcQ"), Some("media"));
-        assert_eq!(expected_card("https://clips.twitch.tv/AwkwardHelplessSalamanderSwiftRage"), Some("media"));
-        assert_eq!(expected_card("https://www.youtube.com/@LofiGirl"), Some("card"));
-        assert_eq!(expected_card("https://discord.gg/streamnook"), Some("card"));
+        assert_eq!(expected_card("https://youtu.be/dQw4w9WgXcQ"), Some("youtube"));
+        assert_eq!(expected_card("https://clips.twitch.tv/AwkwardHelplessSalamanderSwiftRage"), Some("clip"));
+        assert_eq!(expected_card("https://www.youtube.com/@LofiGirl"), Some("youtube_channel"));
+        assert_eq!(expected_card("https://discord.gg/streamnook"), Some("discord"));
+        assert_eq!(expected_card("https://twitter.com/Twitch/status/1800000000000000000"), Some("tweet"));
         assert_eq!(expected_card("https://example.com/page"), None);
         assert_eq!(link_preview_expected("https://example.com/page".into()), None);
+        // Every link that gets a dedicated card names one.
+        for url in ["https://youtu.be/dQw4w9WgXcQ", "https://discord.gg/streamnook", "https://www.youtube.com/playlist?list=PL1"] {
+            assert_eq!(has_dedicated_card(url), expected_card(url).is_some(), "{url}");
+        }
     }
 
     /// The link that showed as plain text: Reddit's viewer around an i.redd.it jpg.

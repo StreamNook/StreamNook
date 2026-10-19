@@ -365,10 +365,10 @@ pub enum MessageSegment {
     Link {
         content: String,
         url: String,
-        /// The card this link's shape all but always gets: "media" (a video or
-        /// clip, drawn 16:9) or "card"; absent when it may have none. A shell
-        /// holds that room while the card loads and nothing for other links, so
-        /// none flashes a placeholder and vanishes.
+        /// The card kind this link's shape all but always gets (`expected_card`:
+        /// "youtube", "discord", "generic"...); absent when it may have none. A
+        /// shell holds exactly that card's room while it loads and nothing for
+        /// other links, so none flashes a placeholder and vanishes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card: Option<String>,
     },
