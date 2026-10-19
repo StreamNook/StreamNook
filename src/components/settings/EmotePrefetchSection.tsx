@@ -5,6 +5,7 @@ import { DownloadCloud, Check, Loader2, Square, RefreshCw } from 'lucide-react';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { inlineEmoteTier } from '../../services/emoteService';
 import { Logger } from '../../utils/logger';
+import { IS_MOBILE } from '../../utils/platform';
 
 // Mirrors the Rust PrefetchProgress (serde serializes the snake_case fields as-is).
 interface PrefetchProgress {
@@ -75,7 +76,8 @@ const EmotePrefetchSection = () => {
     ? Math.round((progress.downloaded / progress.to_download) * 100)
     : 0;
 
-  const primaryBtn = 'px-4 py-2 rounded-lg bg-accent/15 text-accent text-sm font-semibold hover:bg-accent/25 transition-all flex items-center justify-center gap-2';
+  // The phone's action buttons run the row's width.
+  const primaryBtn = `px-4 py-2 rounded-lg bg-accent/15 text-accent text-sm font-semibold hover:bg-accent/25 transition-all flex items-center justify-center gap-2${IS_MOBILE ? ' w-full' : ''}`;
   const ghostBtn = 'px-3 py-2 rounded-lg glass-button text-textSecondary hover:text-textPrimary text-sm transition-all flex items-center justify-center gap-2';
 
   return (

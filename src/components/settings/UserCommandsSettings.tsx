@@ -86,7 +86,7 @@ const UserCommandsSettings = () => {
   return (
     // The phone puts Show reference on the heading's line, as the iPhone does.
     <SettingsSection label="Custom Commands" bare accessory={IS_MOBILE ? referenceToggle : undefined}>
-      <div className="flex items-start justify-between gap-3">
+      <div className={`flex items-start justify-between gap-3 ${IS_MOBILE ? 'px-4' : ''}`}>
         {IS_MOBILE ? (
           // The iPhone page's words.
           <p className="text-xs text-textSecondary flex-1">
