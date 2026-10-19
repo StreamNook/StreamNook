@@ -2035,11 +2035,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 />
               }
             />
+            {/* On the phone it goes under its name at full width, like the
+                choices above it, so the group never mixes the two layouts. */}
             <SubControl
               title="Color"
+              stacked={IS_MOBILE}
               onReset={resetFor(['chat_design.mention_text_color', ''])}
               control={
-                <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-2 ${IS_MOBILE ? 'w-full' : ''}`}>
                   {cd.mention_text_color && (
                     <ColorSwatch
                       value={cd.mention_text_color}
@@ -2048,6 +2051,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                     />
                   )}
                   <SegmentedSelect<'name' | 'fixed'>
+                    fullWidth={IS_MOBILE}
                     value={cd.mention_text_color ? 'fixed' : 'name'}
                     onChange={(mode) => setDesign({ mention_text_color: mode === 'fixed' ? cd.mention_text_color || '#bf94ff' : '' })}
                     options={[
