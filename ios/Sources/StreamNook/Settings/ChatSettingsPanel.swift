@@ -90,6 +90,7 @@ struct ChatSettingsPanel: View {
 
     private var events: some View {
         SettingsBlock(title: "Chat Events", detail: "What live channel activity shows while you watch. Turn any of these off to keep chat clean.") {
+            EventRowsPreview()
             ToggleRow(title: "Redemptions", path: "show_channel_point_redemptions", fallback: true,
                       detail: "A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward.",
                       help: "Rewards that already post to chat are unaffected.")
@@ -125,6 +126,7 @@ struct ChatSettingsPanel: View {
 
     private var layout: some View {
         SettingsBlock(title: "Message Layout", detail: "Spacing, text size, animation and timestamps.") {
+            MessageLayoutPreview()
             ToggleRow(title: "Dividers", path: "chat_design.show_dividers",
                       detail: "A thin line between messages so a fast chat is easier to scan.")
             ToggleRow(title: "Striped rows", path: "chat_design.alternating_backgrounds",
@@ -157,6 +159,7 @@ struct ChatSettingsPanel: View {
 
     private var names: some View {
         SettingsBlock(title: "Names & Badges", detail: "How chatter names, badges and 7TV paints look.") {
+            NamesPreview()
             ChoiceRow(title: "Name style", path: "chat_design.username_style",
                       choices: [Choice("Plain", "plain"), Choice("Accent bar", "bar"), Choice("Chip / tag", "chip"),
                                 Choice("Brackets   [name]", "brackets"), Choice("Color dot", "dot")],
@@ -195,6 +198,7 @@ struct ChatSettingsPanel: View {
                     SettingChips(path: "chat_design.hidden_badge_providers", chips: Self.badgeServices, logos: true)
                 }
             }
+            ProfilePicturePreview()
             ChoiceRow(title: "Profile pictures", path: "cosmetics.profile_picture_source",
                       choices: [Choice("7TV", "seventv"), Choice("Twitch", "twitch")], fallback: "seventv",
                       detail: "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
@@ -220,6 +224,7 @@ struct ChatSettingsPanel: View {
 
     private var mentions: some View {
         SettingsBlock(title: "Mentions & Replies", detail: "How a message that mentions you, and a reply, stand out, and how an @name reads in chat.") {
+            MentionsPreview()
             SettingRow(title: "@name style", detail: "How an @mention reads in chat.",
                        help: "A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright.") {
                 EmptyView()
@@ -307,6 +312,7 @@ struct ChatSettingsPanel: View {
 
     private var input: some View {
         SettingsBlock(title: "Chat Input", detail: "Small conveniences in the box where you type, and which buttons sit around it.") {
+            ChatInputPreview()
             ToggleRow(title: "Duplicate sends", path: "chat_input.bypass_duplicate",
                       detail: "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
                       help: "Twitch normally blocks identical messages sent back to back. Handy for repeating an emote.")
@@ -345,6 +351,7 @@ struct ChatSettingsPanel: View {
 
     private var behavior: some View {
         SettingsBlock(title: "Chat Behavior", detail: "Deleted messages, shared chat, scrolling, and how much chat is kept.") {
+            DeletedMessagePreview()
             // Five segments do not fit a phone's width at 13 pt, so this one is a menu.
             ChoiceRow(title: "Deleted messages", path: "chat_design.deleted_message_style",
                       choices: [Choice("Strikethrough", "strikethrough"), Choice("Dimmed", "dimmed"), Choice("Italic", "italic"),

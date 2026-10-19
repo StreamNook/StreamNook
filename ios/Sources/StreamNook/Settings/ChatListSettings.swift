@@ -254,6 +254,7 @@ struct LinkSettings: View {
 
     var body: some View {
         SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
+            LinksPreview()
             WideRow(title: "Style",
                     detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
                     help: "StreamNook fetches the page from your phone to build the card, so the site sees a visit from you. Only trusted sites get a card. Popular sites are trusted out of the box; add more under Trusted sites.",

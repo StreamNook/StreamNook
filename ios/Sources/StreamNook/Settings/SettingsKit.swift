@@ -516,12 +516,15 @@ struct SettingSlider: View {
     var body: some View {
         let stored = min(max(store.double(path, fallback), range.lowerBound), range.upperBound)
         HStack(spacing: 10) {
-            Slider(value: Binding(get: { live ?? stored }, set: { live = $0 }), in: range, step: step) { editing in
+            // A chat preview on the page follows the finger before the value is saved.
+            Slider(value: Binding(get: { live ?? stored }, set: { live = $0; ChatPreviewDraft.shared.set(path, $0) }),
+                   in: range, step: step) { editing in
                 guard !editing, let value = live else { return }
                 Task {
                     let saved: Any = integer ? Int(value.rounded()) : value
                     await store.set(path, saved)
                     live = nil
+                    ChatPreviewDraft.shared.set(path, nil)
                     await onRelease?(value)
                 }
             }
