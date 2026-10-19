@@ -6,7 +6,19 @@
 // from host components. It has to: the host stylesheet only holds the classes
 // the host itself uses, so markup a plugin styles on its own renders bare.
 
-import { cloneElement, isValidElement, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  cloneElement,
+  createContext,
+  isValidElement,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Plus, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
@@ -140,8 +152,30 @@ export function InlineSlider({
 /** A row's own sub-controls (the settings under a choice like Custom), set in
  *  under a rule so they read as part of that row. Put SubControls inside. */
 export function SubControls({ children }: { children: ReactNode }) {
-  return <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>;
+  // On the phone the group's sliders decide together: when one has to go under
+  // its name, they all do, so their tracks start at the same place.
+  const [stackedSliders, setStackedSliders] = useState<ReadonlySet<string>>(new Set());
+  const report = useCallback((id: string, stacked: boolean) => {
+    setStackedSliders((prev) => {
+      if (prev.has(id) === stacked) return prev;
+      const next = new Set(prev);
+      if (stacked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const group = useMemo(() => ({ report, anySliderStacked: stackedSliders.size > 0 }), [report, stackedSliders]);
+  return (
+    <SubControlGroup.Provider value={group}>
+      <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>
+    </SubControlGroup.Provider>
+  );
 }
+
+const SubControlGroup = createContext<{
+  report: (id: string, stacked: boolean) => void;
+  anySliderStacked: boolean;
+} | null>(null);
 
 /** One line in SubControls: its name, and its control on the right. `stacked`
  *  puts the control under the name at full width, for a control too wide to
@@ -215,7 +249,11 @@ function PhoneSubControl({
   const partRef = useRef<HTMLSpanElement>(null);
   const natural = useRef(0);
   const under = useRef(false);
-  const [stack, setStack] = useState(false);
+  const [ownStack, setOwnStack] = useState(false);
+  const id = useId();
+  const group = useContext(SubControlGroup);
+  const isSlider = isValidElement(control) && control.type === InlineSlider;
+  const report = group?.report;
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row) return;
@@ -223,16 +261,26 @@ function PhoneSubControl({
       const nameEl = nameRef.current;
       const part = partRef.current;
       if (!nameEl || !part) return;
+      // The control's natural width is only readable while it sits beside the
+      // name (its group can put it under too); the name sizes to its own text
+      // either way (w-fit).
       if (!under.current) natural.current = part.scrollWidth;
-      const next = nameEl.scrollWidth + 16 + natural.current > row.clientWidth;
-      under.current = next;
-      setStack(next);
+      setOwnStack(nameEl.scrollWidth + 16 + natural.current > row.clientWidth);
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(row);
     return () => ro.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    if (!report || !isSlider) return;
+    report(id, ownStack);
+    return () => report(id, false);
+  }, [report, isSlider, id, ownStack]);
+  const stack = ownStack || (isSlider && !!group?.anySliderStacked);
+  useLayoutEffect(() => {
+    under.current = stack;
+  }, [stack]);
   const shown =
     stack && isValidElement<{ fullWidth?: boolean }>(control) && control.type === SegmentedSelect
       ? cloneElement(control, { fullWidth: true })
@@ -244,7 +292,7 @@ function PhoneSubControl({
       // A settings search result can land on a nested line, as on a row.
       data-setting-row={title}
     >
-      <div ref={nameRef} className="shrink-0 whitespace-nowrap text-[14px] font-medium text-textPrimary">
+      <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[14px] font-medium text-textPrimary">
         {title}
         {onReset && <ResetArrow onReset={onReset} />}
       </div>

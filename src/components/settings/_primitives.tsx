@@ -429,7 +429,7 @@ export const SegmentedSelect = <T extends string>({
             onClick={() => onChange(opt.value)}
             onMouseEnter={onPreview ? () => onPreview(opt.value) : undefined}
             onFocus={onPreview ? () => onPreview(opt.value) : undefined}
-            className={`${fullWidth ? 'flex-1' : ''} relative z-[1] whitespace-nowrap px-3 py-1 text-[13px] font-medium rounded-md transition-colors ${
+            className={`${fullWidth ? 'flex-1 px-2' : 'px-3'} relative z-[1] whitespace-nowrap py-1 text-[13px] font-medium rounded-md transition-colors ${
               isActive ? 'text-textPrimary' : 'text-textMuted hover:text-textSecondary'
             }`}
           >
