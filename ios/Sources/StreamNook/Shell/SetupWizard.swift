@@ -1,7 +1,7 @@
 import SNKit
 import SwiftUI
 
-/// The first-run wizard: welcome, accounts, drops, done (no notification step until the iPhone
+/// The first-run wizard: welcome, accounts, drops, Kick, done (no notification step until the iPhone
 /// sends alerts). A full-screen layer on the theme background under a faint accent wash; pages
 /// swipe sideways past 70 points and move with a short rise. Finishing saves `setup_complete`
 /// through the core; closing early only keeps it away for this session.
@@ -13,11 +13,12 @@ struct SetupWizard: View {
     @State private var lastTurn = Date.distantPast
     @Environment(\.snStill) private var still
 
-    enum Page: Int, CaseIterable { case welcome, accounts, drops, done }
+    enum Page: Int, CaseIterable { case welcome, accounts, drops, kick, done }
 
     private var signedIn: Bool { model.signedIn }
     private var rewards: RewardsStore { model.rewards }
     private var dropsConnected: Bool { rewards.drops?.connected == true }
+    private var kick: KickAccount { model.kick }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -96,16 +97,23 @@ struct SetupWizard: View {
             } extra: {
                 dropsAction
             }
+        case .kick:
+            PageBody(title: "Kick",
+                     text: "Sign in with Kick to bring in the channels you follow there and chat in Kick rooms.") {
+                PlatformMark(platform: .kick, size: 56)
+            } extra: {
+                kickAction
+            }
         case .done:
             PageBody(title: "You're all set", text: "StreamNook is ready. Pick a stream and dive in.") {
                 PenroseMark(width: 64)
             } extra: {
                 VStack(spacing: 0) {
+                    summary("Twitch", mark: .twitch, done: signedIn)
+                    Divider().overlay(SN.borderSubtle)
                     summary("Drops sign-in", done: dropsConnected)
                     Divider().overlay(SN.borderSubtle)
-                    summary("Sign-in", mark: .twitch, done: signedIn)
-                    Divider().overlay(SN.borderSubtle)
-                    summary("Other platforms", done: false)
+                    summary("Kick", mark: .kick, done: kick.connected)
                 }
                 .snPanel()
                 .frame(maxWidth: 320)
@@ -139,6 +147,43 @@ struct SetupWizard: View {
                 .disabled(rewards.connecting || !model.started)
                 if let error = rewards.connectError {
                     Text(error)
+                        .font(.snCaption)
+                        .foregroundStyle(SN.textMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
+            }
+        }
+    }
+
+    /// Kick sign-in, the same as the You tab's Kick row: the core runs the kick.com login and
+    /// Kick's Authorize page in the web sheet. Signed in, the page says who.
+    @ViewBuilder
+    private var kickAction: some View {
+        if kick.connected {
+            Label(kick.name.map { "Signed in as \($0)" } ?? "Kick connected", systemImage: Symbol.checkCircle)
+                .font(.snBody)
+                .foregroundStyle(SN.success)
+                .frame(minHeight: 50)
+        } else {
+            VStack(spacing: 10) {
+                Button { Task { await kick.connect() } } label: {
+                    HStack(spacing: 10) {
+                        if kick.busy {
+                            ProgressView()
+                            Text("Signing in")
+                        } else {
+                            PlatformMark(platform: .kick, size: 18)
+                            Text("Sign in with Kick")
+                        }
+                    }
+                }
+                .buttonStyle(.snSecondary)
+                .frame(maxWidth: 320)
+                .disabled(kick.busy || !model.started)
+                // The step while it runs, or why it did not finish.
+                if let step = kick.step, !kick.busy {
+                    Text(step)
                         .font(.snCaption)
                         .foregroundStyle(SN.textMuted)
                         .multilineTextAlignment(.center)
