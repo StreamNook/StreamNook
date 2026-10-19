@@ -23,7 +23,6 @@ import { Minus, X, CornersOut, CornersIn, ArrowLineLeft } from 'phosphor-react';
 import { Activity, Settings, ShieldCheck, House } from 'lucide-react';
 import MultiChatPane from './MultiChatPane';
 import { ModLogsWidget } from '../chat/ModLogsWidget';
-import ModerationDragLayer from '../chat/ModerationDragLayer';
 import { ActivityFeedWidget } from '../activity/ActivityFeedWidget';
 import { startActivityNormalizer, stopActivityNormalizer } from '../../services/activityNormalizer';
 import { useActivityStore } from '../../stores/activityStore';
@@ -1957,9 +1956,6 @@ export default function MultiChatWindow() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-textPrimary">
-      {/* Drag-to-moderate overlay (portals to document.body): brings the main
-          app's drag mod tooling into the MultiChat command center. */}
-      <ModerationDragLayer />
       {/* Badge clicks here open their card in this window, not main. */}
       <BadgeSpotlightHost />
       {/* This window has no full ToastManager (that one also fires live-stream

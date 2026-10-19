@@ -1602,7 +1602,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Moderation Actions',
     title: 'Timeout lengths',
     parent: 'Hover buttons',
-    description: 'The lengths the arrow beside the quick 10m timeout opens on a hovered message, shortest first. Previously "Timeout presets", typed in seconds.'
+    description: 'The lengths the arrow beside the quick 10m timeout opens on a hovered message, shortest first. Pick from the list or type your own (45m, 1h30m, 2d). Previously "Timeout presets", typed in seconds.'
   },
   {
     tab: 'Moderation',
@@ -1635,7 +1635,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Moderation',
     section: 'Moderation Actions',
     title: 'Moderation Actions',
-    description: 'How you ban, time out or delete straight from a message: what sits on its left edge (slider, tiles or line buttons) and the hover buttons in its corner. Also called Action Style or Method.'
+    description: 'How you ban, time out or delete straight from a message: what sits on its left edge (slider or line buttons) and the hover buttons in its corner. Also called Action Style or Method.'
   },
   {
     tab: 'Moderation',
@@ -1646,50 +1646,43 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Tile position',
-    parent: 'Message edge',
-    description: 'Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight. Previously "Bucket position".'
-  },
-  {
-    tab: 'Moderation',
-    section: 'Moderation Actions',
-    title: 'Pin tile',
-    parent: 'Message edge',
-    description: 'Adds a Pin tile to the drag tiles. Mods always get a Pin button beside Copy on a message. Previously "Pin bucket".'
-  },
-  {
-    tab: 'Moderation',
-    section: 'Moderation Actions',
-    title: 'Timeout length',
-    parent: 'Message edge',
-    description: 'What a drop on the Timeout tile times someone out for. One drop, no second drag; pick other lengths with the slider.'
-  },
-  {
-    tab: 'Moderation',
-    section: 'Moderation Actions',
     title: 'Message edge',
-    description: 'What sits at the left edge of a message you can act on. Slider: drag it right through Delete, timeouts from short to long, then Ban, and let go to apply. Tiles: drag the message by its left-edge handle onto a Delete, Timeout or Ban tile. Line buttons: Delete, timeouts and Ban as small buttons on every line, one click each. Off: nothing. No ban or timeout on your own messages, the owner\'s, or other mods\'. Also called mod slider, swipe to moderate, drag to moderate, grab handle, drag tiles, buckets, inline mod buttons, one-click moderation. Previously "Slider" and "Method: Drag".'
+    description: 'What sits at the left edge of a message you can act on. Slider: drag it right through Delete, timeouts from short to long, then Ban, and let go to apply. Line buttons: Delete, timeouts and Ban as small buttons on every line, one click each. Off: nothing. No ban or timeout on your own messages, the owner\'s, or other mods\'. Also called mod slider, swipe to moderate, drag to moderate, grab handle, inline mod buttons, one-click moderation. Previously "Slider", "Tiles" and "Method: Drag".'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Show',
+    parent: 'Message edge',
+    description: 'When the line buttons show: On hover puts them on the line under your pointer only, pushing its text over; Always keeps them on every line. Scroll over a timeout button to walk its length through your slider Steps. Also called hover line buttons.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
     title: 'Buttons',
     parent: 'Message edge',
-    description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths. They run from mildest to harshest, left to right.'
+    description: 'Which line buttons each message gets: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They run from mildest to harshest, left to right.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Style',
+    parent: 'Message edge',
+    description: 'How the slider looks while you drag. Preview: the message stays put, struck through in the color of the step, with a chip naming the step. Rail: every step laid out on a bar over the message. Capsule: the message slides aside for a capsule that names the step. Also called slider look or slider design.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
     title: 'Length',
     parent: 'Message edge',
-    description: 'How far you drag to reach each step: Short spreads them over half a message, Medium four fifths, Long the whole width. Also called slider distance or spacing.'
+    description: 'How far you drag for each step, the same at every chat width: Short is closest together, Long is easiest to land on exactly. A narrow chat squeezes them to fit. Also called slider distance or spacing.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
     title: 'Steps',
     parent: 'Message edge',
-    description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths. They always run from mildest to harshest.'
+    description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They always run from mildest to harshest.'
   },
   {
     tab: 'Moderation',

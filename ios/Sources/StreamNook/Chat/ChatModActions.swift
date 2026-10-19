@@ -14,6 +14,28 @@ enum ChatModActions {
         var undo: (@MainActor () -> Void)?
     }
 
+    /// A swipe's step on the chatter captured at touch-down (their message may have left the
+    /// buffer since), with Undo on a timeout or ban.
+    static func runSwipe(_ step: SwipeStep, core: any CoreBridge, room: String, messageID: String, userID: String,
+                         name: String) async -> Outcome {
+        func moderate(_ action: [String: Any], saved: Bool) async throws -> ModOutcome {
+            try await core.invoke("moderate_chatter", args: ["request": [
+                "provider": "twitch", "broadcasterId": room, "targetUserId": userID, "targetName": name,
+                "action": action, "useSavedReason": saved,
+            ] as [String: Any]], as: ModOutcome.self)
+        }
+        let timeout = step.action == "timeout"
+        do {
+            let outcome = try await moderate(step.action(messageID: messageID), saved: step.action != "delete")
+            guard outcome.undoable else { return Outcome(text: outcome.message, success: true) }
+            return Outcome(text: outcome.message, success: true, undo: {
+                Task { _ = try? await moderate(["kind": "unban", "timeout": timeout], saved: false) }
+            })
+        } catch {
+            return Outcome(text: ChatComposerModel.words(error))
+        }
+    }
+
     static func run(_ bucket: FanBucket, message: ChatMessage, seconds: Int?, session: ChatSession,
                     onProfile: (ProfileTarget) -> Void) async -> Outcome? {
         let core = session.core

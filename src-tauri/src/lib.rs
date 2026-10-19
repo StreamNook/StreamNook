@@ -36,7 +36,7 @@ use commands::chat_query::{
 };
 use commands::moderation_tools::{
     get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
-    get_user_pronouns, moderate_chatter, resolve_automod_message, set_user_note,
+    get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
     update_channel_info, upload_image,
 };
 use commands::stream_manager::{
@@ -395,6 +395,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.scope_blend_header_marks_once();
     settings.move_room_modes_to_prompt_once();
     settings.adopt_first_run_look_once();
+    settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
     settings.map_legacy_event_keys();
     Ok(settings)
@@ -1983,6 +1984,7 @@ pub fn run() {
             moderate_chatter,
             get_mod_timeout_steps,
             get_mod_slider_steps,
+            parse_mod_timeout,
             get_streamer_mode_state,
             update_channel_info,
             get_user_pronouns,
@@ -2613,6 +2615,9 @@ pub fn run() {
             services::mod_history::get_chatter_mod_history,
             services::chatter_card::get_chatter_card_tools,
             services::chatter_card::set_card_timeout_length,
+            services::touch_mod_slider::get_touch_mod_slider,
+            services::touch_mod_slider::edit_mod_slider_timeouts,
+            services::room_mod_log::get_room_mod_log,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

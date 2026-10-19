@@ -124,6 +124,9 @@ struct ChatLabView: View {
 ///   core's `AUTOMOD_HELD` frame would; local only, nothing reaches Twitch
 /// - `chatwarn[:off]` puts a moderator's warning on the room's words (or takes it away), as the
 ///   core's ROOMSTATE would; local only
+/// - `chatswipe:PULL` swipes the newest moderatable row PULL points right and holds it there;
+///   `chatswipe:release` lets go (FakeCore only: the release runs the fake mod door)
+/// - `chatmodsheet` opens the Moderation sheet (FakeCore only)
 /// - `chatclose` closes the stage
 ///
 /// The watch page's rooms:
@@ -185,7 +188,7 @@ enum ChatDrive {
         // Steps that write (send, moderator tools) only ever run against a fake core, never a
         // signed-in account. The fan steps only open and point it; nothing is ever released on a
         // bucket, so they run anywhere.
-        if ["chatsend", "chatmod"].contains(name), !(currentSession?.core is FakeCore) {
+        if ["chatsend", "chatmod", "chatswipe", "chatmodsheet"].contains(name), !(currentSession?.core is FakeCore) {
             log.error("drive: \(name, privacy: .public) refused on a real core")
             return true
         }
@@ -254,6 +257,20 @@ enum ChatDrive {
             currentList?.debugEndFan()
         case "chatmod":
             currentSession?.moderatorTools = value != "off"
+        case "chatswipe":
+            guard let session = currentSession, let list = currentList else { return true }
+            if session.roomID == nil { session.roomID = "1" }
+            session.moderatorTools = true
+            list.swipeEnabled = true
+            if value == "release" {
+                await list.debugSwipe(pull: 0, release: true)
+            } else {
+                await list.debugSwipe(pull: CGFloat(Double(value) ?? 120), release: false)
+            }
+        case "chatmodsheet":
+            guard let session = currentSession else { return true }
+            if session.roomID == nil { session.roomID = "1" }
+            composer?.moderationOpen = true
         case "chatheld":
             guard let session = currentSession else { return true }
             session.pipeline.ingest(heldFrame(channel: session.channel, decided: value == "decided"))

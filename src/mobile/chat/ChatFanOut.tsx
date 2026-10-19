@@ -90,6 +90,8 @@ interface Props {
   onCancel: () => void;
   /** Actions to leave out (the read-only landscape overlay drops Reply). */
   hide?: FanAction[];
+  /** A release on Timeout without dialing a length: the swipe's first timeout, from Rust. */
+  quickSeconds?: number;
 }
 
 export const ChatFanOut: React.FC<Props> = ({
@@ -99,6 +101,7 @@ export const ChatFanOut: React.FC<Props> = ({
   onCommit,
   onCancel,
   hide,
+  quickSeconds = 600,
 }) => {
   const { fold } = useWindowShape();
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
@@ -247,7 +250,7 @@ export const ChatFanOut: React.FC<Props> = ({
       const bucket = [...EVERYONE, ...MOD_ONLY].find((b) => b.id === chosen);
       if (bucket?.kind === 'danger') hapticDestructive();
       else hapticCommit();
-      onCommit(chosen, chosen === 'timeout' ? (duration ?? 600) : undefined);
+      onCommit(chosen, chosen === 'timeout' ? (duration ?? quickSeconds) : undefined);
     };
 
     window.addEventListener('pointermove', onMove);
@@ -258,7 +261,7 @@ export const ChatFanOut: React.FC<Props> = ({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
     };
-  }, [target, placed, onCommit, onCancel]);
+  }, [target, placed, onCommit, onCancel, quickSeconds]);
 
   if (!target) return null;
 

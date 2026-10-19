@@ -48,6 +48,7 @@ import { isTwitchStream } from '../../utils/streamProvider';
 import { formatShortCount } from '../../utils/streamStats';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { ManageChannelSheet } from './ManageChannelSheet';
+import { ModerationSheet } from './ModerationSheet';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -166,6 +167,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [manageOpen, setManageOpen] = useState(false);
+  const [moderationOpen, setModerationOpen] = useState(false);
   const text = drafts[roomKey] ?? '';
   const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
     setDrafts((d) => {
@@ -975,8 +977,18 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onReload={onReload}
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
         onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
+        onModeration={channel && channelId && isTwitch && isModerator ? () => setModerationOpen(true) : undefined}
         onCloseChat={onCloseChat}
       />
+      {channel && channelId && isTwitch && isModerator && (
+        <ModerationSheet
+          open={moderationOpen}
+          onClose={() => setModerationOpen(false)}
+          channelId={channelId}
+          channelLogin={channel}
+          onManageChannel={() => setTimeout(() => setManageOpen(true), 260)}
+        />
+      )}
       {channel && channelId && isTwitch && isModerator && (
         <ManageChannelSheet
           open={manageOpen}

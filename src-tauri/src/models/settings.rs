@@ -376,22 +376,14 @@ pub struct ChatDesignSettings {
     pub username_style: String, // plain | bar | chip | brackets | dot
     #[serde(default = "default_username_accent_source")]
     pub username_accent_source: String, // user | theme
-    #[serde(default = "default_true")]
-    pub drag_moderation_enabled: bool, // deprecated: superseded by mod_action_style
+    /// The hover buttons (Ban, Delete and a timeout in the corner of the
+    /// hovered message): "buttons" or "none". Older files also hold "both"
+    /// and "drag", from when this also switched drag to tiles on;
+    /// `retire_mod_tiles` moves those on load.
     #[serde(default = "default_mod_action_style")]
-    pub mod_action_style: String, // buttons | drag | both | none (hover buttons, drag to tiles)
-    /// Where the grab cursor shows while drag-to-moderate is on: "row" (the
-    /// whole message, so the gesture announces itself) or "edge" (only the
-    /// accent strip at the left edge). A press anywhere lifts the chatter
-    /// either way.
-    #[serde(default = "default_mod_drag_cursor")]
-    pub mod_drag_cursor: String, // row | edge
-    #[serde(default = "default_mod_drag_layout")]
-    pub mod_drag_layout: String, // column | bar
+    pub mod_action_style: String,
     #[serde(default = "default_pinned_collapsed_style")]
     pub pinned_collapsed_style: String, // bar | hidden
-    #[serde(default = "default_mod_pin_style")]
-    pub mod_pin_style: String, // inline | drag | both
     /// The slider on a message's left edge: drag right through the timeout
     /// steps to Ban, release to apply. Moderators only.
     #[serde(default = "default_true")]
@@ -406,10 +398,17 @@ pub struct ChatDesignSettings {
     /// The slider ends in Ban.
     #[serde(default = "default_true")]
     pub mod_slider_ban: bool,
-    /// How much of the message width the slider's steps spread over:
-    /// "short" (half), "medium" (four fifths), "long" (all of it).
+    /// How far the slider's steps sit apart, the same at every chat width:
+    /// "short" (18 px), "medium" (22 px), "long" (28 px); a narrow chat
+    /// squeezes them to fit.
     #[serde(default = "default_mod_slider_length")]
     pub mod_slider_length: String,
+    /// How the slider draws a pull: "preview" (the message stays put and
+    /// shows the step struck through in its color, a chip names it),
+    /// "rail" (every step laid out on a rail over the message) or "capsule"
+    /// (the message slides aside for a capsule that names the step).
+    #[serde(default = "default_mod_slider_style")]
+    pub mod_slider_style: String,
     /// Line buttons: small action buttons at the start of every line a
     /// moderator can act on, one click each. They take the left edge, so the
     /// slider grip is not drawn while they are on. Moderators only.
@@ -424,9 +423,10 @@ pub struct ChatDesignSettings {
     /// The line buttons end with Ban.
     #[serde(default = "default_true")]
     pub mod_line_ban: bool,
-    /// Seconds a drop on the drag-to-moderate Timeout tile times out for.
-    #[serde(default = "default_mod_bucket_timeout")]
-    pub mod_bucket_timeout: u32,
+    /// When the line buttons show: "hover" (only on the line under the
+    /// pointer, pushing its text over) or "always" (on every line).
+    #[serde(default = "default_mod_line_show")]
+    pub mod_line_show: String,
     /// "hsl_loop" (default) walks a chatter's color toward the readable side
     /// of the theme; "off" renders it as Twitch sent it.
     #[serde(default = "default_name_color_adjustment")]
@@ -600,19 +600,16 @@ fn default_username_accent_source() -> String {
     "user".to_string()
 }
 fn default_mod_action_style() -> String {
-    "both".to_string()
-}
-fn default_mod_drag_layout() -> String {
-    "column".to_string()
-}
-fn default_mod_drag_cursor() -> String {
-    "row".to_string()
+    "buttons".to_string()
 }
 fn default_mod_slider_length() -> String {
     "medium".to_string()
 }
-fn default_mod_bucket_timeout() -> u32 {
-    600
+fn default_mod_slider_style() -> String {
+    "preview".to_string()
+}
+fn default_mod_line_show() -> String {
+    "hover".to_string()
 }
 fn default_mod_slider_timeouts() -> Vec<u32> {
     crate::services::moderation::DEFAULT_SLIDER_TIMEOUTS.to_vec()
@@ -622,9 +619,6 @@ fn default_mod_line_timeouts() -> Vec<u32> {
 }
 fn default_pinned_collapsed_style() -> String {
     "bar".to_string()
-}
-fn default_mod_pin_style() -> String {
-    "both".to_string()
 }
 
 impl Default for ChatDesignSettings {
@@ -699,22 +693,19 @@ impl Default for ChatDesignSettings {
             scrollbar_marks: true,
             scrollbar_mark_kinds: default_scrollbar_mark_kinds(),
             username_accent_source: "user".to_string(),
-            drag_moderation_enabled: true,
-            mod_action_style: "both".to_string(),
-            mod_drag_cursor: default_mod_drag_cursor(),
-            mod_drag_layout: "column".to_string(),
+            mod_action_style: default_mod_action_style(),
             pinned_collapsed_style: "bar".to_string(),
-            mod_pin_style: "both".to_string(),
             mod_slider: true,
             mod_slider_delete: true,
             mod_slider_timeouts: default_mod_slider_timeouts(),
             mod_slider_ban: true,
             mod_slider_length: default_mod_slider_length(),
+            mod_slider_style: default_mod_slider_style(),
             mod_line_buttons: false,
             mod_line_delete: true,
             mod_line_timeouts: default_mod_line_timeouts(),
             mod_line_ban: true,
-            mod_bucket_timeout: default_mod_bucket_timeout(),
+            mod_line_show: default_mod_line_show(),
         }
     }
 }
@@ -724,11 +715,7 @@ impl ChatDesignSettings {
     /// absent `chat_design` block has always meant, so an old settings file
     /// that lacks one never changes under its owner.
     ///
-    /// Phones keep Twitch's 14px text and 8px spacing on a narrow screen, and
-    /// keep mod buttons: the phone chat has no drag layer, so drag-only would
-    /// leave a moderator there with no actions at all. Desktop starts with the
-    /// hover buttons on beside the slider (the default message edge), and
-    /// drag to tiles off: the slider holds the edge, so tiles would not show.
+    /// Phones keep Twitch's 14px text and 8px spacing on a narrow screen.
     pub fn first_run() -> Self {
         let desktop = cfg!(not(mobile));
         Self {
@@ -736,8 +723,6 @@ impl ChatDesignSettings {
             message_spacing: if desktop { 11 } else { 8 },
             message_entrance: "slide".to_string(),
             deleted_message_style: "italic".to_string(),
-            mod_action_style: if desktop { "buttons" } else { "both" }.to_string(),
-            mod_drag_layout: if desktop { "bar" } else { "column" }.to_string(),
             ..Self::default()
         }
     }
@@ -1807,19 +1792,30 @@ impl Settings {
         if d.deleted_message_style == "strikethrough" {
             d.deleted_message_style = new.deleted_message_style;
         }
-        // "both" is also what a file from before mod_action_style existed
-        // loads as; there the old switch says what the viewer chose, and
-        // drag_moderation_enabled = false meant buttons only.
-        if d.mod_action_style == "both" && d.drag_moderation_enabled {
-            d.mod_action_style = new.mod_action_style;
-        }
-        if d.mod_drag_layout == "column" {
-            d.mod_drag_layout = new.mod_drag_layout;
-        }
         if !self.chat_blend.enabled {
             self.chat_blend.enabled = ChatBlendSettings::first_run().enabled;
         }
         self.first_run_look_adopted = true;
+    }
+
+    /// Moves an install off the removed drag-to-tiles moderation.
+    /// `mod_action_style` used to hold the hover buttons and the tiles
+    /// together ("both" = buttons and tiles, "drag" = tiles only); it now
+    /// holds only the hover buttons. A viewer whose message edge was Tiles
+    /// (the slider and the line buttons both off) gets the slider, so a
+    /// moderator never loses the gesture. Once no "both" or "drag" is left
+    /// there is nothing to move, so this runs once in effect.
+    pub fn retire_mod_tiles(&mut self) {
+        let d = &mut self.chat_design;
+        let hover = match d.mod_action_style.as_str() {
+            "both" => "buttons",
+            "drag" => "none",
+            _ => return,
+        };
+        if !d.mod_slider && !d.mod_line_buttons {
+            d.mod_slider = true;
+        }
+        d.mod_action_style = hover.to_string();
     }
 
     /// One-time flip of the low-latency engine to on for installs written before
@@ -2220,7 +2216,6 @@ mod backup_persistence_tests {
         assert!(old.chat_blend.enabled);
         assert_eq!(old.chat_design.font_size, fresh.font_size);
         assert_eq!(old.chat_design.message_entrance, "slide");
-        assert_eq!(old.chat_design.mod_action_style, fresh.mod_action_style);
         assert_eq!(old.chat_design.message_spacing, 4, "a chosen spacing stays");
         assert_eq!(old.chat_design.deleted_message_style, "hidden", "a chosen style stays");
 
@@ -2238,17 +2233,50 @@ mod backup_persistence_tests {
         assert!(incoming.first_run_look_adopted);
     }
 
-    /// The old on/off drag switch, off, meant buttons only. A file from before
-    /// mod_action_style loads that field as "both"; the first-run look must
-    /// not overwrite what that switch meant.
+    /// Tiles were removed: a message edge on Tiles moves to the slider, and
+    /// the hover buttons keep whatever they were.
     #[test]
-    fn buttons_only_from_the_old_switch_is_not_moved_to_drag() {
-        let mut old = Settings::default();
-        old.first_run_look_adopted = false;
-        old.chat_design = ChatDesignSettings::default();
-        old.chat_design.drag_moderation_enabled = false;
-        old.adopt_first_run_look_once();
-        assert_eq!(old.chat_design.mod_action_style, "both");
+    fn tiles_move_to_the_slider() {
+        let with = |style: &str, slider: bool, line: bool| {
+            let mut s = Settings::default();
+            s.chat_design.mod_action_style = style.into();
+            s.chat_design.mod_slider = slider;
+            s.chat_design.mod_line_buttons = line;
+            s.retire_mod_tiles();
+            (s.chat_design.mod_action_style, s.chat_design.mod_slider, s.chat_design.mod_line_buttons)
+        };
+        // Tiles at the edge, with and without the hover buttons.
+        assert_eq!(with("both", false, false), ("buttons".into(), true, false));
+        assert_eq!(with("drag", false, false), ("none".into(), true, false));
+        // Slider or line buttons at the edge: the tiles never showed.
+        assert_eq!(with("both", true, false), ("buttons".into(), true, false));
+        assert_eq!(with("drag", false, true), ("none".into(), false, true));
+        // Already moved, or never had tiles: nothing changes, so it runs once.
+        assert_eq!(with("buttons", false, false), ("buttons".into(), false, false));
+        assert_eq!(with("none", false, true), ("none".into(), false, true));
+    }
+
+    /// A file written while the tiles existed still loads: the removed keys
+    /// are dropped and the legacy values move.
+    #[test]
+    fn a_settings_file_with_tile_keys_loads() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        let cd = value["chat_design"].as_object_mut().expect("chat_design");
+        cd.insert("mod_action_style".into(), "both".into());
+        cd.insert("mod_slider".into(), false.into());
+        cd.insert("drag_moderation_enabled".into(), true.into());
+        cd.insert("mod_drag_layout".into(), "bar".into());
+        cd.insert("mod_drag_cursor".into(), "edge".into());
+        cd.insert("mod_pin_style".into(), "inline".into());
+        cd.insert("mod_bucket_timeout".into(), 3600.into());
+        let mut parsed: Settings = serde_json::from_value(value).expect("parses");
+        parsed.retire_mod_tiles();
+        assert_eq!(parsed.chat_design.mod_action_style, "buttons");
+        assert!(parsed.chat_design.mod_slider);
+        let saved = serde_json::to_value(&parsed).expect("serialize");
+        for gone in ["mod_drag_layout", "mod_drag_cursor", "mod_pin_style", "mod_bucket_timeout", "drag_moderation_enabled"] {
+            assert!(saved["chat_design"].get(gone).is_none(), "{gone} is not saved again");
+        }
     }
 
     /// The first-run chat look reaches only a fresh install. A file that
@@ -2260,7 +2288,7 @@ mod backup_persistence_tests {
         assert_eq!(fresh.deleted_message_style, "italic");
         assert_eq!(fresh.font_size, if cfg!(mobile) { 14 } else { 16 });
         assert_eq!(fresh.message_spacing, if cfg!(mobile) { 8 } else { 11 });
-        assert_eq!(fresh.mod_action_style, if cfg!(mobile) { "both" } else { "buttons" });
+        assert_eq!(fresh.mod_action_style, "buttons");
         assert!(!fresh.show_dividers);
 
         // A file without the block at all.

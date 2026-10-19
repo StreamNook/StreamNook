@@ -67,11 +67,27 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
         scroll.addGestureRecognizer(tap)
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
+        press.addTarget(self, action: #selector(pressed(_:)))
         press.minimumPressDuration = 0.42
         press.allowableMovement = 10
         press.delegate = self
         scroll.addGestureRecognizer(press)
+        // Swipe right on a message to moderate it. The list's own scroll waits for this to fail,
+        // which it does at once unless the finger heads right over a row the viewer moderates.
+        swipePan.addTarget(self, action: #selector(swiped(_:)))
+        swipePan.delegate = self
+        swipePan.maximumNumberOfTouches = 1
+        scroll.addGestureRecognizer(swipePan)
+        scroll.panGestureRecognizer.require(toFail: swipePan)
+        // The thumb landing on a row the viewer moderates holds the list at once, so the row
+        // under it is the row a swipe acts on, however fast the chat runs.
+        touchDown.addTarget(self, action: #selector(touched(_:)))
+        touchDown.minimumPressDuration = 0
+        touchDown.allowableMovement = .greatestFiniteMagnitude
+        touchDown.cancelsTouchesInView = false
+        touchDown.delaysTouchesEnded = false
+        touchDown.delegate = self
+        scroll.addGestureRecognizer(touchDown)
 
         var config = UIButton.Configuration.glass()
         config.title = "Resume live"
@@ -155,7 +171,9 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     fileprivate func tick(_ link: CADisplayLink) {
         pacing.frame(link)
         ticks += 1
-        if let source {
+        // While a thumb rests on (or swipes) a message the list holds still: new rows wait until
+        // it lifts or turns the press into a scroll.
+        if let source, swipe == nil, touchPress == nil {
             let batches = source.takeReady()
             if !batches.isEmpty { apply(batches) }
         }
@@ -418,6 +436,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         glide = nil
+        // The press became a scroll: the list is the finger's again.
+        if swipe == nil { touchPress = nil }
         lastTranslation = scrollView.panGestureRecognizer.translation(in: scrollView).y
     }
 
@@ -467,6 +487,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     var fanContext: ((ChatRowLayout) -> (buckets: [FanBucket], name: String, color: UIColor)?)?
     /// A released bucket, with the dialled timeout in seconds.
     var onFanCommit: ((FanBucket, ChatRowLayout, Int?) -> Void)?
+    /// A release on the fan's Timeout without dialing: the swipe's first timeout, from the core.
+    var quickSeconds = 600
     private var fan: ChatFanOverlay?
     private var fanRow: ChatRowLayout?
 
@@ -475,7 +497,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         switch gesture.state {
         case .began:
             let point = gesture.location(in: scroll)
-            guard let (row, _) = row(at: point), let context = fanContext?(row.layout), !context.buckets.isEmpty else { return }
+            guard swipe == nil, let (row, _) = row(at: point), let context = fanContext?(row.layout), !context.buckets.isEmpty
+            else { return }
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             onLongPress?(row.layout, gesture.location(in: self))
             // Once armed the list holds still for the rest of the gesture.
@@ -495,7 +518,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                 } else {
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                 }
-                onFanCommit?(bucket, row, bucket == .timeout ? (fan.dialled ?? 600) : nil)
+                onFanCommit?(bucket, row, bucket == .timeout ? (fan.dialled ?? quickSeconds) : nil)
             }
             endFan()
         default:
@@ -539,8 +562,125 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     #endif
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        false
+        // The touch-down watcher only watches; everything else runs alongside it.
+        g === touchDown || other === touchDown
     }
+
+    // MARK: Swipe to moderate
+
+    /// A swipe ready to start: the core's slider for this press and what a release does with its
+    /// step, captured for the chatter under the thumb at touch-down.
+    struct PreparedSwipe {
+        var slider: SwipeSlider
+        var commit: (SwipeStep) -> Void
+    }
+
+    /// Swiping is on here (moderator tools on, the room known); the core's slider comes per press.
+    var swipeEnabled = false {
+        didSet { press.allowableMovement = swipeEnabled ? 6 : 10 }
+    }
+    /// Whether a row can be moderated with a swipe (a Twitch chatter the viewer may act on).
+    var swipeAllowed: ((ChatRowLayout) -> Bool)?
+    /// The slider for a press `startX` points into a row, and the release action, for that row.
+    var prepareSwipe: ((ChatRowLayout, _ width: CGFloat, _ startX: CGFloat) async -> PreparedSwipe?)?
+    /// A swipe started (the hint goes once one has).
+    var onSwipeDone: (() -> Void)?
+    /// The long press that opens the fan; it gives way sooner to a sideways drift while swiping is on.
+    private let press = UILongPressGestureRecognizer()
+    private let swipePan = UIPanGestureRecognizer()
+    private let touchDown = UILongPressGestureRecognizer()
+    private var swipe: SwipeModerator?
+    /// The press a swipe may start from: its row, where the thumb landed, and once the core has
+    /// answered, the prepared swipe.
+    private var touchPress: (row: Row, cell: ChatRowCell, startX: CGFloat, prepared: PreparedSwipe?)?
+
+    @objc private func touched(_ g: UILongPressGestureRecognizer) {
+        switch g.state {
+        case .began:
+            guard swipeEnabled, !readOnly, swipe == nil, fan == nil else { return }
+            let point = g.location(in: scroll)
+            guard let (row, cell) = row(at: point), swipeAllowed?(row.layout) == true else { return }
+            let startX = point.x - cell.frame.minX
+            touchPress = (row, cell, startX, nil)
+            let id = row.id
+            Task { @MainActor [weak self] in
+                guard let self, let prepare = self.prepareSwipe,
+                      let ready = await prepare(row.layout, cell.frame.width, startX),
+                      self.touchPress?.row.id == id else { return }
+                self.touchPress?.prepared = ready
+            }
+        case .ended, .cancelled, .failed:
+            if swipe == nil { touchPress = nil }
+        default:
+            break
+        }
+    }
+
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === swipePan else { return true }
+        guard !readOnly, swipe == nil, fan == nil, let held = touchPress else { return false }
+        // The core's slider may still be on its way; only a press it turned down is refused here.
+        if let ready = held.prepared, !ready.slider.enabled { return false }
+        let t = swipePan.translation(in: scroll)
+        // Only a mainly vertical move (the list's scroll) or a leftward one is refused.
+        return t.x > 0 && abs(t.x) >= abs(t.y)
+    }
+
+    /// How far right of where the thumb went down the finger is now.
+    private func pull(_ g: UIGestureRecognizer, _ held: (row: Row, cell: ChatRowCell, startX: CGFloat, prepared: PreparedSwipe?)) -> CGFloat {
+        g.location(in: scroll).x - (held.cell.frame.minX + held.startX)
+    }
+
+    @objc private func swiped(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began, .changed:
+            guard let held = touchPress else { return }
+            scroll.isScrollEnabled = false
+            // The overlay starts once the core's slider is here; until then the finger just pulls.
+            if swipe == nil, let ready = held.prepared {
+                guard ready.slider.enabled else { return endSwipe() }
+                swipe = SwipeModerator(slider: ready.slider, cell: held.cell, in: scroll, visibleTop: scroll.contentOffset.y,
+                                       commit: ready.commit)
+                // The gesture is found: the one-time hint goes now, before the chip could meet it.
+                onSwipeDone?()
+            }
+            swipe?.track(pull: pull(g, held), y: g.location(in: scroll).y)
+        case .ended:
+            _ = swipe?.release()
+            endSwipe()
+        default:
+            endSwipe()
+        }
+    }
+
+    private func endSwipe() {
+        swipe?.finish()
+        swipe = nil
+        touchPress = nil
+        scroll.isScrollEnabled = true
+    }
+
+    #if DEBUG
+    /// Swipes the newest moderatable row `pull` points (from 16 points into the row) and holds it
+    /// there, for screenshots; `release` lets go (and so runs the release action, which only a
+    /// FakeCore session wires to anything).
+    func debugSwipe(pull: CGFloat, release: Bool) async {
+        if release {
+            if swipe?.release() == true { onSwipeDone?() }
+            endSwipe()
+            return
+        }
+        if swipe == nil {
+            guard let row = rows.last(where: { cells[$0.id] != nil && swipeAllowed?($0.layout) == true }),
+                  let cell = cells[row.id], let prepare = prepareSwipe,
+                  let ready = await prepare(row.layout, cell.frame.width, 16) else { return }
+            touchPress = (row, cell, 16, ready)
+            swipe = SwipeModerator(slider: ready.slider, cell: cell, in: scroll, visibleTop: scroll.contentOffset.y,
+                                   commit: ready.commit)
+        }
+        swipe?.track(pull: pull, y: touchPress?.cell.frame.midY ?? 0)
+    }
+    #endif
 
     /// Scrolls until the row sits in the middle and flashes it; false when it left the buffer.
     func jump(to id: String) -> Bool {

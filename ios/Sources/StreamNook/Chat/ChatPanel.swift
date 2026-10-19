@@ -98,6 +98,7 @@ struct ChatPanel: View {
     var onFloor: ((CGFloat) -> Void)?
 
     @State private var toast: String?
+    @AppStorage(SwipeHint.key) private var hintLearned = false
     /// The pinned banner's and the vote cards' heights, for the inline room.
     @State private var pinsBox: CGFloat = 0
     @State private var votesBox: CGFloat = 0
@@ -153,6 +154,10 @@ struct ChatPanel: View {
                                 .padding(.horizontal, 10)
                                 .padding(.top, rooms?.activePins.isEmpty ?? true ? topGap : 0)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { votesBox = $0 }
+                        }
+                        if !overlay, session.moderatorTools, session.roomID != nil, !hintLearned {
+                            SwipeHint { hintLearned = true }
+                                .padding(.top, 8)
                         }
                         if let toast {
                             Text(toast)
@@ -319,6 +324,34 @@ struct ChatListHost: UIViewRepresentable {
                 }
             }
         }
+        // Swipe right on a message to moderate it (the core lays out the slider and words it).
+        list.swipeAllowed = { layout in
+            guard session.moderatorTools, session.roomID != nil, !layout.id.hasPrefix(ChatRoomBuffer.heldRowID("")),
+                  let message = session.pipeline.message(layout.id), message.provider == "twitch", !message.isSystem,
+                  message.tags["system-msg"] == nil
+            else { return false }
+            // Never another moderator, the broadcaster or staff (the viewer's own rows carry their badge too).
+            let protected: Set<String> = ["moderator", "broadcaster", "staff", "admin", "global_mod", "lead_moderator"]
+            return !message.badges.contains { protected.contains($0.name) }
+        }
+        // A press on a moderatable row: the core's slider for where the thumb landed, and the
+        // chatter captured now, so a release acts on the person pressed even if their message
+        // has since left the buffer.
+        list.prepareSwipe = { layout, width, startX in
+            guard let message = session.pipeline.message(layout.id), let room = session.roomID else { return nil }
+            let core = session.core
+            guard let slider = try? await core.swipeSlider(width: Double(width), startX: Double(startX), name: message.shownName)
+            else { return nil }
+            let (messageID, userID, name) = (message.id, message.userID, message.shownName)
+            return ChatListView.PreparedSwipe(slider: slider) { step in
+                Task { @MainActor in
+                    let outcome = await ChatModActions.runSwipe(step, core: core, room: room, messageID: messageID,
+                                                                userID: userID, name: name)
+                    onOutcome(outcome)
+                }
+            }
+        }
+        list.onSwipeDone = { SwipeHint.learned = true }
         list.onFanCommit = { bucket, layout, seconds in
             guard let message = session.pipeline.message(layout.id) else { return }
             Task { @MainActor in
@@ -336,6 +369,14 @@ struct ChatListHost: UIViewRepresentable {
     func updateUIView(_ list: ChatListView, context: Context) {
         list.readOnly = readOnly
         list.setStyle(session.style)
+        // Swiping is on where moderator tools are; the core lays the slider out per press.
+        list.swipeEnabled = session.moderatorTools && session.roomID != nil && !readOnly
+        if list.swipeEnabled {
+            let core = session.core
+            Task { @MainActor [weak list] in
+                if let quick = try? await core.swipeSlider(width: 390).quickSeconds { list?.quickSeconds = quick }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -359,4 +400,46 @@ final class ChatRegistry {
 final class WeakList {
     weak var list: ChatListView?
     init(_ list: ChatListView) { self.list = list }
+}
+
+
+/// The one-time hint that swiping a message moderates it, shown over the list until a swipe has
+/// run once (or it is dismissed). Android shows the same words.
+struct SwipeHint: View {
+    static let key = "sn-swipe-mod-learned"
+    static var learned: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hand.draw")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SN.accent)
+            Text("Swipe right on a message to moderate it")
+                .font(.snCaption)
+                .foregroundStyle(.primary)
+            // The X's place; the X itself sits over the pill so it alone takes a touch.
+            Color.clear.frame(width: 18, height: 18)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .glassEffect()
+        // Only the X takes a touch: a swipe on the row under the pill still starts.
+        .allowsHitTesting(false)
+        .overlay(alignment: .trailing) {
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(SN.textMuted)
+                    .padding(4)
+            }
+            .accessibilityLabel("Dismiss the swipe hint")
+            .padding(.trailing, 6)
+        }
+        .transition(.opacity)
+    }
 }

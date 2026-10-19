@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { Gift, RotateCcw } from 'lucide-react';
@@ -28,13 +27,12 @@ import type { BackendChatMessage, ScrollbarMarkKind } from '../../services/twitc
 import type { ChatDesignSettings } from '../../types';
 import { ModSlider } from '../chat/ModSlider';
 import { ModLineButtons } from '../chat/ModLineButtons';
-import { lineButtons, type LineButton } from '../chat/modLine';
-import { bindLineStrips, useLineArt, type LineArt } from '../chat/lineArt';
-import { DEFAULT_BUCKET_TIMEOUT_SECS, useLineConfig, useModSliderSteps } from '../../services/moderation';
-import { IconContext } from 'phosphor-react';
-import { BucketTile } from '../chat/ModBucketTile';
-import { BAN_GAP_PX, BAN_TILE, DELETE_TILE, PIN_TILE, TIMEOUT_TILE, pickTile } from '../chat/modTiles';
+import { HoverModButtons } from '../chat/HoverModButtons';
+import { Copy, PushPin } from 'phosphor-react';
 import { formatDuration } from '../../utils/timeoutRamp';
+import { lineButtons, type LineButton } from '../chat/modLine';
+import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons, type LineArt } from '../chat/lineArt';
+import { useLineConfig, useModSliderSteps, useSliderConfig } from '../../services/moderation';
 
 // A few lines of sample chat for the settings page, drawn with the viewer's own
 // chat design (text size, spacing, dividers, stripes, timestamps, name style)
@@ -193,7 +191,7 @@ const PreviewLine = ({
           style={action ? { color, fontWeight: chatBodyWeight(design.font_weight) } : { fontWeight: chatBodyWeight(design.font_weight) }}
           className={action ? 'italic break-words' : 'text-textPrimary break-words'}
         >
-          <span style={moderation && deletedStyle ? deletedBodyStyle(deletedStyle) : undefined}>
+          <span data-mod-body style={moderation && deletedStyle ? deletedBodyStyle(deletedStyle) : undefined}>
             {' '}
             {text}
           </span>
@@ -204,14 +202,16 @@ const PreviewLine = ({
   );
 };
 
-/** A plain chat line as a list child (what striping and arrival key off). */
-const Row = ({ children, collapsed = false }: { children: ReactNode; collapsed?: boolean }) => (
+/** A plain chat line as a list child (what striping and arrival key off).
+ *  `open` lets a line draw past its box (the mod slider's chip); such a line
+ *  never collapses. */
+const Row = ({ children, collapsed = false, open = false }: { children: ReactNode; collapsed?: boolean; open?: boolean }) => (
   <div
     className="chat-message-row grid transition-[grid-template-rows,opacity] duration-300 ease-out"
     style={{ gridTemplateRows: collapsed ? '0fr' : '1fr', opacity: collapsed ? 0 : 1 }}
     aria-hidden={collapsed || undefined}
   >
-    <div className="min-h-0 overflow-hidden">{children}</div>
+    <div className={open ? 'min-h-0' : 'min-h-0 overflow-hidden'}>{children}</div>
   </div>
 );
 
@@ -304,7 +304,7 @@ export const ModSliderPreview = ({ stored }: { stored: ChatDesignSettings | unde
         <Row>
           <PreviewLine design={design} who={PIXELFOX} text="that clutch was unreal" minutesAgo={3} first />
         </Row>
-        <Row>
+        <Row open>
           <div className="group relative isolate">
             <PreviewLine design={design} who={LOOTGOBLIN} text="free subs at the link in my bio" minutesAgo={2} />
             <ModSlider
@@ -324,230 +324,66 @@ export const ModSliderPreview = ({ stored }: { stored: ChatDesignSettings | unde
   );
 };
 
-const TILE_SAMPLES: { who: Chatter; text: string }[] = [
-  { who: PIXELFOX, text: 'that clutch was unreal' },
-  { who: MOSSY, text: 'gg, that boss had no chance' },
-  { who: LOOTGOBLIN, text: 'free subs at the link in my bio' },
-  { who: QUIETSTORM, text: 'what rank is this lobby' },
-];
-/** Which sample the bar sits on. */
-const TILE_TARGET = 2;
-const TILE_ICONS = { weight: 'bold' } as const;
-
-/** Sample chat with the drag tiles where Tile position puts them, with
- *  Timeout level with the message you grab, as in chat. Press the handle on one
- *  message's left edge and drag it onto a tile: the same tiles and the same
- *  picking as chat. Letting go only names the tile; nothing is sent from a
- *  preview. */
-export const ModTilesPreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
-  const design = previewDesignOf(stored);
-  const layout = stored?.mod_drag_layout === 'bar' ? 'bar' : 'column';
-  const timeoutSecs = stored?.mod_bucket_timeout ?? DEFAULT_BUCKET_TIMEOUT_SECS;
-  const tiles = [...(stored?.mod_pin_style !== 'inline' ? [PIN_TILE] : []), DELETE_TILE, TIMEOUT_TILE, BAN_TILE];
-  const target = TILE_SAMPLES[TILE_TARGET].who;
-
-  const boxRef = useRef<HTMLDivElement>(null);
-  const columnRef = useRef<HTMLDivElement>(null);
-  const chatRef = useRef<HTMLDivElement>(null);
-  const targetRef = useRef<HTMLDivElement>(null);
-  const armedRef = useRef<string | null>(null);
-  const [held, setHeld] = useState<{ x: number; y: number } | null>(null);
-  const [armed, setArmed] = useState<string | null>(null);
-  const [result, setResult] = useState<string | null>(null);
-  // Beside chat, the column moves so Timeout meets the grabbed message (or
-  // the chat moves, when the column is the shorter side).
-  const [offsets, setOffsets] = useState({ column: 0, chat: 0 });
-  useLayoutEffect(() => {
-    const column = columnRef.current;
-    const chat = chatRef.current;
-    const row = targetRef.current;
-    const timeout = column?.querySelector<HTMLElement>('[data-bucket-id="timeout"]');
-    if (layout !== 'column' || !column || !chat || !row || !timeout) return;
-    const t = timeout.getBoundingClientRect();
-    const r = row.getBoundingClientRect();
-    const gap = r.top + r.height / 2 - chat.getBoundingClientRect().top - (t.top + t.height / 2 - column.getBoundingClientRect().top);
-    const next = gap >= 0 ? { column: Math.round(gap), chat: 0 } : { column: 0, chat: Math.round(-gap) };
-    // Layout measurement: both offsets come from boxes after layout and land
-    // before paint, and stop once they agree (no loop).
-    if (next.column !== offsets.column || next.chat !== offsets.chat) setOffsets(next);
-  }, [
-    layout,
-    offsets.column,
-    offsets.chat,
-    tiles.length,
-    design.font_size,
-    design.message_spacing,
-    design.show_timestamps,
-    design.show_dividers,
-  ]);
-
-  const labelOf = (id: string) =>
-    id === 'timeout' ? `Timeout (${formatDuration(timeoutSecs)})` : tiles.find((t) => t.id === id)?.label ?? id;
-  const at = (e: ReactPointerEvent) => {
-    const box = boxRef.current!.getBoundingClientRect();
-    return { x: e.clientX - box.left, y: e.clientY - box.top };
-  };
-  const finish = (apply: boolean) => {
-    if (apply) {
-      const picked = armedRef.current;
-      setResult(picked ? `let go on ${labelOf(picked)}; nothing is sent from the preview` : 'let go off the tiles, so nothing happens');
-    }
-    armedRef.current = null;
-    setArmed(null);
-    setHeld(null);
-  };
-  // Escape cancels, as in chat.
-  const holding = held !== null;
-  useEffect(() => {
-    if (!holding) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      armedRef.current = null;
-      setArmed(null);
-      setHeld(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [holding]);
-
-  const tile = (b: (typeof tiles)[number], solid: boolean) => (
-    <BucketTile key={b.id} bucket={b} active={armed === b.id} activeDuration={armed === 'timeout' ? timeoutSecs : null} solid={solid} />
-  );
-  const chat = (
-    <div ref={chatRef} className="min-w-0 flex-1" style={{ marginTop: offsets.chat }}>
-      <PreviewChat design={design}>
-        {TILE_SAMPLES.map((s, i) => (
-          <Row key={s.who.name}>
-            {i === TILE_TARGET ? (
-              <div ref={targetRef} className="group relative isolate">
-                <PreviewLine design={design} who={s.who} text={s.text} minutesAgo={TILE_SAMPLES.length - i} />
-                {held && <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-accent/10" />}
-                <div
-                  aria-hidden="true"
-                  // The chat's grip (globals.css .sn-mod-grip), shown at rest.
-                  className={`sn-mod-grip is-hinted${held ? ' is-active' : ''}`}
-                  onPointerDown={(e) => {
-                    if (e.button !== 0) return;
-                    e.preventDefault();
-                    try {
-                      e.currentTarget.setPointerCapture(e.pointerId);
-                    } catch {
-                      // The pointer is already gone; the next pointer up ends it.
-                    }
-                    setResult(null);
-                    setHeld(at(e));
-                  }}
-                  onPointerMove={(e) => {
-                    if (!held) return;
-                    setHeld(at(e));
-                    const next = pickTile(
-                      boxRef.current!.querySelectorAll<HTMLElement>('[data-bucket-id]'),
-                      e.clientX,
-                      e.clientY,
-                      armedRef.current,
-                    );
-                    armedRef.current = next;
-                    setArmed(next);
-                  }}
-                  onPointerUp={() => held && finish(true)}
-                  onPointerCancel={() => finish(false)}
-                >
-                  <div className="sn-mod-grip-bar pointer-events-none" />
-                </div>
-              </div>
-            ) : (
-              <PreviewLine design={design} who={s.who} text={s.text} minutesAgo={TILE_SAMPLES.length - i} first={i === 0} />
-            )}
-          </Row>
-        ))}
-      </PreviewChat>
-    </div>
-  );
-
-  return (
-    <SettingPreview caption={result ?? `press the dotted handle on ${target.name}'s message and drag it onto a tile`}>
-      <IconContext.Provider value={TILE_ICONS}>
-        <div ref={boxRef} className="relative select-none">
-          {layout === 'column' ? (
-            <div className="flex items-start gap-3">
-              <div ref={columnRef} className="flex flex-col items-center gap-2.5" style={{ marginTop: offsets.column }}>
-                {tiles.map((b) => (
-                  <div key={b.id} style={b.id === 'ban' ? { marginTop: BAN_GAP_PX } : undefined}>
-                    {tile(b, false)}
-                  </div>
-                ))}
-              </div>
-              {chat}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3">
-              <div className="flex flex-col items-center gap-4">
-                {tile(BAN_TILE, true)}
-                <div className="flex gap-4">
-                  {tile(TIMEOUT_TILE, true)}
-                  {tile(DELETE_TILE, true)}
-                  {tiles[0].id === 'pin' && tile(tiles[0], true)}
-                </div>
-              </div>
-              <div className="w-full">{chat}</div>
-            </div>
-          )}
-          {held && (
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute z-30 flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 px-3 py-2 shadow-[0_12px_32px_rgba(0,0,0,0.6)] backdrop-blur-md"
-              style={{
-                left: held.x,
-                top: held.y,
-                transform: 'translate(-24px, calc(-100% - 16px))',
-                backgroundColor:
-                  'color-mix(in srgb, var(--color-background-tertiary) calc(90% + (1 - var(--glass-strength, 1)) * 10%), transparent)',
-              }}
-            >
-              <span className="text-sm font-bold" style={{ color: target.color }}>
-                {target.name}
-              </span>
-              {!armed && <span className="text-[11px] font-medium text-textSecondary">Let go to cancel</span>}
-            </div>
-          )}
-        </div>
-      </IconContext.Provider>
-    </SettingPreview>
-  );
-};
-
 const LINE_SAMPLES: { who: Chatter; text: string }[] = [
   { who: PIXELFOX, text: 'that clutch was unreal' },
   { who: LOOTGOBLIN, text: 'free subs at the link in my bio' },
   { who: MOSSY, text: 'gg, that boss had no chance' },
 ];
 
-/** Sample chat with the real line buttons on every line: the same picture
- *  and the same pointer reading as chat. A click only names the action;
- *  nothing is sent from a preview. */
+/** Sample chat with the real line buttons: the same picture, the same
+ *  pointer reading, the same On hover push and the same scroll over a
+ *  timeout as chat. A click only names the action; nothing is sent from a
+ *  preview. */
 export const ModLinePreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
   const design = previewDesignOf(stored);
   const steps = useModSliderSteps('twitch', useLineConfig());
-  const buttons = useMemo(() => (steps && steps.length > 0 ? lineButtons(steps) : null), [steps]);
-  const art = useLineArt(buttons, design.font_size);
+  const sliderSteps = useModSliderSteps('twitch', useSliderConfig());
+  const ladder = useMemo(() => sliderSteps?.filter((s) => s.action === 'timeout') ?? [], [sliderSteps]);
+  const { buttons, nudge, reset, around } = useLineButtons(steps, ladder);
+  const setButtons = useMemo(() => (steps && steps.length > 0 ? lineButtons(steps) : null), [steps]);
+  const fit = useMemo(
+    () => [...ladder, ...(steps ?? []).filter((s) => s.action === 'timeout')].map((s) => s.label),
+    [ladder, steps],
+  );
+  const art = useLineArt(buttons, design.font_size, fit, setButtons);
+  const show = stored?.mod_line_show === 'always' ? 'always' : 'hover';
   const [clicked, setClicked] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const artRef = useRef<{ art: LineArt; buttons: LineButton[] } | null>(null);
+  const wheelRef = useRef({ nudge, reset, around });
   useLayoutEffect(() => {
     artRef.current = art && buttons ? { art, buttons } : null;
+    wheelRef.current = { nudge, reset, around };
   });
   useEffect(() => {
     const el = hostRef.current;
     if (!el) return;
-    return bindLineStrips(el, () => artRef.current, (hit) =>
+    const unbind = bindLineStrips(el, () => artRef.current, (hit) =>
       setClicked(`clicked ${hit.label} on ${hit.request.targetName ?? 'that chatter'}'s line`),
     );
+    const unbindWheel = bindLineWheel(
+      el,
+      () => artRef.current,
+      (index, dir) => wheelRef.current.nudge(index, dir),
+      () => wheelRef.current.reset(),
+      (index) => wheelRef.current.around(index),
+    );
+    return () => {
+      unbind();
+      unbindWheel();
+    };
   }, []);
   return (
     <SettingPreview
-      caption={clicked ? `${clicked}; nothing is sent from the preview` : 'one click on a line\'s button acts on that chatter'}
+      caption={
+        clicked
+          ? `${clicked}; nothing is sent from the preview`
+          : show === 'hover'
+            ? 'point at a line for its buttons; scroll over the timeout to change its length'
+            : 'one click on a line\'s button acts on that chatter; scroll over the timeout to change its length'
+      }
     >
-      <div ref={hostRef} style={art?.vars}>
+      <div ref={hostRef} style={art?.vars} data-line-show={show}>
         <PreviewChat design={design}>
           {LINE_SAMPLES.map((s, i) => (
             <Row key={s.who.name}>
@@ -563,6 +399,66 @@ export const ModLinePreview = ({ stored }: { stored: ChatDesignSettings | undefi
           ))}
         </PreviewChat>
       </div>
+    </SettingPreview>
+  );
+};
+
+/** Sample chat whose middle line shows the hover buttons as chat draws them
+ *  under the pointer (here at rest, so they can be seen): the real Ban, Delete
+ *  and quick timeout, the other lengths one click away, then Pin and Copy. A
+ *  click only names the action; nothing is sent from a preview. */
+export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
+  const design = previewDesignOf(stored);
+  const [clicked, setClicked] = useState<string | null>(null);
+  const [lengthsOpen, setLengthsOpen] = useState(false);
+  const target = LOOTGOBLIN.name;
+  const dockButton = 'p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors';
+  return (
+    <SettingPreview
+      caption={
+        clicked
+          ? `${clicked}; nothing is sent from the preview`
+          : `the buttons that show in the corner of the message under your pointer`
+      }
+    >
+      <PreviewChat design={design}>
+        <Row>
+          <PreviewLine design={design} who={PIXELFOX} text="that clutch was unreal" minutesAgo={3} first />
+        </Row>
+        <Row>
+          <div className="relative isolate bg-glass">
+            <PreviewLine design={design} who={LOOTGOBLIN} text="free subs at the link in my bio" minutesAgo={2} />
+            {/* The chat row's cluster (ChatMessage), shown at rest. */}
+            <div
+              className="absolute top-px right-2 z-[50] flex items-center gap-0.5 p-0.5 rounded-lg backdrop-blur-md border border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.4)]"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}
+            >
+              <HoverModButtons
+                provider="twitch"
+                targetName={target}
+                canPunish
+                canDelete
+                lengthsOpen={lengthsOpen}
+                onLengthsOpen={setLengthsOpen}
+                onBan={(seconds) =>
+                  setClicked(seconds == null ? `ban ${target}` : `time out ${target} for ${formatDuration(seconds)}`)
+                }
+                onDelete={() => setClicked(`delete ${target}'s message`)}
+              />
+              <div className="mx-0.5 h-4 w-px bg-white/10" />
+              <button type="button" aria-label="Pin message" onClick={() => setClicked('pin the message')} className={dockButton}>
+                <PushPin size={14} weight="bold" />
+              </button>
+              <button type="button" aria-label="Copy message" onClick={() => setClicked('copy the message')} className={dockButton}>
+                <Copy size={14} weight="bold" />
+              </button>
+            </div>
+          </div>
+        </Row>
+        <Row>
+          <PreviewLine design={design} who={MOSSY} text="gg, that boss had no chance" minutesAgo={1} />
+        </Row>
+      </PreviewChat>
     </SettingPreview>
   );
 };

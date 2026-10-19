@@ -58,6 +58,14 @@ pub fn get_mod_slider_steps(
     crate::services::moderation::slider_steps_for(provider.as_deref(), config)
 }
 
+/// A timeout length typed into Settings ("45m", "1h30m", "2d", a bare number
+/// of minutes), as the step it adds: its seconds and label. Err says how to
+/// write one.
+#[tauri::command]
+pub fn parse_mod_timeout(text: String) -> Result<crate::services::moderation::ModStep, String> {
+    crate::services::moderation::typed_timeout_step(&text)
+}
+
 /// `/settitle` and `/setgame`: broadcaster-only Helix channel update.
 #[tauri::command]
 pub async fn update_channel_info(

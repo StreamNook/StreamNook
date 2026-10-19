@@ -62,9 +62,6 @@ export interface SliderConfig {
 
 export const DEFAULT_SLIDER_TIMEOUTS = [60, 300, 600, 1800, 3600, 86400, 604800];
 
-/** Seconds a drop on the drag-to-moderate Timeout tile applies by default. */
-export const DEFAULT_BUCKET_TIMEOUT_SECS = 600;
-
 /** Fired (bubbling) on a chat row a moderator presses to slide or drag, so
  *  its list holds still; the list lets go itself when the button comes up. */
 export const ROW_HOLD_EVENT = 'sn-row-hold';
@@ -73,8 +70,15 @@ export function holdChatRow(row: HTMLElement, on: boolean): void {
   row.dispatchEvent(new CustomEvent(ROW_HOLD_EVENT, { bubbles: true, detail: { on } }));
 }
 
-/** Lengths offered when adding a timeout to the slider or picking the drag
- *  tile's length. The menu's own wording; the chips show Rust's labels. */
+/** A timeout length the viewer typed ("45m", "1h30m", "2d", a bare number of
+ *  minutes), read by Rust. Rejects with the words Settings shows when it is
+ *  not a length Twitch takes (1 s to 14 d). */
+export function parseModTimeout(text: string): Promise<ModStep> {
+  return invoke<ModStep>('parse_mod_timeout', { text });
+}
+
+/** Lengths offered when adding a timeout to the slider, the line buttons or
+ *  the hover buttons. The menu's own wording; the chips show Rust's labels. */
 export const TIMEOUT_LENGTH_CHOICES: { value: number; label: string }[] = [
   { value: 1, label: '1s' },
   { value: 5, label: '5s' },
@@ -110,7 +114,7 @@ export function liftRequest(request: ModRequest): ModRequest {
  */
 export async function moderateWithToast(
   request: ModRequest,
-  opts: { quietSuccess?: boolean } = {},
+  opts: { quietSuccess?: boolean; onUndo?: () => void } = {},
 ): Promise<ModOutcome | null> {
   const { addToast } = useAppStore.getState();
   try {
@@ -120,6 +124,7 @@ export async function moderateWithToast(
         ? {
             label: 'Undo',
             onClick: () => {
+              opts.onUndo?.();
               void moderateWithToast(liftRequest(request));
             },
           }

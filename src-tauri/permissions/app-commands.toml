@@ -230,6 +230,7 @@ allow = [
   "moderate_chatter",
   "get_mod_timeout_steps",
   "get_mod_slider_steps",
+  "parse_mod_timeout",
   "get_streamer_mode_state",
   "update_channel_info",
   "get_user_pronouns",
@@ -757,5 +758,8 @@ allow = [
   "get_chatter_mod_history",
   "get_chatter_card_tools",
   "set_card_timeout_length",
+  "get_touch_mod_slider",
+  "edit_mod_slider_timeouts",
+  "get_room_mod_log",
   "save_stream_screenshot",
 ]

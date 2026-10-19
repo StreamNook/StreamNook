@@ -64,6 +64,8 @@ pub mod user_notes;
 pub mod mod_history;
 pub mod chat_warning;
 pub mod chatter_card;
+pub mod touch_mod_slider;
+pub mod room_mod_log;
 pub mod diagnostic_logger;
 pub mod hls_projection;
 pub mod hls_seq_ids;

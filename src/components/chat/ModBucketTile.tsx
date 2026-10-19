@@ -1,9 +1,6 @@
-// The drop-target tile for drag-to-moderate, shared by the desktop drag layer
-// and the mobile fan-out so both render the identical thing.
-//
-// Lifted out of ModerationDragLayer unchanged. The mobile fan originally drew
-// its own plain circles and looked visibly worse than the desktop client for no
-// reason other than that the tile was a local component nobody could import.
+// The drop-target tile of the phone's fan-out (mobile/chat/ChatFanOut). It
+// came from the desktop drag-to-tiles gesture, which the desktop slider
+// replaced; the phone fan still drops a chatter onto these.
 import type { ComponentType } from 'react';
 import { motion } from 'framer-motion';
 import { formatDuration } from '../../utils/timeoutRamp';

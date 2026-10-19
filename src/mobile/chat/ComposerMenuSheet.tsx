@@ -57,6 +57,8 @@ interface Props {
   /** Opens the stream manager. Absent where there is nothing to manage
    *  (not a Twitch chat you moderate or own). */
   onManageChannel?: () => void;
+  /** The room's moderation sheet (moderators, Twitch). */
+  onModeration?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
 }
@@ -76,6 +78,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onReload,
   onBrowseCommands,
   onManageChannel,
+  onModeration,
   onCloseChat,
 }) => {
   // The stream's own chat closes with the player unless you keep it; every
@@ -270,6 +273,19 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             icon={<Terminal size={ICON} className="text-textSecondary" />}
           >
             Chat commands
+          </GroupRow>
+        )}
+
+        {onModeration && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              onModeration();
+            }}
+            icon={<ShieldCheck size={ICON} className="text-textSecondary" />}
+            trailing={<CaretRight size={16} className="text-textMuted" />}
+          >
+            Moderation
           </GroupRow>
         )}
 

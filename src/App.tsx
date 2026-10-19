@@ -54,7 +54,6 @@ import Sidebar from './components/Sidebar';
 import TwitchOverlay from './components/TwitchOverlay';
 import ErrorBoundary from './components/ErrorBoundary';
 import InputContextMenuHost from './components/InputContextMenuHost';
-import ModerationDragLayer from './components/chat/ModerationDragLayer';
 import { listen } from '@tauri-apps/api/event';
 import { useMentionPing } from './hooks/useMentionPing';
 import { useTwitchSignInPrompt } from './hooks/useTwitchSignInPrompt';
@@ -2512,7 +2511,6 @@ function App() {
       <TooltipManager />
       {commandPaletteEverOpened && <Suspense fallback={null}><CommandPalette /></Suspense>}
       <InputContextMenuHost />
-      <ModerationDragLayer />
       {clipModalEverOpened && <Suspense fallback={null}><ClipModal /></Suspense>}
       {clipEditorEverOpened && <Suspense fallback={null}><ClipEditor /></Suspense>}
       <TwitchOverlay />

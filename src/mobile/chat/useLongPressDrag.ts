@@ -29,9 +29,13 @@ interface Options {
   onArm: (messageId: string, x: number, y: number) => void;
   /** Element to lock scrolling on while armed. */
   scrollLockRef: React.RefObject<HTMLElement | null>;
+  /** Movement that abandons the hold; tighter while swipe-to-moderate shares the finger. */
+  cancelSlop?: number;
 }
 
-export function useLongPressDrag({ resolve, onArm, scrollLockRef }: Options) {
+export function useLongPressDrag({ resolve, onArm, scrollLockRef, cancelSlop = CANCEL_SLOP_PX }: Options) {
+  const slop = useRef(cancelSlop);
+  slop.current = cancelSlop;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const start = useRef<{ x: number; y: number; id: string } | null>(null);
   const armed = useRef(false);
@@ -81,7 +85,7 @@ export function useLongPressDrag({ resolve, onArm, scrollLockRef }: Options) {
     (e: React.PointerEvent) => {
       const s = start.current;
       if (!s || armed.current) return;
-      if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > CANCEL_SLOP_PX) {
+      if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > slop.current) {
         // Became a scroll. Abandon the press entirely.
         clearTimer();
         start.current = null;

@@ -42,6 +42,8 @@ final class ChatComposerModel {
     var commandsOpen = false
     /// The stream manager sheet ("Manage channel" in the chat menu).
     var manageOpen = false
+    /// The Moderation sheet ("Moderation" in the chat menu).
+    var moderationOpen = false
     var toast: String?
     /// The picker keeps its tab, search and answer between opens.
     let picker: EmotePickerModel
