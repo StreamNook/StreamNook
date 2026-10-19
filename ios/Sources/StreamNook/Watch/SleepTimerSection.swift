@@ -28,7 +28,7 @@ struct SleepTimerSection: View {
                         .foregroundStyle(SN.textSecondary)
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
-                        .buttonStyle(DimPress())
+                        .buttonStyle(CardPress())
                 }
                 .padding(.horizontal, 8)
             } else {
