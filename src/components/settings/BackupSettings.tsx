@@ -121,7 +121,7 @@ const BackupSettings = () => {
     <div className="space-y-8">
       <SettingsSection
         label="Settings File"
-        description="Everything you customize in StreamNook lives in one file on this PC, and your Twitch login is stored separately so it never ends up in a backup."
+        description="Everything you customize in StreamNook lives in one file on this device, and your Twitch login is stored separately so it never ends up in a backup."
       >
         <SettingsRow
           title="Location"

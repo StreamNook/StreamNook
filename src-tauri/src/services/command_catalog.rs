@@ -168,7 +168,7 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("part", &[], "Everyone", "/part [channel]", "Remove a chat from your chat dock", "", &[], LOCAL | DESKTOP_ONLY),
     cmd("echo", &[], "Everyone", "/echo <text>", "Print a line in this chat that only you see", "", &[], LOCAL),
     cmd("copy", &[], "Everyone", "/copy <text>", "Copy text to your clipboard", "Handy inside your own commands, for example to copy a link you post often.", &[], LOCAL),
-    cmd("tts", &["espeak"], "Everyone", "/tts <text>", "Read text aloud on this computer", "", &[], LOCAL),
+    cmd("tts", &["espeak"], "Everyone", "/tts <text>", "Read text aloud on this device", "", &[], LOCAL),
     cmd("screenshot", &[], "Everyone", "/screenshot", "Save the current stream picture to Pictures\\StreamNook", "", &[], LOCAL | DESKTOP_ONLY),
     cmd("addstreamhighlight", &[], "Everyone", "/addstreamhighlight [note]", "Note this moment of the stream in your highlights file", "Saves the time, the stream uptime, the title and your note. /openstreamhighlights opens the list.", &["/addstreamhighlight", "/addstreamhighlight insane clutch"], LOCAL),
     cmd("openstreamhighlights", &[], "Everyone", "/openstreamhighlights", "Open your stream highlights file", "", &[], LOCAL | DESKTOP_ONLY),

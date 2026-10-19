@@ -1,3 +1,4 @@
+import { IS_MOBILE } from '../../utils/platform';
 export interface SettingsIndexEntry {
   tab: string;
   section: string;
@@ -369,7 +370,10 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Font',
     sectionId: 'settings-section-font',
     title: 'Custom font',
-    description: 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically, or type the name of a font already installed on this PC.'
+    // A phone draws only fonts the app downloads; a PC also has its installed ones.
+    description: IS_MOBILE
+      ? 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically.'
+      : 'Use any font you want for the app. Type a name like Poppins, Bebas Neue, or Rubik and it loads automatically, or type the name of a font already installed on this PC.'
   },
   // === Chat ===
   {
@@ -2639,7 +2643,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Cache',
     section: 'Cache',
     title: 'Disk cache',
-    description: 'Stores a copy on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again. Previously "Load emotes and badges from disk".'
+    description: 'Stores a copy on this device after the first download so later channel loads are near instant. Off means every launch fetches them again. Previously "Load emotes and badges from disk".'
   },
   {
     tab: 'Cache',
@@ -2752,7 +2756,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Support',
     section: 'Diagnostics',
     title: 'Detailed log',
-    description: 'Records connection, playback, and chat activity to streamnook.log on this PC so a problem can be traced after the fact. Previously "Keep a detailed log for bug reports".'
+    description: 'Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact. Previously "Keep a detailed log for bug reports".'
   },
   {
     tab: 'Support',
@@ -2807,7 +2811,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Backup',
     section: 'Settings File',
     title: 'Location',
-    description: 'The folder on this PC that holds your settings file. Previously "Where your settings file lives".'
+    description: 'The folder on this device that holds your settings file. Previously "Where your settings file lives".'
   },
   {
     tab: 'Chat',

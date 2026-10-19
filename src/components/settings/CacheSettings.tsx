@@ -23,7 +23,7 @@ const CacheSettings = () => {
         <SettingsRow
           title="Disk cache"
           onReset={resetFor(['cache.enabled', true])}
-          description="Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again."
+          description="Loads emotes and badges from disk: a copy is stored on this device after the first download so later channel loads are near instant. Off means every launch fetches them again."
           help="Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that."
           control={
             <Toggle
