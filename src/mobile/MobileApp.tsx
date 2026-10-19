@@ -28,6 +28,7 @@ import { BrowseScreen } from './screens/BrowseScreen';
 import { YouScreen } from './screens/YouScreen';
 import { WatchScreen } from './screens/WatchScreen';
 import { ChatsScreen } from './screens/ChatsScreen';
+import { KeptSurface } from './KeptSurface';
 import { useChatsLifecycle } from './chat/useChatsLifecycle';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
@@ -187,19 +188,9 @@ const MobileApp: React.FC = () => {
               </motion.div>
             </AnimatePresence>
             {chatsKept && (
-              // Hidden by class, not by the attribute alone: `[hidden]` and the
-              // `flex` utility weigh the same and utilities come later, so the
-              // attribute never hid it and its glass kept painting over the
-              // tab in front. `inert` keeps every layer out of reach too.
-              <div
-                ref={chatsRef}
-                hidden={!chatsShown}
-                inert={!chatsShown}
-                className={`absolute inset-0 flex-col ${chatsShown ? 'flex' : 'hidden'}`}
-                style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
-              >
+              <KeptSurface ref={chatsRef} shown={chatsShown} style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}>
                 <ChatsScreen shown={chatsShown} />
-              </div>
+              </KeptSurface>
             )}
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
