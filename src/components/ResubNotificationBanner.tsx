@@ -48,7 +48,7 @@ const SharedRow = ({ title }: { title: string }) => (
 /** Twitch did not take it: one line under the banner's own words. */
 const FailedLine = () => (
   <span role="alert" className="truncate text-[11.5px] font-medium text-error">
-    That didn't go through. Try again.
+    Didn't go through. Try again.
   </span>
 );
 
@@ -112,16 +112,16 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
           <button
             onClick={onToggleStreak}
             aria-pressed={includeStreak}
-            className="mt-0.5 self-start flex items-center gap-1.5 text-[11.5px] text-textMuted hover:text-textSecondary transition-colors"
+            className="mt-0.5 self-start max-w-full flex items-center gap-1.5 whitespace-nowrap text-[11.5px] text-textMuted hover:text-textSecondary transition-colors"
           >
             <span
-              className={`w-3 h-3 rounded-[3px] border flex items-center justify-center ${
+              className={`shrink-0 w-3 h-3 rounded-[3px] border flex items-center justify-center ${
                 includeStreak ? 'bg-accent border-accent' : 'border-textMuted'
               }`}
             >
               {includeStreak && <Check size={8} weight="bold" className="text-background" />}
             </span>
-            Include the {streakMonths}-month streak
+            <span className="truncate">Include the {streakMonths}-month streak</span>
           </button>
         )}
         {feedback === 'failed' && <FailedLine />}

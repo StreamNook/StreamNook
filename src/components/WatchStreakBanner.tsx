@@ -43,7 +43,7 @@ const SharedRow = ({ title }: { title: string }) => (
 /** Twitch did not take it: one line under the banner's own words. */
 const FailedLine = () => (
   <span role="alert" className="truncate text-[11.5px] font-medium text-error">
-    That didn't go through. Try again.
+    Didn't go through. Try again.
   </span>
 );
 

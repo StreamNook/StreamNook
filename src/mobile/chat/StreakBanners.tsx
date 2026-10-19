@@ -245,7 +245,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
   const failedLine = (what: What) =>
     stepFor(what)?.kind === 'failed' ? (
       <span role="alert" className="block truncate text-[11px] font-medium text-error">
-        That didn't go through. Try again.
+        Didn't go through. Try again.
       </span>
     ) : null;
 

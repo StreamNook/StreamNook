@@ -260,7 +260,7 @@ struct StreakBanners: View {
     /// Twitch did not take it: one line under the banner's own words.
     @ViewBuilder private func failedLine(_ what: String) -> some View {
         if rooms.shareStep(what) == .failed {
-            Text("That didn't go through. Try again.")
+            Text("Didn't go through. Try again.")
                 .font(.sn(11, 500))
                 .foregroundStyle(SN.error)
                 .lineLimit(1)
