@@ -65,6 +65,13 @@ export function holdChatRow(row: HTMLElement, on: boolean): void {
   row.dispatchEvent(new CustomEvent(ROW_HOLD_EVENT, { bubbles: true, detail: { on } }));
 }
 
+/** A timeout length the viewer typed ("45m", "1h30m", "2d", a bare number of
+ *  minutes), read by Rust. Rejects with the words Settings shows when it is
+ *  not a length Twitch takes (1 s to 14 d). */
+export function parseModTimeout(text: string): Promise<ModStep> {
+  return invoke<ModStep>('parse_mod_timeout', { text });
+}
+
 /** Lengths offered when adding a timeout to the slider, the line buttons or
  *  the hover buttons. The menu's own wording; the chips show Rust's labels. */
 export const TIMEOUT_LENGTH_CHOICES: { value: number; label: string }[] = [

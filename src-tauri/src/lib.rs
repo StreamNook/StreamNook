@@ -36,7 +36,7 @@ use commands::chat_query::{
 };
 use commands::moderation_tools::{
     get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
-    get_user_pronouns, moderate_chatter, resolve_automod_message, set_user_note,
+    get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
     update_channel_info, upload_image,
 };
 use commands::{
@@ -1949,6 +1949,7 @@ pub fn run() {
             moderate_chatter,
             get_mod_timeout_steps,
             get_mod_slider_steps,
+            parse_mod_timeout,
             get_streamer_mode_state,
             update_channel_info,
             get_user_pronouns,

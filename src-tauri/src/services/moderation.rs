@@ -165,6 +165,63 @@ pub fn kick_minutes(seconds: u32) -> u32 {
     seconds.div_ceil(60).clamp(1, KICK_MAX_TIMEOUT_MINUTES)
 }
 
+/// A timeout length typed into Settings: "45m", "1h30m", "1h 30m", "90s",
+/// "2d", "1w", the words ("45 minutes", "2 hours"), or a bare number, read
+/// as minutes. None when it does not read as a length or falls outside what
+/// Twitch allows (1 s to 14 d).
+pub fn parse_timeout_text(text: &str) -> Option<u32> {
+    let t = text.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return None;
+    }
+    if t.chars().all(|c| c.is_ascii_digit()) {
+        let minutes: u64 = t.parse().ok()?;
+        return u32::try_from(minutes.checked_mul(60)?)
+            .ok()
+            .filter(|s| (1..=TWITCH_MAX_TIMEOUT_SECS).contains(s));
+    }
+    let mut total: u64 = 0;
+    let mut chars = t.chars().filter(|c| !c.is_whitespace() && *c != ',').peekable();
+    let mut any = false;
+    while chars.peek().is_some() {
+        let mut digits = String::new();
+        while let Some(c) = chars.peek().filter(|c| c.is_ascii_digit()) {
+            digits.push(*c);
+            chars.next();
+        }
+        let mut unit = String::new();
+        while let Some(c) = chars.peek().filter(|c| c.is_ascii_alphabetic()) {
+            unit.push(*c);
+            chars.next();
+        }
+        if digits.is_empty() || unit.is_empty() {
+            return None;
+        }
+        let size: u64 = match unit.as_str() {
+            "s" | "sec" | "secs" | "second" | "seconds" => 1,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3_600,
+            "d" | "day" | "days" => 86_400,
+            "w" | "wk" | "wks" | "week" | "weeks" => 604_800,
+            _ => return None,
+        };
+        total = total.checked_add(digits.parse::<u64>().ok()?.checked_mul(size)?)?;
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    u32::try_from(total).ok().filter(|s| (1..=TWITCH_MAX_TIMEOUT_SECS).contains(s))
+}
+
+/// A typed length as a timeout step (its seconds and Rust's label), or why it
+/// is not one, in the words Settings shows.
+pub fn typed_timeout_step(text: &str) -> Result<ModStep, String> {
+    parse_timeout_text(text)
+        .map(ModStep::timeout)
+        .ok_or_else(|| "Type a length like 45m, 2h or 3d, up to 14 days.".to_string())
+}
+
 /// A short label in the largest unit that fits: one part when it divides
 /// evenly ("10m", "1d", "2w"), otherwise the two largest parts ("1m 30s",
 /// "1h 30m").
@@ -471,6 +528,27 @@ pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_timeout_lengths() {
+        assert_eq!(parse_timeout_text("45m"), Some(2_700));
+        assert_eq!(parse_timeout_text(" 1h30m "), Some(5_400));
+        assert_eq!(parse_timeout_text("1h 30m"), Some(5_400));
+        assert_eq!(parse_timeout_text("90s"), Some(90));
+        assert_eq!(parse_timeout_text("2d"), Some(172_800));
+        assert_eq!(parse_timeout_text("1W"), Some(604_800));
+        assert_eq!(parse_timeout_text("2 hours"), Some(7_200));
+        assert_eq!(parse_timeout_text("45 minutes"), Some(2_700));
+        assert_eq!(parse_timeout_text("15"), Some(900), "a bare number is minutes");
+        assert_eq!(parse_timeout_text("14d"), Some(TWITCH_MAX_TIMEOUT_SECS));
+        assert_eq!(parse_timeout_text("15d"), None, "past what Twitch allows");
+        assert_eq!(parse_timeout_text("0m"), None);
+        assert_eq!(parse_timeout_text(""), None);
+        assert_eq!(parse_timeout_text("soon"), None);
+        assert_eq!(parse_timeout_text("5x"), None);
+        assert_eq!(parse_timeout_text("m5"), None);
+        assert_eq!(parse_timeout_text("99999999999999999999d"), None);
+    }
 
     fn labels(steps: &[ModStep]) -> Vec<&str> {
         steps.iter().map(|s| s.label.as_str()).collect()
