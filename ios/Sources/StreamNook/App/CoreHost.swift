@@ -6,7 +6,7 @@ import SNKit
 import UIKit
 import VideoToolbox
 
-private let log = Logger(subsystem: "app.streamnook", category: "vault")
+private let vaultLog = Logger(subsystem: "app.streamnook", category: "vault")
 
 /// What the app hands the core when it starts: where its files go, the key that seals its
 /// token vault, and the codecs this phone decodes in hardware.
@@ -38,10 +38,10 @@ enum CoreHost {
         while true {
             do {
                 let key = try VaultKey.load()
-                if waited { log.notice("vault key read after the first unlock") }
+                if waited { vaultLog.notice("vault key read after the first unlock") }
                 return (try dirs(), key, codecs())
             } catch VaultKeyPolicy.Failure.locked {
-                if !waited { log.notice("vault key locked until the first unlock; waiting") }
+                if !waited { vaultLog.notice("vault key locked until the first unlock; waiting") }
                 waited = true
                 await VaultKey.waitForUnlock()
             }
@@ -75,7 +75,7 @@ enum CoreHost {
             }
         }
         if sealed > 0 {
-            log.notice("backup: \(sealed) sealed files, \(sealed - flagged - failed) already excluded, \(flagged) excluded now, \(failed) failed")
+            vaultLog.notice("backup: \(sealed) sealed files, \(sealed - flagged - failed) already excluded, \(flagged) excluded now, \(failed) failed")
         }
     }
 
