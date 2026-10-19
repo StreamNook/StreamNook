@@ -194,16 +194,7 @@ struct ChatRowLayoutBuilder {
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    var bodyWeight: UIFont.Weight { ChatFont.bodyWeight }
-    var baseWeight: UIFont.Weight {
-        switch style.fontWeight {
-        case ..<350: return .light
-        case ..<450: return .regular
-        case ..<550: return .medium
-        case ..<650: return .semibold
-        default: return .bold
-        }
-    }
+    var bodyWeight: UIFont.Weight { ChatFont.bodyWeight(textWeight: style.fontWeight) }
 
     func build(_ row: ChatRowModel) -> ChatRowLayout {
         let message = row.message

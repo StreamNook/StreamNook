@@ -120,11 +120,13 @@ struct EventRowsPreview: View {
 
     var body: some View {
         let s = ChatPreviewSamples(store)
+        let style = ChatPreviewStyle.style(store)
+        // A room's buffer drops hidden kinds before layout; the preview does the same.
         ChatPreviewRows(rows: [
             s.row("events-1", .pixelfox, "that clutch was unreal", minutesAgo: 2),
             s.giftRow(),
             s.row("events-3", .lootgoblin, "welcome to the club", minutesAgo: 1),
-        ], style: ChatPreviewStyle.style(store))
+        ].filter { !ChatRoomBuffer.hides($0.message, style.hiddenEvents) }, style: style)
         .chatPreviewSurface()
     }
 }
@@ -333,7 +335,10 @@ struct ChatPreviewSamples {
         meta.systemMessage = "mossy gifted a subscription to quietstorm!"
         meta.formattedTimestamp = stamp(2, seconds: false)
         meta.formattedTimestampWithSeconds = stamp(2, seconds: true)
-        meta.view = ChatRowView(nameColor: Chatter.mossy.color)
+        // The event key the core stamps on a row, which is what hiding a kind matches.
+        var view = ChatRowView(nameColor: Chatter.mossy.color)
+        view.event = "twitch:gift"
+        meta.view = view
         let message = ChatMessage(id: "preview-events-2", username: "mossy", displayName: "mossy", color: Chatter.mossy.color,
                                   content: "", channel: "preview",
                                   tags: ["msg-id": "subgift", "msg-param-recipient-display-name": "quietstorm"], metadata: meta)

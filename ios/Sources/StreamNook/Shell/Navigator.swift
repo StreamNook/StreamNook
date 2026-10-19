@@ -20,9 +20,8 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     var id: String { rawValue }
 
     /// The pages the You tab lists. Notifications waits until the iPhone sends alerts: today it
-    /// could only ask for a permission nothing uses. What's New waits for a source of notes, so
-    /// no placeholder page is listed.
-    static var listed: [SettingsSection] { allCases.filter { $0 != .notifications && $0 != .whatsNew } }
+    /// could only ask for a permission nothing uses.
+    static var listed: [SettingsSection] { allCases.filter { $0 != .notifications } }
 
     var title: String {
         switch self {
