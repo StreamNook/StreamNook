@@ -445,16 +445,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [answered, setAnswered] = useState<{ word: string; items: EmoteTabCandidate[] }>({ word: '', items: [] });
   const [suggestSeq] = useState(createRequestSeq);
   useEffect(() => {
-    // One character matches most of the set and is noise, not help.
-    if (word.length < 2 || !channel) return;
+    if (!word || !channel) return;
     const n = suggestSeq.next();
     // Rust's cycle answer carries the room's recent chatters after the emotes.
-    void matchEmotes({ provider, channel, channelId }, word, 'cycle').then((res) => {
+    // A one-character word gets only an emote of exactly that name ("0").
+    void matchEmotes({ provider, channel, channelId }, word, 'cycle', { typing: true }).then((res) => {
       if (!suggestSeq.isCurrent(n)) return;
       setAnswered({ word, items: rowsToTabCandidates(res.rows) });
     });
   }, [word, channel, channelId, provider, suggestSeq]);
-  const suggestions = word.length >= 2 && answered.word === word ? answered.items : [];
+  const suggestions = word && answered.word === word ? answered.items : [];
 
   // What the empty field says: why you cannot send when a mode stops you, the
   // slow-mode wait, else "Send a message" (nothing when Settings hides it). A

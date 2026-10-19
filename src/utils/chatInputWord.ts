@@ -106,13 +106,17 @@ export function wrapIndex(index: number, delta: number, length: number): number 
 
 /**
  * The emote-list query a `:` opens, or null. The colon has to start a word and
- * be followed by at least two characters, the first a letter or digit, all
- * before the caret. That keeps times (`12:30`), emoticons (`:)`, `:D`) and
- * links (`https://`) from ever opening it.
+ * be followed by a letter or digit, all before the caret. That keeps times
+ * (`12:30`), emoticons (`:)`, `:D`, `:P`) and links (`https://`) from ever
+ * opening it. One character after the colon finds only an emote of exactly
+ * that name (Rust decides), so `:0` offers a channel's "0" emote.
  *
  *   "hi :lo|"  -> { anchor: 3, query: 'lo' }
  *   "12:30|"   -> null
  */
+/** The letters of the classic emoticons (`:D`, `:P`, `:O`, `:S`, `:X`). */
+const EMOTICON_LETTERS = new Set(['D', 'd', 'P', 'p', 'O', 'o', 'S', 's', 'X', 'x']);
+
 export function emoteSearchTrigger(
   value: string,
   caret: number,
@@ -120,7 +124,9 @@ export function emoteSearchTrigger(
   const { start, text: typed } = wordBeforeCaret(value, caret);
   if (!typed.startsWith(':')) return null;
   const query = typed.slice(1);
-  if (query.length < 2 || !/^[\p{L}\p{N}_]/u.test(query)) return null;
+  if (!/^[\p{L}\p{N}_]/u.test(query)) return null;
+  // A lone emoticon letter is a face being typed, and Enter picks a list row.
+  if (EMOTICON_LETTERS.has(query)) return null;
   return { anchor: start, query };
 }
 
