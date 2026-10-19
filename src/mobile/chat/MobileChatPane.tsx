@@ -789,9 +789,10 @@ export const MobileChatPane: React.FC<{
         // long-press on text by starting its OWN text selection, which wins the
         // gesture and the fan never arms. Chat text needs no selection anyway —
         // the fan's Copy bucket is the way to take a message.
-        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'}`}
-        // With swiping on, a sideways move is the swipe's from the first pixel, never a pan.
-        style={swipeOn ? { touchAction: 'pan-y' } : undefined}
+        // With swiping on, a sideways move on a row is the swipe's from the first pixel: `sn-swipe-mod`
+        // gives the rows themselves `touch-action: pan-y`. On this wrapper it would do nothing, since
+        // the browser reads touch-action only from the touched element up to its scroll container.
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'} ${swipeOn ? 'sn-swipe-mod' : ''}`}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}
