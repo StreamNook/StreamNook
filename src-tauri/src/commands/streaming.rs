@@ -680,7 +680,7 @@ async fn start_stream_inner(
     // On the phones the link decides the rung from here on ("Auto" only); a
     // link that just failed to hold this rung starts lower.
     let serve_url = crate::services::link_adapt::begin(
-        &tr::parse_master(&r.master),
+        &tr::playable_variants(&r.master),
         &r.url,
         r.quality == "best",
     );
@@ -1062,6 +1062,39 @@ pub fn set_experimental_low_latency(enabled: bool) {
 #[tauri::command]
 pub fn set_codec_preference(prefs: Vec<String>) {
     crate::services::twitch_resolver::set_codec_preference(prefs);
+}
+
+/// The live channel the solo player last restarted for a failed codec, and the
+/// codec families it already stepped away from there.
+static SOLO_CODEC_STEPS: std::sync::Mutex<(String, Vec<&'static str>)> =
+    std::sync::Mutex::new((String::new(), Vec::new()));
+
+/// The solo player could not decode its live Twitch stream, though the probe
+/// said this device plays that codec. The codec leaves selection for the
+/// session, and the answer says whether restarting the stream now gets away
+/// from it. `mime_type` is the SourceBuffer type the player failed to create,
+/// when it got that far; without it the rung playing now counts. Once per codec
+/// per channel: a second failure means the restart found nothing else to play.
+#[tauri::command]
+pub fn report_solo_codec_failure(mime_type: Option<String>) -> bool {
+    // Only a live Twitch resolve honors the codec list.
+    let Some(channel) = crate::services::stream_server::solo_channel() else {
+        return false;
+    };
+    let serving = crate::services::link_adapt::playing_family();
+    let Some(family) = tr::fail_codec(mime_type.as_deref(), serving.as_deref()) else {
+        return false;
+    };
+    let mut steps = SOLO_CODEC_STEPS.lock().unwrap_or_else(|e| e.into_inner());
+    if steps.0 != channel {
+        *steps = (channel.clone(), Vec::new());
+    }
+    let restart = !steps.1.contains(&family);
+    if restart {
+        steps.1.push(family);
+    }
+    debug!("[Streaming] {channel} could not decode {family}; restart={restart}");
+    restart
 }
 
 /// Report the tallest rendition this display can actually show, in pixels.
