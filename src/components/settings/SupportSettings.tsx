@@ -8,6 +8,9 @@ import { IS_MOBILE } from '../../utils/platform';
 import { useSettingReset } from './settingReset';
 
 import { Logger } from '../../utils/logger';
+import { useClientPlatform } from '../../hooks/useClientPlatform';
+import { OtherPlatformLinks } from '../OtherPlatformLinks';
+import { PlatformLogo } from '../ui/PlatformLogo';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
     <button
@@ -207,9 +210,37 @@ const SupportSettings = () => {
                 </div>
             </div>
 
+            {/* Full width: this column centers its children, and the section's short
+                rows would otherwise shrink it to their own width. */}
+            {IS_MOBILE && (
+                <div className="w-full">
+                    <DevicesSection />
+                </div>
+            )}
             <DiagnosticLoggingSection />
             <DataRecordedSection />
         </div>
+    );
+};
+
+/**
+ * Phone only: which build this is, and the other platforms StreamNook runs on.
+ * The desktop says the same in its About popup (the title bar's StreamNook
+ * mark); the phone has no title bar, so it lives here.
+ */
+const DevicesSection = () => {
+    const { current, others, version } = useClientPlatform();
+    return (
+        <SettingsSection label="Devices">
+            <SettingsRow
+                title="This device"
+                logo={<PlatformLogo platform={current.key} />}
+                description={version ? `${current.name} · Version ${version}` : current.name}
+            />
+            <SettingsRow title="Also on your other devices">
+                <OtherPlatformLinks platforms={others} large className="mb-1" />
+            </SettingsRow>
+        </SettingsSection>
     );
 };
 
