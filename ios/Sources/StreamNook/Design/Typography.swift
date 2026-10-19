@@ -26,6 +26,9 @@ enum Typeface {
     private static var customFamily: String?
     /// The family last asked for, so a slower answer for an older name is dropped.
     private static var customAsked: String?
+    /// The family whose lookup is running, so the second settings read one change brings (the
+    /// field's own and the core's update event) does not ask again.
+    private static var customInFlight: String?
 
     /// Registers the bundled fonts once, before the first view draws.
     static func register() {
@@ -91,6 +94,9 @@ enum Typeface {
             Look.shared.setCustomFont(.ready(family))
             return
         }
+        if customInFlight?.caseInsensitiveCompare(family) == .orderedSame { return }
+        customInFlight = family
+        defer { if customInFlight == family { customInFlight = nil } }
         customAsked = family
         Look.shared.setCustomFont(.loading(family))
         log.notice("custom font: asking the core for \(family, privacy: .public)")
