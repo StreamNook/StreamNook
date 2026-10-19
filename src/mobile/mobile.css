@@ -496,3 +496,9 @@ body:has(.sn-mobile) .glass-input:focus {
     opacity: 0;
   }
 }
+
+/* A settings slider on the phone runs the width of its row, as the iPhone
+   draws them; the desktop holds its sliders to 15rem (globals.css). */
+.sn-mobile .settings-row input[type="range"] {
+  max-width: none;
+}

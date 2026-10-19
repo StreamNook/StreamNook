@@ -94,11 +94,13 @@ const SupportSettings = () => {
     const cutoutBorder = { borderColor: 'var(--color-background-tertiary)' } as CSSProperties;
 
     return (
-        <div className="flex min-h-full flex-col items-center py-6">
+        // The phone reads as its other settings pages: sections down the page,
+        // one gap between them. The desktop centers the invite in its pane.
+        <div className={IS_MOBILE ? 'space-y-6' : 'flex min-h-full flex-col items-center py-6'}>
             {/* my-auto centers the card group vertically when there's room, and degrades
                 to top-aligned + scrollable when the card is taller than the pane — unlike
                 justify-center, which clips the top of an overflowing card out of reach. */}
-            <div className="my-auto flex w-full max-w-[400px] flex-col items-center">
+            <div className={`flex w-full flex-col items-center ${IS_MOBILE ? '' : 'my-auto max-w-[400px]'}`}>
                 {/* The phone names the card's section like every other one on
                     its settings pages, as the iPhone page does. */}
                 {IS_MOBILE && (

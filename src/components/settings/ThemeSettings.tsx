@@ -47,12 +47,12 @@ const PhoneThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: Theme
     const { palette } = theme;
     const swatches = [palette.accent, palette.highlight.pink, palette.highlight.purple, palette.highlight.blue, palette.highlight.green];
     return (
-        <div className="relative">
+        <div className="relative h-full">
             <button
                 onClick={onSelect}
                 aria-label={theme.description ? `${theme.name}. ${theme.description}` : theme.name}
                 aria-pressed={isSelected}
-                className={`relative flex w-full flex-col gap-1.5 rounded-lg border p-2.5 text-left active:scale-[0.98] transition-transform ${
+                className={`relative flex h-full w-full flex-col gap-1.5 rounded-lg border p-2.5 text-left active:scale-[0.98] transition-transform ${
                     isSelected ? 'border-accent ring-2 ring-accent/30' : 'border-borderSubtle'
                 }`}
                 style={{ backgroundColor: palette.background }}
@@ -62,8 +62,10 @@ const PhoneThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: Theme
                         <span key={i} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
                     ))}
                 </span>
+                {/* A long name takes a second line rather than being cut short
+                    (the iPhone shrinks its type instead, which CSS cannot). */}
                 <span
-                    className={`block truncate text-[13px] font-semibold ${isCustom && onEdit ? 'pr-5' : ''}`}
+                    className={`block line-clamp-2 break-words text-[13px] font-semibold leading-tight ${isCustom && onEdit ? 'pr-5' : ''}`}
                     style={{ color: palette.textPrimary }}
                 >
                     {theme.name}

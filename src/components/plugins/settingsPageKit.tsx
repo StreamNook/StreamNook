@@ -152,19 +152,24 @@ export function InlineSlider({
 /** A row's own sub-controls (the settings under a choice like Custom), set in
  *  under a rule so they read as part of that row. Put SubControls inside. */
 export function SubControls({ children }: { children: ReactNode }) {
-  // On the phone the group's sliders decide together: when one has to go under
-  // its name, they all do, so their tracks start at the same place.
-  const [stackedSliders, setStackedSliders] = useState<ReadonlySet<string>>(new Set());
-  const report = useCallback((id: string, stacked: boolean) => {
-    setStackedSliders((prev) => {
-      if (prev.has(id) === stacked) return prev;
-      const next = new Set(prev);
-      if (stacked) next.add(id);
+  // On the phone the group's sliders decide together, and so do its segmented
+  // choices: when one has to go under its name, the others of its kind do too,
+  // so their controls start at the same place and the group never mixes the
+  // two layouts.
+  const [stacked, setStacked] = useState<ReadonlyMap<string, SubControlKind>>(new Map());
+  const report = useCallback((id: string, kind: SubControlKind, under: boolean) => {
+    setStacked((prev) => {
+      if (prev.has(id) === under) return prev;
+      const next = new Map(prev);
+      if (under) next.set(id, kind);
       else next.delete(id);
       return next;
     });
   }, []);
-  const group = useMemo(() => ({ report, anySliderStacked: stackedSliders.size > 0 }), [report, stackedSliders]);
+  const group = useMemo(
+    () => ({ report, anyStacked: (kind: SubControlKind) => [...stacked.values()].includes(kind) }),
+    [report, stacked],
+  );
   return (
     <SubControlGroup.Provider value={group}>
       <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>
@@ -172,9 +177,11 @@ export function SubControls({ children }: { children: ReactNode }) {
   );
 }
 
+type SubControlKind = 'slider' | 'segmented';
+
 const SubControlGroup = createContext<{
-  report: (id: string, stacked: boolean) => void;
-  anySliderStacked: boolean;
+  report: (id: string, kind: SubControlKind, under: boolean) => void;
+  anyStacked: (kind: SubControlKind) => boolean;
 } | null>(null);
 
 /** One line in SubControls: its name, and its control on the right. `stacked`
@@ -196,9 +203,8 @@ export function SubControl({
   onReset?: () => void;
 }) {
   const name = (
-    // On the phone a step under its row's 15px name, so the nesting still
-    // reads while the line stays easy to read.
-    <div className={`min-w-0 ${IS_MOBILE ? 'text-[14px]' : 'text-[12.5px]'} font-medium text-textPrimary`}>
+    // A step under its row's name, as every nested line on both phones.
+    <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">
       {title}
       {onReset && <ResetArrow onReset={onReset} />}
     </div>
@@ -278,12 +284,13 @@ function PhoneSubControl({
     ro.observe(row);
     return () => ro.disconnect();
   }, [isSegmented]);
+  const kind: SubControlKind | null = isSlider ? 'slider' : isSegmented ? 'segmented' : null;
   useLayoutEffect(() => {
-    if (!report || !isSlider) return;
-    report(id, ownStack);
-    return () => report(id, false);
-  }, [report, isSlider, id, ownStack]);
-  const stack = ownStack || (isSlider && !!group?.anySliderStacked);
+    if (!report || !kind) return;
+    report(id, kind, ownStack);
+    return () => report(id, kind, false);
+  }, [report, kind, id, ownStack]);
+  const stack = ownStack || (!!kind && !!group?.anyStacked(kind));
   useLayoutEffect(() => {
     under.current = stack;
   }, [stack]);
