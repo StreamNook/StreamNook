@@ -118,6 +118,8 @@ public final class FakeCore: CoreBridge {
             return try Self.json(root)
         case "load_channel_history":
             return "[]"
+        case "get_alert_types":
+            return AlertTypes.fakeJSON
         case "fetch_channel_emotes":
             guard let emotes = chatFixture?.emotesJSON else { return #"{"twitch":[],"bttv":[],"7tv":[],"ffz":[],"kick":[]}"# }
             return String(decoding: emotes, as: UTF8.self)

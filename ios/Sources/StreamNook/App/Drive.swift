@@ -10,7 +10,10 @@ import SwiftUI
 /// - `fake`, `fake:signedin` run the build on FakeCore's fixtures, signed out or signed in (read
 ///   when the core is made, so put them anywhere in the list)
 /// - `setup` shows the first-run wizard (without it a drive run skips the wizard for the session);
-///   `setup:PAGE` opens it on `welcome`, `accounts`, `drops`, `kick` or `done`
+///   `setup:PAGE` opens it on `welcome`, `accounts`, `drops`, `kick`, `notifications` or `done`;
+///   `setupalert:ID` turns an alert type on in its notifications page, as a tap does (asking for
+///   permission the first time; with notifications off in iPhone Settings the page shows its
+///   refusal line)
 /// - `tab:NAME` picks a tab: `following`, `browse`, `rewards`, `you`
 /// - `browse` loads the Browse list again and waits for it; `browse:categories`, `browse:live`
 ///   switch its mode; `search:TEXT` searches it
@@ -100,6 +103,7 @@ enum Drive {
             case "setup":
                 model.showSetup()
                 if let page = SetupWizard.Page.named(value) { model.nav.setupPage = page }
+            case "setupalert": model.nav.setupAlert = value
             case "tab": if let tab = MobileTab(rawValue: value) { model.nav.tab = tab }
             case "browse":
                 switch value {
@@ -456,6 +460,7 @@ extension SetupWizard.Page {
         case "accounts": .accounts
         case "drops": .drops
         case "kick": .kick
+        case "notifications": .notifications
         case "done": .done
         default: nil
         }

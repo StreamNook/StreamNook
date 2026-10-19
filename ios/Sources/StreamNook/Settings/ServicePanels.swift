@@ -128,12 +128,14 @@ struct MasterCard: View {
 
 // MARK: Notifications
 
-/// Settings > Notifications on the iPhone: only what this iPhone sends. While StreamNook runs it
-/// posts mentions and replies. Live channels, drops, badges and background checking need alerts
-/// while the app is closed, which the iPhone does not send yet, so those rows stay hidden (their
-/// saved values are kept for the other apps).
+/// Settings > Notifications on the iPhone: only what this iPhone sends. "Notify me about" lists
+/// the alert types the core says this build sends (`get_alert_types`), the same list and words
+/// Android draws; today that is mentions and replies, posted while StreamNook runs. Go-live,
+/// drops and badges join the list when the core adds the iPhone to them; background checking is
+/// Android's own and stays hidden here (its saved values are kept for the other apps).
 struct NotificationsPanel: View {
     @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var phase
     @State private var status: UNAuthorizationStatus?
 
@@ -143,10 +145,14 @@ struct NotificationsPanel: View {
             MasterCard(symbol: "bell", title: "Notifications",
                        detail: on ? "StreamNook can alert you about the categories below." : "All StreamNook notifications are off.",
                        path: "live_notifications.enabled") { turnedOn in
-                if turnedOn, store.bool("live_notifications.show_mention_notifications", true) { await ask() }
+                if turnedOn, model.alertTypes.contains(where: { store.bool($0.setting, true) }) { await ask() }
             }
-            if on { permissionCard }
-            MentionNotificationSettings(notificationsOn: on, ask: ask)
+            if on {
+                permissionCard
+                AlertTypeSettings(types: model.alertTypes, ask: ask)
+                    .padding(.top, 12)
+            }
+            MentionRuleSettings()
                 .padding(.top, 12)
             SettingButton(title: "Send a test notification", symbol: "bell.badge") { Task { await test() } }
         }
@@ -161,7 +167,7 @@ struct NotificationsPanel: View {
                  body: "StreamNook can send notifications to this iPhone.", allow: false, settingsLabel: "Sounds and banners in iPhone Settings")
         case .notDetermined:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Allow notifications so mentions and replies can reach you.", allow: true, settingsLabel: "Open iPhone Settings")
+                 body: "Allow notifications so the alerts below can reach you.", allow: true, settingsLabel: "Open iPhone Settings")
         case .denied:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
                  body: "Your iPhone will not ask again, so turn notifications on for StreamNook in Settings.", allow: false,
@@ -188,9 +194,7 @@ struct NotificationsPanel: View {
                     }
                 }
             }
-            SettingButton(title: settingsLabel, symbol: "arrow.up.right.square") {
-                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
-            }
+            SettingButton(title: settingsLabel, symbol: "arrow.up.right.square") { MentionAlerts.openSettings() }
         }
         .padding(14)
         .snPanel()
@@ -203,7 +207,7 @@ struct NotificationsPanel: View {
     }
 
     private func readStatus() async {
-        status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        status = await MentionAlerts.status()
     }
 
     private func test() async {
@@ -215,24 +219,29 @@ struct NotificationsPanel: View {
     }
 }
 
-/// Notifications > Mentions and replies: whether a mention notifies, what counts as one (which
-/// also decides what collects in Mentions), and the chats that stay quiet.
-struct MentionNotificationSettings: View {
-    @Environment(SettingsStore.self) private var store
-    let notificationsOn: Bool
+/// Notifications > Notify me about: a switch per alert type the core lists for this iPhone, in its
+/// order and with its words. Turning one on asks for permission the first time.
+struct AlertTypeSettings: View {
+    let types: [AlertType]
     let ask: () async -> Void
 
-    private static let notify = "live_notifications.show_mention_notifications"
-
     var body: some View {
-        SettingsBlock(title: "Mentions and replies") {
-            ToggleRow(title: "Notify me", path: Self.notify, fallback: true,
-                      detailFor: { on in
-                          guard notificationsOn else { return "Turn on Notifications above to get these." }
-                          return on ? "When someone mentions or replies to you in a chat"
-                                    : "They still collect in Mentions on the You tab."
-                      },
-                      onChange: { on in if on && notificationsOn { await ask() } })
+        if !types.isEmpty {
+            SettingsBlock(title: "Notify me about") {
+                ForEach(types) { type in
+                    ToggleRow(title: type.title, path: type.setting, fallback: true, detail: type.detail,
+                              onChange: { on in if on { await ask() } })
+                }
+            }
+        }
+    }
+}
+
+/// Notifications > Mentions: what counts as a mention (which also decides what collects in
+/// Mentions) and the chats that stay quiet. Whether a mention notifies is its Notify me about row.
+struct MentionRuleSettings: View {
+    var body: some View {
+        SettingsBlock(title: "Mentions") {
             // The rules shape Mentions as well as notifications, so they stand on their own.
             SettingRow(title: "Counts as a mention",
                        detail: "Your @name always counts. These count too, in Mentions and for notifications.") {

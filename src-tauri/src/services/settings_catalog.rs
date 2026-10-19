@@ -34,8 +34,10 @@ pub struct CatalogRow {
     #[serde(default, skip_serializing)]
     pub hidden_on_ios: bool,
     /// What this build must have for the row to be drawn at all: a
-    /// `client_capabilities` field (`combined_chat`), or `watch:<platform>`
-    /// for a row that only touches that platform. `|` between names means any
+    /// `client_capabilities` field (`combined_chat`), `watch:<platform>`
+    /// for a row that only touches that platform, or `alert:<type>` for a
+    /// row about an alert type (`services::alert_types`) this build must
+    /// send. `|` between names means any
     /// one of them. Search and the changed review skip the row on a build
     /// without it, on every platform, so they hide exactly what the pages hide.
     #[serde(default, skip_serializing)]
@@ -44,10 +46,13 @@ pub struct CatalogRow {
 
 /// Whether this build has the capability `need` names.
 fn build_has(need: &str) -> bool {
-    match need.strip_prefix("watch:") {
-        Some(platform) => crate::services::account_roster::can_watch(platform),
-        None => crate::services::client_capabilities::has(need),
+    if let Some(platform) = need.strip_prefix("watch:") {
+        return crate::services::account_roster::can_watch(platform);
     }
+    if let Some(alert) = need.strip_prefix("alert:") {
+        return crate::services::alert_types::works(alert);
+    }
+    crate::services::client_capabilities::has(need)
 }
 
 /// Whether a row is drawn on this platform's settings pages, given what the
@@ -324,8 +329,38 @@ mod tests {
         let known = ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary"];
         for row in rows() {
             for need in row.needs.iter().flat_map(|n| n.split('|')) {
-                let ok = known.contains(&need) || matches!(need, "watch:youtube" | "watch:tiktok" | "watch:twitch" | "watch:kick");
+                let alert = need.strip_prefix("alert:").is_some_and(|id| crate::services::alert_types::ids().contains(&id));
+                let ok = known.contains(&need)
+                    || alert
+                    || matches!(need, "watch:youtube" | "watch:tiktok" | "watch:twitch" | "watch:kick");
                 assert!(ok, "{} needs an unknown capability {need}", row.title);
+            }
+        }
+    }
+
+    #[test]
+    fn alert_rows_follow_the_alert_list() {
+        // The iPhone sends mentions only: search finds that row and none of the go-live ones.
+        let iphone = |n: &str| match n.strip_prefix("alert:") {
+            Some(id) => crate::services::alert_types::works_on(id, "ios"),
+            None => true,
+        };
+        let android = |n: &str| match n.strip_prefix("alert:") {
+            Some(id) => crate::services::alert_types::works_on(id, "android"),
+            None => true,
+        };
+        assert!(titles(&search_on("mentions and replies", 5, true, &iphone)).contains(&"Mentions and replies"));
+        for title in ["Live channels", "Which channels", "Drops", "New badges"] {
+            assert!(!titles(&search_on(&title.to_lowercase(), 5, true, &iphone)).contains(&title), "{title} on iPhone");
+            assert!(titles(&search_on(&title.to_lowercase(), 5, false, &android)).contains(&title), "{title} on Android");
+        }
+        // Every type a phone lists has its row on the Notifications page, by the same title.
+        for platform in ["android", "ios"] {
+            for alert in crate::services::alert_types::for_platform(platform) {
+                let row = rows().iter().find(|r| r.paths.contains(&alert.setting)).unwrap_or_else(|| panic!("no row for {}", alert.id));
+                assert_eq!((row.page.as_str(), row.section.as_str(), row.title.as_str()), ("notifications", "Notify me about", alert.title.as_str()));
+                assert_eq!(row.detail, alert.detail, "{} words differ", alert.id);
+                assert_eq!(row.needs.as_deref(), Some(format!("alert:{}", alert.id).as_str()));
             }
         }
     }

@@ -60,6 +60,9 @@ final class AppModel {
     private(set) var lastEvent: String?
     /// The wizard was closed without finishing; it stays away for the rest of this session.
     private var setupClosed = false
+    /// The alerts this iPhone sends, as the core lists them: the Notifications page's "Notify me
+    /// about" rows and the wizard's Notifications page.
+    private(set) var alertTypes: [AlertType] = []
 
     let version = CoreHost.appVersion
 
@@ -137,6 +140,7 @@ final class AppModel {
             return
         }
         let settings = await loadSettings()
+        alertTypes = await AlertTypes.load(core: core)
         // The watch layer reads its landscape chat and player rows from the settings view.
         Task { await settingsStore.refresh() }
         capVideoHeight()
@@ -146,7 +150,8 @@ final class AppModel {
         cosmetics.start(core: core)
         kick.start(core: core, toasts: toasts)
         chat.start()
-        mentions.onNotify = { entry in Task { await MentionAlerts.post(entry) } }
+        let mentionCategory = alertTypes.first { $0.id == "mentions" }?.channel
+        mentions.onNotify = { entry in Task { await MentionAlerts.post(entry, category: mentionCategory) } }
         mentions.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }

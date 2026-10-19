@@ -191,6 +191,13 @@ pub async fn search_settings(query: String) -> Result<Vec<crate::services::setti
     Ok(crate::services::settings_catalog::search(&query, 40))
 }
 
+/// The alert types this build sends, in the order the phones list them: each
+/// with its setting, its OS category, and whether the setup wizard offers it.
+#[tauri::command]
+pub fn get_alert_types() -> Vec<crate::services::alert_types::AlertType> {
+    crate::services::alert_types::alert_types()
+}
+
 /// The settings rows whose values differ from a fresh install, in page order,
 /// for the "changed from default" review.
 #[tauri::command]

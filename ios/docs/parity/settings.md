@@ -225,6 +225,7 @@ Scope: the eight settings rows on the You tab and every panel they open; the Cha
 
 ### 7.3 Notify me about
 
+- [~] The rows are the alert types Rust lists for the build (`get_alert_types`, r:services/alert_types.json): Android Live channels, Mentions and replies, Drops, New badges; iPhone Mentions and replies. Same order and words on both; a type the phone cannot send is not listed, and the go-live rows reach the iPhone by adding `ios` to that type's platforms. Whether a mention notifies moved here from the Mentions section, whose rules now sit under "Mentions" (iPhone: `AlertTypeSettings`) (v3-notify 2026-10-19: built and gated, not yet seen on either phone)
 - [x] Group label "Notify me about", then one glass card with hairline dividers between rows (m:screens/MobileNotificationsSettings.tsx:L255-L257) (iPhone: `Section("Notify me about")`)
 - [x] Row "Live channels", description "Alert when a channel you follow starts streaming", key `live_notifications.show_live_notifications`, default true (m:screens/MobileNotificationsSettings.tsx:L42-L47) (iPhone: `Toggle`)
 - [x] Row "Drops", description "Campaign progress and claimable rewards", key `live_notifications.show_drops_notifications`, default true (m:screens/MobileNotificationsSettings.tsx:L48-L53) (iPhone: `Toggle`)

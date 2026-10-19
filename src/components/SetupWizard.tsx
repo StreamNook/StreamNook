@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, type Transition } from 'framer-motion';
 import {
     Check,
@@ -46,6 +46,8 @@ import PlatformAccountRows from './settings/PlatformAccountRows';
 import { ProviderLogo } from './ProviderLogo';
 import { PROVIDERS, type ProviderId } from '../types/providers';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
+import type { AlertType } from '../mobile/alertTypes';
+import { setSettingsFields } from '../utils/settingsFields';
 
 const STEP_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 const STEP_DURATION = 0.4;
@@ -60,9 +62,10 @@ const STEP_COUNT = 9;
 //      about a surface that never renders.
 //
 // NOT skipped: step 1 (components) is a no-op on both platforms now that the
-// client is self-contained and auto-advances, and step 7 (notifications)
-// branches on IS_MOBILE to request the real Android permission rather than
-// offering Dynamic Island vs toast.
+// client is self-contained and auto-advances. Step 7 (notifications) branches
+// on IS_MOBILE: the phone asks which alert types to turn on, from the list Rust
+// keeps (`get_alert_types`, the ones marked for setup), and is skipped only
+// when Rust offers none; desktop offers Dynamic Island vs toast.
 //
 // MODULE SCOPE ON PURPOSE. These were declared inside the component, below
 // handleDropsLogin, which meant a caller earlier in the body could not use them
@@ -70,16 +73,21 @@ const STEP_COUNT = 9;
 // `setCurrentStep(4)` instead, routing around the skip entirely and landing
 // Android on the whisper step. Any new step transition must go through these.
 const MOBILE_SKIPPED_STEPS = new Set([4, 6]);
-const stepAfter = (s: number): number => {
+const NOTIFICATION_STEP = 7;
+const stepAfter = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
     let n = s + 1;
-    if (IS_MOBILE) while (MOBILE_SKIPPED_STEPS.has(n)) n += 1;
+    if (IS_MOBILE) while (skipped.has(n)) n += 1;
     return n;
 };
-const stepBefore = (s: number): number => {
+const stepBefore = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
     let n = s - 1;
-    if (IS_MOBILE) while (MOBILE_SKIPPED_STEPS.has(n)) n -= 1;
+    if (IS_MOBILE) while (skipped.has(n)) n -= 1;
     return n;
 };
+
+// The phone's Notifications step, loaded only on a phone so the desktop bundle
+// never carries the mobile notification code.
+const MobileNotificationsStep = lazy(() => import('../mobile/setup/NotificationsStep'));
 
 // Notification delivery surfaces offered on the notification-style step. "Both"
 // is just the two booleans on together; the wizard maps each choice onto the
@@ -504,8 +512,11 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             // value keeps forced-relogin walkthroughs (setup already complete) from
             // wiping announcements those users still need.
             const isFirstTimeSetup = !settings.setup_complete;
+            // The store's current copy, not this render's: the Notifications
+            // step writes its choices a moment before this, and a whole-object
+            // save from an older copy would put the defaults back.
             await updateSettings({
-                ...settings,
+                ...useAppStore.getState().settings,
                 setup_complete: true,
             });
             // Mobile-only backstop marker, read by the wizard gate in App.tsx.
@@ -565,44 +576,46 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         { id: 'disabled', icon: X, label: 'Off', desc: 'No sidebar at all.' },
     ];
 
-    // ── Native notification permission (mobile) ────────────────────────────
-    // Android 13+ requires an explicit runtime grant for POST_NOTIFICATIONS, so
-    // the wizard asks for it rather than silently failing to notify later.
-    const [notifPermission, setNotifPermission] = useState<'default' | 'granted' | 'denied'>('default');
-    // NOTE: we deliberately do NOT use @tauri-apps/plugin-notification's JS wrapper
-    // here. Its dist-js reads `window.Notification.permission` unconditionally, and
-    // Android System WebView does not implement the Web Notifications API, so
-    // `window.Notification` is undefined and the wrapper throws
-    // ("Cannot read properties of undefined") before it ever reaches Rust.
-    // Invoking the plugin command directly skips that broken web path.
+    // ── Notifications step (mobile) ────────────────────────────────────────
+    // The alert types Rust offers in setup on this phone, each off until the
+    // person turns it on. Turning one on writes its setting and asks the OS
+    // permission (MobileNotificationsStep); leaving the step forward writes the
+    // rest off, so the step means what it showed. null until read.
+    const [setupAlerts, setSetupAlerts] = useState<AlertType[] | null>(null);
+    const [alertChoices, setAlertChoices] = useState<Record<string, boolean>>({});
     useEffect(() => {
         if (!IS_MOBILE) return;
         let cancelled = false;
-        (async () => {
-            try {
-                const granted = await invoke<boolean>('plugin:notification|is_permission_granted');
-                if (!cancelled && granted) setNotifPermission('granted');
-            } catch (e) {
-                Logger.error('[SetupWizard] notification permission probe failed:', e);
-            }
-        })();
+        // Fetched now so the step draws at once when it fades in.
+        void import('../mobile/setup/NotificationsStep');
+        invoke<AlertType[]>('get_alert_types')
+            .then((list) => {
+                if (!cancelled) setSetupAlerts(list.filter((t) => t.setup));
+            })
+            .catch((e) => {
+                Logger.error('[SetupWizard] get_alert_types failed:', e);
+                if (!cancelled) setSetupAlerts([]);
+            });
         return () => { cancelled = true; };
     }, []);
-    const handleRequestNativeNotifications = useCallback(async () => {
-        try {
-            if (await invoke<boolean>('plugin:notification|is_permission_granted')) {
-                setNotifPermission('granted');
-                return;
-            }
-            const result = await invoke<string>('plugin:notification|request_permission');
-            setNotifPermission(result === 'granted' ? 'granted' : 'denied');
-        } catch (e) {
-            // Surface it: silently mapping every failure to "denied" makes a broken
-            // plugin registration indistinguishable from the user saying no.
-            Logger.error('[SetupWizard] notification permission request failed:', e);
-            setNotifPermission('denied');
-        }
-    }, []);
+    const anyAlertChosen = Object.values(alertChoices).some(Boolean);
+    // Steps this phone skips: the fixed ones, and Notifications when Rust offers no type.
+    const skippedSteps = IS_MOBILE && setupAlerts?.length === 0
+        ? new Set([...MOBILE_SKIPPED_STEPS, NOTIFICATION_STEP])
+        : MOBILE_SKIPPED_STEPS;
+    const nextStep = (s: number) => stepAfter(s, skippedSteps);
+    const prevStep = (s: number) => stepBefore(s, skippedSteps);
+
+    // Leaving the Notifications step forward (button, swipe) writes each offered
+    // type as the step showed it: chosen on, the rest off.
+    const previousStepRef = useRef(currentStep);
+    useEffect(() => {
+        const was = previousStepRef.current;
+        previousStepRef.current = currentStep;
+        if (!IS_MOBILE || was !== NOTIFICATION_STEP || currentStep <= was || !setupAlerts?.length) return;
+        const changes = Object.fromEntries(setupAlerts.map((t) => [t.setting, alertChoices[t.id] === true]));
+        setSettingsFields(changes).catch((e) => Logger.error('[SetupWizard] saving alert choices failed:', e));
+    }, [currentStep, setupAlerts, alertChoices]);
 
     // ── Notification-style step (desktop) ──────────────────────────────────
     const liveNotifications = settings.live_notifications;
@@ -662,13 +675,18 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         variant: 'twitch',
                     };
                 }
-                return { label: 'Continue', onClick: () => setCurrentStep(stepAfter(currentStep)) };
+                return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
             case 3:
             case 4:
             case 5:
             case 6:
+                return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
             case 7:
-                return { label: 'Continue', onClick: () => setCurrentStep(stepAfter(currentStep)) };
+                // The phone's step is a choice: nothing chosen reads as Skip.
+                return {
+                    label: IS_MOBILE && !anyAlertChosen ? 'Skip' : 'Continue',
+                    onClick: () => setCurrentStep(nextStep(currentStep)),
+                };
             case 8:
                 return { label: 'Start watching', onClick: handleCompleteSetup };
             default:
@@ -687,13 +705,12 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     //
     // Deliberately NOT skipped: step 1 (components) is a no-op on both platforms
     // now that the client is self-contained - `check_components_installed`
-    // always returns true and the step auto-advances. Step 7 (notifications) is
-    // not skipped either; it branches on IS_MOBILE to ask for the real Android
-    // notification permission instead of offering Dynamic Island vs toast.
+    // always returns true and the step auto-advances. Step 7 (notifications)
+    // shows on a phone whenever Rust offers an alert type in setup.
     // Dots must reflect the steps this platform actually shows, otherwise mobile
     // renders an indicator for a page it can never land on.
     const visibleSteps = Array.from({ length: STEP_COUNT }, (_, i) => i).filter(
-        (i) => !(IS_MOBILE && MOBILE_SKIPPED_STEPS.has(i)),
+        (i) => !(IS_MOBILE && skippedSteps.has(i)),
     );
 
     const canGoBack = currentStep > 1 && currentStep < 8;
@@ -1099,30 +1116,19 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         <>
                             <Bell size={56} strokeWidth={1.4} className="text-accent mb-8" />
                             <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
-                                Stay in the loop
+                                Notifications
                             </h1>
                             <p className="text-textSecondary text-base max-w-md mb-8">
-                                Get a notification when a followed streamer goes live, a whisper
-                                lands, or a drop is claimed. You can fine-tune each type in
-                                Settings.
+                                Choose what StreamNook alerts you about. You can change these any
+                                time in Settings.
                             </p>
-                            <button
-                                onClick={handleRequestNativeNotifications}
-                                disabled={notifPermission === 'granted'}
-                                className={`glass-button w-full max-w-md rounded-xl py-4 text-base font-medium text-textPrimary ${
-                                    notifPermission === 'granted' ? 'opacity-60' : ''
-                                }`}
-                            >
-                                {notifPermission === 'granted'
-                                    ? 'Notifications enabled'
-                                    : 'Enable notifications'}
-                            </button>
-                            {notifPermission === 'denied' && (
-                                <p className="mt-4 max-w-md text-sm text-textMuted">
-                                    Notifications are turned off for StreamNook. You can turn them
-                                    back on in Android Settings whenever you like.
-                                </p>
-                            )}
+                            <Suspense fallback={null}>
+                                <MobileNotificationsStep
+                                    types={setupAlerts ?? []}
+                                    choices={alertChoices}
+                                    onChoose={(id, on) => setAlertChoices((c) => ({ ...c, [id]: on }))}
+                                />
+                            </Suspense>
                         </>
                     );
                 }
@@ -1293,7 +1299,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     for the bottom row and the CTA keeps a clean full-width block. */}
                 {IS_MOBILE && canGoBack && (
                     <button
-                        onClick={() => setCurrentStep(Math.max(0, stepBefore(currentStep)))}
+                        onClick={() => setCurrentStep(Math.max(0, prevStep(currentStep)))}
                         aria-label="Back"
                         className="absolute left-2 z-20 flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-textSecondary"
                         style={{ top: 'calc(0.5rem + var(--sn-safe-top))' }}
@@ -1340,11 +1346,11 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         if (info.offset.x < -THRESHOLD && canSwipeForward) {
                             lastStepChangeRef.current = now;
                             setHasSwiped(true);
-                            setCurrentStep(stepAfter(currentStep));
+                            setCurrentStep(nextStep(currentStep));
                         } else if (info.offset.x > THRESHOLD && canGoBack) {
                             lastStepChangeRef.current = now;
                             setHasSwiped(true);
-                            setCurrentStep(stepBefore(currentStep));
+                            setCurrentStep(prevStep(currentStep));
                         }
                     }}
                 >
@@ -1421,7 +1427,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                             block. */}
                         {canGoBack && !IS_MOBILE && (
                             <button
-                                onClick={() => setCurrentStep(Math.max(0, stepBefore(currentStep)))}
+                                onClick={() => setCurrentStep(Math.max(0, prevStep(currentStep)))}
                                 className="flex items-center gap-1 px-3 py-2 text-sm text-textSecondary hover:text-textPrimary transition-colors rounded-lg"
                             >
                                 <ChevronLeft size={15} />

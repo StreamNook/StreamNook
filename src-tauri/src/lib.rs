@@ -2141,6 +2141,7 @@ pub fn run() {
             lift_custom_theme,
             search_settings,
             get_changed_settings,
+            get_alert_types,
             services::client_capabilities::get_client_capabilities,
             list_settings_backups,
             restore_settings_backup,

@@ -1,24 +1,37 @@
 import SNKit
 import SwiftUI
+import UserNotifications
 
-/// The first-run wizard: welcome, accounts, drops, Kick, done (no notification step until the iPhone
-/// sends alerts). A full-screen layer on the theme background under a faint accent wash; pages
-/// swipe sideways past 70 points and move with a short rise. Finishing saves `setup_complete`
-/// through the core; closing early only keeps it away for this session.
+/// The first-run wizard: welcome, accounts, drops, Kick, notifications, done. A full-screen layer on
+/// the theme background under a faint accent wash; pages swipe sideways past 70 points and move
+/// with a short rise. Finishing saves `setup_complete` through the core; closing early only keeps
+/// it away for this session. The notifications page offers the alert types the core marks for
+/// setup on this iPhone (`get_alert_types`), as Android's wizard does, and is left out when the
+/// core offers none.
 struct SetupWizard: View {
     let model: AppModel
     @State private var page = Page.welcome
     @State private var forward = true
     @State private var drag: CGFloat = 0
     @State private var lastTurn = Date.distantPast
+    /// The alert types turned on in the notifications page; every one starts off.
+    @State private var chosen: Set<String> = []
+    /// Where notifications stand for StreamNook, read after each ask and on return to the app.
+    @State private var alertStatus: UNAuthorizationStatus?
     @Environment(\.snStill) private var still
+    @Environment(\.scenePhase) private var scene
 
-    enum Page: Int, CaseIterable { case welcome, accounts, drops, kick, done }
+    enum Page: Int, CaseIterable { case welcome, accounts, drops, kick, notifications, done }
 
     private var signedIn: Bool { model.signedIn }
     private var rewards: RewardsStore { model.rewards }
     private var dropsConnected: Bool { rewards.drops?.connected == true }
     private var kick: KickAccount { model.kick }
+    /// The alert types the core offers in setup on this iPhone.
+    private var setupAlerts: [AlertType] { model.alertTypes.filter(\.setup) }
+    /// The pages this iPhone shows, in order.
+    private var pages: [Page] { Page.allCases.filter { $0 != .notifications || !setupAlerts.isEmpty } }
+    private func index(_ page: Page) -> Int { pages.firstIndex(of: page) ?? page.rawValue }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +72,14 @@ struct SetupWizard: View {
         .onChange(of: model.host.sheet == nil) { _, closed in if closed { rewards.sheetClosed() } }
         .onChange(of: model.nav.setupPage, initial: true) { _, asked in
             if let asked { go(to: asked) }
+        }
+        .onChange(of: model.nav.setupAlert, initial: true) { _, id in
+            guard let id, let type = setupAlerts.first(where: { $0.id == id }) else { return }
+            model.nav.setupAlert = nil
+            Task { await choose(type, true) }
+        }
+        .onChange(of: scene) { _, now in
+            if now == .active, page == .notifications { Task { alertStatus = await MentionAlerts.status() } }
         }
         .onChange(of: signedIn) { _, now in
             guard now, page == .accounts else { return }
@@ -103,6 +124,13 @@ struct SetupWizard: View {
                 PlatformMark(platform: .kick, size: 56)
             } extra: {
                 kickAction
+            }
+        case .notifications:
+            PageBody(title: "Notifications",
+                     text: "Choose what StreamNook alerts you about. You can change these any time in Settings.") {
+                Image(systemName: Symbol.notifications).font(.system(size: 48)).foregroundStyle(SN.accent)
+            } extra: {
+                notificationsAction
             }
         case .done:
             PageBody(title: "You're all set", text: "StreamNook is ready. Pick a stream and dive in.") {
@@ -193,6 +221,71 @@ struct SetupWizard: View {
         }
     }
 
+    /// A switch per alert type the core offers here, all off until chosen. Turning one on saves it
+    /// and only then asks the iPhone for permission (the first time; an answer given stays). A
+    /// refusal is said plainly under the switches, with the way to Settings; its room is kept
+    /// while hidden, so the switches never move on the centered page.
+    private var notificationsAction: some View {
+        let refused = !chosen.isEmpty && alertStatus == .denied
+        return VStack(spacing: 16) {
+            VStack(spacing: 0) {
+                ForEach(Array(setupAlerts.enumerated()), id: \.element.id) { offset, type in
+                    if offset > 0 { Divider().overlay(SN.borderSubtle) }
+                    alertRow(type)
+                }
+            }
+            .snPanel()
+            VStack(spacing: 10) {
+                Text("Notifications are turned off for StreamNook in iPhone Settings, so these alerts will not arrive until you allow them there.")
+                    .font(.snCaption)
+                    .foregroundStyle(SN.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { MentionAlerts.openSettings() } label: {
+                    Label("Open iPhone Settings", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.snSecondary)
+            }
+            .opacity(refused ? 1 : 0)
+            .allowsHitTesting(refused)
+            .accessibilityHidden(!refused)
+        }
+        .frame(maxWidth: 320)
+        .task { alertStatus = await MentionAlerts.status() }
+    }
+
+    private func alertRow(_ type: AlertType) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: SettingIcons.symbol(paths: [type.setting], title: type.title))
+                .font(.system(size: 16))
+                .foregroundStyle(SN.textSecondary)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(type.title).font(.snRowTitle).foregroundStyle(SN.textPrimary)
+                Text(type.detail).font(.snRowDetail).foregroundStyle(SN.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle(type.title, isOn: Binding(get: { chosen.contains(type.id) },
+                                             set: { on in Task { await choose(type, on) } }))
+                .labelsHidden()
+                .tint(SN.accent)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    /// Saves one choice; turning a type on also turns notifications on and asks for permission.
+    private func choose(_ type: AlertType, _ on: Bool) async {
+        if on { chosen.insert(type.id) } else { chosen.remove(type.id) }
+        var changes: [String: Any?] = [type.setting: on]
+        if on { changes["live_notifications.enabled"] = true }
+        await model.settingsStore.set(changes)
+        guard on else { return }
+        await MentionAlerts.askIfUndecided()
+        alertStatus = await MentionAlerts.status()
+    }
+
     private func summary(_ title: String, mark: PlatformMark.Platform? = nil, done: Bool) -> some View {
         HStack(spacing: 8) {
             if let mark { PlatformMark(platform: mark, size: 15) }
@@ -213,14 +306,14 @@ struct SetupWizard: View {
     private var footer: some View {
         VStack(spacing: 18) {
             HStack(spacing: 6) {
-                ForEach(Page.allCases, id: \.self) { step in
-                    let past = step.rawValue < page.rawValue
+                ForEach(pages, id: \.self) { step in
+                    let past = index(step) < index(page)
                     Capsule()
                         .fill(step == page ? SN.accent : past ? SN.accent.opacity(0.5) : SN.borderSubtle)
                         .frame(width: step == page ? 40 : 8, height: 8)
                         .shadow(color: step == page ? SN.accent.opacity(0.5) : .clear, radius: 4)
                         .onTapGesture { if past { go(to: step) } }
-                        .accessibilityLabel("Step \(step.rawValue + 1)")
+                        .accessibilityLabel("Step \(index(step) + 1)")
                 }
             }
             primary
@@ -248,7 +341,7 @@ struct SetupWizard: View {
         } else {
             // The way on is the one filled button on the page; a page's own action above it is
             // glass. Both are the same height, so the step dots never jump between pages.
-            Button(page == .welcome ? "Get started" : page == .done ? "Start watching" : "Continue") {
+            Button(primaryTitle) {
                 if page == .done {
                     Task { await model.finishSetup() }
                 } else {
@@ -256,6 +349,17 @@ struct SetupWizard: View {
                 }
             }
             .buttonStyle(.snPrimary)
+        }
+    }
+
+    /// The filled button's words: the notifications page is a choice, so with nothing chosen it
+    /// reads Skip.
+    private var primaryTitle: String {
+        switch page {
+        case .welcome: "Get started"
+        case .done: "Start watching"
+        case .notifications: chosen.isEmpty ? "Skip" : "Continue"
+        default: "Continue"
         }
     }
 
@@ -271,12 +375,21 @@ struct SetupWizard: View {
     }
 
     private func turn(back: Bool) {
-        guard canGo(back: back), let next = Page(rawValue: page.rawValue + (back ? -1 : 1)) else { return }
-        go(to: next)
+        let at = index(page) + (back ? -1 : 1)
+        guard canGo(back: back), pages.indices.contains(at) else { return }
+        go(to: pages[at])
     }
 
     private func go(to next: Page) {
-        forward = next.rawValue > page.rawValue
+        guard pages.contains(next) else { return }
+        forward = index(next) > index(page)
+        // Leaving the notifications page forward saves each offered type as it showed: chosen
+        // on, the rest off.
+        if page == .notifications && forward {
+            let changes = AlertTypes.setupChoices(setupAlerts, chosen: chosen)
+            let store = model.settingsStore
+            Task { await store.set(changes) }
+        }
         lastTurn = .now
         withAnimation(SNMotion.run(SNMotion.page)) { page = next }
     }
