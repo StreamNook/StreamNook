@@ -1,5 +1,7 @@
 import React from 'react';
+import { Check, Star, X } from 'phosphor-react';
 import { Tooltip } from './ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 
 // Types
 export interface ResubNotification {
@@ -23,35 +25,16 @@ interface ResubNotificationBannerProps {
   onCancelShare: () => void;
 }
 
-// Celebration/Star icon SVG
-const CelebrationIcon = ({ className = '', size = 16 }: { className?: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-  </svg>
-);
+// The streak banners' family, like the watch streak above the composer: the
+// chat header capsules' glaze (solid at Glassiness 0), the accent star,
+// what it is in bold with the detail quieter beside it, the streak choice on
+// its own line, one Share and a quieter dismiss. Share arms the composer: the
+// next message sent carries the resub (with the streak when it is ticked).
+const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5`;
+const quiet =
+  'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
 
-// Reply/Share arrow icon SVG
-const ShareIcon = ({ className = '', size = 16 }: { className?: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 10h10a8 8 0 0 1 8 8v2M3 10l6 6m-6-6l6-6" />
-  </svg>
-);
-
-// Close/X icon SVG
-const CloseIcon = ({ className = '', size = 16 }: { className?: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M18 6L6 18" />
-    <path d="M6 6l12 12" />
-  </svg>
-);
-
-// Checkbox SVG
-const CheckboxIcon = ({ checked, className = '', size = 14 }: { checked: boolean; className?: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
-    <rect x="3" y="3" width="18" height="18" rx="3" className={checked ? 'fill-accent/20' : ''} />
-    {checked && <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />}
-  </svg>
-);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   resubNotification,
@@ -67,81 +50,71 @@ const ResubNotificationBanner: React.FC<ResubNotificationBannerProps> = ({
   const streakMonths = resubNotification.streak_tenure_months;
   const isGift = resubNotification.is_gift_subscription;
   const gifter = resubNotification.gifter_display_name;
+  // A one-month streak says nothing the months do not.
+  const hasStreak = streakMonths > 1;
+  const detail = isGift ? (gifter ? `from ${gifter}` : null) : plural(months, 'month');
+  const star = <Star size={14} weight="fill" className="flex-shrink-0 text-accent" />;
 
-  // Active mode: user is composing their resub message
+  // Armed: the next message sent carries the resub.
   if (isResubMode) {
     return (
-      <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-accent/10 rounded-lg border border-accent/30">
-        <ShareIcon size={16} className="text-accent flex-shrink-0" />
-        <span className="text-xs text-textSecondary flex-1">
-          Sharing{' '}
-          <span className="text-accent font-semibold">
-            {months}-month{months > 1 ? 's' : ''} sub
+      <div className={surface} style={BANNER_STYLE} role="status">
+        {star}
+        <span className="min-w-0 flex-1 flex flex-col">
+          <span className="truncate text-[13px] font-semibold text-textPrimary">
+            Sharing your {isGift ? 'gift sub' : 'resub'}
           </span>
-          {isGift && gifter && (
-            <span className="text-textTertiary"> (gifted by {gifter})</span>
-          )}
+          <span className="truncate text-[11.5px] text-textMuted">
+            {hasStreak && includeStreak
+              ? `Next message, with the ${streakMonths}-month streak`
+              : 'It sends with your next message'}
+          </span>
         </span>
-        
-        {/* Include streak checkbox */}
-        {streakMonths > 0 && (
-          <Tooltip content={includeStreak ? "Streak will be shown" : "Click to include streak"} side="top">
-          <button
-            onClick={onToggleStreak}
-            className="flex items-center gap-1.5 text-xs text-textSecondary hover:text-textPrimary transition-colors"
-          >
-            <CheckboxIcon checked={includeStreak} size={14} className="text-accent" />
-            <span>Streak ({streakMonths}mo)</span>
-          </button>
-          </Tooltip>
-        )}
-        
-        {/* Cancel button */}
         <Tooltip content="Cancel share" side="top">
-        <button 
-          onClick={onCancelShare} 
-          className="text-textSecondary hover:text-textPrimary transition-colors" 
-        >
-          <CloseIcon size={16} />
-        </button>
+          <button onClick={onCancelShare} className={quiet} aria-label="Cancel share">
+            <X size={13} />
+          </button>
         </Tooltip>
       </div>
     );
   }
 
-  // Collapsed mode: notification banner
   return (
-    <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-accent/20 hover:border-accent/40 transition-colors">
-      <CelebrationIcon size={16} className="text-accent flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <span className="text-xs text-textPrimary">
-          Share your{' '}
-          <span className="text-accent font-semibold">
-            {months}-month
-          </span>
-          {' '}sub anniversary!
+    <div className={surface} style={BANNER_STYLE}>
+      {star}
+      <span className="min-w-0 flex-1 flex flex-col">
+        <span className="truncate text-[13px]">
+          <span className="font-semibold text-textPrimary">{isGift ? 'Gift sub' : 'Resub'}</span>
+          {detail && <span className="text-textSecondary"> · {detail}</span>}
         </span>
-        {isGift && gifter && (
-          <span className="text-xs text-textTertiary ml-1">(Gift from {gifter})</span>
+        {hasStreak && (
+          <button
+            onClick={onToggleStreak}
+            aria-pressed={includeStreak}
+            className="mt-0.5 self-start flex items-center gap-1.5 text-[11.5px] text-textMuted hover:text-textSecondary transition-colors"
+          >
+            <span
+              className={`w-3 h-3 rounded-[3px] border flex items-center justify-center ${
+                includeStreak ? 'bg-accent border-accent' : 'border-textMuted'
+              }`}
+            >
+              {includeStreak && <Check size={8} weight="bold" className="text-background" />}
+            </span>
+            Include the {streakMonths}-month streak
+          </button>
         )}
-      </div>
-      
-      {/* Share button */}
+      </span>
       <button
         onClick={onActivateShare}
-        className="px-3 py-1 text-xs font-medium text-white bg-accent hover:bg-accent/80 rounded transition-colors"
+        className={`${ACCENT_BUTTON} flex-shrink-0 h-7 px-3.5 !text-[12px]`}
+        style={ACCENT_FILL}
       >
         Share
       </button>
-      
-      {/* Dismiss button */}
       <Tooltip content="Dismiss" side="top">
-      <button 
-        onClick={onDismiss} 
-        className="text-textTertiary hover:text-textSecondary transition-colors" 
-      >
-        <CloseIcon size={14} />
-      </button>
+        <button onClick={onDismiss} className={quiet} aria-label="Dismiss resub">
+          <X size={13} />
+        </button>
       </Tooltip>
     </div>
   );

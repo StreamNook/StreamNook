@@ -14,13 +14,15 @@
 // Both are one-shot: sharing consumes the token, so each strip disappears
 // afterwards rather than lingering as a dead control.
 //
-// They are the pinned banner's kin: the same static popover surface, a 12 px
-// glyph in the leading column, what it is in bold with the detail quieter
-// beside it, then the one action and a quiet dismiss.
+// They wear the chat header capsules' glaze (solid at Glassiness 0, as on the
+// desktop), a 12 px glyph in the leading column, what it is in bold with the
+// detail quieter beside it, then the one glazed accent action and a quiet
+// dismiss.
 import React, { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Star, X } from 'phosphor-react';
 import { WatchStreakFlame } from '../../components/icons/WatchStreakFlame';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from '../../components/ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
@@ -183,11 +185,10 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
   const showResub = !!resub && !isDismissed('resub');
 
   // One action, in the theme's accent; the dismiss is a step quieter.
-  const share =
-    'shrink-0 h-7 px-3 rounded-full bg-accent/15 text-accent text-[12px] font-semibold active:opacity-70 disabled:opacity-50';
+  const share = `${ACCENT_BUTTON} shrink-0 h-7 px-3.5 !text-[12px]`;
   const close =
     'shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted active:text-textSecondary';
-  const surface = 'sn-popover sn-popover--static flex items-center gap-2 pl-2.5 pr-1 py-1';
+  const surface = `${GLAZE_BANNER} flex items-center gap-2 pl-2.5 pr-1 py-1`;
 
   return (
     // They rise out of the composer's edge and fold back into it, so the chat
@@ -198,7 +199,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
       {showResub && resub && (
         <motion.div key="resub" {...FOLD} className="overflow-hidden">
           <div className="px-2.5 pt-1.5">
-            <div className={surface}>
+            <div className={surface} style={BANNER_STYLE}>
               <Star size={12} weight="fill" className="text-accent shrink-0" />
               <div className="min-w-0 flex-1 py-0.5">
                 <div className="text-[12px] truncate">
@@ -229,7 +230,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
                   </button>
                 )}
               </div>
-              <button onClick={() => void shareResub()} disabled={busy} className={share}>
+              <button onClick={() => void shareResub()} disabled={busy} className={share} style={ACCENT_FILL}>
                 Share
               </button>
               <button onClick={() => dismiss('resub')} className={close} aria-label="Dismiss resub">
@@ -243,7 +244,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
       {showStreak && streak && (
         <motion.div key="watch" {...FOLD} className="overflow-hidden">
           <div className="px-2.5 pt-1.5">
-            <div className={surface}>
+            <div className={surface} style={BANNER_STYLE}>
               {/* Twitch's streak flame, in the color the chat's streak rows use. */}
               <WatchStreakFlame size={14} className="shrink-0 text-highlight-orange" />
               <span className="min-w-0 flex-1 py-1 text-[12px] truncate">
@@ -255,7 +256,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
                   </span>
                 )}
               </span>
-              <button onClick={() => void shareWatchStreak()} disabled={busy} className={share}>
+              <button onClick={() => void shareWatchStreak()} disabled={busy} className={share} style={ACCENT_FILL}>
                 Share
               </button>
               <button onClick={() => dismiss('watch')} className={close} aria-label="Dismiss watch streak">
