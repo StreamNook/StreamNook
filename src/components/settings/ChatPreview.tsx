@@ -26,6 +26,9 @@ import type { BackendChatMessage, ScrollbarMarkKind } from '../../services/twitc
 import type { ChatDesignSettings } from '../../types';
 import { ModSlider } from '../chat/ModSlider';
 import { ModLineButtons } from '../chat/ModLineButtons';
+import { HoverModButtons } from '../chat/HoverModButtons';
+import { Copy, PushPin } from 'phosphor-react';
+import { formatDuration } from '../../utils/timeoutRamp';
 import { lineButtons, type LineButton } from '../chat/modLine';
 import { bindLineStrips, useLineArt, type LineArt } from '../chat/lineArt';
 import { useLineConfig, useModSliderSteps } from '../../services/moderation';
@@ -367,6 +370,66 @@ export const ModLinePreview = ({ stored }: { stored: ChatDesignSettings | undefi
           ))}
         </PreviewChat>
       </div>
+    </SettingPreview>
+  );
+};
+
+/** Sample chat whose middle line shows the hover buttons as chat draws them
+ *  under the pointer (here at rest, so they can be seen): the real Ban, Delete
+ *  and quick timeout, the other lengths one click away, then Pin and Copy. A
+ *  click only names the action; nothing is sent from a preview. */
+export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
+  const design = previewDesignOf(stored);
+  const [clicked, setClicked] = useState<string | null>(null);
+  const [lengthsOpen, setLengthsOpen] = useState(false);
+  const target = LOOTGOBLIN.name;
+  const dockButton = 'p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors';
+  return (
+    <SettingPreview
+      caption={
+        clicked
+          ? `${clicked}; nothing is sent from the preview`
+          : `the buttons that show in the corner of the message under your pointer`
+      }
+    >
+      <PreviewChat design={design}>
+        <Row>
+          <PreviewLine design={design} who={PIXELFOX} text="that clutch was unreal" minutesAgo={3} first />
+        </Row>
+        <Row>
+          <div className="relative isolate bg-glass">
+            <PreviewLine design={design} who={LOOTGOBLIN} text="free subs at the link in my bio" minutesAgo={2} />
+            {/* The chat row's cluster (ChatMessage), shown at rest. */}
+            <div
+              className="absolute top-px right-2 z-[50] flex items-center gap-0.5 p-0.5 rounded-lg backdrop-blur-md border border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.4)]"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}
+            >
+              <HoverModButtons
+                provider="twitch"
+                targetName={target}
+                canPunish
+                canDelete
+                lengthsOpen={lengthsOpen}
+                onLengthsOpen={setLengthsOpen}
+                onBan={(seconds) =>
+                  setClicked(seconds == null ? `ban ${target}` : `time out ${target} for ${formatDuration(seconds)}`)
+                }
+                onDelete={() => setClicked(`delete ${target}'s message`)}
+              />
+              <div className="mx-0.5 h-4 w-px bg-white/10" />
+              <button type="button" aria-label="Pin message" onClick={() => setClicked('pin the message')} className={dockButton}>
+                <PushPin size={14} weight="bold" />
+              </button>
+              <button type="button" aria-label="Copy message" onClick={() => setClicked('copy the message')} className={dockButton}>
+                <Copy size={14} weight="bold" />
+              </button>
+            </div>
+          </div>
+        </Row>
+        <Row>
+          <PreviewLine design={design} who={MOSSY} text="gg, that boss had no chance" minutesAgo={1} />
+        </Row>
+      </PreviewChat>
     </SettingPreview>
   );
 };

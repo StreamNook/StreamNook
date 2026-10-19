@@ -380,9 +380,10 @@ import { BackendChatMessage } from '../services/twitchChat';
 import { SevenTvAvatar } from './SevenTvAvatar';
 
 import { Logger } from '../utils/logger';
-import { moderateWithToast, useModTimeoutSteps, type ModRequest } from '../services/moderation';
-import { CaretDown, Clock, Copy, Prohibit, PushPin, PushPinSlash, Trash, X } from 'phosphor-react';
+import { moderateWithToast, type ModRequest } from '../services/moderation';
+import { Copy, PushPin, PushPinSlash } from 'phosphor-react';
 import { ModSlider } from './chat/ModSlider';
+import { HoverModButtons } from './chat/HoverModButtons';
 import { ModLineButtons } from './chat/ModLineButtons';
 import type { LineButton } from './chat/modLine';
 import { WatchStreakFlame } from './icons/WatchStreakFlame';
@@ -743,33 +744,6 @@ function UsernameWithCosmetics({
         </span>
       </Tooltip>
     </span>
-  );
-}
-
-/** The hover dock's timeout lengths: the viewer's durations as Rust says this
- *  platform applies them (the Ban that ends Rust's list has its own button).
- *  Its own component so only a row whose lengths are open asks for them. */
-function DockTimeoutPresets({ provider, onPick }: { provider: string; onPick: (seconds: number, withReason: boolean) => void }) {
-  const steps = useModTimeoutSteps(provider, true);
-  return (
-    <>
-      {steps?.map((step) =>
-        step.action !== 'timeout' || step.seconds == null ? null : (
-          <button
-            key={step.seconds}
-            aria-label={`Time out for ${step.label}`}
-            className="h-[22px] rounded-md px-1.5 text-[11px] font-semibold leading-none text-white/70 hover:text-warning hover:bg-warning/20 transition-colors"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (step.seconds != null) onPick(step.seconds, e.shiftKey);
-            }}
-          >
-            {step.label}
-          </button>
-        ),
-      )}
-    </>
   );
 }
 
@@ -3742,89 +3716,26 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           // show through; fully opaque at 0% glassiness.
           style={{ backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}
         >
-          {dockOffered && (timeoutLengthsOpen ? (
-            <>
-              <DockTimeoutPresets
-                provider={parsed.provider ?? 'twitch'}
-                onPick={(seconds, withReason) => {
-                  setTimeoutLengthsOpen(false);
-                  if (withReason) { prefillModCommand(seconds); return; }
-                  void modBan(seconds);
-                }}
-              />
-              <Tooltip content="Close lengths" side="top">
-                <button
-                  aria-label="Close lengths"
-                  onClick={(e) => { e.preventDefault(); setTimeoutLengthsOpen(false); }}
-                  className="flex h-[22px] w-4 items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
-                >
-                  <X size={10} weight="bold" />
-                </button>
-              </Tooltip>
-            </>
-          ) : (
-            <>
-              {/* Ban and timeouts only where they can land: not on your own
-                  message, the owner's, or another mod's unless it is your
-                  channel. Delete works on any message you moderate. */}
-              {canActOnChatter && (
-                <Tooltip content={`Ban ${modTarget().targetName}. Shift-click to add a reason.`} side="top">
-                  <button
-                    aria-label={`Ban ${modTarget().targetName}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      if (e.shiftKey) { prefillModCommand(null); return; }
-                      void modBan(null);
-                    }}
-                    className="p-1 rounded-md text-white/50 hover:text-error hover:bg-error/15 transition-colors"
-                  >
-                    <Prohibit size={14} weight="bold" />
-                  </button>
-                </Tooltip>
-              )}
-              {thisMessageId && (
-                <Tooltip content="Delete this message" side="top">
-                  <button
-                    aria-label="Delete this message"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      void modDelete(thisMessageId);
-                    }}
-                    className="p-1 rounded-md text-white/50 hover:text-error hover:bg-error/15 transition-colors"
-                  >
-                    <Trash size={14} weight="bold" />
-                  </button>
-                </Tooltip>
-              )}
-              {canActOnChatter && (
-              <>
-              <Tooltip content={`Time out ${modTarget().targetName} for 10m. Shift-click to add a reason.`} side="top">
-                <button
-                  aria-label={`Time out ${modTarget().targetName} for 10m`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    if (e.shiftKey) { prefillModCommand(600); return; }
-                    void modBan(600);
-                  }}
-                  className="flex h-[22px] items-center gap-1 rounded-md px-1 text-[11px] font-semibold leading-none text-white/50 hover:text-warning hover:bg-warning/20 transition-colors"
-                >
-                  <Clock size={14} weight="bold" />
-                  10m
-                </button>
-              </Tooltip>
-              <Tooltip content="Other lengths" side="top">
-                <button
-                  aria-label="Other timeout lengths"
-                  onClick={(e) => { e.preventDefault(); setTimeoutLengthsOpen(true); }}
-                  className="flex h-[22px] w-4 items-center justify-center rounded-md text-white/50 hover:text-warning hover:bg-warning/20 transition-colors"
-                >
-                  <CaretDown size={10} weight="bold" />
-                </button>
-              </Tooltip>
-              </>
-              )}
-            </>
-          ))}
+          {dockOffered && (
+            <HoverModButtons
+              provider={parsed.provider ?? 'twitch'}
+              targetName={modTarget().targetName ?? parsed.username}
+              canPunish={canActOnChatter}
+              canDelete={!!thisMessageId}
+              lengthsOpen={timeoutLengthsOpen}
+              onLengthsOpen={setTimeoutLengthsOpen}
+              onBan={(seconds, withReason) => {
+                if (withReason) {
+                  prefillModCommand(seconds);
+                  return;
+                }
+                void modBan(seconds);
+              }}
+              onDelete={() => {
+                if (thisMessageId) void modDelete(thisMessageId);
+              }}
+            />
+          )}
           {dockOffered && (onMessageCopy || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-white/10" />}
           {showInlinePin && broadcasterId && thisMessageId && parsed.provider === 'twitch' && (
             <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="top">

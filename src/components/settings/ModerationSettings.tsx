@@ -7,7 +7,7 @@ import { MOD_LOG_CATEGORIES, MOD_LOG_STYLES, highlightContainerStyle } from '../
 import { Tooltip } from '../ui/Tooltip';
 import { connectModRoomConsent, clearModeratedCache, loadModeratedChannelIds } from '../../services/modRoomService';
 import { useSettingDefault, useSettingReset } from './settingReset';
-import { ModLinePreview, ModSliderPreview } from './ChatPreview';
+import { ModHoverPreview, ModLinePreview, ModSliderPreview } from './ChatPreview';
 import { HoverTimeoutsEditor, ModSliderStepsEditor } from './ModSliderSteps';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -230,14 +230,17 @@ const ModerationSettings = () => {
           control={<Toggle enabled={hoverButtons} onChange={() => writeModGestures(modEdge, !hoverButtons)} />}
         >
           {hoverButtons && (
-            <SubControls>
-              <SubControl
-                title="Timeout lengths"
-                stacked
-                onReset={resetFor('moderation.timeout_presets')}
-                control={<HoverTimeoutsEditor />}
-              />
-            </SubControls>
+            <>
+              <ModHoverPreview stored={cd} />
+              <SubControls>
+                <SubControl
+                  title="Timeout lengths"
+                  stacked
+                  onReset={resetFor('moderation.timeout_presets')}
+                  control={<HoverTimeoutsEditor />}
+                />
+              </SubControls>
+            </>
           )}
         </SettingsRow>
       </SettingsSection>
