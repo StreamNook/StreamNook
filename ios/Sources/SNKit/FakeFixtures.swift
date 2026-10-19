@@ -67,7 +67,7 @@ public final class FakeFixtures: Sendable {
             state.withLock { $0.signedIn = false }
             return "null"
         case "is_drops_authenticated":
-            return "false"
+            return rewards.connected ? "true" : "false"
         case "refresh_home_section", "set_home_extra_channels":
             return "null"
         case "get_home_snapshot":

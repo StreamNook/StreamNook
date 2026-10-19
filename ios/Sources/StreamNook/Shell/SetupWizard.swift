@@ -16,6 +16,8 @@ struct SetupWizard: View {
     enum Page: Int, CaseIterable { case welcome, accounts, drops, done }
 
     private var signedIn: Bool { model.signedIn }
+    private var rewards: RewardsStore { model.rewards }
+    private var dropsConnected: Bool { rewards.drops?.connected == true }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +51,11 @@ struct SetupWizard: View {
             footer
         }
         .background { Wash() }
+        .task {
+            rewards.listen(toasts: model.toasts)
+            await rewards.load(refresh: false)
+        }
+        .onChange(of: model.host.sheet == nil) { _, closed in if closed { rewards.sheetClosed() } }
         .onChange(of: model.nav.setupPage, initial: true) { _, asked in
             if let asked { go(to: asked) }
         }
@@ -87,17 +94,14 @@ struct SetupWizard: View {
                      text: "Sign in to track Twitch Drops, watch your inventory, and auto-claim rewards.") {
                 Image(systemName: Symbol.gift).font(.system(size: 48)).foregroundStyle(SN.accent)
             } extra: {
-                Button("Sign in for Drops") {}
-                    .buttonStyle(.snSecondary)
-                    .frame(maxWidth: 320)
-                    .disabled(true)
+                dropsAction
             }
         case .done:
             PageBody(title: "You're all set", text: "StreamNook is ready. Pick a stream and dive in.") {
                 PenroseMark(width: 64)
             } extra: {
                 VStack(spacing: 0) {
-                    summary("Drops sign-in", done: false)
+                    summary("Drops sign-in", done: dropsConnected)
                     Divider().overlay(SN.borderSubtle)
                     summary("Sign-in", mark: .twitch, done: signedIn)
                     Divider().overlay(SN.borderSubtle)
@@ -105,6 +109,41 @@ struct SetupWizard: View {
                 }
                 .snPanel()
                 .frame(maxWidth: 320)
+            }
+        }
+    }
+
+    /// Drops sign-in, the same as the Rewards tab's: the core opens Twitch's grant in the web
+    /// sheet and announces the outcome. Connected, the page says so instead.
+    @ViewBuilder
+    private var dropsAction: some View {
+        if dropsConnected {
+            Label("Drops connected", systemImage: Symbol.checkCircle)
+                .font(.snBody)
+                .foregroundStyle(SN.success)
+                .frame(minHeight: 50)
+        } else {
+            VStack(spacing: 10) {
+                Button { Task { await rewards.connect() } } label: {
+                    HStack(spacing: 10) {
+                        if rewards.connecting {
+                            ProgressView()
+                            Text("Waiting for Twitch")
+                        } else {
+                            Text("Sign in for Drops")
+                        }
+                    }
+                }
+                .buttonStyle(.snSecondary)
+                .frame(maxWidth: 320)
+                .disabled(rewards.connecting || !model.started)
+                if let error = rewards.connectError {
+                    Text(error)
+                        .font(.snCaption)
+                        .foregroundStyle(SN.textMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
             }
         }
     }
