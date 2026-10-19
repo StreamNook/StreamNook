@@ -1733,6 +1733,10 @@ pub fn run() {
             #[cfg(desktop)]
             commands::notification_mirror::test_system_notification,
             #[cfg(desktop)]
+            commands::notification_mirror::system_notification_permission,
+            #[cfg(desktop)]
+            commands::notification_mirror::open_system_notification_settings,
+            #[cfg(desktop)]
             services::points_notify::test_points_notification,
             #[cfg(desktop)]
             commands::notification_mirror::take_notice_action,

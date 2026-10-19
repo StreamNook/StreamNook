@@ -1,8 +1,9 @@
-// The alert types this phone sends, as Rust lists them (services/alert_types.rs,
+// The alert types this build sends, as Rust lists them (services/alert_types.rs,
 // `get_alert_types`): the Notifications page's "Notify me about" rows and the
 // setup wizard's Notifications step both draw from it, in its order and with
-// its words, so the two phones list the same thing. A type this build cannot
-// send is simply not in the list.
+// its words, so desktop and the two phones list the same thing. A type this
+// build cannot send is simply not in the list. Desktop's Settings and setup
+// read it from here too.
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../utils/logger';
@@ -10,7 +11,7 @@ import type { LiveNotificationSettings } from '../types';
 
 /** Mirrors Rust `alert_types::AlertType`. */
 export interface AlertType {
-  /** `live`, `mentions`, `drops`, `badges`. */
+  /** `live`, `mentions`, `drops`, `badges`, and on desktop `whispers`, `updates` and the rest. */
   id: string;
   title: string;
   detail: string;
