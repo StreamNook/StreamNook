@@ -73,6 +73,8 @@ const OUTCOME_OK: u8 = 1;
 const OUTCOME_REFUSED: u8 = 2;
 const OUTCOME_FAILED: u8 = 3;
 const OUTCOME_SKIPPED: u8 = 4;
+const OUTCOME_NOT_LIVE: u8 = 5;
+const OUTCOME_NO_LOOKUP: u8 = 6;
 
 /// True when `outcome` differs from the last one stored in `slot`.
 fn changed(slot: &AtomicU8, outcome: u8) -> bool {
@@ -149,7 +151,10 @@ impl WatchHeartbeatService {
     /// Player playback state: true on playing, false on pause. Heartbeats
     /// only happen while true.
     pub fn set_playing(&self, playing: bool) {
-        self.playing.store(playing, Ordering::SeqCst);
+        // Logged on each flip: watching earns nothing while this is false.
+        if self.playing.swap(playing, Ordering::SeqCst) != playing {
+            info!("[Heartbeat] main player playing={playing}");
+        }
     }
 
     /// The channel on screen while it plays, which segment traffic follows.
@@ -193,6 +198,9 @@ impl WatchHeartbeatService {
                 Ok(None) => {
                     // Channel is not live (offline, VOD, or ended). Nothing
                     // to report; re-check on the next stale window.
+                    if changed(&self.drops_outcome, OUTCOME_NOT_LIVE) {
+                        info!("[Heartbeat] {} not live per GetStreamInfo; nothing to report", target.login);
+                    }
                     target.broadcast_id = None;
                     target.broadcast_checked_at = Some(Instant::now());
                 }
@@ -204,7 +212,11 @@ impl WatchHeartbeatService {
                     // extend that window indefinitely. On a phone connection
                     // this is a likely branch, not an exotic one. Leaving the
                     // mark alone retries on the next tick instead.
-                    debug!("[Heartbeat] stream info fetch failed, retrying next tick: {e}");
+                    if changed(&self.drops_outcome, OUTCOME_NO_LOOKUP) {
+                        warn!("[Heartbeat] stream info for {} failed, retrying each tick: {e}", target.login);
+                    } else {
+                        debug!("[Heartbeat] stream info fetch failed, retrying next tick: {e}");
+                    }
                 }
             }
             // Write back the refreshed snapshot unless the target moved on.

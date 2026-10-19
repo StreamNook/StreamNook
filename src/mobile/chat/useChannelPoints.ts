@@ -14,11 +14,11 @@
 // failure mode: the composer just does not show a points button rather than
 // showing a broken one.
 //
-// The bonus chest is still collected HERE when auto-collect is on. Rust's own
-// collector only takes chests on channels the watch session registered as
-// active, which the phone's player does not do, so without this every chest
-// on the phone would expire. Rust turns a second claim on the same chest away,
-// so this and Rust can never collect one twice.
+// The bonus chest on the stream being watched is Rust's to collect
+// (services/watched_chest.rs: watch_start registers the channel, and the
+// points socket or the minute poll offers each chest). This only shows a chest
+// still waiting, on a room the player is not on or with auto-collect off, and
+// collects it on a tap through the same Rust claim, like the iPhone wallet.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -32,7 +32,7 @@ export interface ChannelPointsState {
   name: string | null;
   /** The channel's custom points icon; null means render the default glyph. */
   iconUrl: string | null;
-  /** A chest waiting to be collected, when auto-collect is turned off. */
+  /** A chest waiting to be collected: auto-collect is off, or this room is not the one playing. */
   availableClaimId: string | null;
   /** The bits face, when the channel has bits on. */
   bits: ChannelBitsFace | null;
@@ -59,7 +59,6 @@ export function useChannelPoints(
     };
   }, [login, channelId]);
 
-  const autoClaim = useAppStore((s) => s.settings.auto_claim_points_watching ?? true);
   const chestOnly = useAppStore((s) => s.settings.chat_input?.wallet_gains === 'chest');
   const points = state?.points?.enabled ? state.points : null;
   const bits = state?.bits?.enabled ? state.bits : null;
@@ -94,11 +93,7 @@ export function useChannelPoints(
     [login, channelId],
   );
 
-  // Auto-collect: the chest Rust's poll (or the socket) just reported.
   const claimId = points?.available_claim_id ?? null;
-  useEffect(() => {
-    if (claimId && autoClaim) void claim(claimId);
-  }, [claimId, autoClaim, claim]);
 
   const refresh = useCallback(() => {
     if (login) void refreshChannelState(login, 'points');
@@ -112,7 +107,7 @@ export function useChannelPoints(
     balance: points?.balance ?? null,
     name: points?.name ?? null,
     iconUrl: points?.icon_url ?? null,
-    availableClaimId: autoClaim ? null : claimId,
+    availableClaimId: claimId,
     bits,
     gain,
     clearGain,
