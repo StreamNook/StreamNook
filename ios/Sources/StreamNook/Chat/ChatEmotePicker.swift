@@ -2,9 +2,11 @@ import SNKit
 import SwiftUI
 import UIKit
 
-/// What the picker shows: the selected tab, the search, and the core's answer for them
-/// (`emote_picker`: tabs with counts, sections, each cell's flags). Lives in the composer's
-/// model, so the tab, the search and the answer survive closing and opening the picker.
+/// What the picker shows: the selected tab and the core's answer for it (`emote_picker`: tabs
+/// with counts, sections, each cell's flags). Typing searches every source at once: the core's
+/// ranked search (`match_emote_tokens`, picker mode) with the emoji after it, an All tab, and
+/// the other tabs narrowing the results to theirs. Lives in the composer's model, so the tab,
+/// the search and the answers survive closing and opening the picker.
 @Observable @MainActor
 final class EmotePickerModel {
     /// The 7TV size thumbnails ask for: the smallest that covers a 28 pt emote on this screen.
@@ -13,9 +15,24 @@ final class EmotePickerModel {
     let session: ChatSession
     private(set) var tab = PickerTabs.defaultTab(provider: "twitch")
     var query = "" {
-        didSet { if query != oldValue { reload(debounce: true) } }
+        didSet {
+            guard query != oldValue else { return }
+            if Self.trim(oldValue).isEmpty, searching { scope = PickerTabs.searchScope(from: tab) }
+            if !searching {
+                search = nil
+                emojiMatches = []
+            }
+            reload(debounce: true)
+        }
     }
     private(set) var answer: PickerAnswer?
+    /// While searching: the results' tab (`all`, `favorites`, `emoji` or a source).
+    private(set) var scope = "all"
+    /// The core's ranked search. The last answer stays on screen until the next one lands, so
+    /// narrowing a search never flickers.
+    private(set) var search: PickerSearch?
+    /// Every emoji the search matches.
+    private(set) var emojiMatches: [String] = []
     private(set) var loading = false
     private(set) var emoji: EmojiCatalog?
     /// Bumped when the grid should scroll back to the top (a new tab or search).
@@ -33,6 +50,27 @@ final class EmotePickerModel {
         PickerTabs.order(coreTabs: answer?.tabs.map(\.id) ?? ["favorites", "twitch", "bttv", "7tv", "ffz"], gif: false)
     }
 
+    var trimmedQuery: String { Self.trim(query) }
+    var searching: Bool { !trimmedQuery.isEmpty }
+
+    /// The tab row: All leads it while searching.
+    var visibleTabs: [String] { searching ? PickerTabs.searchOrder(tabs) : tabs }
+
+    /// The highlighted tab: the results' scope while searching, else the selected tab.
+    var activeTab: String { searching ? scope : tab }
+
+    /// The emotes the search shows in its scope, best first.
+    var searchCells: [PickerCell] { search?.cells(in: scope) ?? [] }
+
+    /// The emoji the search shows: a first few after the emotes under All, every one under Emoji.
+    var searchEmoji: [String] {
+        switch scope {
+        case "all": return Array(emojiMatches.prefix(PickerSearch.emojiInAll))
+        case "emoji": return emojiMatches
+        default: return []
+        }
+    }
+
     /// The selected tab's sections, once the core has answered for it.
     var sections: [PickerSection] {
         guard let answer, answer.tab == tab else { return [] }
@@ -43,8 +81,13 @@ final class EmotePickerModel {
         tab != "emoji" && (answer == nil || answer?.tab != tab || answer?.ready == false) && loading
     }
 
+    /// A tab's number: its hits while searching, else what it holds (Emoji shows none).
     func count(_ id: String) -> Int? {
-        id == "emoji" ? nil : answer?.count(id)
+        if searching {
+            if id == "emoji" { return emojiMatches.count }
+            return search?.count(id, emojiHits: emojiMatches.count)
+        }
+        return id == "emoji" ? nil : answer?.count(id)
     }
 
     func setOpen(_ on: Bool) {
@@ -63,6 +106,15 @@ final class EmotePickerModel {
         reload(debounce: false)
     }
 
+    /// A tab press: narrows the results while searching, else selects the tab. Clearing the
+    /// search comes back to the tab selected before it.
+    func pick(_ id: String) {
+        guard searching else { return select(id) }
+        guard id != scope else { return }
+        scope = id
+        resetToken += 1
+    }
+
     func reload(debounce: Bool) {
         loadTask?.cancel()
         resetToken += debounce ? 1 : 0
@@ -73,20 +125,27 @@ final class EmotePickerModel {
         }
     }
 
+    private static func trim(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func load() async {
-        if tab == "emoji", emoji == nil { emoji = EmojiCatalog.bundled() }
+        if tab == "emoji" || searching, emoji == nil { emoji = EmojiCatalog.bundled() }
+        if searching, answer != nil { return await loadSearch() }
         let core = session.core
         let args: [String: Any?] = [
             "provider": session.provider, "channel": session.login, "channelId": session.roomID,
-            "tab": tab == "emoji" ? nil : tab, "query": query, "tier": Self.tier,
+            "tab": tab == "emoji" ? nil : tab, "query": "", "tier": Self.tier,
         ]
         loading = true
         defer { loading = false }
         guard let first = try? await core.invoke("emote_picker", args: args, as: PickerAnswer.self),
               !Task.isCancelled else { return }
         answer = first
+        // Opened with a search kept from before: the tab row is known now, so search.
+        if searching { return await loadSearch() }
         // A Kick room's set is read by its slug inside the same answer.
-        if !first.ready, query.isEmpty, !session.isKick {
+        if !first.ready, !session.isKick {
             // The room's emotes are not in the core yet; ask it to fetch them, then ask again.
             _ = try? await core.invoke("fetch_channel_emotes", args: [
                 "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier,
@@ -95,6 +154,32 @@ final class EmotePickerModel {
                 answer = again
             }
         }
+    }
+
+    /// The search across every source: the core ranks the emotes as the desktop menu's search
+    /// does, and the emoji come from the same catalog as the desktop's.
+    private func loadSearch() async {
+        let typed = trimmedQuery
+        emojiMatches = emoji?.matches(typed) ?? []
+        let core = session.core
+        let args: [String: Any?] = [
+            "provider": session.provider, "channel": session.login, "channelId": session.roomID,
+            "query": typed, "profile": "search", "limit": PickerSearch.limit, "picker": true, "tier": Self.tier,
+        ]
+        loading = true
+        defer { loading = false }
+        guard var found = try? await core.invoke("match_emote_tokens", args: args, as: PickerSearch.self),
+              !Task.isCancelled else { return }
+        if !found.ready, session.provider == "twitch" {
+            // The room's emotes are not in the core yet; ask it to fetch them, then ask again.
+            _ = try? await core.invoke("fetch_channel_emotes", args: [
+                "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier,
+            ])
+            guard let again = try? await core.invoke("match_emote_tokens", args: args, as: PickerSearch.self),
+                  !Task.isCancelled else { return }
+            found = again
+        }
+        search = found
     }
 
     /// Adds or removes a favorite and says so.
@@ -157,15 +242,15 @@ struct ChatEmotePicker: View {
 
     private var tabRow: some View {
         HStack(spacing: 4) {
-            ForEach(picker.tabs, id: \.self) { id in
-                let active = picker.tab == id
+            ForEach(picker.visibleTabs, id: \.self) { id in
+                let active = picker.activeTab == id
                 Button {
-                    picker.select(id)
+                    picker.pick(id)
                 } label: {
                     VStack(spacing: 2) {
                         tabLabel(id, active: active)
                             .frame(height: 16)
-                        Text(picker.count(id).map { "\($0)" } ?? " ")
+                        Text(picker.count(id).map(PickerTabs.countLabel) ?? " ")
                             .font(.sn(10).monospacedDigit())
                             .foregroundStyle(active ? Color.white : ComposerInk.quiet)
                     }
@@ -184,6 +269,10 @@ struct ChatEmotePicker: View {
 
     @ViewBuilder private func tabLabel(_ id: String, active: Bool) -> some View {
         switch id {
+        case "all":
+            Text("All")
+                .font(.sn(12, 600))
+                .foregroundStyle(active ? Color.white : ComposerInk.quiet)
         case "favorites":
             // A pointed shape needs a point more to look the size of the logos beside it.
             Image(systemName: "star.fill")
@@ -212,7 +301,9 @@ struct ChatEmotePicker: View {
     }
 
     @ViewBuilder private var grid: some View {
-        if picker.tab == "emoji" {
+        if picker.searching {
+            searchResults
+        } else if picker.tab == "emoji" {
             emojiGrid
         } else if picker.sections.isEmpty {
             if picker.waiting || picker.answer == nil {
@@ -276,16 +367,7 @@ struct ChatEmotePicker: View {
                                 Section {
                                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 8), spacing: 4) {
                                         ForEach(category.emoji, id: \.self) { emoji in
-                                            Button {
-                                                model.insert(emoji)
-                                            } label: {
-                                                Text(emoji)
-                                                    .font(.system(size: 24))
-                                                    .padding(6)
-                                                    .contentShape(.rect)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .accessibilityLabel(picker.emoji?.keywords[emoji]?.first ?? emoji)
+                                            emojiButton(emoji)
                                         }
                                     }
                                     .padding(.horizontal, 4)
@@ -303,10 +385,95 @@ struct ChatEmotePicker: View {
         }
     }
 
+    private func emojiButton(_ emoji: String) -> some View {
+        Button {
+            model.insert(emoji)
+        } label: {
+            Text(emoji)
+                .font(.system(size: 24))
+                .padding(6)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(picker.emoji?.keywords[emoji]?.first ?? emoji)
+    }
+
+    /// The search across every source: one ranked grid, best match first, wide emotes taking
+    /// two or three cells, then the emoji. The tabs narrow it to one source.
+    @ViewBuilder private var searchResults: some View {
+        let cells = picker.searchCells
+        let emoji = picker.searchEmoji
+        if picker.search == nil, picker.scope != "emoji" {
+            centered("Searching...")
+        } else if cells.isEmpty, emoji.isEmpty {
+            centered(picker.scope == "emoji" ? "No emoji found" : "No emotes found for \u{201C}\(picker.trimmedQuery)\u{201D}")
+        } else {
+            GeometryReader { geo in
+                // Seven cells and six 8 pt gaps across, inside the grid's 4 pt sides.
+                let unit = max(0, (geo.size.width - 8 - 8 * CGFloat(SearchGrid.columns - 1)) / CGFloat(SearchGrid.columns))
+                ScrollViewReader { reader in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8, pinnedViews: [.sectionHeaders]) {
+                            if !cells.isEmpty {
+                                ForEach(Array(SearchGrid.lines(cells).enumerated()), id: \.offset) { _, line in
+                                    HStack(spacing: 8) {
+                                        ForEach(line, id: \.key) { cell in
+                                            EmoteCell(cell: cell, wide: cell.span > 1,
+                                                      animate: model.session.style.animatesEmotes) {
+                                                model.insert(cell.name)
+                                            } favorite: {
+                                                Task { model.show(await picker.toggleFavorite(cell)) }
+                                            }
+                                            .frame(width: unit * CGFloat(cell.span) + 8 * CGFloat(cell.span - 1))
+                                        }
+                                    }
+                                    .padding(.horizontal, 4)
+                                }
+                                if let total = picker.search?.cappedTotal(picker.scope) {
+                                    Text("Showing the best \(cells.count) of \(total). Keep typing to narrow it down.")
+                                        .font(.sn(10))
+                                        .foregroundStyle(ComposerInk.quiet)
+                                        .multilineTextAlignment(.center)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.top, 2)
+                                }
+                            }
+                            if !emoji.isEmpty {
+                                Section {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 8), spacing: 4) {
+                                        ForEach(emoji, id: \.self) { emojiButton($0) }
+                                    }
+                                    .padding(.horizontal, 4)
+                                    if picker.scope == "all", picker.emojiMatches.count > emoji.count {
+                                        Button("Show all \(picker.emojiMatches.count) emoji") { picker.pick("emoji") }
+                                            .font(.sn(11))
+                                            .foregroundStyle(SN.textSecondary)
+                                            .buttonStyle(.plain)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 4)
+                                    }
+                                } header: {
+                                    // Under All the emoji follow the emotes as their own block.
+                                    if picker.scope == "all" {
+                                        header("Emoji", count: picker.emojiMatches.count, mark: "emoji")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
+                        .id("top")
+                    }
+                    .mask(Self.edgeFade)
+                    .onChange(of: picker.resetToken) { _, _ in reader.scrollTo("top", anchor: .top) }
+                }
+            }
+        }
+    }
+
     /// What leads a section header: the provider's logo on a provider tab, a clock on Recently
     /// used, a star on the rest of Favorites.
-    @ViewBuilder private func headerMark(_ key: String) -> some View {
-        switch picker.tab {
+    @ViewBuilder private func headerMark(_ key: String, tab: String) -> some View {
+        switch tab {
         case "favorites":
             Image(systemName: key == "recent" ? "clock.fill" : "star.fill")
                 .font(.system(size: 9, weight: .bold))
@@ -314,13 +481,14 @@ struct ChatEmotePicker: View {
         case "emoji":
             EmptyView()
         default:
-            ProviderLogo(provider: picker.tab, size: 11, tinted: true)
+            ProviderLogo(provider: tab, size: 11, tinted: true)
         }
     }
 
-    private func header(_ title: String, count: Int?, key: String = "") -> some View {
+    /// `mark` is the tab whose mark leads the title (the selected tab when not given).
+    private func header(_ title: String, count: Int?, key: String = "", mark: String? = nil) -> some View {
         HStack(spacing: 5) {
-            headerMark(key)
+            headerMark(key, tab: mark ?? picker.tab)
             Text(title.uppercased()).foregroundStyle(SN.textPrimary)
             if let count { Text("(\(count))").opacity(0.5) }
             Spacer()
