@@ -24,6 +24,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5.2", features = [] }
 
 [dependencies]
+# The mention rule, shared with the standalone mention watcher.
+sn-mention-rule = { path = "crates/sn-mention-rule" }
 # `tauri` itself is declared per target below: the runtime differs on Linux
 # (CEF) and the feature set that picks the runtime cannot be expressed in one
 # line. Every other dependency is runtime-agnostic and stays here. The

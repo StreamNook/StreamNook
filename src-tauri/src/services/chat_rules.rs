@@ -25,6 +25,7 @@
 use crate::models::chat_layout::{BuiltInStamp, ChatMessage, HighlightStamp, ScrollbarMark};
 use crate::models::settings::Settings;
 use crate::services::mention_match::{find_mention, MatchOptions, MentionTarget, NameHit};
+use sn_mention_rule::judge::{is_known_bot, is_reply_to, KNOWN_BOTS};
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -222,53 +223,6 @@ fn cooldown_ms(secs: Option<f64>) -> u64 {
     }
 }
 
-/// Same list as src/utils/knownBots.ts. Keep the two in step.
-const KNOWN_BOTS: &[&str] = &[
-    "nightbot",
-    "streamelements",
-    "streamlabs",
-    "moobot",
-    "fossabot",
-    "wizebot",
-    "sery_bot",
-    "commanderroot",
-    "soundtrackbot",
-    "streamlootsbot",
-    "pretzelrocks",
-    "tangiabot",
-    "blerp",
-    "kofistreambot",
-    "own3d",
-    "botrixoficial",
-    "coebot",
-    "phantombot",
-    "thepositivebot",
-    "streamstickers",
-    "lattemotte",
-    "restreambot",
-    "supibot",
-    "anotherttvviewer",
-    "streamdatabase",
-    "streamdbbot",
-    "potatbotat",
-    "pajbot",
-    "titlechange_bot",
-    "buttsbot",
-    "snusbot",
-    "deepbot",
-    "ankhbot",
-    "vivbot",
-    "revlobot",
-    "dixperbro",
-    "botisimo",
-    "mikuia",
-    "wzbot",
-    "own3dpro_bot",
-    "playwithviewersbot",
-    "thepixelbot",
-    "cloudbot",
-    "9gag",
-];
 
 // ---------------------------------------------------------------------------
 // Compiled rules
@@ -1206,10 +1160,7 @@ impl ChatRules {
         // 1. Ignores. Own messages are exempt so hiding yourself can never
         //    eat your sends (same rule the JS gate had).
         if !is_own {
-            if rules.hide_bots
-                && (KNOWN_BOTS.contains(&facts.login.as_str())
-                    || KNOWN_BOTS.contains(&facts.display_lower.as_str()))
-            {
+            if rules.hide_bots && is_known_bot(&facts.login, &facts.display_lower) {
                 return Evaluation::dropped();
             }
             if !rules.hidden_global.is_empty()
@@ -1251,9 +1202,7 @@ impl ChatRules {
         let mentioned = name_hit.is_some();
         let reply_to_me = own
             .as_ref()
-            .map(|(_, id)| {
-                facts.twitch && !id.is_empty() && !is_own && facts.reply_parent_user_id == id
-            })
+            .map(|(_, id)| facts.twitch && !is_own && is_reply_to(id, Some(facts.reply_parent_user_id)))
             .unwrap_or(false);
 
         // 3. Highlight rules: phrase, then user, then badge; first wins. A

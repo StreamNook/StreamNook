@@ -4289,57 +4289,6 @@ impl IrcService {
         }
     }
 
-    /// Byte index in `content` right after a leading "@<name>" mention plus its
-    /// following whitespace run, or 0 when no alternative matches. The boundary
-    /// is REQUIRED (whitespace or end of message): with multiple alternatives, a
-    /// short name that prefixes a longer one must never partially strip
-    /// ("@foobarbaz" with login "foobar"). Case-folded per char; alternatives
-    /// are tried in order (login before display name).
-    fn reply_mention_end(content: &str, alts: &[&str]) -> usize {
-        let Some(rest) = content.strip_prefix('@') else {
-            return 0;
-        };
-        for alt in alts {
-            if alt.is_empty() {
-                continue;
-            }
-            let mut rest_chars = rest.char_indices();
-            let mut alt_chars = alt.chars();
-            let matched_end = loop {
-                match alt_chars.next() {
-                    // Name fully matched: the end is the next char's byte index
-                    // (offset by the leading '@'), or end of message.
-                    None => {
-                        break Some(
-                            rest_chars
-                                .next()
-                                .map(|(i, _)| 1 + i)
-                                .unwrap_or(content.len()),
-                        )
-                    }
-                    Some(ac) => match rest_chars.next() {
-                        Some((_, rc)) if rc.to_lowercase().eq(ac.to_lowercase()) => {}
-                        _ => break None,
-                    },
-                }
-            };
-            let Some(end) = matched_end else {
-                continue;
-            };
-            let tail = &content[end..];
-            if tail.is_empty() {
-                return content.len();
-            }
-            if tail.starts_with(char::is_whitespace) {
-                // Consume the whole whitespace run (the old pattern's greedy \s+).
-                return end + (tail.len() - tail.trim_start().len());
-            }
-            // Boundary violated - the name only prefixes a longer word; try the
-            // next alternative.
-        }
-        0
-    }
-
     fn parse_message_segments(
         content: &str,
         twitch_emotes: &[EmotePos],
@@ -4748,14 +4697,10 @@ impl IrcService {
                 }
             }
 
-            let mut msg = result_msg;
-            // Check for ACTION wrapper: \x01ACTION message\x01
-            // Minimum valid: "\x01ACTION X\x01" = 10 chars (8 for header + 1 content + 1 closing)
-            if msg.len() >= 10 && msg.starts_with("\x01ACTION ") && msg.ends_with('\x01') {
-                is_action = true;
-                msg = msg[8..msg.len() - 1].to_string();
-            }
-            msg
+            // A /me arrives wrapped as \x01ACTION message\x01.
+            let (msg, action) = sn_mention_rule::normalize::unwrap_action(&result_msg);
+            is_action = action;
+            msg.to_string()
         } else {
             "".to_string()
         };
@@ -4907,36 +4852,14 @@ impl IrcService {
         let reply_parent_display_name = tag_map
             .get("reply-parent-display-name")
             .map(|s| s.to_string());
-        let (content_for_segments, stripped_codepoints) = {
-            let mut alts: Vec<&str> = Vec::new();
-            if let Some(ref login) = reply_parent_user_login {
-                if !login.is_empty() {
-                    alts.push(login);
-                }
-            }
-            if let Some(ref disp) = reply_parent_display_name {
-                if !disp.is_empty() {
-                    alts.push(disp);
-                }
-            }
-            if alts.is_empty() {
-                (content.clone(), 0usize)
-            } else {
-                let mention_end = Self::reply_mention_end(&content, &alts);
-                let rest = &content[mention_end..];
-                // Trim parity with the old regex path: whitespace is trimmed
-                // whether or not a mention matched (replies only).
-                let rest_no_lead = rest.trim_start();
-                // Emote positions are CODEPOINT indices (see char_to_byte in
-                // parse_message_segments), so the offset must count codepoints
-                // consumed from the FRONT - the old byte-length delta mis-shifted
-                // emotes whenever a localized display name was stripped, and
-                // wrongly counted trailing trim too.
-                let front_bytes = content.len() - rest_no_lead.len();
-                let front_codepoints = content[..front_bytes].chars().count();
-                (rest_no_lead.trim_end().to_string(), front_codepoints)
-            }
-        };
+        // Emote positions are CODEPOINT indices (see char_to_byte in
+        // parse_message_segments), so the strip reports how many codepoints it
+        // took from the front.
+        let (content_for_segments, stripped_codepoints) = sn_mention_rule::normalize::strip_reply_parent(
+            &content,
+            reply_parent_user_login.as_deref(),
+            reply_parent_display_name.as_deref(),
+        );
 
         // Also update emote positions if we stripped the @mention
         let emotes_adjusted = if stripped_codepoints > 0 {
@@ -6778,17 +6701,17 @@ mod tests {
     #[test]
     fn reply_mention_strip_boundaries() {
         // Exact name + space: mention and the whole whitespace run consumed.
-        assert_eq!(IrcService::reply_mention_end("@foo  hi", &["foo"]), 6);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foo  hi", &["foo"]), 6);
         // Name at end of message: everything consumed.
-        assert_eq!(IrcService::reply_mention_end("@foo", &["foo"]), 4);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foo", &["foo"]), 4);
         // Boundary REQUIRED: a name prefixing a longer word must not strip.
-        assert_eq!(IrcService::reply_mention_end("@foobarbaz hi", &["foobar"]), 0);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foobarbaz hi", &["foobar"]), 0);
         // Case-insensitive match.
-        assert_eq!(IrcService::reply_mention_end("@FoO hi", &["foo"]), 5);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@FoO hi", &["foo"]), 5);
         // Second alternative (display name) matches when login does not.
-        assert_eq!(IrcService::reply_mention_end("@ふー hi", &["foo", "ふー"]), 8);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@ふー hi", &["foo", "ふー"]), 8);
         // No leading @: untouched.
-        assert_eq!(IrcService::reply_mention_end("foo hi", &["foo"]), 0);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("foo hi", &["foo"]), 0);
     }
 
     #[test]
