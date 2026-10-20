@@ -17,6 +17,11 @@ final class EmotePickerModel {
     var query = "" {
         didSet {
             guard query != oldValue else { return }
+            // In GIFs the field searches GIPHY (trending with nothing typed), as on Android.
+            if section == .gifs {
+                searchGifs(debounce: true)
+                return
+            }
             if Self.trim(oldValue).isEmpty, searching { scope = PickerTabs.searchScope(from: tab) }
             if !searching {
                 search = nil
@@ -39,6 +44,21 @@ final class EmotePickerModel {
     private(set) var resetToken = 0
     private var open = false
     private var loadTask: Task<Void, Never>?
+
+    /// The bottom bar's sections: emotes, or Twitch chat GIFs.
+    enum Section { case emotes, gifs }
+    private(set) var section = Section.emotes
+    /// Twitch's answer about GIFs in this channel; nil (no GIFs section) until it answers, and
+    /// when the question failed (signed out, offline), as on Android.
+    private(set) var gifStatus: GifPickerStatus?
+    /// The results for `gifsKey`; nil while they load.
+    private(set) var gifs: [GifItem]?
+    private var gifsKey = ""
+    /// Why a search or a send did not work, under the search.
+    private(set) var gifNotice = ""
+    /// The GIF being sent; the others dim until it answers.
+    private(set) var sendingGif: String?
+    private var gifTask: Task<Void, Never>?
 
     init(session: ChatSession) {
         self.session = session
@@ -96,7 +116,80 @@ final class EmotePickerModel {
         // The emote disk cache works in bursts while the picker shows.
         let core = session.core
         Task { _ = try? await core.invoke("asset_cache_set_burst", args: ["active": on]) }
-        if on { reload(debounce: false) }
+        if on {
+            reload(debounce: false)
+            loadGifStatus()
+        }
+    }
+
+    // MARK: GIFs (the core's commands/gifs.rs, the same calls as Android's picker)
+
+    /// Asks once per open whether GIFs can be posted here: Twitch rooms with a known room.
+    private func loadGifStatus() {
+        guard session.provider == "twitch", let room = session.roomID else { return }
+        let core = session.core
+        Task { [weak self] in
+            let status = try? await core.invoke("get_gif_picker_status", args: ["channelId": room], as: GifPickerStatus.self)
+            self?.gifStatus = status
+        }
+    }
+
+    func pick(section next: Section) {
+        guard next != section else { return }
+        section = next
+        resetToken += 1
+        if next == .gifs { searchGifs(debounce: false) } else { reload(debounce: false) }
+    }
+
+    /// Trending with nothing typed, else a search 250 ms after the last key.
+    private func searchGifs(debounce: Bool) {
+        guard gifStatus?.canUse == true, let room = session.roomID else { return }
+        let typed = query
+        let key = "\(room)|\(typed)"
+        gifTask?.cancel()
+        let core = session.core
+        gifTask = Task { [weak self] in
+            if debounce, !typed.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
+            guard !Task.isCancelled else { return }
+            do {
+                let items = try await core.invoke("search_gifs", args: [
+                    "channelId": room, "query": typed.isEmpty ? nil : typed, "offset": 0,
+                ], as: [GifItem].self)
+                guard let self, !Task.isCancelled else { return }
+                self.gifs = items
+                self.gifsKey = key
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.gifs = []
+                self.gifsKey = key
+                self.gifNotice = "GIF search is unavailable right now."
+            }
+        }
+    }
+
+    /// The results for what is typed now; nil while they load.
+    var shownGifs: [GifItem]? {
+        guard let room = session.roomID, gifsKey == "\(room)|\(query)" else { return nil }
+        return gifs
+    }
+
+    /// Picking a GIF sends it, as Twitch's own picker does (a GIF has no text form to insert).
+    /// True when it went out.
+    func send(_ gif: GifItem) async -> Bool {
+        guard sendingGif == nil, let room = session.roomID else { return false }
+        sendingGif = gif.id
+        gifNotice = ""
+        defer { sendingGif = nil }
+        do {
+            let outcome = try await session.core.invoke("send_gif_message", args: [
+                "channelId": room, "gifId": gif.id, "gifUrl": gif.url, "searchTerm": query.isEmpty ? nil : query,
+            ], as: SendGifOutcome.self)
+            if outcome.sent { return true }
+            gifNotice = outcome.notSentLine
+        } catch {
+            gifNotice = "That GIF could not be sent."
+        }
+        return false
     }
 
     func select(_ id: String) {
@@ -220,7 +313,8 @@ struct ChatEmotePicker: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ComposerInk.quiet)
-                TextField("", text: $picker.query, prompt: Text("Search emotes...").foregroundStyle(ComposerInk.quiet))
+                TextField("", text: $picker.query,
+                          prompt: Text(picker.section == .gifs ? "Search GIFs..." : "Search emotes...").foregroundStyle(ComposerInk.quiet))
                     .font(.sn(13))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -229,9 +323,13 @@ struct ChatEmotePicker: View {
             .padding(.vertical, 7)
             .background(SN.surface, in: .rect(cornerRadius: 10))
             .simultaneousGesture(swipeDown)
-            tabRow
-                .simultaneousGesture(swipeDown)
-            grid
+            if picker.section == .emotes {
+                tabRow
+                    .simultaneousGesture(swipeDown)
+            }
+            if picker.section == .gifs { gifGrid } else { grid }
+            // Emotes and GIFs, as Android's bar: once Twitch has answered about GIFs here.
+            if picker.gifStatus != nil { sectionBar }
         }
         .padding(8)
         // In the keyboard's place: the composer sizes it; flat, with the hairline a keyboard has.
@@ -304,6 +402,118 @@ struct ChatEmotePicker: View {
         case "kick": return Color(red: 0.33, green: 0.98, blue: 0.09)
         default: return SN.accent
         }
+    }
+
+    /// The segmented bar at the bottom: one button per section, icon and label (Android's
+    /// MenuSwitcher).
+    private var sectionBar: some View {
+        HStack(spacing: 4) {
+            sectionButton(.emotes, label: "Emotes") {
+                Image(systemName: "face.smiling").font(.system(size: 13, weight: .medium))
+            }
+            sectionButton(.gifs, label: "GIFs") {
+                Text("GIF")
+                    .font(.system(size: 8.5, weight: .heavy))
+                    .tracking(0.4)
+                    .padding(.horizontal, 3)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1))
+            }
+        }
+        .padding(.top, 6)
+        .overlay(alignment: .top) { Rectangle().fill(SN.borderSubtle).frame(height: 1) }
+    }
+
+    private func sectionButton<Icon: View>(_ section: EmotePickerModel.Section, label: String,
+                                           @ViewBuilder icon: () -> Icon) -> some View {
+        let active = picker.section == section
+        return Button {
+            picker.pick(section: section)
+        } label: {
+            HStack(spacing: 6) {
+                icon()
+                Text(label).font(.sn(12, 600)).lineLimit(1)
+            }
+            .foregroundStyle(active ? SN.accent : SN.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(active ? Color.white.opacity(0.08) : .clear, in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    /// GIFs: why they cannot be posted here, or two columns of GIPHY results that send on a tap.
+    @ViewBuilder private var gifGrid: some View {
+        if let line = picker.gifStatus?.unavailableLine {
+            VStack(spacing: 6) {
+                Text(line).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                Text("GIFs other people post still show in your chat.").font(.sn(11)).foregroundStyle(ComposerInk.quiet)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, minHeight: 160)
+            .frame(maxHeight: .infinity, alignment: .top)
+        } else if let gifs = picker.shownGifs {
+            ScrollViewReader { reader in
+                ScrollView {
+                    VStack(spacing: 8) {
+                        if !picker.gifNotice.isEmpty {
+                            Text(picker.gifNotice).font(.sn(11)).foregroundStyle(ComposerInk.warning)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if gifs.isEmpty {
+                            centered("No GIFs found")
+                        } else {
+                            // Two columns at a fixed height: GIPHY art is landscape, and a steady
+                            // row height keeps the scroll still while previews stream in.
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                                ForEach(gifs) { gif in gifCell(gif) }
+                            }
+                        }
+                        Text("Powered by GIPHY. Picking a GIF posts it straight to chat.")
+                            .font(.sn(10))
+                            .foregroundStyle(ComposerInk.quiet)
+                            .padding(.top, 4)
+                    }
+                    .padding(.horizontal, 4)
+                    .id("top")
+                }
+                .mask(Self.edgeFade)
+                .onChange(of: picker.resetToken) { _, _ in reader.scrollTo("top", anchor: .top) }
+            }
+        } else {
+            centered("Loading GIFs...")
+        }
+    }
+
+    private func gifCell(_ gif: GifItem) -> some View {
+        let sending = picker.sendingGif == gif.id
+        return Button {
+            Task {
+                // Sent: the panel goes, as Android's does.
+                if await picker.send(gif) { onSwipeDown() }
+            }
+        } label: {
+            CosmeticImage(gif.previewURL, animate: model.session.style.animatesEmotes, fill: true, pointHeight: 96)
+                .frame(maxWidth: .infinity)
+                .frame(height: 96)
+                .clipped()
+                .background(Color.black.opacity(0.2))
+                .clipShape(.rect(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(SN.borderSubtle))
+                .overlay {
+                    if sending {
+                        Text("Sending...").font(.sn(11, 600)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black.opacity(0.6), in: .rect(cornerRadius: 6))
+                    }
+                }
+                .opacity(picker.sendingGif != nil && !sending ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(picker.sendingGif != nil)
+        .accessibilityLabel(gif.title.isEmpty ? "GIF" : gif.title)
     }
 
     @ViewBuilder private var grid: some View {
