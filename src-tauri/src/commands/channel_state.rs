@@ -28,6 +28,16 @@ pub async fn get_channel_state(login: String) -> Result<Option<channel_state::Ch
     Ok(channel_state::get(&login).await)
 }
 
+/// How the wallet button's split glyph lays out this channel's points art
+/// (`None`: Twitch's glyph), the Bits gem and the divider, measured from the art.
+#[tauri::command]
+pub async fn wallet_split_layout(
+    points_icon: Option<String>,
+    gem: String,
+) -> Result<crate::services::wallet_glyph::SplitLayout, String> {
+    Ok(crate::services::wallet_glyph::split_layout(points_icon.as_deref(), &gem).await)
+}
+
 /// Manual refresh of one section (`viewers`, `points`, `pinned`) after a user
 /// action that changes it (pin, claim, spend). The result arrives as an event.
 #[tauri::command]

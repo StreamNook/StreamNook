@@ -13,7 +13,7 @@
 // Channel comes in as a prop rather than being read off `currentStream`: with
 // several chat tabs open the composer must target the tab you are looking at,
 // which is not necessarily the stream playing.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
@@ -29,6 +29,7 @@ import { EmotePickerPanel, useSwappingSmiley } from '../../components/chat/Emote
 import { CheerBar } from '../../components/chat/CheerBar';
 import { useCheerDraft } from '../../stores/cheerPromptStore';
 import { WalletSheet } from '../../components/chat/ChannelWallet';
+import { SplitWalletGlyph, WalletChestGlyph } from '../../components/chat/SplitWalletGlyph';
 import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
@@ -281,7 +282,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const balanceAlways = useAppStore(
     (s) => s.settings.chat_input?.show_points_balance_inline === true && s.settings.chat_input?.hide_points_balance !== true,
   );
-  const shownBalance = balanceAlways && !pointsOpen ? (points.balance ?? walletBits?.balance ?? null) : null;
+  const shownBalances =
+    balanceAlways && !pointsOpen && !points.availableClaimId
+      ? [points.balance, walletBits?.balance ?? null].filter((n): n is number => n !== null)
+      : [];
+  // The channel's own points art, or Twitch's glyph.
+  const pointsArt = (size: number) =>
+    points.iconUrl ? (
+      <img src={points.iconUrl} alt="" style={{ width: size, height: size }} className="object-contain" draggable={false} />
+    ) : (
+      <ChannelPointsIcon size={size} />
+    );
   // One rewards read per channel while it has a points button, so the sheet's
   // first open paints Rust's list instead of waiting on Twitch.
   const hasPointsButton = !!channel && !!channelId && points.balance !== null;
@@ -727,7 +738,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 setPointsOpen((v) => !v);
               }}
               className={`relative shrink-0 h-9 flex items-center justify-center gap-1 active:opacity-70 ${
-                shownBalance !== null ? 'px-1.5' : 'w-9'
+                shownBalances.length ? 'px-1.5' : 'w-9'
               } ${pointsOpen ? 'text-accent' : 'text-textSecondary'}`}
               aria-label={pointsOpen ? 'Close the wallet' : 'Wallet'}
             >
@@ -770,12 +781,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   </motion.span>
                 )}
               </AnimatePresence>
-              {/* A chest waiting to be collected. Only ever shows with
-                  auto-collect turned off, since otherwise it is taken the moment
-                  it appears. Tapping the button collects it. */}
-              {points.availableClaimId && (
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-accent" />
-              )}
               {/* Two amber pulses on the icon itself.
                   Driven by `filter`, not by text colour, because this is an
                   `<img>` whenever the channel has its own points art and colour
@@ -807,38 +812,32 @@ const MobileChatInputImpl: React.FC<Props> = ({
               >
                 {pointsOpen ? (
                   <X size={19} weight="bold" />
+                ) : points.availableClaimId ? (
+                  // A chest waiting (auto-collect off, or a room the player is
+                  // not on): the button becomes the chest, like the desktop's.
+                  // Tapping it collects the chest.
+                  <span className="chest-attention flex">
+                    <WalletChestGlyph size={19} />
+                  </span>
                 ) : points.balance === null && walletBits?.gem_url ? (
                   // Bits only: Twitch's still gem leads.
                   <img src={walletBits.gem_url} alt="" className="w-[19px] h-[19px] object-contain" draggable={false} />
+                ) : walletBits?.gem_url ? (
+                  // Bits live here too: points and the gem share one split glyph.
+                  <SplitWalletGlyph points={pointsArt} pointsIcon={points.iconUrl} gemUrl={walletBits.gem_url} />
                 ) : (
-                  <span className="relative flex">
-                    {points.iconUrl ? (
-                      <img
-                        src={points.iconUrl}
-                        alt=""
-                        className="w-[19px] h-[19px] object-contain"
-                        draggable={false}
-                      />
-                    ) : (
-                      <ChannelPointsIcon size={19} />
-                    )}
-                    {/* Bits live here too: a small still gem says so. */}
-                    {walletBits?.gem_url && (
-                      <img
-                        src={walletBits.gem_url}
-                        alt=""
-                        className="absolute -bottom-0.5 -right-1 h-[9px] w-[9px] object-contain"
-                        draggable={false}
-                      />
-                    )}
-                  </span>
+                  pointsArt(19)
                 )}
               </motion.span>
-              {shownBalance !== null && (
-                <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap text-textPrimary">
-                  {formatShortCount(shownBalance)}
-                </span>
-              )}
+              {/* Points, then Bits, in the glyph's own order: the glyph is the key. */}
+              {shownBalances.map((balance, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span className="h-3 w-px bg-textSecondary/35" aria-hidden="true" />}
+                  <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap text-textPrimary">
+                    {formatShortCount(balance)}
+                  </span>
+                </Fragment>
+              ))}
             </button>
           )}
         </div>

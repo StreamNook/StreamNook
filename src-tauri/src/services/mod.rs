@@ -84,6 +84,7 @@ pub mod drop_words;
 pub mod drops_overview;
 pub mod drops_service;
 pub mod game_suggest;
+pub mod wallet_glyph;
 pub mod watched_chest;
 pub mod reward_drops;
 pub mod reward_redeem;
