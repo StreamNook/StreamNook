@@ -24,6 +24,9 @@ const target = { provider: 'twitch' as const, channel: 'xqc', channelId: '710929
 describe('emote fill menu', () => {
   it('asks the fill question for every fixture word, as typed', async () => {
     expect(fixture.words.length).toBeGreaterThan(0);
+    // One letter asks too: the full list starts at one character.
+    expect(fixture.words).toContain(fixture.oneLetter);
+    expect(fixture.oneLetter).toHaveLength(1);
     for (const word of fixture.words) {
       for (const typed of [word, `:${word}`]) {
         invoke.mockReset();

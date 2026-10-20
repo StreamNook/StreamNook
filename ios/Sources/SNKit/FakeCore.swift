@@ -303,18 +303,15 @@ public final class FakeCore: CoreBridge {
         // The fill menu is the core's search, Twitch first, as the viewer types.
         let fill = args["profile"] as? String == EmoteFill.profile
         let search = fill || args["profile"] as? String == "search"
-        // As the core does: a colon trigger is set aside, and a one-character word typed in
-        // passing matches only an emote of exactly that name.
+        // As the core does: a colon trigger is set aside, and one letter gets the full list.
         let bare = typed.hasPrefix(":") ? String(typed.dropFirst()) : typed
-        let exactOnly = (fill || args["typing"] as? Bool == true) && !bare.isEmpty && bare.count < 2
         let query = (fill ? bare : search || !typed.hasPrefix(":") ? typed : bare).lowercased()
         var rows: [[String: Any]] = []
         for provider in fill ? ["twitch", "7tv", "bttv", "ffz"] : ["7tv", "bttv", "ffz", "twitch"] {
             for emote in set[provider] ?? [] {
                 guard let name = emote["name"] as? String, let url = emote["url"] as? String else { continue }
                 let lower = name.lowercased()
-                let hit = exactOnly ? name == bare
-                    : query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
+                let hit = query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
                 guard hit else { continue }
                 var row: [String: Any] = [
                     "id": emote["id"] as? String ?? name, "name": name, "url": url, "provider": provider,

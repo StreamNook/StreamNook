@@ -88,7 +88,7 @@ test('a colon opening a word, then two characters, opens the emote list', () => 
   assert.deepEqual(emoteSearchTrigger('hi\n:Pog', 7), { anchor: 3, query: 'Pog' });
   // Only what is before the caret counts.
   assert.deepEqual(emoteSearchTrigger(':lo world', 3), { anchor: 0, query: 'lo' });
-  // One character opens it too; Rust then offers only an emote of exactly that name.
+  // One character opens it too, with Rust's full ranked list.
   assert.deepEqual(emoteSearchTrigger(':0', 2), { anchor: 0, query: '0' });
   assert.deepEqual(emoteSearchTrigger('hi :l', 5), { anchor: 3, query: 'l' });
 });

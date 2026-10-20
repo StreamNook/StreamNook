@@ -94,8 +94,7 @@ export async function matchEmotes(
   profile: EmoteMatchProfile,
   /** `picker`: the emote menu's search, which also lists FFZ subscriber
    *  effects this account cannot send (marked `locked`). `typing`: asked as
-   *  the viewer types (the phone strip, the colon list), not on Tab, so Rust
-   *  answers a one-character word with only an emote of exactly that name. */
+   *  the viewer types, not on Tab (Rust's `MIN_PREFIX_CHARS`, one letter). */
   options: { twitchFirst?: boolean; limit?: number; picker?: boolean; typing?: boolean } = {},
 ): Promise<EmoteMatchResult> {
   if (!target.channel) return EMPTY;

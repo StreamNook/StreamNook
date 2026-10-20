@@ -132,8 +132,8 @@ pub async fn match_emote_tokens(
     typing: Option<bool>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteMatchResult, String> {
-    // `typing`: asked as the viewer types (the fill menu), not on Tab, so a
-    // one-character word finds only an exact emote name.
+    // `typing`: asked as the viewer types (the fill menu), not on Tab; a word
+    // under `MIN_PREFIX_CHARS` finds only an exact emote name.
     let request = emote_match::Request::resolve(profile.as_deref(), order.as_deref(), limit, typing);
     let (profile, order, limit, typing) = (request.profile, request.order, request.limit, request.typing);
     let tier = render_tier(tier.as_deref());
@@ -264,7 +264,7 @@ pub async fn match_emote_tokens(
 
     // The cycle and the fill menu offer the room's recent chatters after the
     // emotes (provider `user`); a colon word names none (`chatter_rows`).
-    // A one-character word typed in passing names no chatter either.
+    // A word too short for the emote list names no chatter either.
     if request.chatters && !(typing && emote_match::is_short_word(&query)) {
         let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
         let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);

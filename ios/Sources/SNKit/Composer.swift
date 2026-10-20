@@ -64,8 +64,7 @@ public struct EmoteMatchResult: Decodable, Sendable {
 // MARK: Draft editing
 
 public enum ComposerText {
-    /// Any word asks: the core answers a one-character word with only an emote of exactly that
-    /// name ("0"), since a prefix list for it would be most of the set.
+    /// Any word asks: one letter gets the core's full fill list (Rust `MIN_PREFIX_CHARS`).
     public static let minimumSuggestLength = 1
 
     /// The run of non-space characters at the end of the draft (empty after a space).

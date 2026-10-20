@@ -11,7 +11,7 @@ import Testing
     }
 
     @Test func everyWordAsksAndTheCoreKeepsShortOnesExact() {
-        // "0" asks too: the core offers only an emote named exactly 0 (Rust `typing`).
+        // "0" asks too: one letter gets the core's full list (Rust `MIN_PREFIX_CHARS`).
         #expect(ComposerText.wantsSuggestions("0"))
         #expect(ComposerText.wantsSuggestions(":0"))
         #expect(ComposerText.wantsSuggestions("00"))
@@ -19,14 +19,14 @@ import Testing
         #expect(!ComposerText.wantsSuggestions(""))
     }
 
-    @Test func theFakeCoreKeepsOneCharacterWordsExactWhileTyping() throws {
+    @Test func theFakeCoreGivesOneLetterTheFullListWhileTyping() throws {
         let emotes = Data(#"{"7tv":[{"id":"a","name":"0","url":"u"},{"id":"b","name":"00","url":"u"},{"id":"c","name":"0head","url":"u"}]}"#.utf8)
         let names = { (query: String, typing: Bool) -> [String] in
             let answer = FakeCore.emoteMatches(emotes, args: ["query": query, "profile": "cycle", "typing": typing])
             return (answer["rows"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
         }
-        #expect(names("0", true) == ["0"])
-        #expect(names(":0", true) == ["0"])
+        #expect(names("0", true) == ["0", "00", "0head"])
+        #expect(names(":0", true) == ["0", "00", "0head"])
         #expect(names("00", true) == ["00"])
         #expect(names("0", false) == ["0", "00", "0head"])
     }

@@ -504,8 +504,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
   useEffect(() => {
     if (!word || !channel) return;
     const n = suggestSeq.next();
-    // The answer carries the room's recent chatters after the emotes. A
-    // one-character word gets only an emote of exactly that name ("0").
+    // The answer carries the room's recent chatters after the emotes. One
+    // letter is enough for the full list.
     void matchEmoteFill({ provider, channel, channelId }, word).then((res) => {
       if (!suggestSeq.isCurrent(n)) return;
       setAnswered({ word, items: rowsToTabCandidates(res.rows) });
