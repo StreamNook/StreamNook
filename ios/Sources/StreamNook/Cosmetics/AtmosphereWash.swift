@@ -69,6 +69,15 @@ final class AtmosphereWashLayer: CALayer {
         CATransaction.commit()
     }
 
+    /// Stops it and forgets what it showed, so the next `show` builds it again with its motion:
+    /// Core Animation drops a layer's animations once it leaves the window.
+    @MainActor
+    func stop() {
+        key = ""
+        for layer in [base, curtain1, curtain2, image, rim, edge, veil, coin] { layer.removeAllAnimations() }
+        image.stopAnimating()
+    }
+
     @MainActor
     private func showAtmosphere(_ look: AtmosphereLook, bounds: CGRect, scale: CGFloat, animate: Bool, breathe: Bool) {
         base.frame = bounds

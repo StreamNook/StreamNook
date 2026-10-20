@@ -374,6 +374,9 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                     cell = pool.popLast() ?? ChatRowCell()
                     cells[row.id] = cell
                     scroll.addSubview(cell)
+                    // A pooled cell back on the row it last showed skips configure, so it
+                    // restarts what it stopped when it left the screen.
+                    if cell.layout === row.layout { cell.resume() }
                 }
                 let frame = CGRect(x: 0, y: row.y, width: bounds.width, height: row.height)
                 if cell.frame != frame { cell.frame = frame }
