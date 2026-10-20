@@ -9,6 +9,8 @@ import WebKit
 /// minutes; closing it resolves "not signed in".
 struct SevenTvSignInSheet: View {
     let core: CoreBridge
+    /// The signed-in Twitch account, stored beside the token as desktop and Android store it.
+    let twitchID: String
     /// true when a token was stored.
     let finished: @MainActor (Bool) -> Void
     @State private var url: URL?
@@ -57,8 +59,7 @@ struct SevenTvSignInSheet: View {
 
     private func store(_ token: String) async {
         guard !done else { return }
-        let stored = (try? await core.invoke("store_seventv_token", args: ["accessToken": token, "userId": "", "twitchId": ""])) != nil
-        finish(stored)
+        finish(await SevenTvToken.store(token, core: core, twitchID: twitchID))
     }
 
     private func finish(_ stored: Bool) {

@@ -73,10 +73,10 @@ final class ChatRowCell: UIView {
         text.frame = CGRect(origin: .zero, size: size)
         text.contents = bitmap
         layer.contents = nil
-        if let look {
+        if look != nil {
             let wash = wash ?? AtmosphereWashLayer()
-            wash.show(look, cologne: layout.decor.cologne, size: size, scale: scale,
-                      animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
+            self.wash = wash
+            showWash(layout, scale: scale)
             // Over the flash, as a desktop row's own background sits under its Atmosphere.
             if wash.superlayer == nil {
                 if let flashLayer, flashLayer.superlayer === layer {
@@ -85,7 +85,6 @@ final class ChatRowCell: UIView {
                     layer.insertSublayer(wash, at: 0)
                 }
             }
-            self.wash = wash
         } else {
             wash?.removeFromSuperlayer()
             wash = nil
@@ -101,6 +100,13 @@ final class ChatRowCell: UIView {
         }
         CATransaction.commit()
         textLayer = text
+    }
+
+    /// The author's Atmosphere on the wash layer, moving unless the user chose still.
+    private func showWash(_ layout: ChatRowLayout, scale: CGFloat) {
+        guard let wash, let look = layout.decor.atmosphere else { return }
+        wash.show(look, cologne: layout.decor.cologne, size: CGSize(width: layout.width, height: layout.height), scale: scale,
+                  animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
     }
 
     private func rebuildImages(_ layout: ChatRowLayout, scale: CGFloat) {
@@ -475,12 +481,15 @@ final class ChatRowCell: UIView {
         layer.removeAllAnimations()
         flashLayer?.removeAllAnimations()
         stopGlint()
+        wash?.stop()
     }
 
-    /// Hands the images back to the clock when the row returns to the screen.
+    /// Hands the images back to the clock when the row returns to the screen, and starts the
+    /// glint and the Atmosphere's motion again.
     func resume() {
         guard let layout else { return }
         showGlint(layout)
+        showWash(layout, scale: layer.contentsScale)
         var i = 0
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count

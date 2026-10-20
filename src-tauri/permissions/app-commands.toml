@@ -28,6 +28,7 @@ allow = [
   "fetch_exchange_rates",
   "get_window_size",
   "take_pending_watch_link",
+  "watch_link_key",
   "share_link",
   "reveal_main_window",
   "log_messages_batch",

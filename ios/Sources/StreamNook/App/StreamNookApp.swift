@@ -23,6 +23,8 @@ struct StreamNookApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     model.lifecycle("memory_warning")
                 }
+                // A StreamNook link (`streamnook://w/...`) opens its stream.
+                .onOpenURL { model.openWatchLink($0) }
         }
         .onChange(of: phase) { _, phase in
             switch phase {
