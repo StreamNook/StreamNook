@@ -11,6 +11,11 @@
 //! held in memory, flushed every 5 s when dirty and on exit. Capped at
 //! `MAX_ENTRIES`, and anything older than `MAX_AGE_MS` is pruned.
 //!
+//! Mentions the mention server found while the app was away arrive through
+//! `merge_remote` (`services::mention_watch` pulls them): filed like a
+//! backfill, deduped by id against what this app caught itself. A removed or
+//! cleared id is kept as a tombstone, so a later pull never brings it back.
+//!
 //! Rooms are keyed the way chat tabs are: a bare lowercased login for Twitch,
 //! `provider:slug` otherwise.
 
@@ -30,6 +35,8 @@ use crate::services::chat_rules::{channel_filter_key, ChatRules, Verdict};
 const DIR: &str = "mentions";
 pub const MAX_ENTRIES: usize = 500;
 pub const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// Removed and cleared ids kept so a pull never refiles them; the oldest go first.
+pub const MAX_TOMBSTONES: usize = 2000;
 /// Message text kept per entry, in characters.
 const MAX_TEXT: usize = 500;
 pub const CHANGED_EVENT: &str = "mention-inbox-changed";
@@ -164,6 +171,13 @@ struct InboxFile {
     version: u32,
     /// Oldest first.
     entries: Vec<MentionEntry>,
+    /// Ids removed or cleared here, oldest first (version 2).
+    #[serde(default)]
+    tombstones: Vec<String>,
+    /// How far this account has pulled from the mention server: the last
+    /// `next` it answered (version 2).
+    #[serde(default)]
+    remote_cursor_ms: i64,
 }
 
 /// One owner's inbox in memory. Pure apart from the clock it is handed, so the
@@ -174,6 +188,9 @@ pub struct Inbox {
     entries: Vec<MentionEntry>,
     /// Rooms on screen right now: mentions there arrive already read.
     visible: HashSet<String>,
+    /// Removed and cleared ids, oldest first, at most `MAX_TOMBSTONES`.
+    tombstones: Vec<String>,
+    remote_cursor_ms: i64,
 }
 
 impl Inbox {
@@ -182,14 +199,47 @@ impl Inbox {
         let mut inbox = Inbox {
             entries,
             visible: HashSet::new(),
+            tombstones: Vec::new(),
+            remote_cursor_ms: 0,
         };
         inbox.prune(now_ms);
         inbox
     }
 
-    /// File one entry. False when it was already there (same message id).
+    fn from_file(file: InboxFile, now_ms: i64) -> Self {
+        let mut inbox = Self::from_entries(file.entries, now_ms);
+        inbox.tombstones = file.tombstones;
+        inbox.remote_cursor_ms = file.remote_cursor_ms;
+        inbox
+    }
+
+    fn to_file(&self) -> InboxFile {
+        InboxFile {
+            version: 2,
+            entries: self.entries.clone(),
+            tombstones: self.tombstones.clone(),
+            remote_cursor_ms: self.remote_cursor_ms,
+        }
+    }
+
+    fn tombstone(&mut self, id: &str) {
+        if self.tombstones.iter().any(|t| t == id) {
+            return;
+        }
+        self.tombstones.push(id.to_string());
+        if self.tombstones.len() > MAX_TOMBSTONES {
+            let extra = self.tombstones.len() - MAX_TOMBSTONES;
+            self.tombstones.drain(..extra);
+        }
+    }
+
+    /// File one entry. False when it was already there (same message id), or
+    /// was removed or cleared here before.
     pub fn file(&mut self, mut entry: MentionEntry, now_ms: i64) -> bool {
         if self.entries.iter().any(|e| e.id == entry.id && e.platform == entry.platform) {
+            return false;
+        }
+        if self.tombstones.iter().any(|t| *t == entry.id) {
             return false;
         }
         if self.visible.contains(&entry.room) {
@@ -272,7 +322,11 @@ impl Inbox {
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| e.id != id);
-        self.entries.len() != before
+        let removed = self.entries.len() != before;
+        if removed {
+            self.tombstone(id);
+        }
+        removed
     }
 
     pub fn mark_removed(&mut self, id: &str) -> bool {
@@ -287,8 +341,18 @@ impl Inbox {
 
     pub fn clear(&mut self) -> bool {
         let had = !self.entries.is_empty();
-        self.entries.clear();
+        let ids: Vec<String> = self.entries.drain(..).map(|e| e.id).collect();
+        for id in ids {
+            self.tombstone(&id);
+        }
         had
+    }
+
+    /// Mentions the mention server found, filed like a backfill (read when
+    /// their chat is on screen). Answers how many were new: one this app
+    /// caught itself, or removed before, is skipped.
+    pub fn merge_remote(&mut self, remote: Vec<MentionEntry>, now_ms: i64) -> usize {
+        remote.into_iter().filter(|e| self.file(e.clone(), now_ms)).count()
     }
 
     pub fn get(&self, id: &str) -> Option<&MentionEntry> {
@@ -621,18 +685,16 @@ fn file_path(owner: &str) -> Option<PathBuf> {
 }
 
 fn load(owner: &str) -> Inbox {
-    let entries = file_path(owner)
+    let file = file_path(owner)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<InboxFile>(&s).ok())
-        .map(|f| f.entries)
         .unwrap_or_default();
-    Inbox::from_entries(entries, now_ms())
+    Inbox::from_file(file, now_ms())
 }
 
-fn write(owner: &str, inbox: &Inbox) -> Result<(), String> {
+fn write(owner: &str, file: &InboxFile) -> Result<(), String> {
     let path = file_path(owner).ok_or("no mentions folder")?;
-    let body = serde_json::to_string(&InboxFile { version: 1, entries: inbox.entries.clone() })
-        .map_err(|e| e.to_string())?;
+    let body = serde_json::to_string(file).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
@@ -648,7 +710,7 @@ fn with_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
         if guard.as_ref().map(|s| s.owner != owner).unwrap_or(true) {
             if let Some(old) = guard.take() {
                 if old.dirty {
-                    let _ = write(&old.owner, &old.inbox);
+                    let _ = write(&old.owner, &old.inbox.to_file());
                 }
             }
             *guard = Some(State { owner: owner.clone(), inbox: load(&owner), dirty: false });
@@ -699,13 +761,15 @@ pub fn flush_now() -> Result<(), String> {
         match guard.as_mut() {
             Some(st) if st.dirty => {
                 st.dirty = false;
-                Some((st.owner.clone(), Inbox::from_entries(st.inbox.entries.clone(), now_ms())))
+                let mut file = st.inbox.to_file();
+                file.entries = Inbox::from_entries(file.entries, now_ms()).entries;
+                Some((st.owner.clone(), file))
             }
             _ => None,
         }
     };
     match snapshot {
-        Some((owner, inbox)) => write(&owner, &inbox).inspect_err(|_| {
+        Some((owner, file)) => write(&owner, &file).inspect_err(|_| {
             if let Ok(mut g) = state().lock() {
                 if let Some(st) = g.as_mut() {
                     st.dirty = true;
@@ -856,6 +920,37 @@ pub fn remove(id: &str) {
 
 pub fn clear() {
     let _ = with_inbox(|inbox| ((), inbox.clear()));
+}
+
+/// One page the mention server sent: its mentions filed without a sound, a
+/// notification or an arrival card, and the account's cursor moved to `next`
+/// (forward only), in one go, so a page is at most one inbox update. Muted
+/// chats are left out. Answers how many were new; None when nobody is signed
+/// in to Twitch. A cursor that moved with nothing new is written with the next
+/// change: losing it costs only a pull that refiles nothing.
+pub fn merge_remote(remote: Vec<MentionEntry>, next: i64) -> Option<usize> {
+    let cfg = config();
+    let remote: Vec<MentionEntry> = remote.into_iter().filter(|e| !cfg.muted.contains(&e.room)).collect();
+    with_inbox(|inbox| {
+        let filed = inbox.merge_remote(remote, now_ms());
+        if next > inbox.remote_cursor_ms {
+            inbox.remote_cursor_ms = next;
+        }
+        (filed, filed > 0)
+    })
+}
+
+/// How far the signed-in account has pulled from the mention server.
+pub fn remote_cursor() -> Option<i64> {
+    with_inbox(|inbox| (inbox.remote_cursor_ms, false))
+}
+
+/// Whether this app already holds the message (it caught it itself), or its
+/// chat is on screen now: a push for it would only repeat what is in front of
+/// the viewer. False when nobody is signed in in this process.
+pub fn caught_here(id: &str, room: &str) -> bool {
+    let room = room.to_lowercase();
+    with_inbox(|inbox| (inbox.get(id).is_some() || inbox.visible.contains(&room), false)).unwrap_or(false)
 }
 
 /// Opening an entry marks it read and returns it.
@@ -1123,5 +1218,62 @@ mod tests {
         assert_eq!(kind_for(&verdict(false, false, true), true), Some(MentionKind::Word));
         assert_eq!(kind_for(&verdict(false, false, true), false), None);
         assert_eq!(kind_for(&verdict(false, false, false), true), None);
+    }
+
+    #[test]
+    fn removed_and_cleared_ids_never_come_back_from_a_pull() {
+        let mut inbox = Inbox::default();
+        assert!(inbox.file(entry("a", "room", 1_000), 2_000));
+        assert!(inbox.file(entry("b", "room", 1_100), 2_000));
+        assert!(inbox.remove("a"));
+        assert_eq!(inbox.merge_remote(vec![entry("a", "room", 1_000), entry("c", "room", 1_200)], 2_000), 1);
+        assert!(inbox.get("a").is_none() && inbox.get("c").is_some());
+        assert!(inbox.clear());
+        assert_eq!(inbox.merge_remote(vec![entry("b", "room", 1_100), entry("c", "room", 1_200)], 2_000), 0);
+        assert_eq!(inbox.merge_remote(vec![entry("d", "room", 1_300)], 2_000), 1);
+    }
+
+    #[test]
+    fn a_pull_never_files_what_this_app_caught_itself() {
+        let mut inbox = Inbox::default();
+        assert!(inbox.file(entry("a", "room", 1_000), 2_000));
+        assert_eq!(inbox.merge_remote(vec![entry("a", "room", 1_000)], 2_000), 0);
+        assert_eq!(inbox.entries.len(), 1);
+    }
+
+    #[test]
+    fn a_pulled_mention_for_a_chat_on_screen_arrives_read() {
+        let mut inbox = Inbox::default();
+        inbox.set_visible(vec!["room".into()]);
+        assert_eq!(inbox.merge_remote(vec![entry("a", "room", 1_000), entry("b", "other", 1_000)], 2_000), 2);
+        assert!(inbox.get("a").unwrap().read);
+        assert!(!inbox.get("b").unwrap().read);
+    }
+
+    #[test]
+    fn tombstones_are_capped_oldest_first() {
+        let mut inbox = Inbox::default();
+        for i in 0..(MAX_TOMBSTONES + 5) {
+            inbox.tombstone(&format!("id{i}"));
+        }
+        assert_eq!(inbox.tombstones.len(), MAX_TOMBSTONES);
+        assert_eq!(inbox.tombstones.first().map(String::as_str), Some("id5"));
+        inbox.tombstone("id5");
+        assert_eq!(inbox.tombstones.len(), MAX_TOMBSTONES);
+    }
+
+    #[test]
+    fn the_file_keeps_tombstones_and_the_cursor_and_reads_version_one() {
+        let mut inbox = Inbox::default();
+        assert!(inbox.file(entry("a", "room", 1_000), 2_000));
+        assert!(inbox.remove("a"));
+        inbox.remote_cursor_ms = 42;
+        let text = serde_json::to_string(&inbox.to_file()).unwrap();
+        let back = Inbox::from_file(serde_json::from_str(&text).unwrap(), 2_000);
+        assert_eq!(back.tombstones, vec!["a".to_string()]);
+        assert_eq!(back.remote_cursor_ms, 42);
+        let v1 = r#"{"version":1,"entries":[]}"#;
+        let old = Inbox::from_file(serde_json::from_str(v1).unwrap(), 2_000);
+        assert!(old.tombstones.is_empty() && old.remote_cursor_ms == 0);
     }
 }

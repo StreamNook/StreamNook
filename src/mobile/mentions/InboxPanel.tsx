@@ -156,13 +156,11 @@ const InboxRow: React.FC<{
 InboxRow.displayName = 'InboxRow';
 
 export const InboxPanel: React.FC<{
-  /** `sheet` sits in the chat (its grabber is the sheet's own); `screen` is
-   *  You > Mentions, with a way back. */
+  /** `sheet` sits in the chat's bottom sheet (its grabber and title are the
+   *  sheet's own); `screen` is You > Mentions, with a way back. */
   variant: 'sheet' | 'screen';
   onClose: () => void;
-  /** Swipe-down handlers for the sheet's header band. */
-  headerHandlers?: React.HTMLAttributes<HTMLDivElement>;
-}> = ({ variant, onClose, headerHandlers }) => {
+}> = ({ variant, onClose }) => {
   const revision = useMentionsStore((s) => s.revision);
   const muted = useAppStore((s) => s.settings.mentions?.muted_channels);
   const [filter, setFilter] = useState<InboxFilterId>('all');
@@ -272,22 +270,17 @@ export const InboxPanel: React.FC<{
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <div className="shrink-0 flex flex-col" {...headerHandlers}>
-        {variant === 'sheet' && (
-          <div className="flex justify-center pt-1.5" aria-hidden>
-            <span className="block h-[4px] w-9 rounded-full bg-textMuted/50" />
-          </div>
-        )}
-        <div className={`flex items-center h-10 pr-[2.5px] ${variant === 'screen' ? 'pl-1' : 'pl-3'}`}>
-          {variant === 'screen' && (
-            <button
-              onClick={onClose}
-              className="sn-touch flex items-center justify-center text-textSecondary -mr-1"
-              aria-label="Back"
-            >
-              <ArrowLeft size={22} />
-            </button>
-          )}
+      {/* The screen's header: back, the title and count, mark all read. The
+          sheet's grabber and title are MobileSheet's. */}
+      {variant === 'screen' && (
+        <div className="shrink-0 flex items-center h-10 pr-[2.5px] pl-1">
+          <button
+            onClick={onClose}
+            className="sn-touch flex items-center justify-center text-textSecondary -mr-1"
+            aria-label="Back"
+          >
+            <ArrowLeft size={22} />
+          </button>
           <span className="flex items-baseline gap-2 min-w-0">
             <span className="text-[16px] font-bold text-textPrimary tracking-tight">Inbox</span>
             {unread > 0 && <span className="text-[12.5px] font-medium text-textMuted tabular-nums">{unread} new</span>}
@@ -303,7 +296,7 @@ export const InboxPanel: React.FC<{
             </button>
           )}
         </div>
-      </div>
+      )}
       <div className="shrink-0 flex items-center gap-1.5 px-3 pb-2" role="radiogroup" aria-label="Show">
         {chips.map((c) => {
           const on = c.id === filter;
@@ -331,6 +324,15 @@ export const InboxPanel: React.FC<{
             </button>
           );
         })}
+        {variant === 'sheet' && unread > 0 && (
+          <button
+            onClick={() => void markAllMentionsRead()}
+            className="ml-auto -my-[5px] -mr-1.5 w-9 h-9 flex items-center justify-center text-textMuted active:text-textPrimary"
+            aria-label={`Mark all read, ${unread} new`}
+          >
+            <CheckCheck size={18} strokeWidth={2.1} />
+          </button>
+        )}
       </div>
       <div
         ref={scrollRef}

@@ -693,6 +693,19 @@ const NotificationsSettings = () => {
             </div>
           )}
         </SettingsRow>
+        {/* Rust tells the server and pulls what it found into that history on
+            launch (services/mention_watch.rs); the desktop gets no push. */}
+        <SettingsRow
+          title="Mentions while you're away"
+          onReset={resetFor(['mentions.away_alerts', false])}
+          description="StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days."
+          control={
+            <Toggle
+              enabled={mentions.away_alerts ?? false}
+              onChange={() => updateMentions({ away_alerts: !(mentions.away_alerts ?? false) })}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection label="About" bare>

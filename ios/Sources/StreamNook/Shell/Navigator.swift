@@ -12,8 +12,6 @@ enum Route: Hashable {
     case mentions
     /// Your whisper conversations.
     case whispers
-    /// One whisper conversation, by its inbox key.
-    case whisper(String)
     /// You › Your clips.
     case myClips
 }

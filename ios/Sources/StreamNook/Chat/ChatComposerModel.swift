@@ -511,7 +511,7 @@ final class ChatComposerModel {
         let channel = session.login
         let provider = session.provider
         let channelID = session.roomID
-        let tier = EmotePickerModel.tier
+        let tier = EmotePickerModel.tier(emoteScale: session.style.emoteScale)
         Task { [weak self] in
             // One answer: the emotes, then the room's recent chatters (provider "user").
             guard let json = try? await core.invoke("match_emote_tokens", args: [

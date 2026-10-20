@@ -1,0 +1,14 @@
+[package]
+name = "sn-mention-rule"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Does a chat message name you: the one mention rule, shared by the StreamNook app and the mention watcher"
+
+# No runtime dependencies on purpose: the app links this into every build, and
+# the watcher on the homelab stays small.
+[dependencies]
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

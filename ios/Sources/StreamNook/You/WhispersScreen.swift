@@ -2,9 +2,9 @@ import SNKit
 import SwiftUI
 
 /// Whispers: your Twitch private conversations, newest first, from the core's inbox. Unread
-/// conversations carry their count; a tap opens the conversation. Reached from You (for now; the
-/// chat inbox opens the same pages through `AppModel.openWhispers` / `openWhisper`) and
-/// from a tapped whisper notification.
+/// conversations carry their count; a tap opens the conversation in the chat menu's native sheet
+/// (`AppModel.openWhisper`, which the chat inbox and a tapped whisper notification use too).
+/// Reached from You for now (`AppModel.openWhispers`).
 struct WhispersScreen: View {
     let model: AppModel
 
@@ -32,7 +32,9 @@ struct WhispersScreen: View {
         } else {
             List {
                 ForEach(store.list.conversations) { row in
-                    NavigationLink(value: Route.whisper(row.key)) {
+                    Button {
+                        model.openWhisper(row.key)
+                    } label: {
                         WhisperListRow(row: row)
                     }
                     .buttonStyle(RowPress())
@@ -114,6 +116,28 @@ struct WhisperPicture: View {
                 }
                 .accessibilityHidden(true)
         }
+    }
+}
+
+/// The conversation the whisper sheet shows.
+struct WhisperSheetKey: Identifiable, Hashable {
+    let key: String
+    var id: String { key }
+}
+
+/// A conversation in the native sheet the chat menu uses: the system grabber, medium and large,
+/// and a slide down or a tap above it closes it.
+struct WhisperSheet: View {
+    let model: AppModel
+    let key: String
+
+    var body: some View {
+        NavigationStack {
+            WhisperConversationScreen(model: model, key: key)
+        }
+        .snSheetLight()
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

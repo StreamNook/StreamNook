@@ -123,6 +123,27 @@ public final class FakeFixtures: Sendable {
         }
     }
 
+    /// The core's refusal of a command called without a key it requires, in Tauri's words.
+    static func missing(_ key: String, _ cmd: String) -> CoreFailure {
+        .command(json: "\"invalid args `\(key)` for command `\(cmd)`: command \(cmd) missing required key \(key)\"")
+    }
+
+    /// Whether an edit has the shape the core's `ListEdit` reads: a known op with the keys it needs.
+    static func readsAsListEdit(_ edit: [String: Any]) -> Bool {
+        switch edit["op"] as? String {
+        case "add", "remove": true
+        case "update": edit["patch"] is [String: Any]
+        case "move": edit["to"] is Int
+        case "toggle": edit["value"] != nil
+        default: false
+        }
+    }
+
+    /// The sections `refresh_home_section` knows (`home_snapshot::refresh`).
+    static let homeSections: Set<String> = [
+        "followed_live", "offline", "recommended", "hype_trains", "collaborations", "shared_chats",
+        "watch_streaks", "drops", "continue_watching", "discover",
+    ]
     /// The answer to `cmd`, or nil when the fixtures do not know it.
     func answer(_ cmd: String, _ args: [String: Any]) throws -> String? {
         switch cmd {
@@ -130,7 +151,7 @@ public final class FakeFixtures: Sendable {
             let pairs = state.withLock { $0.settings }.map { "\"\($0.key)\":\($0.value)" }.sorted()
             return "{" + pairs.joined(separator: ",") + "}"
         case "patch_settings":
-            guard let patch = args["patch"] as? [String: Any] else { return "null" }
+            guard let patch = args["patch"] as? [String: Any] else { throw Self.missing("patch", cmd) }
             let encoded = patch.compactMapValues { value -> String? in
                 guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]) else { return nil }
                 return String(decoding: data, as: UTF8.self)
@@ -138,14 +159,14 @@ public final class FakeFixtures: Sendable {
             state.withLock { $0.settings.merge(encoded) { $1 } }
             return "null"
         case "set_settings_fields":
-            guard let changes = args["changes"] as? [String: Any] else { return "null" }
+            guard let changes = args["changes"] as? [String: Any] else { throw Self.missing("changes", cmd) }
             var root = settingsRoot()
             for (path, value) in changes { Self.set(&root, path, value is NSNull ? nil : value) }
             store(root, touching: Array(changes.keys))
             state.withLock { $0.changed.formUnion(changes.keys) }
             return "null"
         case "reset_settings":
-            guard let paths = args["paths"] as? [String] else { return "null" }
+            guard let paths = args["paths"] as? [String] else { throw Self.missing("paths", cmd) }
             var root = settingsRoot()
             for path in paths { Self.set(&root, path, nil) }
             store(root, touching: paths)
@@ -154,7 +175,8 @@ public final class FakeFixtures: Sendable {
             }
             return "null"
         case "edit_settings_list":
-            guard let path = args["path"] as? String, let edit = args["edit"] as? [String: Any] else { return "[]" }
+            guard let path = args["path"] as? String else { throw Self.missing("path", cmd) }
+            guard let edit = args["edit"] as? [String: Any], Self.readsAsListEdit(edit) else { throw Self.missing("edit", cmd) }
             var root = settingsRoot()
             let list = Self.edited(SettingsPath.value(in: root, path) as? [Any] ?? [], edit)
             Self.set(&root, path, list)
@@ -181,7 +203,13 @@ public final class FakeFixtures: Sendable {
             return "null"
         case "is_drops_authenticated":
             return rewards.connected ? "true" : "false"
-        case "refresh_home_section", "set_home_extra_channels":
+        case "refresh_home_section":
+            guard let section = args["section"] as? String else { throw Self.missing("section", cmd) }
+            guard Self.homeSections.contains(section) else {
+                throw CoreFailure.command(json: "\"unknown home section: \(section)\"")
+            }
+            return "null"
+        case "set_home_extra_channels":
             return "null"
         case "get_home_snapshot":
             let streams = FakeCore.streams.map(\.stream)

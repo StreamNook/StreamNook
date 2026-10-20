@@ -93,6 +93,14 @@ fn parse_watch_link(url: &tauri::Url) -> Option<String> {
     services::share_link::openable(url).map(|link| link.stream_key())
 }
 
+/// The stream key a `streamnook://` or streamnook.app link names, read as the
+/// deep-link handler reads it (`parse_watch_link`); None when it names nothing
+/// this build can watch. The iPhone hands the links it is opened with here.
+#[tauri::command]
+fn watch_link_key(url: String) -> Option<String> {
+    tauri::Url::parse(&url).ok().as_ref().and_then(parse_watch_link)
+}
+
 /// The link a share button copies for a stream. `channel` is the row's
 /// `user_login`; `stream_id` its platform stream id, which names the live video
 /// for a YouTube stream started from a channel.
@@ -398,6 +406,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
     settings.map_legacy_event_keys();
+    settings.retire_oled_v2();
     Ok(settings)
 }
 
@@ -874,6 +883,8 @@ pub fn run() {
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
     services::mention_inbox::refresh(&settings);
+    // Mentions while you're away: told once at launch when on, then pulled.
+    services::mention_watch::client::seed(&settings);
     services::whisper_inbox::refresh_settings(&settings);
     services::hidden_channels::refresh(&settings);
 
@@ -1679,6 +1690,7 @@ pub fn run() {
             fetch_exchange_rates,
             get_window_size,
             take_pending_watch_link,
+            watch_link_key,
             share_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
@@ -1897,7 +1909,6 @@ pub fn run() {
             get_games_by_ids,
             get_videos_by_game,
             get_user_videos,
-            get_vod_comments,
             send_whisper,
             start_whisper_listener,
             get_whisper_history,
@@ -2367,6 +2378,8 @@ pub fn run() {
             clear_mention_inbox,
             open_mention,
             set_visible_mention_rooms,
+            mention_watch_pull,
+            mention_push_arrived,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

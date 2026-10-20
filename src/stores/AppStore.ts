@@ -1891,13 +1891,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     ) {
       set({ activePlatform: savedPlatform });
     }
-    // Migrate the retired second OLED theme: it was a fixed-orange variant of the
-    // now-unified OLED theme. Move those users onto OLED with the orange accent
-    // preserved, so their look is unchanged.
-    if (settings.theme === 'prince0fdubai-oled-v2') {
-      settings.theme = 'prince0fdubai-oled';
-      if (!settings.oled_accent) settings.oled_accent = '#ff9933';
-    }
+    // The retired second OLED theme moves to OLED in Rust when settings load
+    // (Settings::retire_oled_v2), so every shell gets it.
     const state = get();
     if (state.isTheaterMode) {
       set({ settings, originalChatPlacement: settings.chat_placement });
@@ -2677,10 +2672,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       try {
         const { currentMediaType, originalMediaUrl } = get();
-        const targetUrl =
-          currentMediaType !== 'live' && originalMediaUrl
-            ? originalMediaUrl
-            : `https://twitch.tv/${currentStream.user_login}`;
+        // A Kick or YouTube stream re-resolves through its own adapter, as
+        // changeStreamQuality does: a twitch.tv URL sent the slug to the Twitch
+        // resolver, which could start the wrong stream on a screen lock.
+        const provider = streamProvider(currentStream);
+        const liveUrl =
+          provider === 'twitch'
+            ? `https://twitch.tv/${currentStream.user_login}`
+            : buildProviderUrl(provider, currentStream.user_login);
+        const targetUrl = currentMediaType !== 'live' && originalMediaUrl ? originalMediaUrl : liveUrl;
         const result = await invoke<StreamStartResult>('change_stream_quality', {
           url: targetUrl,
           quality,

@@ -92,10 +92,42 @@ pub async fn clear_mention_inbox() {
 }
 
 /// Opening an entry (a row tap or a notification click): marks it read and
-/// returns it, so the page can open its chat and look for the message.
+/// returns it, so the page can open its chat and look for the message. A
+/// mention pushed while the app was away may not be here yet: it is pulled
+/// from the mention server first.
 #[tauri::command]
 pub async fn open_mention(id: String) -> Option<MentionEntry> {
-    mention_inbox::open(&id)
+    if let Some(entry) = mention_inbox::open(&id) {
+        return Some(entry);
+    }
+    match crate::services::mention_watch::client::pull().await {
+        Ok(_) => mention_inbox::open(&id),
+        Err(e) => {
+            log::warn!("[MentionWatch] pull for an opened mention failed: {e}");
+            None
+        }
+    }
+}
+
+/// Pulls what the mention server found while the app was away into the
+/// inbox now. Answers how many entries were new (0 with the switch off).
+#[tauri::command]
+pub async fn mention_watch_pull() -> Result<u32, String> {
+    crate::services::mention_watch::client::pull().await
+}
+
+/// A mention push arrived while the app is in front (the iPhone asks before
+/// showing its banner): whether it should show, by the same rules as the
+/// app's own notices. Its entry is pulled into the inbox either way.
+#[tauri::command]
+pub async fn mention_push_arrived(id: String, room: String) -> bool {
+    let show = crate::services::mention_watch::claim_push(
+        &crate::services::mention_watch::client::saved_settings(),
+        &id,
+        &room,
+    );
+    crate::services::mention_watch::client::pull_soon();
+    show
 }
 
 /// The chats on screen right now (room keys). Their mentions are read, and

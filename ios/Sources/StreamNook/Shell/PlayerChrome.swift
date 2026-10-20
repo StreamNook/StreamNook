@@ -236,6 +236,15 @@ struct PlayerChrome: View {
     /// another.
     private static let barIcon: CGFloat = 20
 
+    /// The bar's share glyph, for the stream's link and a video's alike.
+    private var shareGlyph: some View {
+        Image(systemName: Symbol.share)
+            .font(.system(size: Self.barIcon, weight: .medium))
+            .foregroundStyle(.white)
+            .barSlot()
+            .contentShape(Rectangle())
+    }
+
     /// A VOD's transport: back and forward ten seconds and the speed. Play and pause stay the
     /// center button's, as on a live stream.
     private var vodTransport: some View {
@@ -322,18 +331,15 @@ struct PlayerChrome: View {
         case .share:
             if let stream {
                 let title = watch.vodTitle ?? watch.live?.title ?? stream.title
-                let link = watch.playingVod.flatMap { URL(string: "https://www.twitch.tv/videos/\($0.videoID)") }
-                    ?? stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!
-                ShareLink(item: link,
-                          subject: Text(title.isEmpty ? stream.userName : title),
-                          message: Text(watch.playingVod == nil ? "\(stream.userName) is live" : "\(stream.userName)'s broadcast")) {
-                    Image(systemName: Symbol.share)
-                        .font(.system(size: Self.barIcon, weight: .medium))
-                        .foregroundStyle(.white)
-                        .barSlot()
-                        .contentShape(Rectangle())
+                let subject = Text(title.isEmpty ? stream.userName : title)
+                if let vod = watch.playingVod, let link = URL(string: "https://www.twitch.tv/videos/\(vod.videoID)") {
+                    ShareLink(item: link, subject: subject, message: Text("\(stream.userName)'s broadcast")) { shareGlyph }
+                        .accessibilityLabel("Share video")
+                } else {
+                    // The core's link, as desktop and Android share a stream.
+                    StreamShareLink(stream: stream, subject: subject, message: Text("\(stream.userName) is live")) { shareGlyph }
+                        .accessibilityLabel("Share stream")
                 }
-                .accessibilityLabel(watch.playingVod == nil ? "Share stream" : "Share video")
             }
         case .clip:
             if let stream, stream.isTwitch, model.signedIn {

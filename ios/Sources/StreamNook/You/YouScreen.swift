@@ -67,7 +67,7 @@ struct YouScreen: View {
         .onAppear { if let picks { Task { await picks.load() } } }
         .sheet(isPresented: Binding(get: { picks?.showSevenTvSignIn ?? false },
                                     set: { picks?.showSevenTvSignIn = $0 })) {
-            SevenTvSignInSheet(core: model.core) { stored in
+            SevenTvSignInSheet(core: model.core, twitchID: model.signIn.user?.id ?? "") { stored in
                 Task {
                     await picks?.sevenTvSignInFinished(stored)
                     await picks?.load()

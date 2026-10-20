@@ -53,7 +53,8 @@ final class ChatSession {
     /// "broadcaster"), or "unknown" before it has answered.
     private(set) var role = "unknown"
     /// The signed-in viewer's Twitch user id, once known.
-    private(set) var viewerID = ""
+    /// The signed-in viewer's Twitch user id (the app's sign-in), or "" when signed out.
+    var viewerID: String { rooms?.viewerID() ?? "" }
     /// The signed-in viewer's own chat color here, as Twitch's USERSTATE reports it
     /// (`USER_COLOR:`), for the row the composer builds at send. Starts as the last color any
     /// room reported, so a cold launch's first own row is not the default color.
@@ -250,11 +251,6 @@ final class ChatSession {
             self.role = role
             self.isModerator = role == "moderator" || role == "broadcaster"
             self.isBroadcaster = role == "broadcaster"
-            if self.viewerID.isEmpty,
-               let userJSON = try? await core.invoke("get_user_info", "{}"),
-               let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) {
-                self.viewerID = user.id
-            }
             // On by default; turned off for this room earlier this session, it stays off.
             self.moderatorTools = self.isModerator && !(self.rooms?.modToolsOff.contains(self.channel) ?? false)
             if changed {
