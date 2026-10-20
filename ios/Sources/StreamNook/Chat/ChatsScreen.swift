@@ -237,16 +237,15 @@ struct ChatsScreen: View {
     }
 }
 
-/// Chats' way out: the player's minimize arrow (the same glyph, size and weight), at the left
-/// edge of the row, so leaving Chats reads like putting the player away. The room pills keep
-/// their own X for closing a room, so the row has one X. Leaving Chats keeps its chats; the
-/// grabber and a slide down still work.
+/// Chats' way out: a back arrow at the left edge of the row, where people look for "back"
+/// (Brandon's call). The room pills keep their own X for closing a room, so the row has one X.
+/// Leaving Chats keeps its chats; the grabber and a slide down still work.
 struct ChatsMinimizeButton: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: Symbol.minimize)
+            Image(systemName: "chevron.left")
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(SN.textSecondary)
                 .frame(width: 44, height: 44)
@@ -255,7 +254,7 @@ struct ChatsMinimizeButton: View {
         .buttonStyle(.plain)
         // Pressed while typing it still leaves Chats on that tap; the keyboard goes with it.
         .tapsThroughKeyboard()
-        .accessibilityLabel("Minimize chats")
+        .accessibilityLabel("Back")
     }
 }
 
