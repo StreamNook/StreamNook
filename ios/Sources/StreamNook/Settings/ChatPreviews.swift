@@ -200,9 +200,10 @@ struct ProfilePicturePreview: View {
     }
 }
 
-/// Chat Input: the message box in a followers-only room in slow mode, with the mode's icon when
-/// Chat modes is on, and the placeholder and emote button unless they are hidden. Drawn as the
-/// composer draws its field; nothing in it can be typed into.
+/// Chat Input: the message bar in a followers-only room in slow mode, with the mode's icon when
+/// Chat modes is on, the placeholder and emote button unless they are hidden, and the inbox tray
+/// at the end Inbox button picks (the chat menu at the other). Drawn as the composer draws it;
+/// nothing in it can be typed into or pressed.
 struct ChatInputPreview: View {
     @Environment(SettingsStore.self) private var store
 
@@ -210,7 +211,9 @@ struct ChatInputPreview: View {
         let modes = store.bool("chat_input.show_room_modes", true)
         let placeholder = !store.bool("chat_input.hide_placeholder")
         let emote = !store.bool("chat_input.hide_emote_button")
+        let right = store.string("chat_input.inbox_button_side", "left") == "right"
         HStack(alignment: .center, spacing: 6) {
+            if right { menu } else { tray }
             HStack(spacing: 4) {
                 if emote {
                     Text("😀").font(.sn(20)).frame(width: 36, height: 36)
@@ -243,15 +246,30 @@ struct ChatInputPreview: View {
             .padding(.trailing, 5)
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            Image(systemName: "ellipsis")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(SN.textSecondary)
-                .frame(width: 44, height: 44)
-                .glassEffect(.regular, in: .circle)
+            if right { tray } else { menu }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .chatPreviewSurface()
+        .animation(.snappy(duration: 0.25), value: right)
+    }
+
+    private var menu: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(SN.textSecondary)
+            .frame(width: 44, height: 44)
+            .glassEffect(.regular, in: .circle)
+    }
+
+    private var tray: some View {
+        let right = store.string("chat_input.inbox_button_side", "left") == "right"
+        return Image(systemName: "tray")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(SN.textSecondary)
+            .frame(width: 44, height: 44)
+            .glassEffect(.regular, in: .circle)
+            .overlay(alignment: right ? .topLeading : .topTrailing) { InboxCount(count: 2).offset(x: right ? -4 : 4, y: -4) }
     }
 }
 

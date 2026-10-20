@@ -84,6 +84,7 @@ pub mod drop_words;
 pub mod drops_overview;
 pub mod drops_service;
 pub mod game_suggest;
+pub mod wallet_glyph;
 pub mod watched_chest;
 pub mod reward_drops;
 pub mod reward_redeem;
@@ -140,6 +141,10 @@ pub mod alert_types;
 // Phones only: go-live push registration. Its rules are tested on desktop.
 #[cfg(any(mobile, test))]
 pub mod push_alerts;
+// Phones only: the background go-live check and its never-twice record. Its
+// rules are tested on desktop.
+#[cfg(any(mobile, test))]
+pub mod live_poll;
 pub mod client_capabilities;
 #[cfg(test)]
 mod ll_soak;

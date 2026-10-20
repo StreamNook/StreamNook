@@ -1708,6 +1708,10 @@ pub fn run() {
             services::push_alerts::server::push_unregister,
             #[cfg(target_os = "ios")]
             services::push_alerts::server::push_set_apns_device,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_check,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_seen,
             #[cfg(target_os = "android")]
             cast_plugin::cast_get_state,
             #[cfg(target_os = "android")]
@@ -2357,6 +2361,7 @@ pub fn run() {
             whisper_thread,
             // Mentions inbox
             get_mention_inbox,
+            get_inbox_view,
             mark_mentions_read,
             remove_mention,
             clear_mention_inbox,
@@ -2558,6 +2563,7 @@ pub fn run() {
             watch_channel_state,
             unwatch_channel_state,
             get_channel_state,
+            wallet_split_layout,
             submit_media_frame,
             sample_media_glow,
             get_window_flags,

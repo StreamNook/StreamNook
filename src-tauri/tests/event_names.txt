@@ -64,6 +64,7 @@ member-aliases-invalidated
 member-theme-changed
 membership-gift-received
 membership-status-changed
+mention-arrived
 mention-inbox-changed
 mention-notify
 mirrored-notification

@@ -19,6 +19,11 @@
     <key>UIBackgroundModes</key>
     <array>
         <string>audio</string>
+        <string>fetch</string>
+    </array>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>app.streamnook.live-check</string>
     </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>

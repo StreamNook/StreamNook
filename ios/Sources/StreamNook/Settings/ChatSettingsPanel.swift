@@ -334,6 +334,9 @@ struct ChatSettingsPanel: View {
                       detail: "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.")
             ToggleRow(title: "Hide emote button", path: "chat_input.hide_emote_button",
                       detail: "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.")
+            ChoiceRow(title: "Inbox button", path: "chat_input.inbox_button_side",
+                      choices: [Choice("Left", "left"), Choice("Right", "right")], fallback: "left",
+                      detail: "Which end of the message bar the inbox sits at. Right swaps it with the chat menu, for a right thumb.")
             WalletBalanceRow()
         }
     }

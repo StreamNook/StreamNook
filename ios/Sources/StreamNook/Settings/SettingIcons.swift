@@ -81,6 +81,7 @@ enum SettingIcons {
         "chat_input.show_room_modes": "lock.shield",
         "chat_input.hide_placeholder": "text.cursor",
         "chat_input.hide_emote_button": "face.dashed",
+        "chat_input.inbox_button_side": "tray",
         "chat_input.emote_tab_complete_enabled": "text.badge.plus",
         "chat_input.emote_tab_complete_include_chatters": "person.2",
         "auto_claim_points_watching": "shippingbox",

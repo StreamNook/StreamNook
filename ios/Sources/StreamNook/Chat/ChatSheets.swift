@@ -101,22 +101,24 @@ struct ChatMenuSheet: View {
                         } label: {
                             Label("Add a chat", systemImage: "plus.bubble")
                         }
-                        if let mentions = rooms.mentions {
+                        // A bar too narrow for the inbox tray keeps the inbox here, with its count.
+                        if model.inboxFolded, let mentions = rooms.mentions {
                             Button {
                                 dismiss()
-                                // After this sheet has gone, so the next one can come up.
+                                let surface = model.inboxSurface
+                                // After this sheet has gone, so the inbox grows out of the bar.
                                 Task {
                                     try? await Task.sleep(for: .milliseconds(350))
-                                    rooms.mentionsOpen = true
+                                    withAnimation(SNMotion.run(InboxMotion.spring)) { mentions.sheetIn = surface }
                                 }
                             } label: {
                                 HStack {
-                                    Label("Mentions", systemImage: "at")
+                                    Label("Inbox", systemImage: "tray")
                                     Spacer()
                                     UnreadCount(count: mentions.unreadTotal)
                                 }
                             }
-                            .accessibilityValue(mentions.unreadTotal > 0 ? "\(mentions.unreadTotal) unread" : "")
+                            .accessibilityValue(mentions.unreadTotal > 0 ? "\(mentions.unreadTotal) new" : "")
                         }
                         // A pin folded out of sight by Pinned Messages > Style: Hidden opens here (the
                         // desktop's is the pin in its chat header).

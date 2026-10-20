@@ -14,9 +14,12 @@ import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
 import type { ProviderId } from '../../types/providers';
-import type { MentionEntry, MentionPage } from '../../types';
+import type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage } from '../../types';
 
-export type { MentionEntry, MentionPage };
+export type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage };
+
+/** Where an inbox sheet opens: the chat under the player, or the Chats tab. */
+export type InboxSurface = 'watch' | 'chats';
 
 export const PAGE_SIZE = 40;
 
@@ -47,6 +50,13 @@ interface MentionsState {
   pendingJump: MentionEntry | null;
   /** Shown pinned over its chat when the message was older than its history. */
   contextCard: MentionEntry | null;
+  /** The chat whose inbox sheet is open, if any. */
+  sheetIn: InboxSurface | null;
+  /** The latest arrival waiting for, or showing as, the card over the bar. */
+  arrival: (MentionArrival & { seq: number }) | null;
+  /** The composer holds a long draft or its suggestions strip: an arrival
+   *  waits rather than sit over what is being written. */
+  composerBusy: boolean;
 }
 
 export const useMentionsStore = create<MentionsState>(() => ({
@@ -54,7 +64,60 @@ export const useMentionsStore = create<MentionsState>(() => ({
   revision: 0,
   pendingJump: null,
   contextCard: null,
+  sheetIn: null,
+  arrival: null,
+  composerBusy: false,
 }));
+
+/** The tray's tap: open this chat's sheet, or close it when it is open. An
+ *  arrival card folds away, since the sheet now shows it. */
+export function toggleInboxSheet(surface: InboxSurface): void {
+  useMentionsStore.setState((s) => ({ sheetIn: s.sheetIn === surface ? null : surface, arrival: null }));
+}
+
+export function closeInboxSheet(): void {
+  if (useMentionsStore.getState().sheetIn) useMentionsStore.setState({ sheetIn: null });
+}
+
+export function dismissArrival(seq: number): void {
+  if (useMentionsStore.getState().arrival?.seq === seq) useMentionsStore.setState({ arrival: null });
+}
+
+export function setComposerBusy(busy: boolean): void {
+  if (useMentionsStore.getState().composerBusy !== busy) useMentionsStore.setState({ composerBusy: busy });
+}
+
+/** One page of the timeline for a chip: Rust filters, folds identical
+ *  messages and attaches the senders' pictures it has. */
+export function getInboxView(filter: InboxFilterId, beforeMs?: number | null, limit = PAGE_SIZE): Promise<InboxView> {
+  return invoke<InboxView>('get_inbox_view', { filter, beforeMs: beforeMs ?? undefined, limit });
+}
+
+/** Rows the sheet showed while it was open, marked read as it closes. */
+export function markInboxSeen(ids: string[]): void {
+  if (ids.length === 0) return;
+  void invoke('mark_mentions_read', { ids }).catch((err) => Logger.warn('[Inbox] mark seen failed:', err));
+}
+
+/**
+ * Hooks the whisper inbox fills in when it joins the timeline (Rust adds the
+ * `whispers` chip and `whisper` rows to `get_inbox_view`): what a whisper row
+ * opens. Until then no whisper row exists, so nothing calls it.
+ */
+export const inboxHooks: { openWhisper: ((row: InboxRowView) => void) | null } = { openWhisper: null };
+
+/** A row tap: jump to the message (its whole fold reads as read), or open the
+ *  whisper conversation. */
+export function openInboxRow(row: InboxRowView): void {
+  if ((row.entry.kind as string) === 'whisper') {
+    inboxHooks.openWhisper?.(row);
+    return;
+  }
+  closeInboxSheet();
+  const folded = row.folded.filter((f) => !f.read).map((f) => f.id);
+  if (folded.length) void invoke('mark_mentions_read', { ids: folded }).catch(() => {});
+  void openMention(row.entry);
+}
 
 export function dismissContextCard(): void {
   useMentionsStore.setState({ contextCard: null });
@@ -165,6 +228,13 @@ export async function openMention(entry: MentionEntry): Promise<void> {
   }
 }
 
+/** The picture cache's key for a sender, as Rust's `avatar_request` builds it:
+ *  Twitch and YouTube ids, Kick slugs. */
+function arrivalAvatarKey(e: MentionEntry): string | null {
+  const id = e.platform === 'kick' ? e.sender_login : e.platform === 'twitch' || e.platform === 'youtube' ? e.sender_id : '';
+  return id ? `${e.platform}:${id.toLowerCase()}` : null;
+}
+
 let installed = false;
 
 /** Mounted once by the shell: the unread count, seeded now and kept current by
@@ -178,17 +248,48 @@ export function installMentionInbox(): () => void {
       .catch(() => {});
   };
   seed();
-  let unlisten: (() => void) | null = null;
   let dead = false;
-  void listen<{ unread_total: number }>('mention-inbox-changed', (e) => {
-    useMentionsStore.setState((s) => ({
-      unreadTotal: e.payload?.unread_total ?? s.unreadTotal,
-      revision: s.revision + 1,
-    }));
-  }).then((u) => {
-    if (dead) u();
-    else unlisten = u;
-  });
+  const unlistens: (() => void)[] = [];
+  const keep = (p: Promise<() => void>) =>
+    void p.then((u) => {
+      if (dead) u();
+      else unlistens.push(u);
+    });
+  keep(
+    listen<{ unread_total: number }>('mention-inbox-changed', (e) => {
+      useMentionsStore.setState((s) => ({
+        unreadTotal: e.payload?.unread_total ?? s.unreadTotal,
+        revision: s.revision + 1,
+      }));
+    }),
+  );
+  // A new entry for the card over the bar. Rust already left out replay, a
+  // chat on screen and streamer mode. With the sheet open the sheet shows it.
+  let seq = 0;
+  keep(
+    listen<MentionArrival>('mention-arrived', (e) => {
+      if (!e.payload?.entry) return;
+      Logger.debug('[Inbox] arrival', e.payload.entry.id);
+      if (useMentionsStore.getState().sheetIn) return;
+      useMentionsStore.setState({ arrival: { ...e.payload, seq: ++seq } });
+    }),
+  );
+  // Senders' pictures landing: an open inbox reads again to show them, and a
+  // card still up takes its sender's.
+  keep(
+    listen<Record<string, string>>('channel-avatars', (e) => {
+      const s = useMentionsStore.getState();
+      const a = s.arrival;
+      if (a && !a.avatar) {
+        const key = arrivalAvatarKey(a.entry);
+        const url = key ? e.payload?.[key] : undefined;
+        if (url) useMentionsStore.setState({ arrival: { ...a, avatar: url } });
+      }
+      if (s.sheetIn || useMobileNavStore.getState().mentionsOpen) {
+        useMentionsStore.setState((st) => ({ revision: st.revision + 1 }));
+      }
+    }),
+  );
   const unsubUser = useAppStore.subscribe((s, prev) => {
     if (s.currentUser?.user_id !== prev.currentUser?.user_id) seed();
   });
@@ -201,7 +302,7 @@ export function installMentionInbox(): () => void {
   return () => {
     dead = true;
     installed = false;
-    unlisten?.();
+    unlistens.forEach((u) => u());
     unsubUser();
     unsubTabs();
   };

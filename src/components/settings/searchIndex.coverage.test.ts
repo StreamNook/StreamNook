@@ -43,7 +43,7 @@ const COMPONENT_SECTIONS: Record<string, string> = { CompactViewSettings: 'Compa
 // Never indexed: phone-only settings (search runs only in the desktop Settings
 // dialog and the MultiChat modal) and development-build previews.
 const UNINDEXED: Record<string, { sections?: string[]; titles?: string[] }> = {
-  Chat: { sections: ['Landscape Chat', 'Chats Tab'], titles: ['Vibration', 'Keep screen on'] },
+  Chat: { sections: ['Landscape Chat', 'Chats Tab'], titles: ['Vibration', 'Keep screen on', 'Inbox button'] },
   Player: { sections: ['Discover'], titles: ['Background play'] },
   Support: { titles: ['Log export'] },
   Notifications: { titles: ['Gift sub preview', 'Reward preview'] },

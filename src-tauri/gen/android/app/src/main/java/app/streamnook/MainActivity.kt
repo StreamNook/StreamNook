@@ -318,6 +318,19 @@ class MainActivity : TauriActivity() {
     }
 
     /** Hide/show the system bars (immersive playback, e.g. landscape watch). */
+    /** The player's rotate button: hold landscape (either side) or portrait whatever the
+     *  rotation lock says, or release back to the sensor when the player is left. */
+    @JavascriptInterface
+    fun setPlayerOrientation(mode: String) {
+      runOnUiThread {
+        requestedOrientation = when (mode) {
+          "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+          "portrait" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+          else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+      }
+    }
+
     @JavascriptInterface
     fun setImmersive(immersive: Boolean) {
       runOnUiThread {

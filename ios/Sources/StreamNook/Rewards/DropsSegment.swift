@@ -173,6 +173,8 @@ private struct DropsSearchField: View {
         .frame(height: 40)
         .snPanel(radius: 10, light: nil)
         .contentShape(Rectangle())
+        // Clearing the search keeps the keyboard for the next one.
+        .keepsKeyboard()
         .onTapGesture { focused = true }
     }
 }

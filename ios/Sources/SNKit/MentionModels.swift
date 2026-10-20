@@ -38,9 +38,12 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
     public var read: Bool
     /// A moderator deleted the message after it was filed.
     public var removed: Bool
+    /// The message as the chat drew it, words and emotes in order. Empty on older entries and on a
+    /// message with no emote: show `text`.
+    public var parts: [MentionPart] = []
 
     enum CodingKeys: String, CodingKey {
-        case id, platform, room, text, kind, read, removed
+        case id, platform, room, text, kind, read, removed, parts
         case openKey = "open_key", watchURL = "watch_url"
         case channelLogin = "channel_login", channelID = "channel_id"
         case senderID = "sender_id", senderLogin = "sender_login", senderName = "sender_name"
@@ -90,6 +93,7 @@ public struct MentionEntry: Codable, Sendable, Equatable, Hashable, Identifiable
         atMs = try c.decodeIfPresent(Int64.self, forKey: .atMs) ?? 0
         read = try c.decodeIfPresent(Bool.self, forKey: .read) ?? false
         removed = try c.decodeIfPresent(Bool.self, forKey: .removed) ?? false
+        parts = (try? c.decodeIfPresent([MentionPart].self, forKey: .parts)) ?? []
     }
 
     /// What opens the chat: `open_key`, or the room key on an entry filed before it existed.
@@ -252,3 +256,183 @@ public enum MentionText {
     }
 }
 
+/// One piece of a filed message: words, or an emote drawn where it was said.
+public enum MentionPart: Codable, Sendable, Equatable, Hashable {
+    case text(String)
+    case emote(name: String, url: String)
+
+    enum CodingKeys: String, CodingKey { case type, text, name, url }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decodeIfPresent(String.self, forKey: .type) {
+        case "emote":
+            self = .emote(name: try c.decodeIfPresent(String.self, forKey: .name) ?? "",
+                          url: try c.decodeIfPresent(String.self, forKey: .url) ?? "")
+        default:
+            self = .text(try c.decodeIfPresent(String.self, forKey: .text) ?? "")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text(let text):
+            try c.encode("text", forKey: .type)
+            try c.encode(text, forKey: .text)
+        case .emote(let name, let url):
+            try c.encode("emote", forKey: .type)
+            try c.encode(name, forKey: .name)
+            try c.encode(url, forKey: .url)
+        }
+    }
+}
+
+/// The phones' inbox chips. `whispers` arrives once the whisper store joins the core's view; a
+/// chip the app does not know is still listed by its id.
+public enum InboxFilterID: String, Sendable, CaseIterable {
+    case all, mentions, highlights, whispers
+}
+
+/// One chip of `get_inbox_view`, with how many unread rows it holds.
+public struct InboxChip: Decodable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var unread: Int
+
+    public init(id: String, unread: Int) {
+        self.id = id
+        self.unread = unread
+    }
+}
+
+/// A message folded under its row: the same words from the same sender, right after it.
+public struct InboxFolded: Decodable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var atMs: Int64
+    public var read: Bool
+
+    enum CodingKeys: String, CodingKey { case id, read, atMs = "at_ms" }
+
+    public init(id: String, atMs: Int64, read: Bool) {
+        self.id = id
+        self.atMs = atMs
+        self.read = read
+    }
+}
+
+/// One row of `get_inbox_view`: the newest of a run of identical messages, the rest folded under
+/// it, and the sender's picture once the core has it.
+public struct InboxRowView: Decodable, Sendable, Equatable, Identifiable {
+    public var entry: MentionEntry
+    public var folded: [InboxFolded]
+    public var unread: Bool
+    public var avatar: String?
+
+    public var id: String { entry.id }
+    /// Every message the row stands for, newest first.
+    public var ids: [String] { [entry.id] + folded.map(\.id) }
+
+    public init(entry: MentionEntry, folded: [InboxFolded] = [], unread: Bool, avatar: String? = nil) {
+        self.entry = entry
+        self.folded = folded
+        self.unread = unread
+        self.avatar = avatar
+    }
+}
+
+/// `get_inbox_view`: one page of the timeline for a chip, newest first, built by the core
+/// (filtered, identical messages folded, pictures attached).
+public struct InboxView: Decodable, Sendable, Equatable {
+    public var rows: [InboxRowView]
+    public var hasMore: Bool
+    /// What `beforeMs` asks for to get the next page.
+    public var beforeMs: Int64?
+    public var unreadTotal: Int
+    public var chips: [InboxChip]
+
+    enum CodingKeys: String, CodingKey {
+        case rows, chips, hasMore = "has_more", beforeMs = "before_ms", unreadTotal = "unread_total"
+    }
+
+    public init(rows: [InboxRowView], hasMore: Bool, beforeMs: Int64?, unreadTotal: Int, chips: [InboxChip]) {
+        self.rows = rows
+        self.hasMore = hasMore
+        self.beforeMs = beforeMs
+        self.unreadTotal = unreadTotal
+        self.chips = chips
+    }
+
+    /// A later page under the rows held (a row already held is not repeated).
+    public mutating func append(_ page: InboxView) {
+        let have = Set(rows.map(\.id))
+        rows += page.rows.filter { !have.contains($0.id) }
+        hasMore = page.hasMore
+        beforeMs = page.beforeMs
+        unreadTotal = page.unreadTotal
+        chips = page.chips
+    }
+
+    /// More than one platform in the rows: they then wear their platform's logo.
+    public var mixedPlatforms: Bool { Set(rows.map(\.entry.platform)).count > 1 }
+}
+
+/// `mention-arrived`: a live entry just filed unread (its chat is not on screen), for the card
+/// over the message bar.
+public struct MentionArrival: Decodable, Sendable, Equatable {
+    public var entry: MentionEntry
+    public var avatar: String?
+
+    public init(entry: MentionEntry, avatar: String?) {
+        self.entry = entry
+        self.avatar = avatar
+    }
+}
+
+/// The inbox's words, the same as Android's (mentions/inboxText.ts).
+public enum InboxText {
+    public static func chip(_ id: String) -> String {
+        switch InboxFilterID(rawValue: id) {
+        case .all: "All"
+        case .mentions: "Mentions"
+        case .highlights: "Highlights"
+        case .whispers: "Whispers"
+        case nil: id.capitalized
+        }
+    }
+
+    /// The empty list's words for a chip.
+    public static func empty(_ id: String) -> (text: String, hint: String) {
+        switch InboxFilterID(rawValue: id) {
+        case .highlights: ("No highlights yet.", "Messages with one of your highlight phrases show up here.")
+        case .whispers: ("No whispers yet.", "Whispers sent to you show up here.")
+        case .mentions: ("No mentions yet.", "When someone mentions or replies to you in a chat, it shows up here.")
+        default: ("Nothing here yet.", "Mentions, replies and your highlight phrases show up here.")
+        }
+    }
+
+    /// "6 identical mentions", the fold's line under its row (`count` includes the row itself).
+    public static func folded(_ entry: MentionEntry, count: Int) -> String {
+        let noun = switch entry.kind {
+        case .reply: "replies"
+        case .word: "messages"
+        case .mention: "mentions"
+        }
+        return "\(count) identical \(noun)"
+    }
+
+    /// The chat a row was said in, by its channel name rather than the room key.
+    public static func place(_ entry: MentionEntry) -> String {
+        entry.channelLogin.isEmpty ? MentionText.channel(ofRoom: entry.room) : entry.channelLogin
+    }
+
+    /// The picture cache's key for a sender, as the core's `avatar_request` builds it: Twitch and
+    /// YouTube ids, Kick slugs. Nil where the core looks none up.
+    public static func avatarKey(_ entry: MentionEntry) -> String? {
+        let id: String = switch entry.platform {
+        case "kick": entry.senderLogin
+        case "twitch", "youtube": entry.senderID
+        default: ""
+        }
+        return id.isEmpty ? nil : "\(entry.platform):\(id.lowercased())"
+    }
+}

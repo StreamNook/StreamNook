@@ -50,12 +50,15 @@ public final class FakeCore: CoreBridge {
         events.emit(name: "whisper-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
     }
 
-    /// Files a mention in the fixture inbox and asks for its notification, as the core does when
-    /// a live message mentions you in a chat that is not on screen.
+    /// Files a mention in the fixture inbox and asks for its card over the message bar and its
+    /// notification, as the core does when a live message mentions you in a chat that is not on
+    /// screen.
     public func simulateMention(_ entry: MentionEntry) {
         fixtures?.mentions.file(entry)
         guard let data = try? JSONEncoder().encode(entry) else { return }
-        events.emit(name: "mention-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
+        let json = String(decoding: data, as: UTF8.self)
+        events.emit(name: "mention-arrived", payloadJSON: #"{"entry":\#(json),"avatar":null}"#, target: nil)
+        events.emit(name: "mention-notify", payloadJSON: json, target: nil)
     }
 
     /// The commands invoked so far, oldest first.

@@ -196,9 +196,15 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
-        if let alert = LivePush.alert(in: notification.request.content.userInfo),
-           await MainActor.run(body: { Self.isPlaying?(alert) ?? false }) {
-            return []
+        if let alert = LivePush.alert(in: notification.request.content.userInfo) {
+            // A push is recorded, so the live check never announces its broadcast again; one the
+            // live check already announced only updates the list.
+            var fresh: Bool?
+            if !alert.polled, let sighting = LiveCheck.sightingJSON(notification) {
+                fresh = await LiveCheck.recordSeen(sighting)
+            }
+            if await MainActor.run(body: { Self.isPlaying?(alert) ?? false }) { return [] }
+            if fresh == false { return [.list] }
         }
         return [.banner, .sound, .list]
     }
@@ -217,6 +223,10 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
         if let alert = LivePush.alert(in: info) {
             await MainActor.run { Self.route(alert) }
+            // A tapped push is recorded, as a presented one is.
+            if !alert.polled, let sighting = LiveCheck.sightingJSON(response.notification) {
+                _ = await LiveCheck.recordSeen(sighting)
+            }
             return
         }
         guard let id = info[Self.mentionKey] as? String else { return }

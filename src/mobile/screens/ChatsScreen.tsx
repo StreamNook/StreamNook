@@ -361,7 +361,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
               </div>
             )}
             {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
-            <MobileChatPane strip={false} paused={!shown} />
+            <MobileChatPane strip={false} paused={!shown} surface="chats" />
           </div>
         </>
       )}

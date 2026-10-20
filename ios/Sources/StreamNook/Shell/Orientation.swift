@@ -7,10 +7,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientations: UIInterfaceOrientationMask = .portrait
 
     /// The notification delegate goes in before launch ends, so a tapped mention or go-live that
-    /// opened the app reaches it. Installing it asks for nothing.
+    /// opened the app reaches it. Installing it asks for nothing. The background live check's
+    /// handler must be registered before launch ends too.
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         NotificationRouter.install()
+        LiveCheck.register()
         return true
     }
 
@@ -40,6 +42,20 @@ enum Orientation {
             for window in scene.windows { window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
             if !allow, scene.effectiveGeometry.interfaceOrientation.isLandscape {
                 scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
+            }
+        }
+    }
+
+    /// The player's rotate button: turns the screen to landscape or portrait and holds it there,
+    /// whatever the phone's own rotation lock says. Leaving the full player calls
+    /// `allowLandscape(false)` and the next one `allowLandscape(true)`, which hands the screen back
+    /// to the sensor.
+    static func hold(landscape: Bool) {
+        AppDelegate.orientations = landscape ? .landscape : .portrait
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows { window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait)) { error in
+                log.error("rotate failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

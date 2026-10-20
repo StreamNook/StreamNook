@@ -46,7 +46,6 @@ struct CosmeticsScreen: View {
                 store.scrollTarget = nil
             }
         }
-        .scrollIndicators(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) { pinned }
         .background(SN.background)
         .environment(\.themeLightOff, true)
@@ -69,6 +68,7 @@ struct CosmeticsScreen: View {
         }
         .sheet(isPresented: $screen.editingBio) {
             BioEditor(initial: screen.bio ?? "") { text in await screen.saveBio(text) }
+                .tapsThroughKeyboard()
         }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
             SevenTvSignInSheet(core: model.core) { stored in

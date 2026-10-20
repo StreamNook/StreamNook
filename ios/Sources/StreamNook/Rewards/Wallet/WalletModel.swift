@@ -16,6 +16,9 @@ final class WalletModel {
     var sheetOpen = false
     /// Show gains is Bonus chest only; the button keeps it in step with the room's chat style.
     var chestOnly = false
+    /// Where the split glyph puts the points art, the gem and the divider (Rust measures the art).
+    private(set) var split = SplitLayout.fallback
+    private var splitFor: String?
     /// A reward whose detail the sheet opens on (drive steps).
     var pendingReward: String?
     /// Wallets on screen, by login (drive steps).
@@ -58,6 +61,22 @@ final class WalletModel {
             faces = first
             noteGain(first.points?.lastGain)
         }
+        measureSplit()
+    }
+
+    /// Asks the core where the split glyph's parts go for this room's points art and gem, once
+    /// per pair; the fallback stands until the answer comes.
+    private func measureSplit() {
+        guard let points, let gem = bits?.gemURL else { return }
+        let key = "\(points.iconURL ?? "")|\(gem)"
+        guard key != splitFor else { return }
+        splitFor = key
+        let icon = points.iconURL
+        Task { [weak self, core] in
+            guard let json = try? await core.invoke("wallet_split_layout", args: ["pointsIcon": icon, "gem": gem]),
+                  let layout = SplitLayout.parse(json), let self, self.splitFor == key else { return }
+            self.split = layout
+        }
     }
 
     func stop() {
@@ -71,8 +90,10 @@ final class WalletModel {
         case .points(let who, let points) where who == login:
             faces.points = points
             noteGain(points?.lastGain)
+            measureSplit()
         case .bits(let who, let bits) where who == login:
             faces.bits = bits
+            measureSplit()
         default:
             break
         }

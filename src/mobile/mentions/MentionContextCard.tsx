@@ -2,6 +2,7 @@
 // anything the chat could load. It says so, shows what was said, and goes away
 // on Dismiss or when you leave that chat.
 import React from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { X } from 'phosphor-react';
 import { agoLabel } from '../../utils/lastLive';
 import { dismissContextCard, KIND_LABEL, type MentionEntry } from './mentionInbox';
@@ -10,8 +11,14 @@ export const MentionContextCard: React.FC<{ entry: MentionEntry }> = ({ entry })
   // Rust hands over the readable color the chat row shows.
   const color = entry.sender_color ?? undefined;
   const when = agoLabel(new Date(entry.at_ms).toISOString()) ?? '';
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const markInside = useOutsidePress(true, [rootRef], dismissContextCard);
   return (
-    <div className="sn-popover pointer-events-auto rounded-xl px-3 pt-2 pb-2.5 flex items-start gap-2">
+    <div
+      ref={rootRef}
+      onPointerDownCapture={markInside}
+      className="sn-popover pointer-events-auto rounded-xl px-3 pt-2 pb-2.5 flex items-start gap-2"
+    >
       <div className="flex-1 min-w-0">
         <div className="text-[11.5px] font-semibold uppercase tracking-wide text-textMuted leading-[16px]">
           Older than chat history

@@ -59,10 +59,15 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         backgroundColor = .clear
         scroll.delegate = self
         scroll.alwaysBounceVertical = true
-        scroll.showsVerticalScrollIndicator = false
+        // The system's own indicator, while a finger moves the list or it jumps to a row. Pinning
+        // to the newest line sets the offset directly, which never shows it, so live chat stays bare.
+        scroll.showsVerticalScrollIndicator = true
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.scrollsToTop = false
         scroll.delaysContentTouches = false
+        // As in Messages: a drag that reaches the keyboard pulls it down with the finger. A scroll
+        // that stays above it leaves it up.
+        scroll.keyboardDismissMode = .interactive
         addSubview(scroll)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))

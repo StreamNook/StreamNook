@@ -14,8 +14,9 @@
 //! over its APNs token, environment and topic with `push_set_apns_device`.
 //! Android also keeps its own Instant alerts switch (`push_notifications`): off
 //! drops the device from the server and leaves the scheduled poll to deliver.
-//! The iPhone has no poll, so push is its only lane and that switch is not read
-//! there.
+//! The iPhone's poll (`services::live_poll`) is a background refresh iOS runs
+//! when it chooses, a fallback only, so push stays its main lane and that
+//! switch is not read there.
 //!
 //! Every change that alters the list (a follow, an unfollow, a mute, the
 //! switches) re-registers on a short debounce, so a run of quick changes costs
@@ -298,6 +299,9 @@ pub mod server {
         match follow_list(crate::services::alert_types::PLATFORM, &inputs, &follows) {
             Some(ids) => {
                 post("/register", &device.register_body(&ids)).await?;
+                // The iPhone's poll leaves these to the push once pushes arrive.
+                #[cfg(target_os = "ios")]
+                crate::services::live_poll::poll::note_registered(Some(&ids));
                 if let Ok(mut last) = LAST_SENT.lock() {
                     *last = Some((device, Instant::now()));
                 }
@@ -305,6 +309,8 @@ pub mod server {
             }
             None => {
                 post("/unregister", &device.unregister_body()).await?;
+                #[cfg(target_os = "ios")]
+                crate::services::live_poll::poll::note_registered(None);
                 if let Ok(mut last) = LAST_SENT.lock() {
                     *last = None;
                 }
@@ -329,6 +335,8 @@ pub mod server {
             return Ok(());
         };
         post("/unregister", &device.unregister_body()).await?;
+        #[cfg(target_os = "ios")]
+        crate::services::live_poll::poll::note_registered(None);
         if let Ok(mut last) = LAST_SENT.lock() {
             *last = None;
         }

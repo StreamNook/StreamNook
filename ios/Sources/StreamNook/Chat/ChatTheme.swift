@@ -39,6 +39,12 @@ enum ChatTheme {
     static var textMuted: UIColor { now.textMuted }
     static var borderSubtle: UIColor { now.borderSubtle }
     static var surface: UIColor { now.surface }
+    /// A fully opaque raised surface for labels that sit over chat text (the swipe chip and
+    /// rail): the theme's tertiary floor over its background, both over black, so a theme colour
+    /// with any opacity still paints solid.
+    static var raisedSolid: UIColor { now.raisedSolid }
+    /// The theme is dark (its background's luminance under one half).
+    static var isDark: Bool { now.isDark }
     static var accent: UIColor { now.accent }
     static var info: UIColor { now.info }
     static var warning: UIColor { now.warning }
@@ -69,6 +75,18 @@ enum ChatTheme {
         let textPrimary, textSecondary, textMuted, borderSubtle, surface, accent: UIColor
         let info, warning, error, success, background: UIColor
         let backgroundSecondary, backgroundTertiary: UIColor
+        let raisedSolid: UIColor
+        let isDark: Bool
+
+        /// `top` over `bottom`, both over black: always opaque.
+        private static func opaque(_ top: UIColor, over bottom: UIColor) -> UIColor {
+            var (r1, g1, b1, a1): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+            var (r2, g2, b2, a2): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+            top.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+            bottom.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+            let mix = { (t: CGFloat, b: CGFloat) in t * a1 + b * a2 * (1 - a1) }
+            return UIColor(red: mix(r1, r2), green: mix(g1, g2), blue: mix(b1, b2), alpha: 1)
+        }
 
         init(_ p: Palette) {
             textPrimary = p.textPrimary.uiColor
@@ -84,6 +102,8 @@ enum ChatTheme {
             background = p.background.uiColor
             backgroundSecondary = p.backgroundSecondary.uiColor
             backgroundTertiary = p.backgroundTertiary.uiColor
+            raisedSolid = Self.opaque(p.backgroundTertiary.uiColor, over: p.background.uiColor)
+            isDark = p.background.luminance < 0.5
         }
     }
 }

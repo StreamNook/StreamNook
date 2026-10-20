@@ -124,15 +124,34 @@ struct ChatPanel: View {
                         Color.black
                     }
                 }
+                // Rows under the inbox's sheet or card fade out above it instead of showing as
+                // slivers beside it.
+                .mask { InboxClearMask(sheet: inboxSheetHere, card: inboxCardHere) }
                 // The stack's height cap and its short-column rule are Rust's, from this height.
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     votes?.setChatHeight(height)
                 }
+                // The inbox: a new mention's card risen from the tray, or the sheet grown out of
+                // the bar. Over the rows, flush on the composer below them.
+                .overlay {
+                    if let mentions = rooms?.mentions {
+                        ZStack(alignment: .bottom) {
+                            if !overlay, mentions.onScreen == surface {
+                                InboxArrivalCard(store: mentions, leading: !session.style.inboxRight)
+                            }
+                            // In landscape the tray sits at the strip's leading end.
+                            InboxSheetOverlay(store: mentions, surface: surface,
+                                              leading: overlay || !session.style.inboxRight)
+                        }
+                    }
+                }
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
                         if let rooms, !overlay, rooms.pinsShown {
-                            PinnedBanner(pins: rooms.activePins,
-                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
+                            let unrolled = Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 })
+                            PinnedBanner(pins: rooms.activePins, expanded: unrolled)
+                                // Unrolled, it floats over the rows: a tap outside rolls it up.
+                                .closesOnOutsideTap(unrolled, id: "pins")
                                 .padding(.horizontal, 10)
                                 .padding(.top, topGap)
                                 // Opened, the banner floats over the rows; the list keeps the
@@ -143,6 +162,8 @@ struct ChatPanel: View {
                         }
                         if let rooms, !overlay, let card = rooms.mentionCards[session.channel] {
                             MentionContextCard(entry: card) { rooms.dismissMentionCard(session.channel) }
+                                .closesOnOutsideTap(Binding(get: { true }, set: { if !$0 { rooms.dismissMentionCard(session.channel) } }),
+                                                    id: "mention-card")
                                 .padding(.horizontal, 10)
                                 .padding(.top, 6)
                                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -181,6 +202,7 @@ struct ChatPanel: View {
                         StreakBanners(rooms: rooms, session: session)
                     }
                     ChatComposer(session: session, onProfile: onProfile)
+                        .environment(\.inboxSurface, surface)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { onFloor?($0) }
             }
@@ -207,6 +229,16 @@ struct ChatPanel: View {
 
     /// The pins' gap under the header: the grabber's gap on Chats, a tight 6 under the player.
     private var topGap: CGFloat { pinsInline ? 12 : 6 }
+
+    /// Which chat this is, for the inbox: the Chats tab's, or the one under the player.
+    private var surface: InboxSurface { pinsInline ? .chats : .watch }
+
+    private var inboxSheetHere: Bool { rooms?.mentions?.sheetIn == surface }
+
+    private var inboxCardHere: Bool {
+        guard !overlay, let mentions = rooms?.mentions else { return false }
+        return mentions.arrival != nil && !mentions.composerBusy && mentions.sheetIn == nil && mentions.onScreen == surface
+    }
 
     /// The room the inline pins and votes take above the list, and 4 points of air under them.
     private var inlineTop: CGFloat {

@@ -10,6 +10,7 @@
 // TOP of chat is the wrong mental model. Content should come out of the thing
 // you tapped.
 import React from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CaretDown, PushPin } from 'phosphor-react';
 import { PinnedChatter } from '../../components/chat/PinnedChatter';
@@ -40,6 +41,9 @@ interface Props {
 const NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
 
 export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId, collapsedStyle = 'bar' }) => {
+  // Unrolled, it floats over the rows: a tap outside rolls it up.
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const markInside = useOutsidePress(expanded && pins.length > 0, [rootRef], onToggle);
   if (pins.length === 0) return null;
   const [first, ...rest] = pins;
 
@@ -49,7 +53,11 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
 
   return (
     // The single container. Everything below lives inside this one box.
-    <div className="sn-popover sn-popover--static pointer-events-auto w-full overflow-hidden">
+    <div
+      ref={rootRef}
+      onPointerDownCapture={markInside}
+      className="sn-popover sn-popover--static pointer-events-auto w-full overflow-hidden"
+    >
       <button
         type="button"
         onClick={onToggle}

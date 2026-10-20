@@ -65,6 +65,7 @@ import {
   setMediaVolume,
   setPipEligible,
   setPipSourceRect,
+  setPlayerOrientation,
   setPreferredRefreshRate,
   setScreenBrightness,
 } from '../nativeBridge';
@@ -573,6 +574,13 @@ export const WatchScreen: React.FC = () => {
   // A per-change cleanup sent "show" straight before every "hide", which is a
   // bar flash and an inset re-layout the viewer can see.
   const immersive = show && !mini && !pip && shape.landscape;
+  // The rotate button holds an orientation while the full player is up;
+  // leaving it (the mini box, picture in picture, closing) hands the screen
+  // back to the sensor, so the rest of the app is never stuck on its side.
+  const playerUp = show && !mini && !pip;
+  useEffect(() => {
+    if (!playerUp) setPlayerOrientation('release');
+  }, [playerUp]);
   useEffect(() => {
     setImmersive(immersive);
   }, [immersive]);
@@ -1068,6 +1076,14 @@ export const WatchScreen: React.FC = () => {
               immersive={sideBySide || pip}
               compact={mini || pip}
               onMinimize={mini || pip ? undefined : () => setPlayerMode('mini')}
+              // Turns the screen whatever the rotation lock says; leaving the
+              // player hands it back to the sensor (the effect below).
+              onRotate={
+                mini || pip || shape.largeScreen
+                  ? undefined
+                  : () => setPlayerOrientation(shape.landscape ? 'portrait' : 'landscape')
+              }
+              landscapeNow={shape.landscape}
               onToggleFullscreen={
                 largeToggle && !mini && !pip
                   ? () => setLargeChatHidden((v) => !v)
