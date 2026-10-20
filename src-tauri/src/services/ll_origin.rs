@@ -941,6 +941,12 @@ pub fn set_disabled(disabled: bool) {
 
 /// The viewer's target latency (None or a non-positive value is Auto). AVPlayer
 /// reads it as the hold-back of the next playlist it loads.
+/// The viewer's target latency in seconds, or None at Auto.
+pub(crate) fn target_gap_secs() -> Option<f64> {
+    let ms = TARGET_GAP_MS.load(Ordering::Relaxed);
+    (ms > 0).then(|| ms as f64 / 1000.0)
+}
+
 pub fn set_target_gap(gap: Option<f32>) {
     let ms = gap.filter(|g| *g > 0.0).map(|g| (g as f64 * 1000.0).round() as u64).unwrap_or(0);
     TARGET_GAP_MS.store(ms, Ordering::Relaxed);

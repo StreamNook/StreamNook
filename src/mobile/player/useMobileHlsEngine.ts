@@ -220,6 +220,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       teardownPlayer();
       setReason(why);
       setState('error');
+      // As the desktop player does: the core confirms whether the stream ended
+      // (offline room, auto-switch) or reloads it in place when it is still live.
+      if (!vodStart) void useAppStore.getState().handleStreamOffline('player');
     };
 
     // A VOD (opened from the offline room, a channel's videos, or a rewind) as
