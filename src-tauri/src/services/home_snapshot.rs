@@ -625,6 +625,8 @@ pub async fn set_extra_channels(ids: Vec<String>) {
 /// nothing. Signed out, nothing. Answers whether a reload started, so the shell
 /// can renew its previews; the lists land as `home-snapshot` updates.
 pub async fn note_app_resumed() -> bool {
+    // What the mention server found while the app was away.
+    crate::services::mention_watch::client::pull_soon();
     let Some(inner) = SERVICE.get() else { return false };
     if !signed_in().await {
         return false;

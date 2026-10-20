@@ -131,6 +131,9 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     @MainActor private static var pendingLive: LivePush.Alert?
     /// Whether a go-live is about the channel playing now; its banner is left out.
     @MainActor static var isPlaying: ((LivePush.Alert) -> Bool)?
+    /// Whether a pushed mention shows while StreamNook is in front (the core's rules), which
+    /// also pulls it into Mentions; set once the core runs.
+    @MainActor static var mentionPushArrived: ((MentionPush.Alert) async -> Bool)?
 
     @MainActor static func install() {
         let center = UNUserNotificationCenter.current()
@@ -190,6 +193,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         if let handler { handler(id) } else { pending = id }
     }
 
+    /// The core's answer for a pushed mention; shown when the core is not up yet.
+    @MainActor private static func mentionShows(_ mention: MentionPush.Alert) async -> Bool {
+        guard let mentionPushArrived else { return true }
+        return await mentionPushArrived(mention)
+    }
+
     @MainActor private static func route(_ alert: LivePush.Alert) {
         if let liveHandler { liveHandler(alert) } else { pendingLive = alert }
     }
@@ -205,6 +214,10 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             }
             if await MainActor.run(body: { Self.isPlaying?(alert) ?? false }) { return [] }
             if fresh == false { return [.list] }
+        }
+        if let mention = MentionPush.alert(in: notification.request.content.userInfo) {
+            // Not one the app caught itself, nor a chat on screen; muted and quiet chats stay quiet.
+            if await !Self.mentionShows(mention) { return [] }
         }
         return [.banner, .sound, .list]
     }
@@ -227,6 +240,11 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             if !alert.polled, let sighting = LiveCheck.sightingJSON(response.notification) {
                 _ = await LiveCheck.recordSeen(sighting)
             }
+            return
+        }
+        // A pushed mention opens like the app's own: `open_mention` pulls it first when needed.
+        if let mention = MentionPush.alert(in: info) {
+            await MainActor.run { Self.route(mention.id) }
             return
         }
         guard let id = info[Self.mentionKey] as? String else { return }

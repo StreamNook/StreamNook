@@ -1448,6 +1448,10 @@ pub struct MentionSettings {
     /// Chats whose mentions still highlight but never notify or reach the
     /// inbox, by room key (bare Twitch login, `provider:slug` otherwise).
     pub muted_channels: Vec<String>,
+    /// Mentions while you're away: StreamNook's server watches chat in the
+    /// channels you follow for your name and replies (`services::mention_watch`).
+    /// Off until chosen.
+    pub away_alerts: bool,
     /// Keys the frontend adds to this group before this struct names them.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -1460,6 +1464,7 @@ impl Default for MentionSettings {
             match_display_name: true,
             highlight_words: true,
             muted_channels: Vec::new(),
+            away_alerts: false,
             extra: HashMap::new(),
         }
     }

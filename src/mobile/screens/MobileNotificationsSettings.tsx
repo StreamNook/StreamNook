@@ -146,6 +146,20 @@ const MentionsSection: React.FC = () => {
           </div>
         )}
       </SettingsRow>
+
+      {/* Rust tells the server and pulls what it finds into Mentions
+          (services/mention_watch.rs). */}
+      <SettingsRow
+        title="Mentions while you're away"
+        description="StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days."
+        onReset={resetFor('mentions.away_alerts')}
+        control={
+          <Toggle
+            on={mentions?.away_alerts === true}
+            onChange={() => void write(fieldsIn('mentions', { away_alerts: mentions?.away_alerts !== true }))}
+          />
+        }
+      />
     </SettingsSection>
   );
 };

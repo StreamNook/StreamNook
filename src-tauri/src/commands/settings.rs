@@ -630,6 +630,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::streamer_mode::StreamerMode::refresh(settings);
     crate::services::mention_ping::refresh(settings);
     crate::services::mention_inbox::refresh(settings);
+    // Mentions while you're away: the server follows the switch and the rule.
+    crate::services::mention_watch::client::refresh(settings);
     crate::services::whisper_inbox::refresh_settings(settings);
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
     // restart and "off" costs no task at all.
