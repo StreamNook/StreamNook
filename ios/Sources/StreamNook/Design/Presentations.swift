@@ -97,7 +97,6 @@ private struct FittedSheet: ViewModifier {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
-        .scrollIndicators(.hidden)
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, now in
             scrolled = now
         }

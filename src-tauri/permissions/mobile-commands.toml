@@ -18,6 +18,8 @@ allow = [
   "push_register",
   "push_unregister",
   "push_set_apns_device",
+  "live_poll_check",
+  "live_poll_seen",
   "set_max_video_height",
   "report_playback_health",
   "get_live_edge_cushion",

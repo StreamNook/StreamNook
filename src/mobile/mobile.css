@@ -36,16 +36,6 @@
   .sn-mobile { --sn-hairline: 0.25px; }
 }
 
-/* Touch surfaces scroll with overlay scrolling; the 8px hover-styled desktop
-   scrollbar is noise on a phone. Sheets and menus portal into <body>, outside
-   .sn-mobile, so the rule reaches them through `body:has(.sn-mobile)`: a sheet
-   showed a scrollbar the screens behind it did not. */
-.sn-mobile ::-webkit-scrollbar,
-body:has(.sn-mobile) ::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
 /* Fields on the phone (search, the composer, the command box): the theme's
    raised surface (its surface over its background), the pair the text floors
    are measured on, with the glass family's edge, a lit rim fading inward and a
@@ -165,6 +155,15 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-touch {
   min-height: 44px;
   min-width: 44px;
+}
+
+/* A player bar button: 44px when the bar has room, giving way to 34px each
+   when it is full, so a narrow phone keeps every button on one row. */
+.sn-bar-btn {
+  min-height: 44px;
+  width: 44px;
+  min-width: 34px;
+  flex-shrink: 1;
 }
 
 /* The stream manager's forms are the desktop builders' own; on the phone

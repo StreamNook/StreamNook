@@ -90,7 +90,7 @@ export function stepKeeping(s: TouchSlider, slide: number, cur: number | null): 
 /** A step's color: Delete a calm slate, timeouts amber toward red, Ban red. */
 export function stepTint(step: TouchStep): string {
   if (step.action === 'ban') return 'var(--color-error)';
-  if (step.tone == null) return 'color-mix(in srgb, var(--color-text-secondary) 55%, #334155)';
+  if (step.tone == null) return 'color-mix(in srgb, var(--color-text-secondary) 75%, #334155)';
   return `color-mix(in srgb, var(--color-error) ${Math.round(step.tone * 100)}%, var(--color-warning))`;
 }
 

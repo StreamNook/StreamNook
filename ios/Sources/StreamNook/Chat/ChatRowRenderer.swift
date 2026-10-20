@@ -155,6 +155,12 @@ enum ChatRowRenderer {
             ctx.setLineWidth(0.5)
             ctx.addPath(UIBezierPath(roundedRect: r.insetBy(dx: 0.25, dy: 0.25), cornerRadius: radius).cgPath)
             ctx.strokePath()
+        case .glyph(let glyph, let color):
+            ctx.saveGState()
+            ctx.addPath(glyph.path(in: r))
+            ctx.setFillColor(color.cgColor)
+            ctx.fillPath(using: glyph.evenOdd ? .evenOdd : .winding)
+            ctx.restoreGState()
         case .symbol(let name, let color):
             if name.hasPrefix("text:") {
                 let label = String(name.dropFirst(5))

@@ -61,7 +61,6 @@ struct FollowingScreen: View {
                 content
             }
         }
-        .scrollIndicators(.hidden)
         .refreshable { await home.loadFollowing(pulled: true) }
         .task(id: model.signedIn) {
             if model.signedIn && !home.followedLoaded { await home.loadFollowing() }

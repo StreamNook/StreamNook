@@ -32,7 +32,6 @@ struct CategoryScreen: View {
                 }
             }
         }
-        .scrollIndicators(.hidden)
         .snShellBackground()
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)

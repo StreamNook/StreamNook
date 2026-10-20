@@ -107,7 +107,6 @@ private struct RewardsList: View {
             .padding(.top, 20)
             .padding(.bottom, 24)
         }
-        .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.never)
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -368,7 +367,6 @@ private struct RewardDetail: View {
             .padding(.top, 8)
             .padding(.bottom, 24)
         }
-        .scrollIndicators(.hidden)
         .navigationTitle("Rewards")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if view.takesText { focused = true } }
@@ -411,7 +409,6 @@ private struct EmoteUnlockPicker: View {
             }
             .padding(16)
         }
-        .scrollIndicators(.hidden)
         .navigationTitle(reward.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {

@@ -37,7 +37,6 @@ struct RewardsScreen: View {
                 }
             }
         }
-        .scrollIndicators(.hidden)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .scrollDismissesKeyboard(.never)
         .snShellBackground()

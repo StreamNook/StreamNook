@@ -29,6 +29,8 @@ struct StreamNookApp: App {
             case .active: model.lifecycle("foreground")
             case .background:
                 model.lifecycle("background")
+                // The go-live check the push may miss, asked for while alerts can arrive.
+                Task { await LiveCheck.backgrounded(model) }
                 // Sign-ins rewritten during the session stay out of backups too.
                 Task.detached(priority: .utility) { CoreHost.excludeSealedFromBackup() }
             default: break

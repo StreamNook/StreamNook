@@ -126,7 +126,6 @@ struct ChannelSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .scrollIndicators(.hidden)
         .refreshable { await load(reset: true) }
     }
 

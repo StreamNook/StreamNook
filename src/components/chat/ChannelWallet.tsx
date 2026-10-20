@@ -16,6 +16,7 @@ import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { Tooltip } from '../ui/Tooltip';
 import { BitsPane } from './BitsPane';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
+import { SplitWalletGlyph, WalletChestGlyph } from './SplitWalletGlyph';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { useAppStore } from '../../stores/AppStore';
@@ -184,11 +185,9 @@ export function WalletFace({ points, bits: bitsFace, mode, gains, open, onToggle
             onClick={chest.onClaim}
             disabled={chest.claiming}
             aria-label="Claim channel points bonus"
-            className="sn-composer-tool chest-attention flex items-center justify-center w-9 h-9 text-accent-neon transition-opacity duration-200 disabled:opacity-50"
+            className="sn-composer-tool chest-attention flex items-center justify-center w-9 h-9 transition-opacity duration-200 disabled:opacity-50"
           >
-            <svg width={18} height={18} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path fillRule="evenodd" clipRule="evenodd" d="M2 22v-9l2.417-4.029A2 2 0 0 1 6.132 8h11.736a2 2 0 0 1 1.715.971L22 13v9H2Zm18-2v-5h-7v2h-2v-2H4v5h16Zm-2.132-10 1.8 3H4.332l1.8-3h11.736Z" />
-            </svg>
+            <WalletChestGlyph />
           </button>
         </Tooltip>
       ) : (
@@ -203,15 +202,16 @@ export function WalletFace({ points, bits: bitsFace, mode, gains, open, onToggle
               pointsCount || bitsCount ? 'px-1.5' : 'w-9'
             } ${open || known ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
           >
-            {points ? (
-              <span className="relative flex">
-                <PointsGlyph iconUrl={points.iconUrl} name={points.name} size={18} className={glow} />
-                {/* Bits live here too: a small still gem says so. Hidden while
-                    the bits count itself is on the button. */}
-                {bits?.gem_url && (
-                  <Gem url={bits.gem_url} size={9} className={`absolute -bottom-0.5 -right-1 ${bitsCount ? 'sn-wallet-pip-always' : ''}`} />
-                )}
-              </span>
+            {points && bits?.gem_url ? (
+              // Bits live here too: points and the gem share one split glyph.
+              <SplitWalletGlyph
+                points={(size) => <PointsGlyph iconUrl={points.iconUrl} name={points.name} size={size} />}
+                pointsIcon={points.iconUrl}
+                gemUrl={bits.gem_url}
+                className={glow}
+              />
+            ) : points ? (
+              <PointsGlyph iconUrl={points.iconUrl} name={points.name} size={18} className={glow} />
             ) : (
               <Gem url={bits?.gem_url ?? null} size={18} className={glow} />
             )}
@@ -223,8 +223,8 @@ export function WalletFace({ points, bits: bitsFace, mode, gains, open, onToggle
             )}
             {bitsCount && (
               <span className="sn-composer-points-count sn-wallet-bits flex items-center gap-1.5">
-                {points && <span className="h-3.5 w-px bg-white/15" aria-hidden="true" />}
-                {points && <Gem url={bits!.gem_url} size={12} />}
+                {/* Points, then Bits, in the glyph's own order: the glyph is the key. */}
+                {points && <span className="h-3.5 w-px bg-textSecondary/35" aria-hidden="true" />}
                 <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap text-textPrimary">
                   {formatShortCount(bits!.balance!)}
                 </span>

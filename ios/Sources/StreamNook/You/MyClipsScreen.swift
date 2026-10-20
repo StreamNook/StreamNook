@@ -34,7 +34,6 @@ struct MyClipsScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .scrollIndicators(.hidden)
         .background(SN.background)
         .navigationTitle("Your clips")
         .task { await load() }

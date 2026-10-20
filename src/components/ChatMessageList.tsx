@@ -900,7 +900,9 @@ const ChatMessageList = memo(function ChatMessageList({
     <div className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
       <div
         ref={containerRef}
-        className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin"
+        // On the phone the bar shows only while the list is paused (sn-chat-live
+        // in styles/mobile.css): pinned to the newest line it moves every message.
+        className={`h-full overflow-y-auto overflow-x-hidden scrollbar-thin${isPaused ? '' : ' sn-chat-live'}`}
         data-line-show={lineActive ? lineShow : undefined}
         onScroll={handleScroll}
         onWheel={handleWheel}
