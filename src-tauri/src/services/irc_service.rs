@@ -2687,6 +2687,7 @@ impl IrcService {
                     // Inbox, mention sound and notification, all from one call.
                     crate::services::mention_inbox::on_verdict(&chat_msg, &verdict);
                     crate::services::chat_row_view::stamp(&mut chat_msg);
+                    crate::services::late_third_party::note_if_early(&chat_msg, &enhanced_message);
                 }
 
                 // Deliver to the frontend FIRST (wire order is the only order
@@ -2768,6 +2769,7 @@ impl IrcService {
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
                 if !verdict.drop {
                     crate::services::chat_row_view::stamp(&mut chat_msg);
+                    crate::services::late_third_party::note_if_early(&chat_msg, trimmed);
                 }
 
                 // Frontend first, side effects on the ordered lane (no history:
@@ -5437,6 +5439,16 @@ impl IrcService {
             debug!("[SharedChat] {home}: {} partner rows now wear their room's emotes and badges", rows.len());
             let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": home, "rows": rows });
             send_to_bridge(BridgeFrame::channel(&home, frame.to_string()), false).await;
+        }
+    }
+
+    /// A live chat line (a message or a USERNOTICE) parsed as the read loop
+    /// parses it; None for any other command.
+    pub(crate) fn parse_live_line(raw: &str) -> Option<ChatMessage> {
+        match irc_command(raw) {
+            Some("PRIVMSG") => Self::parse_privmsg(raw),
+            Some("USERNOTICE") => Self::parse_usernotice(raw),
+            _ => None,
         }
     }
 

@@ -409,6 +409,8 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
     public var displayName: String
     public var shownLogin: String?
     public var paint: ChatPaint?
+    /// The account's Twitch name color, readable as chat shows it; nil when Twitch did not say.
+    public var nameColor: String?
     public var picture: AvatarPick?
     /// The Twitch profile banner; nil when the account has none.
     public var bannerURL: String?
@@ -421,7 +423,7 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login", paint, picture, badges
-        case bannerURL = "banner_url", streamnook, atmosphere, cologne
+        case bannerURL = "banner_url", streamnook, atmosphere, cologne, nameColor = "name_color"
     }
 
     public init(from decoder: Decoder) throws {
@@ -431,6 +433,7 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         shownLogin = try c.decodeIfPresent(String.self, forKey: .shownLogin)
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
+        nameColor = try c.decodeIfPresent(String.self, forKey: .nameColor)
         picture = try c.decodeIfPresent(AvatarPick.self, forKey: .picture)
         bannerURL = try c.decodeIfPresent(String.self, forKey: .bannerURL)
         badges = try c.decodeIfPresent([ProfileBadge].self, forKey: .badges) ?? []
@@ -510,6 +513,8 @@ public struct ExternalPickerState: Codable, Sendable, Equatable {
     public var dropsSignedIn: Bool
     public var twitchSelectable: [TwitchIdentityBadge]
     public var twitchEarned: [ProfileBadge]
+    /// The chat-client badges worn (FFZ, BetterTTV, Chatterino and the rest), for the preview row.
+    public var chatClients: [ProfileBadge]
     /// The account's Twitch name colour, `#rrggbb`.
     public var chatColor: String?
     public var namedColors: [NamedChatColor]
@@ -517,7 +522,7 @@ public struct ExternalPickerState: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case sevenTvSignedIn = "seventv_signed_in", sevenTvUserID = "seventv_user_id", paints
         case sevenTvBadges = "seventv_badges", dropsSignedIn = "drops_signed_in"
-        case twitchSelectable = "twitch_selectable", twitchEarned = "twitch_earned"
+        case twitchSelectable = "twitch_selectable", twitchEarned = "twitch_earned", chatClients = "chat_clients"
         case chatColor = "chat_color", namedColors = "named_colors"
     }
 
@@ -530,6 +535,7 @@ public struct ExternalPickerState: Codable, Sendable, Equatable {
         dropsSignedIn = try c.decodeIfPresent(Bool.self, forKey: .dropsSignedIn) ?? false
         twitchSelectable = try c.decodeIfPresent([TwitchIdentityBadge].self, forKey: .twitchSelectable) ?? []
         twitchEarned = try c.decodeIfPresent([ProfileBadge].self, forKey: .twitchEarned) ?? []
+        chatClients = try c.decodeIfPresent([ProfileBadge].self, forKey: .chatClients) ?? []
         chatColor = try c.decodeIfPresent(String.self, forKey: .chatColor)
         namedColors = try c.decodeIfPresent([NamedChatColor].self, forKey: .namedColors) ?? []
     }

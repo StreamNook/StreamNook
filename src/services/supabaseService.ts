@@ -13,7 +13,7 @@ import {
     withStreamnookArtCopies,
 } from './streamnookArt';
 import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
-import type { ActiveEquipment, CosmeticSlot } from './cosmetics/types';
+import type { ActiveEquipment, AssetManifest, CosmeticSlot } from './cosmetics/types';
 // Supabase client singleton
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -1362,6 +1362,9 @@ export interface CosmeticCatalogEntry {
     // Set on Contributor badge tiers: the shipped contribution points that earn
     // the tier. These are granted by the database, never bought.
     contribution_min_points?: number | null;
+    // The art variants (animated, static, poster); Rust draws from it first,
+    // so every surface that resolves art passes it on.
+    asset_manifest?: AssetManifest | null;
 }
 
 let snRegistry: Map<string, number> = new Map();
@@ -1526,9 +1529,12 @@ const loadSnapshot = (): Promise<void> => {
     if (snapshotLoading) { snapshotReloadQueued = true; return snapshotLoading; }
     snapshotLoading = (async () => {
         try {
-            applySnapshot(await invoke<RegistrySnapshot>('sn_registry_snapshot'));
+            const snap = await invoke<RegistrySnapshot>('sn_registry_snapshot');
+            applySnapshot(snap);
+            retryUnloadedSnapshot(snap);
         } catch (e) {
             Logger.warn('[Supabase] registry snapshot unavailable:', e);
+            retryUnloadedSnapshot({ membersLoaded: false, cosmeticsLoaded: false } as RegistrySnapshot);
         } finally {
             snapshotLoading = null;
             if (snapshotReloadQueued) { snapshotReloadQueued = false; void loadSnapshot(); }
@@ -1537,14 +1543,32 @@ const loadSnapshot = (): Promise<void> => {
     return snapshotLoading;
 };
 
-/** Reads the snapshot once and follows Rust's change event from then on. */
+/** Reads the snapshot once and follows Rust's change event from then on. The
+ *  listener goes on before the first read: Rust announces only a change, so a
+ *  load that finished between a read and a late listener was never heard, and
+ *  the page kept an empty member list (no StreamNook badges) for the session. */
 const ensureRegistries = (): void => {
     if (snapshotListening) return;
     snapshotListening = true;
-    void loadSnapshot();
     void import('@tauri-apps/api/event')
         .then(({ listen }) => listen('sn-registry-changed', () => { void loadSnapshot(); }))
-        .catch((e) => Logger.warn('[Supabase] registry change listener unavailable:', e));
+        .catch((e) => Logger.warn('[Supabase] registry change listener unavailable:', e))
+        .finally(() => { void loadSnapshot(); });
+};
+
+/** Re-reads a snapshot Rust answered before its registries had loaded, a few
+ *  times with growing gaps, in case their change event is never heard. */
+const SNAPSHOT_RETRY_MS = [2000, 4000, 8000, 15000, 30000];
+let snapshotRetry = 0;
+const retryUnloadedSnapshot = (snap: RegistrySnapshot): void => {
+    if (snap.membersLoaded && snap.cosmeticsLoaded) {
+        snapshotRetry = 0;
+        return;
+    }
+    const wait = SNAPSHOT_RETRY_MS[snapshotRetry];
+    if (wait === undefined) return;
+    snapshotRetry += 1;
+    setTimeout(() => { void loadSnapshot(); }, wait);
 };
 
 /**

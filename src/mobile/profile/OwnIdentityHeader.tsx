@@ -45,7 +45,8 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
   // The theme you just picked once Edit profile has read it, else the one Rust
   // says you wear (Rust's copy also covers a catalog the page has not read yet).
   const atmosphere = glowAtmosphere(sn ? sn.theme : identity?.atmosphere?.id);
-  const color = nameColorOr(ext?.chat_color);
+  // Your color once Edit profile has read it, else the one Rust's identity carries.
+  const color = nameColorOr(ext?.chat_color ?? identity?.name_color);
   // Once the 7TV half has answered it is the truth, a paint taken off included;
   // until then, the paint the identity carries.
   const paint = ext ? (ext.paints.find((p) => p.worn)?.def ?? null) : (identity?.paint_def ?? null);

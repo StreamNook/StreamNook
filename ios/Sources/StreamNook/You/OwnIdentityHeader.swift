@@ -49,7 +49,7 @@ struct OwnIdentityCard: View {
             .buttonStyle(RowPress())
         }
         .background(alignment: .top) {
-            AtmosphereGlow(look: look, tint: nameColor(picks.ext?.chatColor)).frame(height: Self.glow)
+            AtmosphereGlow(look: look, tint: nameColor(picks.ext?.chatColor ?? identity?.nameColor)).frame(height: Self.glow)
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
         .snPanel(radius: Self.radius, stage: true)
@@ -63,13 +63,13 @@ struct OwnIdentityCard: View {
         if let theme = picks.sn?.theme {
             return theme == "tier" || theme == "paint" ? nil : AtmosphereCatalog.shared.look(theme)
         }
-        return identity?.atmosphere?.look
+        return AtmosphereCatalog.shared.look(atmosphere: identity?.atmosphere?.look, cologne: identity?.cologne)
     }
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 0) {
             PaintedText(text: user.displayName, font: .sn(Self.nameSize(user.displayName), 700), paint: wornPaint,
-                        fallback: nameColor(picks.ext?.chatColor), shadows: .all, lineLimit: 2)
+                        fallback: nameColor(picks.ext?.chatColor ?? identity?.nameColor), shadows: .all, lineLimit: 2)
                 .fixedSize(horizontal: false, vertical: true)
             if user.login.lowercased() != user.displayName.lowercased() {
                 Text("@\(user.login)")

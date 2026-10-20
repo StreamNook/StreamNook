@@ -125,11 +125,13 @@ export interface OwnIdentityView {
   display_name: string;
   shown_login?: string;
   paint_def?: PaintV4;
+  /** Your Twitch name color, readable as chat shows it; absent when Twitch did not say. */
+  name_color?: string;
   /** Your 7TV picture, when you set one and you show 7TV pictures. */
   picture?: AvatarPick;
   /** Your Twitch profile banner; absent when the account has none. */
   banner_url?: string;
-  /** Worn, in order, images only, at most eight. */
+  /** Worn, in surface order (your StreamNook badge last), images only, capped. */
   badges: ProfileBadge[];
   streamnook?: SnMemberBadge;
   atmosphere?: AtmosphereView;
@@ -164,6 +166,8 @@ export interface ExternalPickerView {
   drops_signed_in: boolean;
   twitch_selectable: ChatIdentityBadge[];
   twitch_earned: ProfileBadge[];
+  /** The chat-client badges you wear (FFZ, BetterTTV, Chatterino and the rest), for the preview row. */
+  chat_clients?: ProfileBadge[];
   /** Your Twitch name color (`#rrggbb`), when Twitch says. */
   chat_color?: string;
   /** Twitch's named colors, which every account may pick, in Twitch's order. */

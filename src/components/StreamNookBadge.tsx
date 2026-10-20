@@ -391,8 +391,10 @@ const useActiveCosmeticAsset = (userId: string | null | undefined): string | nul
   // cosmetics fall back to the catalog's R2 asset_path, so a new badge ships as a
   // DB row + an upload with no desktop release (same model as atmospheres).
   // chatSize: this component renders at 24px everywhere it mounts.
+  // The asset manifest goes along so the row draws the art Rust picks for every other surface.
+  const entry = getCosmeticBySlug(slug);
   return resolveCosmeticAsset(
-    { slug, asset_path: getCosmeticBySlug(slug)?.asset_path },
+    { slug, asset_path: entry?.asset_path, asset_manifest: entry?.asset_manifest },
     { chatSize: true },
   );
 };
@@ -505,7 +507,9 @@ export const StreamNookBadge = memo(function StreamNookBadge({
 
   // The card shows the full-size art; the row keeps its 24px chat copy.
   const fullArt =
-    (cosmeticSlug ? resolveCosmeticAsset({ slug: cosmeticSlug, asset_path: cosmetic?.asset_path }) : null) ??
+    (cosmeticSlug
+      ? resolveCosmeticAsset({ slug: cosmeticSlug, asset_path: cosmetic?.asset_path, asset_manifest: cosmetic?.asset_manifest })
+      : null) ??
     streamNookLogo;
   const ref = streamNookBadgeRef(userId ?? '', label, fullArt, cosmeticSlug ?? undefined);
 

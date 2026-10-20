@@ -25,6 +25,14 @@ pub async fn initialize_badge_service() {
 
     *BADGE_SERVICE.write().await = Some(service);
     debug!("[BadgeService] Service initialized and pre-warmed");
+    // Rows a native shell got before now wore no chat-client badges.
+    crate::services::late_third_party::flush().await;
+}
+
+/// Whether the service (and so the chat-client badge feeds) is up; rows stamped
+/// before then wear none of those badges.
+pub fn third_party_ready() -> bool {
+    BADGE_SERVICE.try_read().is_ok_and(|guard| guard.is_some())
 }
 
 /// The third-party badges a chatter wears, without waiting on the service

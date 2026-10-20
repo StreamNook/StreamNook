@@ -11,7 +11,7 @@
 // picture and StreamNook membership, cached per person and room. The same
 // answer draws the iPhone's native sheet, so the two cannot drift; this lays it
 // out.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { listen } from '@tauri-apps/api/event';
@@ -21,6 +21,12 @@ import { FallbackImage } from '../../components/FallbackImage';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { Logger } from '../../utils/logger';
+import {
+  getCosmeticsVersion,
+  getStreamNookRegistryVersion,
+  subscribeCosmeticsVersion,
+  subscribeStreamNookRegistryVersion,
+} from '../../services/supabaseService';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
@@ -323,6 +329,11 @@ const ProfileBody: React.FC<{
     };
   }, [username, channelName, wornBadges]);
 
+  // The members and cosmetics registries arriving or changing (a badge just
+  // worn, the member list read late) build the sheet again, as chat rows redraw.
+  const registryVersion = useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion);
+  const cosmeticsVersion = useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -348,7 +359,7 @@ const ProfileBody: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [userId, username, user.displayName, user.color, channelId, channelName]);
+  }, [userId, username, user.displayName, user.color, channelId, channelName, registryVersion, cosmeticsVersion]);
 
   const paint = sheet?.paint_def ?? null;
   const adjustNameColor = useNameColorAdjust();

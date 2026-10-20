@@ -16,9 +16,26 @@ final class AtmosphereCatalog: Sendable {
         return looks.withLock { $0[id] ?? $0[String(id.split(separator: "+").first ?? "")] }
     }
 
+    /// The Cologne event theme's id: a member wearing it carries `cologne` instead of an
+    /// Atmosphere, and a card glows with the theme's own look.
+    static let cologneTheme = "cs2-major-cologne"
+
+    /// What a card glows with: the member's Atmosphere, else the Cologne look they wear.
+    func look(atmosphere: AtmosphereLook?, cologne: CologneLook?) -> AtmosphereLook? {
+        atmosphere ?? (cologne != nil ? look(Self.cologneTheme) : nil)
+    }
+
+    /// Posted when the catalog's looks change, so rows laid out before it answered (a cold start,
+    /// the history) are laid out again with their authors' washes.
+    static let changed = Notification.Name("app.streamnook.atmospheres.changed")
+
     func replace(_ atmospheres: [Atmosphere]) {
         let map = Dictionary(atmospheres.map { ($0.id, $0.look) }, uniquingKeysWith: { a, _ in a })
-        looks.withLock { $0 = map }
+        let changed = looks.withLock { old -> Bool in
+            defer { old = map }
+            return old != map
+        }
+        if changed { NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
 }
 

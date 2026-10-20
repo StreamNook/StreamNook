@@ -265,7 +265,7 @@ fn note_seen(login: &str, color: &str) {
     }
 }
 
-fn seen_color(login: &str) -> Option<String> {
+pub(crate) fn seen_color(login: &str) -> Option<String> {
     SEEN.lock().ok()?.as_mut()?.get(&login.to_lowercase()).cloned()
 }
 

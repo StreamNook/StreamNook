@@ -36,8 +36,12 @@ final class ChatPipeline: @unchecked Sendable {
     private let counters = Mutex<(frames: Int, rows: Int, layoutNanos: UInt64)>((0, 0, 0))
 
     @MainActor weak var list: ChatListView?
+    /// Paint images asked for (an image paint's art), each once: a row's bitmap draws one only
+    /// when it is loaded, so the rows wearing it are drawn again when it lands.
+    private var paintImages: Set<String> = []
     private var failureObserver: NSObjectProtocol?
     private var themeObserver: NSObjectProtocol?
+    private var atmosphereObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
          onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -56,11 +60,17 @@ final class ChatPipeline: @unchecked Sendable {
         themeObserver = NotificationCenter.default.addObserver(forName: ChatTheme.changed, object: nil, queue: nil) { [weak self] _ in
             self?.themeChanged()
         }
+        // The Atmosphere catalog arriving (or changing) puts the washes on rows laid out without them.
+        atmosphereObserver = NotificationCenter.default.addObserver(forName: AtmosphereCatalog.changed, object: nil,
+                                                                    queue: nil) { [weak self] _ in
+            self?.themeChanged()
+        }
     }
 
     deinit {
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        if let atmosphereObserver { NotificationCenter.default.removeObserver(atmosphereObserver) }
     }
 
     private func themeChanged() {
@@ -234,6 +244,7 @@ final class ChatPipeline: @unchecked Sendable {
 
     private func layout(_ row: ChatRowModel, bitmap: Bool) -> ChatRowLayout {
         let start = DispatchTime.now().uptimeNanoseconds
+        loadPaintImages(row)
         let built = ChatRowLayoutBuilder(style: style, width: width, scale: scale).build(row)
         if bitmap { built.renderBitmap(scale: scale) }
         layouts[row.id] = built
@@ -250,6 +261,41 @@ final class ChatPipeline: @unchecked Sendable {
     private func dropBadge(_ url: String) {
         queue.async { [self] in
             let wearing = buffer.rows.filter { $0.message.metadata.view?.badges.contains { $0.url == url } == true }
+            guard !wearing.isEmpty else { return }
+            guard width > 0, visible else {
+                for row in wearing { layouts[row.id] = nil }
+                return
+            }
+            let batch = Batch(updated: wearing.map { layout($0, bitmap: true) })
+            ready.withLock { $0.append(batch) }
+        }
+    }
+
+    /// Starts loading the art of the author's image paint when nothing has it yet. Without it the
+    /// name draws in its base color (the account's Twitch color) until another screen happens
+    /// to load the same image.
+    private func loadPaintImages(_ row: ChatRowModel) {
+        guard let paint = row.message.metadata.view?.paint else { return }
+        for url in PaintPainter.imageURLs(paint) where !paintImages.contains(url) {
+            guard ImagePipeline.shared.cachedAnySize(url) == nil, !ImagePipeline.shared.hasFailed(url) else { continue }
+            paintImages.insert(url)
+            // About the name's height on screen; the painter scales whatever size is loaded.
+            let pixels = Int((CGFloat(style.fontSize) * 2 * scale).rounded(.up))
+            // Asked again after it lands, so art the image cache later drops is loaded again.
+            ImagePipeline.shared.load(url, pixelHeight: pixels, animated: false) { [weak self] image in
+                guard let self else { return }
+                queue.async { self.paintImages.remove(url) }
+                if image != nil { redrawPaint(url) }
+            }
+        }
+    }
+
+    /// A paint image that just loaded: the rows wearing it are drawn again with it.
+    private func redrawPaint(_ url: String) {
+        queue.async { [self] in
+            let wearing = buffer.rows.filter { row in
+                row.message.metadata.view?.paint.map { PaintPainter.imageURLs($0).contains(url) } == true
+            }
             guard !wearing.isEmpty else { return }
             guard width > 0, visible else {
                 for row in wearing { layouts[row.id] = nil }

@@ -257,12 +257,13 @@ pub async fn refresh() {
     }
 }
 
-/// Waits (up to `limit`) until the cosmetics and atmosphere catalogs have loaded
-/// once, so an answer is never computed against an empty catalog.
+/// Waits (up to `limit`) until the member list and the cosmetics and atmosphere
+/// catalogs have loaded once, so an answer is never computed against an empty one.
 pub async fn ready(limit: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + limit;
     loop {
-        if read(|s| s.cosmetics_loaded && s.atmospheres_loaded) {
+        // The member list too: a sheet or backlog read before it would find no member.
+        if read(|s| s.members_loaded && s.cosmetics_loaded && s.atmospheres_loaded) {
             return true;
         }
         if tokio::time::Instant::now() >= deadline || !backend::configured() {
