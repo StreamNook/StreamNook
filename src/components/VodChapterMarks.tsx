@@ -98,14 +98,17 @@ export default function VodChapterMarks({
   }, [host, hasPreview, chapters.length]);
 
   // Hover tracking on the host: its content box is the true 0-100% playhead
-  // space (see the .sn-muted-marks note in globals.css).
+  // space (see the .sn-muted-marks note in globals.css). Mouse events, the
+  // ones Plyr's tooltip and preview read: they carry the exact pointer, and
+  // the thumb's position during a fine drag (plyrFineScrub), so this tip
+  // names the same moment theirs do.
   useEffect(() => {
     if (!host || chapters.length < 2) return;
     const video = videoRef.current;
     const onEnter = () => {
       rectRef.current = host.getBoundingClientRect();
     };
-    const onMove = (e: PointerEvent) => {
+    const onMove = (e: MouseEvent) => {
       const r = rectRef.current ?? (rectRef.current = host.getBoundingClientRect());
       if (r.width <= 0) return;
       const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
@@ -121,15 +124,15 @@ export default function VodChapterMarks({
       rectRef.current = null;
       setHover(null);
     };
-    host.addEventListener('pointerenter', onEnter);
-    host.addEventListener('pointerdown', onMove);
-    host.addEventListener('pointermove', onMove);
-    host.addEventListener('pointerleave', onLeave);
+    host.addEventListener('mouseenter', onEnter);
+    host.addEventListener('mousedown', onMove);
+    host.addEventListener('mousemove', onMove);
+    host.addEventListener('mouseleave', onLeave);
     return () => {
-      host.removeEventListener('pointerenter', onEnter);
-      host.removeEventListener('pointerdown', onMove);
-      host.removeEventListener('pointermove', onMove);
-      host.removeEventListener('pointerleave', onLeave);
+      host.removeEventListener('mouseenter', onEnter);
+      host.removeEventListener('mousedown', onMove);
+      host.removeEventListener('mousemove', onMove);
+      host.removeEventListener('mouseleave', onLeave);
     };
   }, [host, chapters, videoRef, fallbackLengthSecs, hasPreview]);
 
@@ -162,7 +165,7 @@ export default function VodChapterMarks({
       {hover && !hasPreview &&
         createPortal(
           <div className="sn-chapter-tip" style={{ left: `${hover.frac * 100}%` }}>
-            {formatVodTime(hover.secs)}
+            <span className="sn-chapter-tip__time">{formatVodTime(hover.secs)}</span>
             <span className="sn-chapter-tip__title">{hover.title}</span>
           </div>,
           host,

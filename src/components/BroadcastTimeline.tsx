@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { formatAgo, formatVodTime } from '../utils/vodProgress';
 import { broadcastScale, formatBehindShort } from '../utils/broadcastScale';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
-import { dragDivisor, dragSpeedLabel, nudgeFrac, wheelStepSecs } from '../utils/scrubPrecision';
+import { dragDivisor, dragFrac, dragSpeedLabel, NUDGE_SETTLE_MS, nudgeFrac, wheelStepSecs } from '../utils/scrubPrecision';
 
 /**
  * The broadcast timeline for a live Twitch stream: a scrubber that spans the
@@ -93,8 +93,6 @@ const PENDING_SETTLE_SECS = 3;
 /** A drop nothing ever confirms (the swap failed, the seek was refused)
  *  stops being shown after this. */
 const PENDING_TIMEOUT_MS = 8000;
-/** A wheel nudge lands this long after the last notch. */
-const NUDGE_SETTLE_MS = 600;
 /** A press or drop this close to the "you left here" mark lands on it. */
 const MARK_SNAP_PX = 8;
 
@@ -333,9 +331,8 @@ function BroadcastTimelineBar({
     // Slow scrub: the further the pointer sits above or below the bar, the
     // less of its horizontal motion reaches the thumb.
     const divisor = dragDivisor(Math.abs(e.clientY - (r.top + r.height / 2)));
-    const dx = e.clientX - d.lastX;
+    d.frac = dragFrac(d.frac, e.clientX - d.lastX, r.width, divisor);
     d.lastX = e.clientX;
-    d.frac = Math.min(1, Math.max(0, d.frac + dx / r.width / divisor));
     setDragRate(divisor);
     setDrag(d.frac);
   };
