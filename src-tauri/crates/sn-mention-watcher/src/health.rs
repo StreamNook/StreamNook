@@ -1,9 +1,10 @@
 //! What the watcher is doing, for a person or a monitor to read: a JSON file
 //! rewritten every 30 s.
 //!
-//! `{"connected": 3, "channels": 412, "users": 57, "last_targets_ok": 1792424183,
-//!   "last_post_ok": 1792424170, "dropped": 0}` (times in Unix seconds, null
-//! until the first success).
+//! `{"connected": 3, "channels": 412, "wanted": 600, "wanted_live": 40, "users": 57,
+//!   "last_targets_ok": 1792424183, "last_post_ok": 1792424170, "dropped": 0}`
+//! (`channels` joined of `wanted`; times in Unix seconds, null until the first
+//! success).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -20,6 +21,9 @@ pub const EVERY: Duration = Duration::from_secs(30);
 pub struct Health {
     pub connected: AtomicUsize,
     pub channels: AtomicUsize,
+    /// Channels the last targets read wanted, and how many of them are live.
+    pub wanted: AtomicUsize,
+    pub wanted_live: AtomicUsize,
     pub users: AtomicUsize,
     pub last_targets_ok: AtomicU64,
     pub last_post_ok: AtomicU64,
@@ -30,6 +34,8 @@ pub struct Health {
 pub struct Snapshot {
     pub connected: usize,
     pub channels: usize,
+    pub wanted: usize,
+    pub wanted_live: usize,
     pub users: usize,
     pub last_targets_ok: Option<u64>,
     pub last_post_ok: Option<u64>,
@@ -54,6 +60,8 @@ impl Health {
         Snapshot {
             connected: self.connected.load(Ordering::Relaxed),
             channels: self.channels.load(Ordering::Relaxed),
+            wanted: self.wanted.load(Ordering::Relaxed),
+            wanted_live: self.wanted_live.load(Ordering::Relaxed),
             users: self.users.load(Ordering::Relaxed),
             last_targets_ok: when(&self.last_targets_ok),
             last_post_ok: when(&self.last_post_ok),

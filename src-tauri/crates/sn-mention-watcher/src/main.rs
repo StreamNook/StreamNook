@@ -1,6 +1,8 @@
 //! The StreamNook mention watcher: reads the chat of every live channel that
-//! opted-in users follow, with one anonymous Twitch connection pool, and
-//! hands each mention of or reply to them to the notify Worker.
+//! opted-in users follow, and of every offline chat they hold a lease on (one
+//! they opened lately, or that was live lately), live ones joined first, with
+//! one anonymous Twitch connection pool, and hands each mention of or reply to
+//! them to the notify Worker.
 //!
 //! Configuration, from the environment:
 //! - `SN_NOTIFY_URL`: the Worker's origin, e.g. `https://notify.streamnook.app`.
@@ -8,8 +10,8 @@
 //! - `SN_WATCHER_HEALTH`: the health file (default `/run/sn-mention-watcher/health`).
 //! - `RUST_LOG`: log filter (default `info`).
 //!
-//! Flow: every 60 s the signed `GET /watcher/targets` gives the live set; the
-//! pool joins and parts to match it; each PRIVMSG goes through the shared rule
+//! Flow: every 60 s the signed `GET /watcher/targets` (every page of it) gives
+//! the watched set; the pool joins and parts to match it, live channels first; each PRIVMSG goes through the shared rule
 //! (`sn_mention_rule`) for everyone watching that channel; matches go out in
 //! signed batches (`POST /watcher/mentions`).
 
@@ -57,12 +59,12 @@ fn config() -> Result<Config, String> {
     Ok(Config { base, secret, health: PathBuf::from(health) })
 }
 
-/// One signed targets read.
-async fn fetch_targets(client: &reqwest::Client, cfg: &Config) -> Result<LiveSet, String> {
+/// One signed targets page. The signature covers the path, never the query.
+async fn fetch_page(client: &reqwest::Client, cfg: &Config, page: u32) -> Result<targets::Answer, String> {
     let ts = sign::now_secs();
     let sig = sign::signature(&cfg.secret, ts, "GET", targets::PATH, b"");
     let resp = client
-        .get(format!("{}{}", cfg.base, targets::PATH))
+        .get(format!("{}{}?page={page}", cfg.base, targets::PATH))
         .header(sign::TS_HEADER, ts.to_string())
         .header(sign::SIG_HEADER, sig)
         .send()
@@ -70,11 +72,27 @@ async fn fetch_targets(client: &reqwest::Client, cfg: &Config) -> Result<LiveSet
         .map_err(|e| format!("could not reach the Worker: {e}"))?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(format!("the Worker answered {status}"));
+        return Err(format!("the Worker answered {status} for page {page}"));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("could not read the answer: {e}"))?;
-    let answer: targets::Answer = serde_json::from_slice(&bytes).map_err(|e| format!("unreadable answer: {e}"))?;
-    Ok(LiveSet::from_answer(answer))
+    let bytes = resp.bytes().await.map_err(|e| format!("could not read page {page}: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("unreadable page {page}: {e}"))
+}
+
+/// One signed targets read: every page, or nothing (a failed page keeps the
+/// last whole set).
+async fn fetch_targets(client: &reqwest::Client, cfg: &Config) -> Result<LiveSet, String> {
+    let mut answers = Vec::new();
+    let mut page = 0;
+    loop {
+        let answer = fetch_page(client, cfg, page).await?;
+        let next = answer.next;
+        answers.push(answer);
+        match next {
+            Some(n) if n > page && n < targets::MAX_PAGES => page = n,
+            _ => break,
+        }
+    }
+    Ok(LiveSet::from_answers(answers))
 }
 
 async fn shutdown_signal() {
@@ -151,6 +169,8 @@ async fn main() {
     tokio::spawn(health::run(health.clone(), cfg.health.clone()));
 
     let mut pool = irc::Pool::new(line_tx, health.clone());
+    // Whether the last read's channels were all joined, so "all joined" is said once.
+    let mut caught_up = false;
     let mut tick = tokio::time::interval(POLL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tracing::info!("watching for mentions through {}", cfg.base);
@@ -165,10 +185,22 @@ async fn main() {
             Ok(set) => {
                 health.targets_ok();
                 health.users.store(set.users.len(), Ordering::Relaxed);
-                let logins = set.logins();
-                tracing::debug!("targets: {} live channels, {} users", logins.len(), set.users.len());
+                let wanted = set.wanted();
+                let live_count = set.live_count();
+                health.wanted.store(wanted.len(), Ordering::Relaxed);
+                health.wanted_live.store(live_count, Ordering::Relaxed);
+                tracing::debug!("targets: {} channels ({} live), {} users", wanted.len(), live_count, set.users.len());
                 *live.write().unwrap_or_else(|p| p.into_inner()) = set;
-                pool.apply(&logins);
+                pool.apply(&wanted);
+                // Join progress, live channels first: said every read until done.
+                let joined = health.channels.load(Ordering::Relaxed);
+                if joined < wanted.len() {
+                    tracing::info!("irc: joined {} of {} channels ({} live)", joined, wanted.len(), live_count);
+                    caught_up = false;
+                } else if !caught_up {
+                    tracing::info!("irc: all {} channels joined ({} live)", wanted.len(), live_count);
+                    caught_up = true;
+                }
             }
             // The last good set stays: a Worker outage parts nothing.
             Err(e) => tracing::warn!("targets: {e}; keeping the last set"),
