@@ -23,6 +23,8 @@ import SwiftUI
 /// - `room:LOGIN` opens LOGIN's offline room (or its stream when it is live); `roomvod` plays the
 ///   room's latest broadcast, `roomback` returns to the room; `roomstate` logs what the room holds
 /// - `sleep:MINUTES` starts the sleep timer, `sleepoff` turns it off, `sleepstate` logs it
+/// - `openoffline:INDEX` opens the Browse search's offline result at INDEX as a tap does;
+///   `browsestate` logs the search query, its result count, the tab and the watch layer
 /// - `clip` opens the watched channel's top clip the way a chat link does (the clip sheet)
 /// - `channelsheet` opens the watched channel's videos and clips; `vodof:INDEX` plays the watched
 ///   channel's past broadcast at INDEX (as its Channel sheet does), `clipof:INDEX` its clip;
@@ -115,6 +117,18 @@ enum Drive {
                 default: await model.browse()
                 }
             case "search": model.browseState.query = value
+            case "openoffline":
+                // The offline result at INDEX of the Browse search, opened as its row's tap opens it.
+                let offline = (model.browseState.streamResults ?? []).filter(\.isOffline)
+                let index = Int(value) ?? 0
+                if offline.indices.contains(index) {
+                    log.notice("drive offline result \(offline[index].userLogin, privacy: .public)")
+                    model.startWatching(offline[index])
+                } else {
+                    log.notice("drive offline result \(index) missing of \(offline.count)")
+                }
+            case "browsestate":
+                log.notice("drive browse query \(model.browseState.query, privacy: .public) results \(model.browseState.streamResults?.count ?? -1) tab \(String(describing: model.nav.tab), privacy: .public) mode \(model.nav.playerMode == .mini ? "mini" : "full", privacy: .public) watching \(model.watch.stream?.userLogin ?? "-", privacy: .public)")
             case "open": await open(value, model: model)
             case "play": await open("watch:\(value)", model: model)
             case "login":
