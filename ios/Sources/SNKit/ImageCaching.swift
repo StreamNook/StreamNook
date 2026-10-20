@@ -29,6 +29,22 @@ public enum ImageTier {
         return url
     }
 
+    /// The smaller FrankerFaceZ sizes to try, largest first, when the size asked for is missing:
+    /// not every FFZ emote has a 4 or a 2. Static (`.../emote/<id>/4`) and animated
+    /// (`.../emote/<id>/animated/4`) alike; any other URL has none.
+    public static func ffzFallbacks(_ url: String) -> [String] {
+        guard url.contains("cdn.frankerfacez.com/") else { return [] }
+        let sizes: [Int]
+        if url.hasSuffix("/4") {
+            sizes = [2, 1]
+        } else if url.hasSuffix("/2") {
+            sizes = [1]
+        } else {
+            return []
+        }
+        return sizes.map { replacingLast(url, pattern: #"/[124]$"#, with: "/\($0)", keepGroup: false) }
+    }
+
     private static func replacingLast(_ url: String, pattern: String, with replacement: String, keepGroup: Bool) -> String {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return url }
         let range = NSRange(url.startIndex..., in: url)
