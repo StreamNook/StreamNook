@@ -17,7 +17,7 @@
 // own state, so a moving finger re-renders this overlay and nothing else: the
 // pane's re-render storms are what once dropped chat swipes. A non-passive
 // touchmove stops the list scrolling under the pull.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
@@ -299,6 +299,14 @@ const CHIP_HEIGHT = 28;
 const CHIP_INSET = 12;
 /** The Preview track along the row's bottom, which the chip never covers. */
 const TRACK = 3;
+/** A fully opaque raised surface for what sits over chat text (the chip and the rail): the
+ *  theme's tertiary floor over its background, both over black, so a theme color with any
+ *  opacity still paints solid and the message behind never shows through. */
+const SOLID_RAISED: CSSProperties = {
+  backgroundColor: '#000',
+  backgroundImage:
+    'linear-gradient(var(--color-background-tertiary), var(--color-background-tertiary)), linear-gradient(var(--color-background), var(--color-background))',
+};
 
 function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
   const chipRef = useRef<HTMLDivElement>(null);
@@ -326,7 +334,9 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       aria-live="polite"
     >
       {slider.style === 'rail' ? (
-        <div className="absolute inset-x-1 inset-y-0.5 rounded-[10px] border border-white/[0.08] bg-surface">
+        // Solid: the rail covers the message, and a see-through one let its text clash with the
+        // step names.
+        <div className="absolute inset-x-1 inset-y-0.5 rounded-[10px] border border-borderSubtle" style={SOLID_RAISED}>
           {slider.steps.map((s, i) => {
             // A legend spread evenly along the rail, so short zones never crowd
             // their labels together; the lit pill marks the step under the finger.
@@ -372,8 +382,11 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       )}
       <div
         ref={chipRef}
-        className="absolute flex h-7 items-center justify-center overflow-hidden whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
+        className="absolute flex h-7 items-center justify-center overflow-hidden whitespace-nowrap rounded-xl border px-3 text-[13px] font-semibold"
         style={{
+          // Solid and lifted off the chat, so the words read over any message on any theme.
+          ...SOLID_RAISED,
+          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.28)',
           left: chipX,
           top: chipTop,
           maxWidth: view.width - CHIP_INSET * 2,

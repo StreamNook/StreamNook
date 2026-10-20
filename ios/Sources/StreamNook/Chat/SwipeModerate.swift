@@ -180,6 +180,9 @@ final class SwipeModOverlay: UIView {
     private let railPill = UIView()
     private let chip = UILabel()
     private let chipBox = UIView()
+    /// The chip's lift off the chat: a solid backing with a soft shadow under it (the chip itself
+    /// clips its dwell fill, so it cannot carry the shadow).
+    private let chipLift = UIView()
     /// Ban's rest filling the chip behind its words.
     private let dwellBar = CALayer()
     private static let chipHeight: CGFloat = 28
@@ -205,11 +208,13 @@ final class SwipeModOverlay: UIView {
         let local = CGRect(x: 0, y: Self.headroom, width: row.width, height: row.height)
         if slider.style == "rail" {
             rail.frame = local.insetBy(dx: 4, dy: 2)
-            rail.backgroundColor = ChatTheme.surface
+            // Solid: the rail covers the message, and a see-through one let its text clash with
+            // the step names.
+            rail.backgroundColor = ChatTheme.raisedSolid
             rail.layer.cornerRadius = 10
             rail.layer.cornerCurve = .continuous
             rail.layer.borderWidth = 0.5
-            rail.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
+            rail.layer.borderColor = ChatTheme.borderSubtle.cgColor
             addSubview(rail)
             railPill.layer.cornerRadius = 9
             railPill.layer.cornerCurve = .continuous
@@ -251,7 +256,8 @@ final class SwipeModOverlay: UIView {
         chip.font = .systemFont(ofSize: 13, weight: .semibold)
         chip.textColor = ChatTheme.textPrimary
         chip.textAlignment = .center
-        chipBox.backgroundColor = ChatTheme.surface
+        // Solid, so the words read over any message text above the row, on every theme.
+        chipBox.backgroundColor = ChatTheme.raisedSolid
         chipBox.layer.cornerRadius = 12
         chipBox.layer.cornerCurve = .continuous
         chipBox.layer.borderWidth = 1
@@ -259,6 +265,14 @@ final class SwipeModOverlay: UIView {
         dwellBar.backgroundColor = ChatTheme.error.withAlphaComponent(0.2).cgColor
         chipBox.layer.addSublayer(dwellBar)
         chipBox.addSubview(chip)
+        chipLift.backgroundColor = ChatTheme.raisedSolid
+        chipLift.layer.cornerRadius = 12
+        chipLift.layer.cornerCurve = .continuous
+        chipLift.layer.shadowColor = UIColor.black.cgColor
+        chipLift.layer.shadowOpacity = 0.28
+        chipLift.layer.shadowRadius = 6
+        chipLift.layer.shadowOffset = CGSize(width: 0, height: 2)
+        addSubview(chipLift)
         addSubview(chipBox)
         alpha = 0
         UIView.animate(withDuration: 0.12) { self.alpha = 1 }
@@ -303,6 +317,8 @@ final class SwipeModOverlay: UIView {
         let y = min(max(Self.headroom - 34, listTop + 30), Self.headroom + row.height - 3 - Self.chipHeight - 4)
         chipBox.frame = CGRect(x: x, y: y, width: width, height: Self.chipHeight)
         chip.frame = chipBox.bounds
+        chipLift.frame = chipBox.frame
+        chipLift.layer.shadowPath = UIBezierPath(roundedRect: chipLift.bounds, cornerRadius: 12).cgPath
         chipBox.layer.borderColor = (quiet ? ChatTheme.error.withAlphaComponent(0.55) : ink.withAlphaComponent(0.55)).cgColor
         chip.textColor = tint == nil ? ChatTheme.textSecondary : ChatTheme.textPrimary
     }
