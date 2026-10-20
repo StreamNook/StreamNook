@@ -24,10 +24,12 @@ extension CatalogRow {
     /// logged and left out, so one row never blanks the list; Android draws what it knows the
     /// same way. Nil when the call itself failed.
     @MainActor
-    static func load(_ cmd: String, args: [String: Any?] = [:], core: CoreBridge) async -> [CatalogRow]? {
+    static func load(_ cmd: String, args: [String: String] = [:], core: CoreBridge) async -> [CatalogRow]? {
         let json: String
         do {
-            json = try await core.invoke(cmd, args: args)
+            // Plain JSON text crosses to the core: a [String: Any?] is not Sendable under Swift 6.
+            let body = (try? JSONSerialization.data(withJSONObject: args)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            json = try await core.invoke(cmd, body)
         } catch {
             log.error("\(cmd, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             return nil
