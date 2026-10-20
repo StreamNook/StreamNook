@@ -473,6 +473,8 @@ pub async fn kick_chat_history(
             } else {
                 m.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut m);
+                // Patched in later if the channel's whole 7TV table is not in yet.
+                crate::services::providers::kick_emotes::hold_row(&m);
                 Some(m)
             }
         })
