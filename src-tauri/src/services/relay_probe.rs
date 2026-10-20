@@ -167,7 +167,11 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>, playlist_behin
         _ => false,
     };
     s.catching_up = catching_up;
-    let readout = behind_ms.or_else(|| playlist_behind_ms.filter(|b| b.is_finite() && *b >= 0.0).map(|b| b as i64));
+    // Seconds behind live: the relay edge's own distance plus how far that edge
+    // trails the broadcaster (the desktop shows the same sum). The playlist
+    // fallback is already a distance from the playlist's end.
+    let edge_delay_ms = (crate::services::ll_origin::LL_EDGE_DELAY_SECS * 1000.0) as i64;
+    let readout = behind_ms.map(|b| b + edge_delay_ms).or_else(|| playlist_behind_ms.filter(|b| b.is_finite() && *b >= 0.0).map(|b| b as i64));
     if let Some(b) = readout {
         s.recent.push_back(b);
         while s.recent.len() > LABEL_SAMPLES {

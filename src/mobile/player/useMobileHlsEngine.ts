@@ -113,6 +113,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     // from low latency, and how many rebuilds this URL has had since it last
     // played. All per URL: a new URL starts the count again.
     let lowLatency = false;
+    // A low-latency broadcast the parts origin did not take (Twitch's PREFETCH
+    // hints on whole segments): the relay promotes its in-progress segments,
+    // so it rides closer than a normal-latency one, as on the desktop.
+    let promoted = false;
     let fellBack = false;
     let reloads = 0;
     // Whether the core was already told this URL's codec failed to decode:
@@ -231,9 +235,12 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // The viewer's chosen distance behind live. On the parts path the edge
       // trails the broadcaster by a measured delay, so the edge target sits
       // that much lower to land on what they actually asked for.
-      // The phone has no prefetch probe yet, so a whole-segment ride is
-      // treated as a normal-latency broadcast (the safe side).
-      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, ll ? 'll' : 'plain');
+      // The same three paths as the desktop: parts, a promoted low-latency
+      // broadcast on whole segments, or a normal-latency one.
+      const llTargetDisplayed = resolveLiveEdgeGap(
+        current?.ll_target_latency,
+        ll ? 'll' : promoted ? 'promotion' : 'plain',
+      );
       const llTargetRaw = ll ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
 
       const hls = new Hls({
@@ -643,6 +650,15 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       if (!vodStart) {
         try {
           isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
+        } catch {
+          /* command unavailable or the stream went away */
+        }
+      }
+      // The second relay fact, as the desktop reads it: a low-latency broadcast
+      // (PREFETCH hints) that the parts origin did not take over.
+      if (!vodStart && !isLowLatencyChannel) {
+        try {
+          promoted = await invoke<boolean>('get_stream_prefetch_present');
         } catch {
           /* command unavailable or the stream went away */
         }
