@@ -91,7 +91,17 @@ pub async fn rpc(name: &str, args: Value) -> Result<Value, String> {
         let body = res.text().await.unwrap_or_default();
         return Err(format!("{name}: {status} {}", body.chars().take(200).collect::<String>()));
     }
-    res.json::<Value>().await.map_err(|e| format!("{name}: {e}"))
+    // A function that returns nothing answers 200 or 204 with an empty body;
+    // that is a success, not a body to decode.
+    let body = res.text().await.map_err(|e| format!("{name}: {e}"))?;
+    rpc_body(&body).map_err(|e| format!("{name}: {e}"))
+}
+
+fn rpc_body(body: &str) -> Result<Value, serde_json::Error> {
+    if body.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(body)
 }
 
 /// The legacy direct write: an upsert under the anon key. Used only while the
@@ -249,6 +259,14 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_function_that_returns_nothing_is_a_success() {
+        assert_eq!(rpc_body("").unwrap(), Value::Null);
+        assert_eq!(rpc_body("  \n").unwrap(), Value::Null);
+        assert_eq!(rpc_body("5").unwrap(), json!(5));
+        assert!(rpc_body("{not json").is_err());
+    }
 
     #[test]
     fn a_postgres_change_carries_its_table_kind_and_row() {
