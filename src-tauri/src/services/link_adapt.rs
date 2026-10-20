@@ -2314,6 +2314,9 @@ mod tests {
         begin_ladder(id, ladder(), 0, true, Arc::new(Still));
         let newer = generation(id);
         assert_ne!(older, newer);
+        // Any id but the solo player's starts as a tile, which never gets a
+        // start pick: play the solo player's part without touching its session.
+        sessions().get_mut(id).unwrap().gov.set_tile(false);
         let (b, s) = seg(8_200_000, 2e6);
         note_throughput(id, b, s);
         note_throughput(id, b, s);
