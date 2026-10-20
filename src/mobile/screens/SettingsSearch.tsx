@@ -13,7 +13,7 @@ import { useGroupRowFrame } from '../ui/groupSurface';
 import EmoteProviderLogo, { type EmoteProviderId } from '../../components/chat/EmoteProviderLogo';
 import { SETTINGS_ROWS } from './SettingsScreen';
 import { settingIcon } from './settingsIcons';
-import { catalogRowKey, openCatalogRow, rowPlace, type CatalogRow } from './settingsCatalog';
+import { catalogRowKey, knownRows, openCatalogRow, rowPlace, type CatalogRow } from './settingsCatalog';
 import { Logger } from '../../utils/logger';
 
 const EMOTE_LOGOS: readonly string[] = ['7tv', 'ffz', 'bttv'];
@@ -143,7 +143,7 @@ export const SettingsDirectory: React.FC = () => {
     const timer = window.setTimeout(() => {
       invoke<CatalogRow[]>('search_settings', { query: trimmed })
         .then((rows) => {
-          if (!cancelled) setAnswer({ query: trimmed, rows });
+          if (!cancelled) setAnswer({ query: trimmed, rows: knownRows(rows, 'SettingsSearch') });
         })
         .catch((e) => {
           Logger.warn('[SettingsSearch] search_settings failed:', e);
