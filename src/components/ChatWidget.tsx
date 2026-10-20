@@ -143,7 +143,7 @@ interface ParsedMessage {
 
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { usePinStore } from '../stores/pinStore';
-import { useVodReplayStore, useVodReplaySnapshot, nudgeVodReplay } from '../stores/vodReplayStore';
+import { useVodReplayStore, useVodReplaySnapshot, setVodReplayShowing } from '../stores/vodReplayStore';
 import { SegmentedSelect } from './settings/_primitives';
 import type { TwitchStream, HypeTrainData, MentionEntry } from '../types';
 
@@ -768,7 +768,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Read before the replay seam below, which gates on it.
   const currentMediaType = useAppStore((s) => s.currentMediaType);
   const replayChat = useVodReplaySnapshot();
-  const replaySessionId = useVodReplayStore((s) => s.sessionId);
   const replayActive = useVodReplayStore((s) => s.active);
   // The toggle is available whenever a VOD replay session exists — started for a
   // VOD opened from the Videos list OR via the offline-channel button. Never in
@@ -779,21 +778,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     !channelOverride &&
     replayActive &&
     (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
-  const [chatMode, setChatMode] = useState<'replay' | 'live'>('replay');
+  // The VOD Chat / Live Chat switch lives in the replay store, shared with the
+  // phone's chat pane; a new VOD always starts on replay, and switching back to
+  // replay catches up to the playhead at once.
+  const chatMode = useVodReplayStore((s) => s.showing);
   const chat = isVodReplay && chatMode === 'replay' ? replayChat : isTwitch ? twitchChat : providerChat;
   const { connectChat, sendMessage, isConnected, setPaused: setBufferPaused, roomState, userBadges } = chat;
-
-  // A new VOD always starts in replay (beginVodReplay bumps sessionId).
-  useEffect(() => {
-    setChatMode('replay');
-  }, [replaySessionId]);
-
-  // Returning to replay from live: catch up to the current playhead instantly.
-  // The engine keeps running across the toggle, so this never resets position —
-  // it just avoids waiting up to one poll interval to resync.
-  useEffect(() => {
-    if (isVodReplay && chatMode === 'replay') nudgeVodReplay();
-  }, [isVodReplay, chatMode]);
 
   // Kick sending requires a connected Kick account (OAuth). Poll the state so the
   // composer enables right after the user connects.
@@ -5777,7 +5767,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   <SegmentedSelect
                     fullWidth
                     value={chatMode}
-                    onChange={(v) => setChatMode(v)}
+                    onChange={(v) => setVodReplayShowing(v)}
                     options={[
                       { value: 'replay', label: 'VOD Chat' },
                       { value: 'live', label: 'Live Chat' },
