@@ -482,6 +482,11 @@ pub struct RowView {
     /// the settings page writes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
+    /// The art a subscription or gift notice leads with, as the desktop card
+    /// draws it: Twitch's own gift (the Sub Gifter badge). None for a Prime sub
+    /// (the shell draws Twitch's Prime crown) and for every other row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_art: Option<String>,
 }
 
 /// One link's card on a row.

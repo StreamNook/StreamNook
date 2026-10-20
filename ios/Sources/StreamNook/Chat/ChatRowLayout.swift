@@ -114,6 +114,8 @@ struct RowShape {
         case bar(UIColor)
         case dot(UIColor)
         case symbol(String, UIColor)
+        /// One of the desktop's event glyphs (the Prime crown, the raid group, the streak flame).
+        case glyph(EventGlyph, UIColor)
         /// A link card's panel: the floor and wash, a dark contour and light along the top.
         case card(radius: CGFloat)
     }
@@ -608,12 +610,14 @@ struct ChatRowLayoutBuilder {
         var attachments: [RowAttachment] = []
         var shapes: [RowShape] = []
         var taps: [RowTap] = []
-        let icon: CGFloat = 20
+        // The desktop card's lead: 20 points, the cheer's gem 28; 10 points before the text.
+        let icon: CGFloat = kind == .cheer ? 28 : 20
         let indent = icon + 10
         let tags = message.tags
 
-        let symbol: (String, UIColor)
-        var gem: String?
+        // What the row leads with, as the desktop card draws it: a glyph or symbol, or art.
+        let mark: RowShape.Kind
+        var art: (kind: RowAttachment.Kind, url: String, animate: Bool)?
         var header = RowText(builder: self)
         let nameColor = ChatTheme.color(view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
         let small = font(fontSize, .regular)
@@ -622,14 +626,14 @@ struct ChatRowLayoutBuilder {
         case "cheer":
             let bits = meta.bitsAmount ?? Int(tags["bits"] ?? "") ?? 0
             let (tier, color) = Self.cheerTier(bits)
-            gem = "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/\(tier)/2.gif"
-            symbol = ("diamond.fill", color)
+            art = (.cheer, "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/\(tier)/2.gif", style.animatesEmotes)
+            mark = .symbol("diamond.fill", color)
             decor.fill = .gradient([UIColor.systemPurple, UIColor.systemBlue, UIColor.systemCyan, UIColor.systemPink].map { $0.withAlphaComponent(0.15) })
             for badge in view?.badges ?? [] { header.badge(badge, gapAfter: 4) }
             header.name(message.shownName, font: bold, color: nameColor, paint: view?.paint, chip: nil)
             header.append(" cheered \(bits.formatted()) bits", bold, color)
         case "raid":
-            symbol = ("person.3.fill", ChatTheme.highlightRed)
+            mark = .glyph(.raid, ChatTheme.highlightRed)
             decor.fill = .gradient([UIColor.systemRed, UIColor.systemOrange].map { $0.withAlphaComponent(0.15) })
             for badge in view?.badges ?? [] { header.badge(badge, gapAfter: 4) }
             header.name(message.shownName, font: bold, color: nameColor, paint: view?.paint, chip: nil)
@@ -637,7 +641,7 @@ struct ChatRowLayoutBuilder {
             header.append(viewers.map { " is raiding with \($0.formatted()) viewer\($0 == 1 ? "" : "s")!" } ?? " is raiding!",
                           bold, ChatTheme.highlightRed)
         case "viewermilestone":
-            symbol = ("flame.fill", ChatTheme.highlightOrange)
+            mark = .glyph(.streak, ChatTheme.highlightOrange)
             decor.fill = .gradient([UIColor.systemOrange, UIColor.systemYellow].map { $0.withAlphaComponent(0.12) })
             for badge in view?.badges ?? [] { header.badge(badge, gapAfter: 4) }
             header.name(message.shownName, font: bold, color: nameColor, paint: view?.paint, chip: nil)
@@ -645,8 +649,14 @@ struct ChatRowLayoutBuilder {
                 header.append("  +\(reward)", bold, ChatTheme.highlightOrange)
             }
         default:
-            let prime = tags["msg-param-sub-plan"] == "Prime"
-            symbol = (prime ? "crown.fill" : "gift.fill", prime ? UIColor.systemTeal : ChatTheme.accent)
+            // Twitch's Prime crown for a Prime sub; Twitch's gift art for every other sub and gift
+            // (the drawn gift until that art is known).
+            if tags["msg-param-sub-plan"] == "Prime" {
+                mark = .glyph(.prime, ChatTheme.info)
+            } else {
+                mark = .symbol("gift.fill", ChatTheme.accent)
+                if let gift = view?.eventArt { art = (.badge, gift, false) }
+            }
             decor.fill = .gradient([UIColor.systemPink, UIColor.systemPurple, UIColor.systemBlue, UIColor.systemCyan, UIColor.systemYellow]
                 .map { $0.withAlphaComponent(0.12) })
             let system = meta.systemMessage.map { $0.replacingOccurrences(of: "\\s", with: " ") }
@@ -654,13 +664,7 @@ struct ChatRowLayoutBuilder {
             header.append(system, font(fontSize, .medium), ChatTheme.textPrimary)
             _ = small
         }
-        shapes.append(RowShape(kind: .symbol(symbol.0, symbol.1), rect: CGRect(x: sideInset, y: top + 1, width: icon, height: icon)))
-        if let gem {
-            attachments.append(RowAttachment(kind: .cheer, url: gem, pixelHeight: Int(icon * scale),
-                                             rect: CGRect(x: sideInset, y: top + 1, width: icon, height: icon),
-                                             overlays: [], effects: 0, animate: style.animatesEmotes))
-            shapes.removeLast()
-        }
+        let blockTop = top
         func place(_ block: RowText) {
             let placed = block.layout(top: top, left: sideInset + indent, width: width - 2 * sideInset - indent,
                                       maxLines: 0, alignRight: false)
@@ -684,6 +688,15 @@ struct ChatRowLayoutBuilder {
             body.spans(spans, size: fontSize, color: kind == .cheer ? ChatTheme.textSecondary : ChatTheme.textPrimary,
                        emoteHeight: emoteHeight, weight: bodyWeight)
             place(body)
+        }
+        // The lead sits centered on the whole text block, however many lines it takes, as the
+        // desktop card's `items-center` puts it.
+        let lead = CGRect(x: sideInset, y: (blockTop + max(0, (top - blockTop - icon) / 2)).rounded(), width: icon, height: icon)
+        if let art {
+            attachments.append(RowAttachment(kind: art.kind, url: art.url, pixelHeight: Int(icon * scale), rect: lead,
+                                             overlays: [], effects: 0, animate: art.animate))
+        } else {
+            shapes.append(RowShape(kind: mark, rect: lead))
         }
         top += CGFloat(style.rowPadding) + 2
         let accessibility = (meta.systemMessage ?? message.shownName) + " " + message.content

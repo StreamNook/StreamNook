@@ -1302,8 +1302,25 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         source,
         nickname: own.nickname,
         previews,
+        event_art: event_art(msg),
         event: event_key(msg),
     });
+}
+
+/// What a Twitch subscription or gift notice leads with, as the desktop card
+/// draws it: Twitch's gift art (the Sub Gifter badge), except for a Prime sub,
+/// which leads with Twitch's Prime crown the shell draws itself.
+fn event_art(msg: &ChatMessage) -> Option<String> {
+    let twitch = msg.provider.is_empty() || msg.provider == "twitch";
+    let msg_type = msg.metadata.msg_type.as_deref().or_else(|| msg.tags.get("msg-id").map(String::as_str));
+    let kind = msg_type.and_then(event_category)?;
+    if !twitch || !matches!(kind, "subscription" | "gift") {
+        return None;
+    }
+    if msg.tags.get("msg-param-sub-plan").is_some_and(|p| p == "Prime") {
+        return None;
+    }
+    twitch_badge_art(None, "sub-gifter", "1").map(|(url, _)| url)
 }
 
 /// A notice's chat event category by its msg-id / msg_type. Shared with the
