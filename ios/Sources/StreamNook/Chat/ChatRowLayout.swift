@@ -2,10 +2,11 @@ import CoreText
 import SNKit
 import UIKit
 
-/// An image inside a row: an emote with what stacks over it, a badge, a cheer gem, a GIF or a
-/// gigantified emote. Its rect is fixed before the image loads, so a row never reflows.
+/// An image inside a row: an emote with what stacks over it, a badge, a cheer gem, a GIF, a
+/// gigantified emote, or a name's 7TV paint image (moving over the drawn first frame, masked to
+/// the name's letters). Its rect is fixed before the image loads, so a row never reflows.
 struct RowAttachment {
-    enum Kind { case emote, badge, cheer, gif, giant, avatar, preview }
+    enum Kind { case emote, badge, cheer, gif, giant, avatar, preview, paint }
     var kind: Kind
     var url: String
     /// The pixel height to decode at.
@@ -16,6 +17,8 @@ struct RowAttachment {
     var animate: Bool
     /// A link card's picture: its corner radius, filled to its box.
     var radius: CGFloat = 0
+    /// A paint image's mask: the name's glyph outlines, in the attachment's own coordinates.
+    var mask: CGPath?
 }
 
 /// Where a tap on a row goes.

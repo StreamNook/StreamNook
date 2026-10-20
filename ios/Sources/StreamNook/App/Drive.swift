@@ -34,6 +34,9 @@ import SwiftUI
 ///   creates one); `open:myclips` pushes You > Your clips
 /// - `corelog:TEXT` copies the core log's lines holding TEXT (`_` for spaces, the last 12) into
 ///   the app log, where a drive run reads them
+/// - `tapoutside[:X,Y]` taps at X,Y points (default: a third down the middle) through the same
+///   decision and closing as a finger's tap (`OutsideTap`) and logs what it put away;
+///   `outsidelog` logs whether the keyboard is up and which pop-outs are open
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
 /// - `open:settings:NAME` pushes a settings section (`theme`, `support`, ...); `open:cosmetics`
 /// - `mini`, `full` shrink or expand the watch layer; `back` or `close` closes it
@@ -73,6 +76,8 @@ import SwiftUI
 ///   `predbet:yes:250`, `predconfirm`, `liveVotesLog`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
 /// - the Mentions steps in `MentionsDrive` (`mentions`, `mentions:fake`, `mentionnotify`, `mentioncard`, ...)
+/// - the Whispers steps in `WhispersDrive` (`whispers`, `whispers:fake`, `whisper:KEY`, `whispernotify`,
+///   `whispersend:fail`, ...), every write on a fixture inbox only
 /// - `livecheck` runs the background go-live check now, as a refresh would (the core's live
 ///   check, the go-lives on screen handed over, what it finds posted), and logs the refresh iOS
 ///   has pending; `livecheck:schedule` asks for the next refresh first, as going to the
@@ -146,6 +151,19 @@ enum Drive {
                 model.startWatching(TwitchStream(id: "", userLogin: value, userName: value, title: "", viewerCount: 0,
                                                  gameName: ""))
             case "corelog": coreLog(value.replacingOccurrences(of: "_", with: " "))
+            case "tapoutside":
+                // A tap at X,Y in points (default: a third down the middle, over the chat or the
+                // video), through the same decision and closing as a finger's.
+                let xy = value.split(separator: ",").compactMap { Double($0) }
+                let bounds = OutsideTap.keyWindow?.bounds ?? .zero
+                let point = xy.count == 2 ? CGPoint(x: xy[0], y: xy[1]) : CGPoint(x: bounds.midX, y: bounds.height / 3)
+                let decision = OutsideTap.shared.tap(at: point)
+                let closed = (decision?.popouts ?? []).joined(separator: ",")
+                log.notice("outside tap at \(Int(point.x)),\(Int(point.y)) keyboard \(decision?.keyboard ?? false) closed \(closed, privacy: .public) used \(decision?.closesAnything ?? false)")
+                try? await Task.sleep(for: .milliseconds(600))
+            case "outsidelog":
+                let open = OutsideTap.shared.openPopouts.joined(separator: ",")
+                log.notice("outside state keyboard \(OutsideTap.editingView() != nil) open \(open, privacy: .public)")
             case "loginof":
                 // A Browse stream opened by its bare login, as a notification tap would.
                 guard await waitForStreams(model), let index = Int(value), model.streams.indices.contains(index) else { continue }
@@ -273,7 +291,8 @@ enum Drive {
                    !(await CosmeticsDrive.run(name, value, model: model)),
                    !(await RewardsDrive.run(name, value, model: model)),
                    !(await KickDrive.run(name, value, model: model)),
-                   !(await MentionsDrive.run(name, value, model: model)) {
+                   !(await MentionsDrive.run(name, value, model: model)),
+                   !(await WhispersDrive.run(name, value, model: model)) {
                     log.error("drive: unknown step \(name, privacy: .public)")
                 }
             }

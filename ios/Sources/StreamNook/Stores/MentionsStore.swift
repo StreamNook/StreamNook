@@ -13,6 +13,24 @@ final class MentionsStore {
     private(set) var failed = false
     /// "Clear all" is asking for its confirmation.
     var confirmingClear = false
+    /// Bumped on every change the core announces (and when senders' pictures land), so an open
+    /// inbox reads its view again.
+    private(set) var revision = 0
+    /// The chat whose inbox sheet is open (the tray's tap), if any.
+    var sheetIn: InboxSurface?
+    /// The latest arrival waiting for, or showing as, the card over the message bar.
+    private(set) var arrival: ArrivalCard?
+    /// The composer's own risers (the suggestion strip, the emote picker) hold the room the card
+    /// would rise into: it waits while one is up.
+    var composerBusy = false
+    /// The chat on screen (under the full player, or the Chats tab): a card rises only there.
+    var onScreen: InboxSurface?
+
+    /// One card: the core's arrival and a number that tells two cards apart.
+    struct ArrivalCard: Equatable {
+        var arrival: MentionArrival
+        var seq: Int
+    }
 
     var unreadTotal: Int { list.unreadTotal }
 
@@ -22,6 +40,11 @@ final class MentionsStore {
     @ObservationIgnored private var viewers = 0
     /// Called with each entry the core asks to announce now (`mention-notify`).
     @ObservationIgnored var onNotify: ((MentionEntry) -> Void)?
+    /// Opens a row's message: its chat, then the message brought into view (AppModel's route).
+    @ObservationIgnored var onOpen: ((String) -> Void)?
+    /// The settings, for a row's Mute this chat.
+    @ObservationIgnored weak var settings: SettingsStore?
+    @ObservationIgnored private var arrivals = 0
 
     init(core: CoreBridge) {
         self.core = core
@@ -48,13 +71,42 @@ final class MentionsStore {
         listeners.forEach { $0.cancel() }
         let changed = core.events.stream("mention-inbox-changed")
         let notify = core.events.stream("mention-notify")
+        let arrived = core.events.stream("mention-arrived")
+        let pictures = core.events.stream("channel-avatars")
         let roster = core.events.stream("account-roster-changed")
         listeners = [
             Task { [weak self] in
                 for await event in changed {
                     guard let self else { return }
                     if let push = MentionInboxChanged.parse(event.payloadJSON) { self.list.setUnread(push.unreadTotal) }
+                    self.revision += 1
                     if self.viewers > 0 { await self.refresh() }
+                }
+            },
+            // A new entry for the card over the bar. The core already left out replay, a chat on
+            // screen and streamer mode; with the sheet open the sheet shows it instead.
+            Task { [weak self] in
+                for await event in arrived {
+                    guard let self,
+                          let arrival = try? JSONDecoder().decode(MentionArrival.self, from: Data(event.payloadJSON.utf8))
+                    else { continue }
+                    log.notice("inbox arrival \(arrival.entry.id, privacy: .public)")
+                    guard self.sheetIn == nil else { continue }
+                    self.arrivals += 1
+                    self.arrival = ArrivalCard(arrival: arrival, seq: self.arrivals)
+                }
+            },
+            // Senders' pictures landing: an open inbox reads again, a card still up takes its own.
+            Task { [weak self] in
+                for await event in pictures {
+                    guard let self else { return }
+                    if var card = self.arrival, card.arrival.avatar == nil, let key = InboxText.avatarKey(card.arrival.entry),
+                       let found = try? JSONDecoder().decode([String: String].self, from: Data(event.payloadJSON.utf8)),
+                       let url = found[key] {
+                        card.arrival.avatar = url
+                        self.arrival = card
+                    }
+                    if self.sheetIn != nil || self.viewers > 0 { self.revision += 1 }
                 }
             },
             Task { [weak self] in
@@ -72,6 +124,49 @@ final class MentionsStore {
             },
         ]
     }
+
+    /// One page of the inbox timeline for a chip, as the core builds it (filtered, identical
+    /// messages folded, pictures it has attached).
+    func view(_ filter: String, before: Int64? = nil, limit: Int = MentionList.pageSize) async throws -> InboxView {
+        var args: [String: Any] = ["filter": filter, "limit": limit]
+        if let before { args["beforeMs"] = before }
+        return try await core.invoke("get_inbox_view", args: args, as: InboxView.self)
+    }
+
+    /// The rows an inbox showed, read as it closes.
+    func markSeen(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        log.notice("inbox closing, marking \(ids.count) seen")
+        Task { _ = try? await core.invoke("mark_mentions_read", args: ["ids": ids]) }
+    }
+
+    /// The tray's tap: this chat's sheet opens, or closes when open. A card folds away.
+    func toggleSheet(_ surface: InboxSurface) {
+        sheetIn = sheetIn == surface ? nil : surface
+        arrival = nil
+    }
+
+    func dismissArrival(_ seq: Int) {
+        if arrival?.seq == seq { arrival = nil }
+    }
+
+    /// A row's tap: the message (its whole fold reads as read), or the whisper.
+    func open(row: InboxRowView) {
+        sheetIn = nil
+        let unreadFolded = row.folded.filter { !$0.read }.map(\.id)
+        if !unreadFolded.isEmpty {
+            Task { _ = try? await core.invoke("mark_mentions_read", args: ["ids": unreadFolded]) }
+        }
+        onOpen?(row.entry.id)
+    }
+
+    #if DEBUG
+    /// A drive step's card, as the core's `mention-arrived` would bring it.
+    func showArrival(_ arrival: MentionArrival) {
+        arrivals += 1
+        self.arrival = ArrivalCard(arrival: arrival, seq: arrivals)
+    }
+    #endif
 
     /// The Mentions screen came up or went away.
     func appeared() {
@@ -153,4 +248,9 @@ final class MentionsStore {
     }
 
     private static let mutedPath = "mentions.muted_channels"
+}
+
+/// Where an inbox sheet opens: the chat under the player, or the Chats tab.
+enum InboxSurface: Equatable {
+    case watch, chats
 }

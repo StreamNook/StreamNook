@@ -33,14 +33,32 @@ public final class FakeCore: CoreBridge {
                 events.emit(name: "mention-inbox-changed", payloadJSON: #"{"unread_total":\#(total)}"#, target: nil)
             }
         }
+        fixtures?.whispers.onUpdate.withLock { change in
+            change = { update in
+                guard let data = try? JSONEncoder().encode(update) else { return }
+                events.emit(name: "whisper-conversation-updated", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
+            }
+        }
     }
 
-    /// Files a mention in the fixture inbox and asks for its notification, as the core does when
-    /// a live message mentions you in a chat that is not on screen.
+    /// Files an incoming whisper in the fixture inbox and asks for its notification, as the core
+    /// does when one arrives outside the conversation on screen.
+    public func simulateWhisper(from key: String, text: String) {
+        guard let update = fixtures?.whispers.receive(from: key, text: text),
+              let data = try? JSONEncoder().encode(update) else { return }
+        guard update.meta.unreadCount > 0 else { return }
+        events.emit(name: "whisper-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
+    }
+
+    /// Files a mention in the fixture inbox and asks for its card over the message bar and its
+    /// notification, as the core does when a live message mentions you in a chat that is not on
+    /// screen.
     public func simulateMention(_ entry: MentionEntry) {
         fixtures?.mentions.file(entry)
         guard let data = try? JSONEncoder().encode(entry) else { return }
-        events.emit(name: "mention-notify", payloadJSON: String(decoding: data, as: UTF8.self), target: nil)
+        let json = String(decoding: data, as: UTF8.self)
+        events.emit(name: "mention-arrived", payloadJSON: #"{"entry":\#(json),"avatar":null}"#, target: nil)
+        events.emit(name: "mention-notify", payloadJSON: json, target: nil)
     }
 
     /// The commands invoked so far, oldest first.

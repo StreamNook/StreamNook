@@ -78,6 +78,9 @@ final class ChatRooms {
     @ObservationIgnored var mentionFocus: Task<Void, Never>?
     /// The Twitch follows that are live now, for the "Add a chat" sheet (the home snapshot's).
     @ObservationIgnored var followedLive: @MainActor () -> [TwitchStream] = { [] }
+    /// Moves with every home snapshot read, so the picker's offline follows appear once the core
+    /// has them (they land after the live list at launch).
+    @ObservationIgnored var homeSnapshots: @MainActor () -> Int = { 0 }
     /// A live Twitch channel's group (streaming together or sharing its chat), by channel id: the
     /// home snapshot's maps the stream cards read.
     @ObservationIgnored var groupFor: @MainActor (String) -> ChannelGroup? = { _ in nil }

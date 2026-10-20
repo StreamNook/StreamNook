@@ -108,6 +108,8 @@ private struct RewardsList: View {
             .padding(.bottom, 24)
         }
         .scrollDismissesKeyboard(.never)
+        // A tap on a result puts the keyboard away and opens it.
+        .tapsThroughKeyboard()
         .toolbar(.hidden, for: .navigationBar)
     }
 

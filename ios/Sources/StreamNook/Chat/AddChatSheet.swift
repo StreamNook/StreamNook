@@ -30,6 +30,8 @@ struct ChatPicker: View {
     var onPicked: () -> Void = {}
     /// Room under the lists (the inline picker clears the tab bar on its own).
     var bottomPadding: CGFloat = 16
+    /// Set where the picker is the whole Chats screen: a Close beside the search leaves Chats.
+    var onClose: (() -> Void)?
     @State private var query = ""
     @State private var results: [ChatRoomRow] = []
     @State private var searching = false
@@ -57,6 +59,15 @@ struct ChatPicker: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // The capsule is the field's own: clearing or tapping its padding keeps the keyboard.
+            .keepsKeyboard()
+            .overlay(alignment: .trailing) {
+                // Chats' way out, beside the search, on the field's center line.
+                if let onClose {
+                    ChatsCloseButton(action: onClose).offset(x: 52)
+                }
+            }
+            .padding(.trailing, onClose == nil ? 0 : 50)
             .padding(.horizontal, 16)
             .padding(.bottom, 19)
 
@@ -93,6 +104,8 @@ struct ChatPicker: View {
                 .padding(.bottom, bottomPadding)
             }
             .scrollDismissesKeyboard(.never)
+            // A tap on a result puts the keyboard away and opens it.
+            .tapsThroughKeyboard()
             // Rows fade out at both edges instead of being cut.
             .mask {
                 VStack(spacing: 0) {
@@ -111,7 +124,9 @@ struct ChatPicker: View {
         }
         .task(id: query) { await search() }
         // The tabs moved (an open mark), or the Following snapshot did: read the lists again.
-        .task(id: "\(rooms.state.revision)|\(rooms.followedLive().count)") { await load() }
+        // Asked again when the rooms change or the core's lists do: the offline follows land after
+        // the live ones at launch, which left the Offline section out until a room changed.
+        .task(id: "\(rooms.state.revision)|\(rooms.homeSnapshots())") { await load() }
     }
 
     private func header(_ text: String, count: Int?) -> some View {

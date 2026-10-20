@@ -300,6 +300,16 @@ pub async fn build() -> AccountRoster {
     }
 }
 
+/// The Twitch account whose whispers to listen for: the connected one, else
+/// nobody (signed out, or signed out by StreamNook until it signs in again).
+fn whisper_account(roster: &AccountRoster) -> Option<String> {
+    roster
+        .main_account("twitch")
+        .filter(|a| a.status == AccountStatus::Connected)
+        .and_then(|a| a.account_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
 /// Rebuild the roster and tell every window, if it changed.
 ///
 /// Cheap and safe to call from any credential write: it spawns, reads memory,
@@ -315,6 +325,10 @@ pub fn notify() {
         // Claims are reported from every build (they dedupe on their own), so a
         // retry after a cooldown goes out even when the roster did not change.
         crate::services::linked_accounts::on_roster(&roster);
+        // The whisper socket follows the Twitch account on every platform:
+        // listening while it is connected, closed on sign-out or once Twitch
+        // needs the sign-in again.
+        crate::services::whisper_service::follow_account(&app, whisper_account(&roster));
         if last.as_ref() == Some(&roster) {
             return;
         }

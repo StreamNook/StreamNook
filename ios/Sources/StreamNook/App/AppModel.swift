@@ -41,6 +41,9 @@ final class AppModel {
     let kick = KickAccount()
     /// The mentions inbox: its rows, the unread count, and the notifications the core asks for.
     let mentions: MentionsStore
+    /// Your Twitch whispers: the conversations, the unread count, and the notifications the core
+    /// asks for.
+    let whispers: WhispersStore
 
     private(set) var phase = Phase.booting
     /// A clip link from chat, open in the clip sheet.
@@ -78,6 +81,7 @@ final class AppModel {
         chat = ChatRooms(core: core)
         rewards = RewardsStore(core: core)
         mentions = MentionsStore(core: core)
+        whispers = WhispersStore(core: core)
         let watch = watch
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }
@@ -123,6 +127,7 @@ final class AppModel {
             return true
         }
         chat.followedLive = { home.lists.followingLive }
+        chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
         // A background live check that launches the app finds the core here.
         LiveCheck.model = self
@@ -183,7 +188,17 @@ final class AppModel {
         chat.start()
         let mentionCategory = alertTypes.first { $0.id == "mentions" }?.channel
         mentions.onNotify = { entry in Task { await MentionAlerts.post(entry, category: mentionCategory) } }
+        // An inbox row or card opens its message the way a notification does.
+        mentions.onOpen = { [weak self] id in Task { await self?.openMention(id) } }
+        mentions.settings = settingsStore
         mentions.start()
+        // Whispers post under the core's category, which carries the Reply box.
+        let whisperCategory = alertTypes.first { $0.id == "whispers" }?.channel
+        if let whisperCategory { Task { await WhisperAlerts.register(category: whisperCategory) } }
+        whispers.onNotify = { update in Task { await WhisperAlerts.post(update, category: whisperCategory) } }
+        whispers.start()
+        let whispers = whispers
+        NotificationRouter.replyHandler = { text, update in await whispers.reply(text, to: update) }
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
         #endif
@@ -198,7 +213,23 @@ final class AppModel {
         // Go-lives: the channel playing gets no banner, and a tap plays the stream.
         NotificationRouter.isPlaying = { [weak self] alert in self?.isPlaying(alert) ?? false }
         NotificationRouter.handleLive { [weak self] alert in self?.openLiveAlert(alert) }
+        // A whisper tapped while the app started opens its conversation once the tabs are up.
+        NotificationRouter.handleWhisper { [weak self] key in self?.openWhisper(key) }
         Task { await settingsStore.refresh(); await LiveAlerts.sync(self) }
+    }
+
+    /// Whispers on the You tab (the entry the chat inbox uses too).
+    func openWhispers() {
+        if nav.shellCovered { nav.playerMode = .mini }
+        nav.tab = .you
+        nav.paths[.you] = [.whispers]
+    }
+
+    /// One conversation, with the list under it so back lands on the list.
+    func openWhisper(_ key: String) {
+        if nav.shellCovered { nav.playerMode = .mini }
+        nav.tab = .you
+        nav.paths[.you] = [.whispers, .whisper(key)]
     }
 
     /// Reads the settings, applies the look and hands the player its saved choices. A failed read
@@ -455,8 +486,13 @@ final class AppModel {
     func lifecycle(_ state: String) {
         guard started else { return }
         core.lifecycle(state)
-        if state == "background" { chat.backgrounded(inPiP: watch.pip.active) }
+        if state == "background" {
+            chat.backgrounded(inPiP: watch.pip.active)
+            // A conversation left on screen is not being read while the app is away.
+            whispers.setInFront(false)
+        }
         if state == "foreground" {
+            whispers.setInFront(true)
             Task { await signIn.refresh() }
             Task { await home.resumed() }
             // Notifications may have been allowed in iPhone Settings meanwhile.

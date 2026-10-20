@@ -683,6 +683,44 @@ export interface MentionEntry {
   read: boolean;
   /** A moderator deleted the message after it was filed. */
   removed: boolean;
+  /** The message as the chat drew it, words and emotes in order. Absent on
+   *  older entries and on a message with no emote: show `text`. */
+  parts?: MentionPart[];
+}
+
+/** One piece of a filed message (mention_inbox.rs `MentionPart`). */
+export type MentionPart = { type: 'text'; text: string } | { type: 'emote'; name: string; url: string };
+
+/** The phones' inbox chips (mention_inbox.rs `InboxFilter`; `whispers` once
+ *  the whisper store joins the view). */
+export type InboxFilterId = 'all' | 'mentions' | 'highlights' | 'whispers';
+
+/** One row of `get_inbox_view`: the newest of a run of identical messages. */
+export interface InboxRowView {
+  entry: MentionEntry;
+  /** The older identical messages, newest first. */
+  folded: { id: string; at_ms: number; read: boolean }[];
+  /** Any message in the row is unread. */
+  unread: boolean;
+  /** The sender's picture, once Rust has it. */
+  avatar: string | null;
+}
+
+/** `get_inbox_view` (commands/mention_inbox.rs `InboxView`). */
+export interface InboxView {
+  rows: InboxRowView[];
+  has_more: boolean;
+  /** The `beforeMs` that asks for the next page. */
+  before_ms: number | null;
+  unread_total: number;
+  chips: { id: InboxFilterId; unread: number }[];
+}
+
+/** `mention-arrived`: a live entry just filed unread, for the card over the
+ *  message bar. */
+export interface MentionArrival {
+  entry: MentionEntry;
+  avatar: string | null;
 }
 
 /** `get_mention_inbox` (commands/mention_inbox.rs `MentionPage`). */
@@ -763,6 +801,10 @@ export interface ChatInputSettings {
   // in the message box while they are on. Typed in Rust
   // (models/settings.rs ChatInputSettings), which owns the default: on.
   show_room_modes?: boolean;
+  // Which end of the phones' message bar the inbox button takes: left (the
+  // default, the chat menu on the right) or right (the pair mirrored). Typed
+  // in Rust (models/settings.rs ChatInputSettings), which owns the default.
+  inbox_button_side?: 'left' | 'right';
   // How the modes show: named in place of "Send a message" only while one
   // holds you back (the default), or one chip at the box's edge whenever a
   // mode is on. Typed in Rust beside show_room_modes.
@@ -2693,6 +2735,28 @@ export interface WhisperUpdate {
     unread_count: number;
   };
   message: Whisper | null;
+}
+
+/** One row of Rust's `whisper_list`: the conversation's meta, flattened, with
+ *  its newest line. */
+export interface WhisperListRow {
+  key: string;
+  user_id: string;
+  user_login: string;
+  user_name: string;
+  profile_image_url: string | null;
+  last_message_timestamp: number;
+  unread_count: number;
+  last_text: string;
+  last_is_sent: boolean;
+}
+
+/** Rust's `whisper_list`: the signed-in account's conversations, newest
+ *  first. `owner_id` is empty when nobody is signed in; the writes take it. */
+export interface WhisperList {
+  owner_id: string;
+  conversations: WhisperListRow[];
+  unread_total: number;
 }
 
 // Hype Train Types

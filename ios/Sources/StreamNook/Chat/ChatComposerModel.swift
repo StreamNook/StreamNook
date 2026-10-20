@@ -40,6 +40,7 @@ final class ChatComposerModel {
     var draft = "" {
         didSet {
             guard draft != oldValue else { return }
+            suggestionsDismissed = false
             suggest()
             checkCheer()
             // Editing the message that failed is a new message.
@@ -48,10 +49,17 @@ final class ChatComposerModel {
     }
     private(set) var sending = false
     private(set) var suggestions: [EmoteMatch] = []
+    /// A tap outside put the suggestion strip away; typing brings it back.
+    var suggestionsDismissed = false
     var panel: Panel = .none {
         didSet { if panel != oldValue { picker.setOpen(panel == .emotes) } }
     }
     var menuOpen = false
+    /// The bar is too narrow for the inbox tray (the field would keep under about 12
+    /// characters): the chat menu carries the inbox and its count instead.
+    var inboxFolded = false
+    /// Which chat's inbox sheet this bar opens.
+    var inboxSurface: InboxSurface = .watch
     var commandsOpen = false
     /// The stream manager sheet ("Manage channel" in the chat menu).
     var manageOpen = false

@@ -74,6 +74,8 @@ struct MainShell: View {
         // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
         // player covers it) and under the full player.
         .onChange(of: onScreenRoom, initial: true) { _, room in model.chat.setVisible(room.map { [$0] } ?? []) }
+        // Which chat is on screen, for the inbox: a new mention's card rises only there.
+        .onChange(of: inboxOnScreen, initial: true) { _, place in model.mentions.onScreen = place }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
         // selected ring's color).
         .task(id: "\(model.signIn.user?.id ?? "")|\(model.signIn.user?.profileImageURL ?? "")|\(model.cosmetics.registryVersion)|\(model.look.themeID)") {
@@ -106,6 +108,11 @@ struct MainShell: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
+    private var inboxOnScreen: InboxSurface? {
+        guard scenePhase == .active else { return nil }
+        return nav.shellCovered ? .watch : nav.tab == .chats ? .chats : nil
+    }
+
     private var onScreenRoom: String? {
         guard scenePhase == .active, model.signedIn, let room = model.chat.state.activeChannel else { return nil }
         return nav.shellCovered || nav.tab == .chats ? room : nil
@@ -128,7 +135,7 @@ struct MainShell: View {
     /// Whether the tab's screen keeps the tab bar: a category's streams and Edit profile hide it.
     private func showsTabBar(_ tab: MobileTab) -> Bool {
         switch nav.paths[tab]?.last {
-        case .category, .cosmetics: false
+        case .category, .cosmetics, .whisper: false
         default: true
         }
     }
@@ -144,6 +151,10 @@ struct MainShell: View {
             CosmeticsScreen(model: model)
         case .mentions:
             MentionsScreen(model: model)
+        case .whispers:
+            WhispersScreen(model: model)
+        case .whisper(let key):
+            WhisperConversationScreen(model: model, key: key)
         case .myClips:
             MyClipsScreen(model: model)
         }

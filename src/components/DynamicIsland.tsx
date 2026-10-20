@@ -556,7 +556,6 @@ const DynamicIsland = () => {
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
     const showLiveNotifications = settings.live_notifications?.show_live_notifications ?? true;
     const showFavoriteLiveNotifications = settings.live_notifications?.show_favorite_live_notifications ?? true;
-    const showWhisperNotifications = settings.live_notifications?.show_whisper_notifications ?? true;
     const showUpdateNotifications = settings.live_notifications?.show_update_notifications ?? true;
     const showDropsNotifications = settings.live_notifications?.show_drops_notifications ?? true;
     const showFavoriteDropsNotifications = settings.live_notifications?.show_favorite_drops_notifications ?? true;
@@ -1102,12 +1101,12 @@ const DynamicIsland = () => {
 
     // Listen for whisper notifications
     useEffect(() => {
-        // Rust records each incoming whisper before announcing it, and the
-        // announcement already carries the sender's picture.
-        const unlisten = listen<WhisperUpdate>('whisper-conversation-updated', (event) => {
-            // Check if notifications are enabled
-            if (!notificationsEnabled || !showWhisperNotifications) return;
-
+        // Rust records each incoming whisper, then decides whether it is worth
+        // a notification (services/whisper_inbox.rs: the master switch and the
+        // Whispers type, streamer mode, and not the conversation on screen),
+        // the same decision the phones post from. The announcement already
+        // carries the sender's picture.
+        const unlisten = listen<WhisperUpdate>('whisper-notify', (event) => {
             const whisper = event.payload.message;
             if (!whisper || whisper.is_sent) return;
             const data = {
@@ -1200,7 +1199,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, showWhisperNotifications, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
+    }, [addNotification, playNotificationSound, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
 
     // Rewards Twitch names for your account (a badge earned, a drop reward
     // waiting), off its own notification feed, polled and classified in Rust.

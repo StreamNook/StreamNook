@@ -35,6 +35,11 @@ interface MobileNavState {
   cosmeticsOpen: boolean;
   /** The mentions inbox, over everything else (it opens from the chat too). */
   mentionsOpen: boolean;
+  /** The whispers list, over everything else like Mentions (a notification
+   *  tap and the chat inbox open it from anywhere). */
+  whispersOpen: boolean;
+  /** The conversation open over the whispers list, by its inbox key. */
+  whisperKey: string | null;
   /** Watch presentation: full screen, or the draggable in-app mini player
    *  (the tab shell stays live behind it). System PiP is separate: that hands
    *  the whole activity to the OS window. */
@@ -67,8 +72,16 @@ interface MobileNavState {
   openBrowseCategory: (category: TwitchCategory | null) => void;
   setCosmeticsOpen: (open: boolean) => void;
   setMentionsOpen: (open: boolean) => void;
+  /** The whispers list (the entry the inbox and the You tab use). */
+  openWhispers: () => void;
+  /** One conversation, with the list under it so back lands on the list. */
+  openWhisper: (key: string) => void;
+  /** Back out of the open conversation to the list. */
+  closeWhisper: () => void;
+  /** Close the whispers layer entirely. */
+  closeWhispers: () => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet -> mentions -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet -> whisper conversation -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -85,6 +98,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   browseCategory: null,
   cosmeticsOpen: false,
   mentionsOpen: false,
+  whispersOpen: false,
+  whisperKey: null,
   playerMode: 'full',
   focusDropCampaignId: null,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
@@ -131,6 +146,10 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   openBrowseCategory: (category) => set({ browseCategory: category }),
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
   setMentionsOpen: (open) => set({ mentionsOpen: open }),
+  openWhispers: () => set({ whispersOpen: true, whisperKey: null }),
+  openWhisper: (key) => set({ whispersOpen: true, whisperKey: key }),
+  closeWhisper: () => set({ whisperKey: null }),
+  closeWhispers: () => set({ whispersOpen: false, whisperKey: null }),
   setPlayerMode: (mode) => set({ playerMode: mode }),
 
   handleBack: () => {
@@ -139,6 +158,14 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
     if (sheetStack.length > 0) {
       const top = sheetStack[sheetStack.length - 1];
       window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
+      return true;
+    }
+    if (get().whisperKey) {
+      set({ whisperKey: null });
+      return true;
+    }
+    if (get().whispersOpen) {
+      set({ whispersOpen: false });
       return true;
     }
     if (mentionsOpen) {

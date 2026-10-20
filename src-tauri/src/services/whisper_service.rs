@@ -20,6 +20,16 @@ const RETRY_MAX_SECS: u64 = 300;
 /// A session that dies sooner than this counts as a failure for the backoff,
 /// so a socket that keeps closing right after subscribing cannot spin.
 const HEALTHY_SESSION: Duration = Duration::from_secs(60);
+/// The first wait after Twitch refused the subscription for the account's
+/// socket limit: three sockets with subscriptions per client id and user, which
+/// a phone and a desktop signed in as the same person share. Another device's
+/// socket frees its slot when it closes, so this waits longer than a network
+/// failure would, and still keeps trying.
+const OVER_BUDGET_SECS: u64 = 60;
+
+/// Wakes a listener waiting out its backoff, when the app comes back to the
+/// front (the phones say so through `note_app_resumed`).
+static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 #[derive(Debug, Deserialize)]
 struct WebSocketMessage {
@@ -59,13 +69,71 @@ enum Ended {
     Dropped(Duration),
     /// Twitch refused the subscription itself (401/403): retrying repeats it.
     Refused,
+    /// Twitch refused the subscription because this account already has its
+    /// three sockets with subscriptions (another device, or this one's watch and
+    /// moderation sockets). Retried after a longer wait.
+    OverBudget,
     /// Connect, welcome or subscribe failed in a way worth retrying.
     Failed,
 }
 
 enum SubscribeError {
     Refused(String),
+    OverBudget(String),
     Retry(String),
+}
+
+/// How a refused subscription is handled, from Twitch's status and body.
+/// 429 with "transport" in it is the per-account socket limit ("number of
+/// websocket transports limit exceeded"); any other 429 is a plain rate limit.
+fn classify_refusal(status: u16, body: &str) -> SubscribeError {
+    let message = format!("Failed to subscribe ({}): {}", status, body);
+    match status {
+        401 | 403 => SubscribeError::Refused(message),
+        429 if body.to_ascii_lowercase().contains("transport") => SubscribeError::OverBudget(message),
+        _ => SubscribeError::Retry(message),
+    }
+}
+
+/// The wait before the next attempt, and the wait after that.
+fn next_wait(retry: u64, ended: &Ended) -> (u64, u64) {
+    match ended {
+        Ended::OverBudget => {
+            let wait = retry.max(OVER_BUDGET_SECS);
+            (wait, (wait * 2).min(RETRY_MAX_SECS))
+        }
+        Ended::Dropped(lasted) if *lasted >= HEALTHY_SESSION => (RETRY_MIN_SECS, RETRY_MIN_SECS),
+        _ => (retry, (retry * 2).min(RETRY_MAX_SECS)),
+    }
+}
+
+/// The app came back to the front: a listener waiting to retry tries now.
+/// A live session is left alone (it keeps its subscription and its slot).
+pub fn resume() {
+    WAKE.notify_waiters();
+}
+
+/// Follow the signed-in Twitch account: listen for its whispers, or stop when
+/// nobody is signed in (or StreamNook needs the sign-in again). Called with
+/// every account roster build, so sign-in, sign-out and an account switch all
+/// land here on every platform; starting for the account already followed
+/// changes nothing.
+pub fn follow_account(app: &AppHandle, user_id: Option<String>) {
+    use std::sync::Arc;
+    use tauri::Manager;
+    use tokio::sync::Mutex as TokioMutex;
+    let Some(service) = app.try_state::<Arc<TokioMutex<WhisperService>>>() else { return };
+    let service = service.inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let service = service.lock().await;
+        match user_id {
+            Some(id) => {
+                let _ = service.start_listening(id, app).await;
+            }
+            None => service.stop(),
+        }
+    });
 }
 
 impl WhisperService {
@@ -88,8 +156,21 @@ impl WhisperService {
         if let Some((_, handle)) = slot.take() {
             handle.abort();
         }
+        log::info!("[WhisperService] listening for whispers to the signed-in account");
         *slot = Some((user_id.clone(), tokio::spawn(listen(user_id, app_handle))));
         Ok(())
+    }
+
+    /// Stop listening (signed out). Aborting the task drops its socket and its
+    /// `LiveSession`, so nothing more is filed for the account that left.
+    pub fn stop(&self) {
+        let mut slot = self.task.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((_, handle)) = slot.take() {
+            if !handle.is_finished() {
+                log::info!("[WhisperService] signed out, whisper listener stopped");
+            }
+            handle.abort();
+        }
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -111,22 +192,26 @@ async fn listen(user_id: String, app_handle: AppHandle) {
             debug!("[WhisperService] Signed out, whisper listener stopped");
             return;
         };
-        let failed = match run_session(&user_id, &token, &app_handle).await {
-            Ended::Dropped(lasted) => lasted < HEALTHY_SESSION,
-            Ended::Failed => true,
-            Ended::Refused => {
-                warn!("[WhisperService] Twitch refused the whisper subscription, listener stopped");
-                return;
-            }
-        };
-        if !failed {
-            retry = RETRY_MIN_SECS;
+        let ended = run_session(&user_id, &token, &app_handle).await;
+        if matches!(ended, Ended::Refused) {
+            warn!("[WhisperService] Twitch refused the whisper subscription, listener stopped");
+            return;
         }
-        debug!("[WhisperService] Reconnecting in {}s", retry);
-        sleep(Duration::from_secs(retry)).await;
-        if failed {
-            retry = (retry * 2).min(RETRY_MAX_SECS);
+        let (wait, after) = next_wait(retry, &ended);
+        if matches!(ended, Ended::OverBudget) {
+            warn!(
+                "[WhisperService] Twitch's socket limit for this account is reached (3 per account, shared with other devices signed in as it); retrying in {}s",
+                wait
+            );
+        } else {
+            debug!("[WhisperService] Reconnecting in {}s", wait);
         }
+        // Coming back to the app cuts the wait short.
+        tokio::select! {
+            _ = sleep(Duration::from_secs(wait)) => {}
+            _ = WAKE.notified() => debug!("[WhisperService] App resumed, reconnecting now"),
+        }
+        retry = after;
     }
 }
 
@@ -151,6 +236,10 @@ async fn run_session(user_id: &str, token: &str, app_handle: &AppHandle) -> Ende
         Err(SubscribeError::Refused(e)) => {
             error!("[WhisperService] Failed to subscribe to whispers: {}", e);
             return Ended::Refused;
+        }
+        Err(SubscribeError::OverBudget(e)) => {
+            warn!("[WhisperService] Failed to subscribe to whispers: {}", e);
+            return Ended::OverBudget;
         }
         Err(SubscribeError::Retry(e)) => {
             error!("[WhisperService] Failed to subscribe to whispers: {}", e);
@@ -327,11 +416,29 @@ async fn subscribe_to_whispers(
         debug!("[WhisperService] Whisper subscription created successfully");
         Ok(())
     } else {
-        let message = format!("Failed to subscribe ({}): {}", status, response_text);
-        if matches!(status.as_u16(), 401 | 403) {
-            Err(SubscribeError::Refused(message))
-        } else {
-            Err(SubscribeError::Retry(message))
-        }
+        Err(classify_refusal(status.as_u16(), &response_text))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_socket_limit_waits_longer_than_a_network_failure() {
+        assert!(matches!(
+            classify_refusal(429, r#"{"error":"Too Many Requests","status":429,"message":"number of websocket transports limit exceeded"}"#),
+            SubscribeError::OverBudget(_)
+        ));
+        assert!(matches!(classify_refusal(429, "slow down"), SubscribeError::Retry(_)));
+        assert!(matches!(classify_refusal(403, ""), SubscribeError::Refused(_)));
+        assert!(matches!(classify_refusal(500, ""), SubscribeError::Retry(_)));
+        // Over the limit: at least a minute, doubling to the cap.
+        assert_eq!(next_wait(5, &Ended::OverBudget), (60, 120));
+        assert_eq!(next_wait(240, &Ended::OverBudget), (240, 300));
+        // A failure backs off from where it stands; a healthy session resets.
+        assert_eq!(next_wait(5, &Ended::Failed), (5, 10));
+        assert_eq!(next_wait(160, &Ended::Dropped(Duration::from_secs(1))), (160, 300));
+        assert_eq!(next_wait(160, &Ended::Dropped(HEALTHY_SESSION)), (5, 5));
     }
 }

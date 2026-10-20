@@ -14,6 +14,9 @@ final class HomeStore {
     private(set) var recommendedLoaded = false
     /// Changes when a list is refreshed, so previews are fetched anew.
     private(set) var previewStamp = Int(Date().timeIntervalSince1970)
+    /// Counts the snapshots read: anything built from the core's lists (the chat picker's live
+    /// and offline follows) asks again when it moves, the offline follows landing included.
+    private(set) var snapshots = 0
 
     private let core: CoreBridge
     private var listening: Task<Void, Never>?
@@ -90,5 +93,6 @@ final class HomeStore {
         guard let snapshot = try? await core.invoke("get_home_snapshot", args: [:], as: HomeLists.self) else { return }
         lists = snapshot
         if !snapshot.recommended.isEmpty { recommended = snapshot.recommended }
+        snapshots += 1
     }
 }

@@ -12,15 +12,21 @@ import Testing
 
     @Test func theCoreListsWhatThisIPhoneSends() async throws {
         let types = await AlertTypes.load(core: try started())
-        #expect(types.map(\.id) == ["live", "mentions"])
+        #expect(types.map(\.id) == ["live", "mentions", "whispers"])
         let live = try #require(types.first)
         #expect(live.title == "Live channels")
         #expect(live.setting == "live_notifications.show_live_notifications")
         #expect(live.setup)
-        let mentions = try #require(types.last)
+        let mentions = try #require(types.dropFirst().first)
         #expect(mentions.title == "Mentions and replies")
         #expect(mentions.setting == "live_notifications.show_mention_notifications")
         #expect(mentions.setup)
+        // Whispers post under their own category (it carries the Reply box) and are not a setup pick.
+        let whispers = try #require(types.last)
+        #expect(whispers.title == "Whispers")
+        #expect(whispers.setting == "live_notifications.show_whisper_notifications")
+        #expect(whispers.channel == "whispers")
+        #expect(!whispers.setup)
     }
 
     @Test func anUnstartedCoreListsNothing() async {

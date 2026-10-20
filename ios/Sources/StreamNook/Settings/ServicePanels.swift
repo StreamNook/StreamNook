@@ -130,8 +130,8 @@ struct MasterCard: View {
 
 /// Settings > Notifications on the iPhone: only what this iPhone sends. "Notify me about" lists
 /// the alert types the core says this build sends (`get_alert_types`), the same list and words
-/// Android draws; today that is go-lives (pushed, app open or closed; Which channels narrows them)
-/// and mentions and replies (posted while StreamNook runs). Drops and badges join the list when
+/// Android draws; today that is go-lives (pushed, app open or closed; Which channels narrows them),
+/// mentions and replies, and whispers (both posted while StreamNook runs). Drops and badges join the list when
 /// the core adds the iPhone to them; background checking and Instant alerts are Android's own and
 /// stay hidden here (their saved values are kept for the other apps).
 struct NotificationsPanel: View {

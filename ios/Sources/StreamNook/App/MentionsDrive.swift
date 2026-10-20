@@ -16,6 +16,11 @@ import SNKit
 ///   history"); `mentioncard:close` dismisses it
 /// - `mentionjump` brings the chat's tenth newest row into view as a mention open does
 /// - `mentionlog` logs the unread count and the rows held
+/// - `inbox:open` / `inbox:open:chats` opens the inbox sheet over the chat under the player (or the
+///   Chats tab's), as the tray's tap does; `inbox:close` closes it
+/// - `inbox:arrive` shows a new mention's card over the message bar (on fixtures, through the
+///   fake core's `mention-arrived`, so the card takes the real event path)
+/// - `inboxlog` logs the sheet, the card, the chat on screen and the unread count
 @MainActor
 enum MentionsDrive {
     static func run(_ name: String, _ value: String, model: AppModel) async -> Bool {
@@ -71,6 +76,28 @@ enum MentionsDrive {
         case "mentionlog":
             let list = model.mentions.list
             log.notice("drive mentions unread \(list.unreadTotal) rows \(list.entries.count) more \(list.hasMore)")
+        case "inbox":
+            let store = model.mentions
+            switch value {
+            case "open": store.sheetIn = .watch
+            case "open:chats": store.sheetIn = .chats
+            case "close": store.sheetIn = nil
+            case "arrive":
+                let ms = Int64(Date().timeIntervalSince1970 * 1000)
+                let entry = MentionEntry(
+                    id: "fm-arrive-\(ms)", room: "nookstreamer", channelLogin: "nookstreamer", channelID: "4242",
+                    senderID: "1001", senderLogin: "glassowl", senderName: "GlassOwl", senderColor: "#2dd4bf",
+                    text: "@NookViewer are you coming to the watch party tonight?", kind: .mention, atMs: ms)
+                if let fake = fixtureCore {
+                    fake.simulateMention(entry)
+                } else {
+                    store.showArrival(MentionArrival(entry: entry, avatar: nil))
+                }
+            default: log.error("drive inbox: unknown \(value, privacy: .public)")
+            }
+        case "inboxlog":
+            let store = model.mentions
+            log.notice("drive inbox sheet \(String(describing: store.sheetIn), privacy: .public) card \(store.arrival?.arrival.entry.id ?? "none", privacy: .public) on screen \(String(describing: store.onScreen), privacy: .public) unread \(store.unreadTotal)")
         default:
             return false
         }

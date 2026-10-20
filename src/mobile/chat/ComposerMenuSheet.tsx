@@ -1,9 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, At, BookmarkSimple, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
-import { useMobileNavStore } from '../navStore';
-import { useMentionsStore } from '../mentions/mentionInbox';
+import { ArrowsClockwise, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -13,6 +11,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { MobileSheet } from '../ui/MobileSheet';
+import { fitCount } from '../../utils/fitNumber';
 import { GroupCard, GroupFooter, GroupLabel, GroupRow } from '../ui/GroupedList';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
@@ -64,6 +63,9 @@ interface Props {
   onShowPinned?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
+  /** The inbox, while a narrow message bar has no room for its tray: its
+   *  row and count live here instead. Absent while the tray is on the bar. */
+  inbox?: { unread: number; open: () => void };
 }
 
 export const ComposerMenuSheet: React.FC<Props> = ({
@@ -84,6 +86,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onModeration,
   onShowPinned,
   onCloseChat,
+  inbox,
 }) => {
   // The stream's own chat closes with the player unless you keep it; every
   // other open chat is already one of yours.
@@ -92,7 +95,6 @@ export const ComposerMenuSheet: React.FC<Props> = ({
     return t?.pinnedToStream ? t : null;
   });
   const keep = useChatTabsStore((s) => s.keep);
-  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
 
   // The desktop client's follow logic, ported rather than reimplemented: this
   // hook lives in hooks/ precisely so several surfaces can share it, and it
@@ -224,22 +226,24 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           Add a chat
         </GroupRow>
 
-        {/* Every chat's mentions of you, over the player; the stream keeps
-            playing behind it. The dot is the unread mark. */}
-        <GroupRow
-          onClick={() => {
-            onClose();
-            useMobileNavStore.getState().setMentionsOpen(true);
-          }}
-          icon={<At size={ICON} className="text-textSecondary" />}
-          trailing={
-            mentionsUnread > 0 ? (
-              <span className="w-2 h-2 mr-1 rounded-full bg-accent shrink-0" aria-label="Unread mentions" />
-            ) : undefined
-          }
-        >
-          Mentions
-        </GroupRow>
+        {inbox && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              inbox.open();
+            }}
+            icon={<Tray size={ICON} className="text-textSecondary" />}
+            trailing={
+              inbox.unread > 0 ? (
+                <span className="sn-inbox-badge mr-1 min-w-[18px] h-[18px] px-[5px] rounded-full text-[11px] font-bold leading-[18px] text-center tabular-nums">
+                  {fitCount(inbox.unread)}
+                </span>
+              ) : undefined
+            }
+          >
+            Inbox
+          </GroupRow>
+        )}
 
         {onShowPinned && (
           <GroupRow

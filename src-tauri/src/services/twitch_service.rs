@@ -3467,13 +3467,24 @@ impl TwitchService {
                 "message": message
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                log::warn!("[Whisper] send request failed: {e}");
+                anyhow::anyhow!(crate::services::whisper_inbox::send_failure_reason(None, ""))
+            })?;
 
-        if response.status().is_success() || response.status() == 204 {
+        let status = response.status();
+        if status.is_success() {
             Ok(())
         } else {
-            let error_text = response.text().await?;
-            Err(anyhow::anyhow!("Failed to send whisper: {}", error_text))
+            // Twitch's reason, in the words every platform shows (the raw body
+            // stays in the log).
+            let error_text = response.text().await.unwrap_or_default();
+            log::warn!("[Whisper] Twitch refused a whisper ({status}): {error_text}");
+            Err(anyhow::anyhow!(crate::services::whisper_inbox::send_failure_reason(
+                Some(status.as_u16()),
+                &error_text
+            )))
         }
     }
 

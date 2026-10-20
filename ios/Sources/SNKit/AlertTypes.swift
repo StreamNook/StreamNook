@@ -6,7 +6,7 @@ import Foundation
 /// Notifications section and setup step from the same list, so both phones say the same thing.
 /// A type this iPhone cannot send is not in the list.
 public struct AlertType: Decodable, Sendable, Equatable, Identifiable {
-    /// `live`, `mentions`, `drops`, `badges`.
+    /// `live`, `mentions`, `whispers`, `drops`, `badges`.
     public let id: String
     public let title: String
     public let detail: String
@@ -46,9 +46,11 @@ public enum AlertTypes {
         return changes
     }
 
-    /// The list the fake core answers: the iPhone's today, go-lives (pushed) and mentions.
+    /// The list the fake core answers: the iPhone's today, go-lives (pushed), mentions and
+    /// whispers.
     static let fakeJSON = #"""
     [{"id":"live","title":"Live channels","detail":"When a channel you follow goes live","setting":"live_notifications.show_live_notifications","channel":"live-channels","setup":true},
-     {"id":"mentions","title":"Mentions and replies","detail":"When someone mentions or replies to you","setting":"live_notifications.show_mention_notifications","channel":"mentions","setup":true}]
+     {"id":"mentions","title":"Mentions and replies","detail":"When someone mentions or replies to you","setting":"live_notifications.show_mention_notifications","channel":"mentions","setup":true},
+     {"id":"whispers","title":"Whispers","detail":"When someone whispers you","setting":"live_notifications.show_whisper_notifications","channel":"whispers","setup":false}]
     """#
 }

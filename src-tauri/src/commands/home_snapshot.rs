@@ -93,6 +93,9 @@ pub async fn set_home_extra_channels(channel_ids: Vec<String>) -> Result<(), Str
 /// started. Allowed only by mobile-commands.toml.
 #[tauri::command]
 pub async fn note_app_resumed() -> Result<bool, String> {
+    // A whisper socket waiting out a retry (the phone was asleep, or offline)
+    // reconnects now rather than at the end of its wait.
+    crate::services::whisper_service::resume();
     Ok(home_snapshot::note_app_resumed().await)
 }
 
