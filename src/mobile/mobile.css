@@ -571,3 +571,8 @@ body:has(.sn-mobile) .glass-input:focus {
   -webkit-mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
   mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
 }
+/* Send's mark on the accent fill: black on a light accent, white on a dark
+   one, the same rule as the inbox count. */
+.sn-send-ink {
+  color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
+}

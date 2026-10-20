@@ -37,6 +37,8 @@ private struct ComposerBar: View {
     let session: ChatSession
     @FocusState private var focused: Bool
     @Environment(\.inboxSurface) private var inboxSurface
+    /// The right end's frame among the trays', while it is the tray.
+    @State private var endKey = UUID().uuidString
     @State private var smiley = "😀"
     @State private var smileyOut = false
 
@@ -242,34 +244,53 @@ private struct ComposerBar: View {
     }
 
     private func inputRow(slowWait: Int) -> some View {
-        // The inbox tray at the end Settings picks, the chat menu (and Send, which shares its
-        // slot) at the other.
-        let right = session.style.inboxRight
+        // Send is always the right end's job. The swap setting decides which of the inbox tray and
+        // the chat menu sits left; a bar too narrow for the tray folds it away and the menu takes
+        // the right end.
+        let hasInbox = session.rooms?.mentions != nil
+        let folded = model.inboxFolded || !hasInbox
+        let trayRight = session.style.inboxRight && !folded
         return HStack(alignment: .center, spacing: 6) {
-            if right { menuButton(slowWait: slowWait) } else { tray(right: false) }
+            if !folded {
+                leftEnd(tray: !session.style.inboxRight)
+            }
             fieldBox(slowWait: slowWait)
-            if right { tray(right: true) } else { menuButton(slowWait: slowWait) }
+            endButton(slowWait: slowWait, tray: trayRight)
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
     }
 
-    /// The inbox tray. While you type it slides out its own side and the field grows into its
-    /// room, in one spring; it comes back the same way. The chat menu stays put. A bar dragged
-    /// narrow (the side chat beside the video) keeps it off the same way, for the field.
-    @ViewBuilder
-    private func tray(right: Bool) -> some View {
-        if let mentions = session.rooms?.mentions {
-            let hidden = focused || model.inboxFolded
-            InboxTray(store: mentions, surface: inboxSurface, right: right)
-                .opacity(hidden ? 0 : 1)
-                .offset(x: hidden ? (right ? 52 : -52) : 0)
-                .frame(width: hidden ? 0 : 44)
-                .padding(right ? Edge.Set.leading : Edge.Set.trailing, hidden ? -6 : 0)
-                .allowsHitTesting(!hidden)
-                .accessibilityHidden(hidden)
-                .animation(SNMotion.run(InboxMotion.spring), value: hidden)
+    /// The bar's left end: the inbox tray, or the chat menu when Settings swaps the pair. While you
+    /// type it slides out its own side and the field grows into its room, in one spring; it comes
+    /// back the same way.
+    private func leftEnd(tray: Bool) -> some View {
+        Group {
+            if tray, let mentions = session.rooms?.mentions {
+                InboxTray(store: mentions, surface: inboxSurface)
+            } else {
+                Button { openMenu() } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(SN.textSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel("Chat options")
+            }
         }
+        .opacity(focused ? 0 : 1)
+        .offset(x: focused ? -52 : 0)
+        .frame(width: focused ? 0 : 44)
+        .padding(.trailing, focused ? -6 : 0)
+        .allowsHitTesting(!focused)
+        .accessibilityHidden(focused)
+        .animation(SNMotion.run(InboxMotion.spring), value: focused)
+    }
+
+    private func openMenu() {
+        model.panel = .none
+        model.menuOpen = true
     }
 
     /// About 12 characters of the placeholder at 15 pt: the least the field keeps before the
@@ -343,57 +364,111 @@ private struct ComposerBar: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 12))
     }
 
-    private func menuButton(slowWait: Int) -> some View {
-        // Send with a draft; with none, the chat menu, except while the keyboard is up: scrolling
-        // the chat never closes it, so this slot is the way down until it goes.
-        Button {
-            if model.canSend {
+    /// What the right end of the bar is right now.
+    private enum EndMode {
+        case send, keyboard, tray, menu
+    }
+
+    /// The bar's right end, one control with every job it has: Send the moment the field holds a
+    /// message, whatever sits here otherwise (the chat menu, or the inbox tray when Settings swaps
+    /// the pair), and the way to put the keyboard away while you type with nothing written
+    /// (scrolling the chat never does). One button in one spot: the marks crossfade and the accent
+    /// fill grows in under Send, so nothing slides in or moves. Send is always on the right.
+    private func endButton(slowWait: Int, tray: Bool) -> some View {
+        let mentions = session.rooms?.mentions
+        let mode: EndMode = model.canSend || model.sending ? .send : focused ? .keyboard : tray ? .tray : .menu
+        let sheetOpen = tray && mentions?.sheetIn == inboxSurface
+        let unread = mentions?.unreadTotal ?? 0
+        let showsCount = unread > 0 && (mode == .tray ? !sheetOpen : mode == .menu && model.inboxFolded)
+        return Button {
+            switch mode {
+            case .send:
                 Task { await model.send() }
-            } else if focused {
+            case .keyboard:
                 focused = false
-            } else {
-                model.panel = .none
-                model.menuOpen = true
+            case .tray:
+                if let mentions {
+                    withAnimation(SNMotion.run(InboxMotion.spring)) { mentions.toggleSheet(inboxSurface) }
+                }
+            case .menu:
+                openMenu()
             }
         } label: {
-            Group {
-                if model.canSend, slowWait > 0 {
-                    // Slow mode: the seconds until the next message can go.
-                    Text("\(slowWait)")
-                        .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(SN.textPrimary)
-                } else if model.canSend, let gem = model.cheer.draft?.iconURL {
-                    // The message cheers: Send spends, so it wears the gem.
-                    RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
-                } else {
-                    Image(systemName: model.canSend || model.sending ? "paperplane.fill"
-                        : focused ? "keyboard.chevron.compact.down" : "ellipsis")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
-                        .contentTransition(.symbolEffect(.replace))
-                        // The keyboard coming and going swaps the mark over 0.2 s, as Android crossfades it.
-                        .animation(.easeOut(duration: 0.2), value: focused)
+            ZStack {
+                // Send's accent fill, grown in under its mark.
+                Circle()
+                    .fill(SN.accent)
+                    .scaleEffect(mode == .send ? 1 : 0.55)
+                    .opacity(mode == .send ? 1 : 0)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(SN.textSecondary)
+                    .opacity(mode == .menu ? 1 : 0)
+                if tray {
+                    Image(systemName: sheetOpen ? "xmark" : "tray")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(sheetOpen ? SN.textPrimary : SN.textSecondary)
+                        .opacity(mode == .tray ? 1 : 0)
                 }
+                Image(systemName: "keyboard.chevron.compact.down")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(SN.textSecondary)
+                    .opacity(mode == .keyboard ? 1 : 0)
+                sendMark(slowWait: slowWait)
+                    .opacity(mode == .send ? 1 : 0)
             }
+            // The marks swap over 0.2 s, as Android crossfades them.
+            .animation(SNMotion.run(.easeOut(duration: 0.2)), value: mode)
             // A circle reads smaller than the 40 pt field beside it; 44 matches it.
             .frame(width: 44, height: 44)
+            .contentShape(Circle())
         }
         .glassEffect(.regular.interactive(), in: .circle)
-        .overlay(alignment: session.style.inboxRight ? .topTrailing : .topLeading) {
-            // A narrow bar has no room for the tray: the inbox's count rides this menu, where its
-            // row is, on the corner beside the field.
-            if model.inboxFolded, !focused, !model.canSend, let unread = session.rooms?.mentions?.unreadTotal, unread > 0 {
+        .overlay(alignment: .topLeading) {
+            // The inbox's count rides the corner beside the field: on the tray when it sits here,
+            // or on the chat menu when a narrow bar folded the tray into it.
+            if showsCount {
                 InboxCount(count: unread)
-                    .offset(x: session.style.inboxRight ? 4 : -4, y: -4)
+                    .offset(x: -4, y: -4)
                     .allowsHitTesting(false)
             }
         }
-        .disabled(model.sending || (model.canSend && slowWait > 0) || model.cheerBlocked)
-        .opacity(model.sending || model.cheerBlocked ? 0.5 : 1)
-        .accessibilityLabel(model.canSend
+        // A tap on the tray here is the tray's own, never a tap outside its sheet.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            InboxTrayFrames.frames[endKey] = tray ? frame : nil
+        }
+        .onDisappear { InboxTrayFrames.frames[endKey] = nil }
+        .disabled(mode == .send && (model.sending || slowWait > 0 || model.cheerBlocked))
+        .opacity(mode == .send && (model.sending || model.cheerBlocked) ? 0.5 : 1)
+        .accessibilityLabel(mode == .send
             ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
                 : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
-            : focused ? "Hide keyboard" : "Chat options")
+            : mode == .keyboard ? "Hide keyboard"
+            : mode == .tray ? (sheetOpen ? "Close the inbox" : unread > 0 ? "Inbox, \(unread) new" : "Inbox")
+            : (showsCount ? "Chat options, \(unread) new in the inbox" : "Chat options"))
+    }
+
+    /// Send's mark: the slow-mode seconds, the cheer's gem when the message cheers, else the plane.
+    @ViewBuilder
+    private func sendMark(slowWait: Int) -> some View {
+        if slowWait > 0 {
+            // Slow mode: the seconds until the next message can go.
+            Text("\(slowWait)")
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                .foregroundStyle(sendInk)
+        } else if let gem = model.cheer.draft?.iconURL {
+            // The message cheers: Send spends, so it wears the gem.
+            RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
+        } else {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(sendInk)
+        }
+    }
+
+    /// Send's mark on the accent fill: black on a light accent, white on a dark one.
+    private var sendInk: Color {
+        Look.shared.palette.accent.luminance > 0.5 ? Color.black.opacity(0.88) : .white
     }
 
     /// A Kick room without a Kick sign-in: one accent button where the text would go, which runs

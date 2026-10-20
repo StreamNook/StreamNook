@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
-import { CircleSlash } from 'lucide-react';
+import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
 import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
@@ -80,6 +80,9 @@ const FIELD_MIN_PX = 92;
 const FOLD_HYSTERESIS_PX = 12;
 /** What the tray takes from the field: its 40 px and the 6 px gap. */
 const TRAY_ROOM = 46;
+
+/** One of the right end's marks, stacked in the same spot and crossfaded. */
+const END_MARK = 'absolute inset-0 flex items-center justify-center transition-opacity duration-200 pointer-events-none';
 
 /** Twitch's message limit; the counter shows from COUNTER_FROM characters. */
 const MESSAGE_LIMIT = 500;
@@ -556,7 +559,18 @@ const MobileChatInputImpl: React.FC<Props> = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-  const trayHidden = typing || trayFolded;
+  // What each end of the bar holds. Send is always the right end's job (see
+  // the button); the swap setting decides which of the tray and the chat menu
+  // sits left. A narrow bar folds the tray away and the menu takes the right.
+  const leftEnd: 'tray' | 'menu' | null = trayFolded ? null : trayRight ? 'menu' : 'tray';
+  const rightEnd: 'tray' | 'menu' = trayFolded ? 'menu' : trayRight ? 'tray' : 'menu';
+  const endMode: 'send' | 'keyboard' | 'tray' | 'menu' = canSend ? 'send' : typing ? 'keyboard' : rightEnd;
+  const inboxOpenHere = useMentionsStore((s) => s.sheetIn === inboxSurface);
+  const openMenu = () => {
+    setEmotesOpen(false);
+    setPointsOpen(false);
+    setMenuOpen(true);
+  };
 
   // Replace the word being typed rather than appending, which is what makes
   // this a completion instead of a second insertion.
@@ -649,30 +663,40 @@ const MobileChatInputImpl: React.FC<Props> = ({
             />
           )}
         </AnimatePresence>
-        {/* The inbox tray, at the end Settings picks. While you type it slides
-            out its own side and the field grows into its room, in one spring
-            (width and transform only); it comes back the same way. The chat
-            menu at the other end stays put. */}
-        <motion.div
-          className="shrink-0 self-end"
-          style={{ order: trayRight ? 3 : -1 }}
-          initial={false}
-          animate={{
-            width: trayHidden ? 0 : 40,
-            [trayRight ? 'marginLeft' : 'marginRight']: trayHidden ? -6 : 0,
-          }}
-          transition={INBOX_SPRING}
-          aria-hidden={trayHidden}
-        >
+        {/* The bar's left end: the inbox tray, or the chat menu when Settings
+            swaps the pair. While you type it slides out its own side and the
+            field grows into its room, in one spring (width and transform
+            only); it comes back the same way. A bar too narrow for the tray
+            keeps nothing here: the chat menu takes the right end. */}
+        {leftEnd && (
           <motion.div
+            className="shrink-0 self-end"
+            style={{ order: -1 }}
             initial={false}
-            animate={{ x: trayHidden ? (trayRight ? 48 : -48) : 0, opacity: trayHidden ? 0 : 1 }}
+            animate={{ width: typing ? 0 : 40, marginRight: typing ? -6 : 0 }}
             transition={INBOX_SPRING}
-            style={{ pointerEvents: trayHidden ? 'none' : undefined }}
+            aria-hidden={typing}
           >
-            <InboxTray surface={inboxSurface} side={trayRight ? 'right' : 'left'} />
+            <motion.div
+              initial={false}
+              animate={{ x: typing ? -48 : 0, opacity: typing ? 0 : 1 }}
+              transition={INBOX_SPRING}
+              style={{ pointerEvents: typing ? 'none' : undefined }}
+            >
+              {leftEnd === 'tray' ? (
+                <InboxTray surface={inboxSurface} side="left" />
+              ) : (
+                <button
+                  onClick={openMenu}
+                  className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center w-10 h-10 text-textSecondary active:text-textPrimary"
+                  aria-label="Chat options"
+                >
+                  <DotsThreeVertical size={22} weight="bold" />
+                </button>
+              )}
+            </motion.div>
           </motion.div>
-        </motion.div>
+        )}
         {/* The emote trigger and the points button live INSIDE the field so the
             typing area keeps full width instead of being squeezed by chrome.
             Exactly 40px, the height of the round button beside it. */}
@@ -922,31 +946,84 @@ const MobileChatInputImpl: React.FC<Props> = ({
           )}
         </div>
 
-        {/* One slot, two jobs: Send while there is a message, otherwise the chat
-            menu. Avoids parking a permanently disabled Send on screen. While the
-            keyboard is up with nothing typed, the menu's place is the way to put
-            the keyboard away (scrolling the chat never does), and it is the menu
-            again once the keyboard goes. */}
-        {canSend ? (
-          <button
-            onClick={() => void send()}
-            // Held while slow mode makes you wait (the button counts it down)
-            // and while a cheer in the message has a problem.
-            disabled={sending || slowWait > 0 || cheerBlocked}
-            style={{ order: trayRight ? -2 : 2 }}
-            className={`chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-textPrimary transition-all duration-300 ${
-              sending || cheerBlocked ? 'opacity-50' : ''
-            }`}
-            aria-label={
-              slowWait > 0
+        {/* The bar's right end, one control with every job it has: Send the
+            moment the field holds a message, whatever sits here otherwise (the
+            chat menu, or the inbox tray when Settings swaps the pair), and the
+            way to put the keyboard away while you type with nothing written
+            (scrolling the chat never does). One element in one spot: the marks
+            crossfade and the accent fill grows in under Send, so nothing slides
+            in or moves. Send is always on the right. */}
+        <button
+          // Held on the press while typing, so the field keeps the keyboard
+          // until the tap lands (and after a send, for the next message).
+          onPointerDown={(e) => {
+            if (typing) e.preventDefault();
+          }}
+          onClick={() => {
+            if (endMode === 'send') {
+              void send();
+            } else if (endMode === 'keyboard') {
+              inputRef.current?.blur();
+            } else if (endMode === 'tray') {
+              toggleInboxSheet(inboxSurface);
+            } else {
+              openMenu();
+            }
+          }}
+          // Held while slow mode makes you wait (the button counts it down)
+          // and while a cheer in the message has a problem.
+          disabled={endMode === 'send' && (sending || slowWait > 0 || cheerBlocked)}
+          data-inbox-tray={rightEnd === 'tray' ? '' : undefined}
+          style={{ order: 2 }}
+          className={`chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 transition-opacity duration-200 ${
+            endMode === 'send' ? 'sn-send-ink' : inboxOpenHere && endMode === 'tray' ? 'text-textPrimary' : 'text-textSecondary active:text-textPrimary'
+          } ${endMode === 'send' && (sending || cheerBlocked) ? 'opacity-50' : ''}`}
+          aria-label={
+            endMode === 'send'
+              ? slowWait > 0
                 ? `Send again in ${slowWait} seconds`
                 : composerCheer
                   ? `Cheer ${composerCheer.total} bits`
                   : 'Send'
-            }
-          >
+              : endMode === 'keyboard'
+                ? 'Hide keyboard'
+                : endMode === 'tray'
+                  ? inboxOpenHere
+                    ? 'Close the inbox'
+                    : inboxUnread > 0
+                      ? `Inbox, ${inboxUnread} new`
+                      : 'Inbox'
+                  : trayFolded && inboxUnread > 0
+                    ? `Chat options, ${inboxUnread} new in the inbox`
+                    : 'Chat options'
+          }
+        >
+          {/* Send's accent fill, grown in under its mark (opacity and scale
+              only, so it holds the frame rate). */}
+          <span
+            aria-hidden
+            className="absolute inset-0 rounded-full bg-accent pointer-events-none"
+            style={{
+              opacity: endMode === 'send' ? 1 : 0,
+              transform: `scale(${endMode === 'send' ? 1 : 0.55})`,
+              transition: 'opacity 160ms ease-out, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+            }}
+          />
+          {/* Every mark in one place, crossfading, so nothing moves. */}
+          <span className={`${END_MARK} ${endMode === 'menu' ? 'opacity-100' : 'opacity-0'}`}>
+            <DotsThreeVertical size={22} weight="bold" />
+          </span>
+          {rightEnd === 'tray' && (
+            <span className={`${END_MARK} ${endMode === 'tray' ? 'opacity-100' : 'opacity-0'}`}>
+              {inboxOpenHere ? <XIcon size={19} strokeWidth={2.25} /> : <InboxIcon size={19} strokeWidth={2} />}
+            </span>
+          )}
+          <span className={`${END_MARK} ${endMode === 'keyboard' ? 'opacity-100' : 'opacity-0'}`}>
+            <KeyboardHideIcon size={20} />
+          </span>
+          <span className={`${END_MARK} ${endMode === 'send' ? 'opacity-100' : 'opacity-0'}`}>
             {slowWait > 0 ? (
-              <span className="text-[14px] font-semibold tabular-nums text-textPrimary">{slowWait}</span>
+              <span className="text-[14px] font-semibold tabular-nums">{slowWait}</span>
             ) : composerCheer?.icon_url ? (
               // The message cheers: Send spends, so it wears the gem.
               <img src={composerCheer.icon_url} alt="" className="h-5 w-5 object-contain" draggable={false} />
@@ -960,48 +1037,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 />
               </svg>
             )}
-          </button>
-        ) : (
-          <button
-            // Held on the press while typing, so the field keeps the keyboard
-            // until the tap lands; otherwise it would blur first and the button
-            // would turn back into the menu under the finger.
-            onPointerDown={(e) => {
-              if (typing) e.preventDefault();
-            }}
-            onClick={() => {
-              if (typing) {
-                inputRef.current?.blur();
-                return;
-              }
-              setEmotesOpen(false);
-              setPointsOpen(false);
-              setMenuOpen(true);
-            }}
-            style={{ order: trayRight ? -2 : 2 }}
-            className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
-            aria-label={
-              typing ? 'Hide keyboard' : trayFolded && inboxUnread > 0 ? `Chat options, ${inboxUnread} new in the inbox` : 'Chat options'
-            }
-          >
-            {/* Both marks in one place, crossfading, so nothing moves. */}
-            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}>
-              <DotsThreeVertical size={22} weight="bold" />
+          </span>
+          {/* The inbox's count rides the corner beside the field: on the tray
+              when it sits here, or on the chat menu when a narrow bar folded
+              the tray into it. Not while the end is Send or the keyboard's. */}
+          {(endMode === 'tray' ? !inboxOpenHere : endMode === 'menu' && trayFolded) && inboxUnread > 0 && (
+            <span className="sn-inbox-badge absolute -top-1 -left-1 min-w-[17px] h-[17px] px-[5px] rounded-full text-[10.5px] font-bold leading-[17px] text-center tabular-nums pointer-events-none">
+              {fitCount(inboxUnread)}
             </span>
-            <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-100' : 'opacity-0'}`}>
-              <KeyboardHideIcon size={20} />
-            </span>
-            {/* A narrow bar has no room for the tray: the inbox's count rides
-                this menu, where its row is. */}
-            {trayFolded && !typing && inboxUnread > 0 && (
-              <span
-                className={`sn-inbox-badge absolute -top-1 ${trayRight ? '-right-1' : '-left-1'} min-w-[17px] h-[17px] px-[5px] rounded-full text-[10.5px] font-bold leading-[17px] text-center tabular-nums pointer-events-none`}
-              >
-                {fitCount(inboxUnread)}
-              </span>
-            )}
-          </button>
-        )}
+          )}
+        </button>
 
         <EmotePickerPanel
           open={emotesOpen}
