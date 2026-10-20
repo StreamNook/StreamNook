@@ -364,11 +364,14 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
         )}
       </div>
       {tabs.length === 0 ? (
-        // No chat open: the tab is the picker itself.
-        // The search field stays put and fully drawn; only the lists under it
-        // scroll and fade.
-        <div className="flex-1 min-h-0 flex flex-col px-2 pt-1">
-          <ChatPicker scrolls bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" onClose={exitChats} />
+        // No chat open: the tab is the picker itself, on the glaze the sheets
+        // wear (solid at 0% glassiness). The search field stays put and fully
+        // drawn; only the lists under it scroll and fade.
+        <div className="flex-1 min-h-0 flex flex-col px-2 pt-1" style={{ paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' }}>
+          {/* The glaze is a pill by default; a sheet-sized panel takes the sheets' corner. */}
+          <div className="flex-1 min-h-0 flex flex-col pt-3 px-1 chrome-glaze chrome-glaze--flat" style={{ borderRadius: 28 }}>
+            <ChatPicker scrolls bottomClearance="16px" onClose={exitChats} />
+          </div>
         </div>
       ) : (
         <>
