@@ -2,7 +2,8 @@ import SNKit
 import SwiftUI
 
 /// The channel wallet's button inside the composer field, for a Twitch room with points or bits:
-/// the channel's own points art (or Twitch's glyph), a small bits gem when bits are on too, a dot
+/// the channel's own points art (or Twitch's glyph), split on the diagonal with the Bits gem when
+/// bits are on too, a dot
 /// for a waiting bonus chest, and a "+N" for every gain Rust records. A tap collects a waiting
 /// chest on the way in and opens the wallet sheet.
 struct WalletButton: View {
@@ -57,17 +58,14 @@ struct WalletButton: View {
                                 CubicKeyframe(0, duration: 0.38)
                             }
                         }
-                    if wallet.chestWaiting {
-                        // The gain's amber, rimmed dark so it reads apart from the glyph's arc.
-                        Circle()
-                            .fill(GainFloat.amber)
-                            .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1.5))
-                            .frame(width: 9, height: 9)
-                            .offset(x: 1, y: 4)
+                }
+                ForEach(Array(shownBalances(wallet).enumerated()), id: \.offset) { index, balance in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(SN.textSecondary.opacity(0.35))
+                            .frame(width: 1, height: 12)
                             .accessibilityHidden(true)
                     }
-                }
-                if let balance = shownBalance(wallet) {
                     Text(balance)
                         .font(.sn(12, 600))
                         .monospacedDigit()
@@ -76,7 +74,7 @@ struct WalletButton: View {
                         .fixedSize()
                 }
             }
-            .padding(.horizontal, shownBalance(wallet) == nil ? 0 : 4)
+            .padding(.horizontal, shownBalances(wallet).isEmpty ? 0 : 4)
             .frame(minWidth: 32, minHeight: 36)
             .contentShape(Rectangle())
             .overlay(alignment: .top) {
@@ -95,24 +93,24 @@ struct WalletButton: View {
 
     @ViewBuilder
     private func face(_ wallet: WalletModel) -> some View {
-        if let points = wallet.points {
-            ZStack(alignment: .bottomTrailing) {
-                PointsArt(iconURL: points.iconURL, size: 19)
-                if let gem = wallet.bits?.gemURL {
-                    RewardArt(url: gem, width: 9, height: 9, radius: 0, fit: true, placeholder: nil)
-                        .offset(x: 4, y: 2)
-                }
-            }
+        if wallet.chestWaiting {
+            // The whole button becomes the chest, like the desktop's, never a mark on a corner.
+            WalletChest()
+        } else if let points = wallet.points, let gem = wallet.bits?.gemURL {
+            SplitWalletGlyph(pointsIconURL: points.iconURL, gemURL: gem)
+        } else if let points = wallet.points {
+            PointsArt(iconURL: points.iconURL, size: 19)
         } else if let gem = wallet.bits?.gemURL {
             RewardArt(url: gem, width: 19, height: 19, radius: 0, fit: true, placeholder: nil)
         }
     }
 
-    /// The short balance beside the icon while Wallet balance is Always and the sheet is closed.
-    private func shownBalance(_ wallet: WalletModel) -> String? {
-        guard session.style.walletBalanceShown, !wallet.sheetOpen,
-              let balance = wallet.points?.balance ?? wallet.bits?.balance else { return nil }
-        return balance.formatted(.number.notation(.compactName))
+    /// The short balances beside the icon while Wallet balance is Always and the sheet is closed:
+    /// points, then Bits, in the glyph's own order.
+    private func shownBalances(_ wallet: WalletModel) -> [String] {
+        guard session.style.walletBalanceShown, !wallet.sheetOpen, !wallet.chestWaiting else { return [] }
+        let short = { (n: Int64) in n.formatted(.number.notation(.compactName)) }
+        return [wallet.points?.balance, wallet.bits?.balance].compactMap { $0 }.map(short)
     }
 
     /// "Wallet: 12,850 Nooks, 300 bits".
@@ -199,6 +197,121 @@ struct PointsArt: View {
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         }
+    }
+}
+
+/// The wallet's mark for a channel with both channel points and Bits: one square split on the
+/// diagonal, the points art in the upper-left half and the Bits gem in the lower-right, both
+/// whole and the same size, with a short hairline across the gap between them. Nothing sits on a
+/// corner, so it never reads as an unread badge. Same geometry as the desktop and Android
+/// `SplitWalletGlyph`, on a 22 point grid.
+struct SplitWalletGlyph: View {
+    let pointsIconURL: String?
+    let gemURL: String
+    var size: CGFloat = 22
+
+    var body: some View {
+        let u = size / 22
+        ZStack(alignment: .topLeading) {
+            PointsArt(iconURL: pointsIconURL, size: 11 * u)
+                .offset(x: 0.5 * u, y: 0.5 * u)
+            RewardArt(url: gemURL, width: 11 * u, height: 11 * u, radius: 0, fit: true, placeholder: nil)
+                .offset(x: 10.5 * u, y: 10.5 * u)
+            // Only across the gap: 10 points long, ending just inside the marks' width, and centered
+            // on the gap you see (a gem's nearest point sits farther out than round points art's).
+            Path { path in
+                path.move(to: CGPoint(x: 15.2 * u, y: 8.13 * u))
+                path.addLine(to: CGPoint(x: 8.13 * u, y: 15.2 * u))
+            }
+            .stroke(SN.textSecondary.opacity(0.45), lineWidth: 1)
+            .accessibilityHidden(true)
+        }
+        .frame(width: size, height: size, alignment: .topLeading)
+    }
+}
+
+/// A bonus chest waiting: the chest in the theme's warning amber with a soft glow, and every few
+/// seconds the desktop's wiggle (rotation and scale only, so it stays on the compositor), held
+/// still under Reduce Motion or the Motion setting.
+struct WalletChest: View {
+    @Environment(\.snStill) private var still
+
+    var body: some View {
+        let chest = ChestGlyph()
+            .fill(style: FillStyle(eoFill: true))
+            .foregroundStyle(SN.warning)
+            .frame(width: 19, height: 19)
+            .shadow(color: SN.warning.opacity(0.4), radius: 1.5)
+            .accessibilityHidden(true)
+        if still {
+            chest
+        } else {
+            chest.keyframeAnimator(initialValue: Wiggle(), repeating: true) { content, w in
+                content.scaleEffect(w.scale).rotationEffect(.degrees(w.angle))
+            } keyframes: { _ in
+                // The desktop's chest-attention: 3.4 s, still for the first 70%.
+                KeyframeTrack(\.angle) {
+                    LinearKeyframe(0, duration: 2.38)
+                    CubicKeyframe(-13, duration: 0.136)
+                    CubicKeyframe(11, duration: 0.17)
+                    CubicKeyframe(-8, duration: 0.17)
+                    CubicKeyframe(5, duration: 0.17)
+                    CubicKeyframe(0, duration: 0.17)
+                    LinearKeyframe(0, duration: 0.204)
+                }
+                KeyframeTrack(\.scale) {
+                    LinearKeyframe(1, duration: 2.38)
+                    CubicKeyframe(1.14, duration: 0.136)
+                    CubicKeyframe(1.12, duration: 0.17)
+                    CubicKeyframe(1.08, duration: 0.17)
+                    CubicKeyframe(1.04, duration: 0.17)
+                    CubicKeyframe(1, duration: 0.17)
+                    LinearKeyframe(1, duration: 0.204)
+                }
+            }
+        }
+    }
+
+    private struct Wiggle {
+        var angle = 0.0
+        var scale = 1.0
+    }
+}
+
+/// The bonus chest on a 24 point grid (the desktop's chest glyph), filled even-odd.
+struct ChestGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 24
+        let o = CGPoint(x: rect.midX - 12 * s, y: rect.midY - 12 * s)
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: o.x + x * s, y: o.y + y * s) }
+        var path = Path()
+        // The chest's outline, its top corners rounded.
+        path.move(to: p(2, 22))
+        path.addLine(to: p(2, 13))
+        path.addLine(to: p(4.417, 8.971))
+        path.addQuadCurve(to: p(6.132, 8), control: p(5, 8))
+        path.addLine(to: p(17.868, 8))
+        path.addQuadCurve(to: p(19.583, 8.971), control: p(19, 8))
+        path.addLine(to: p(22, 13))
+        path.addLine(to: p(22, 22))
+        path.closeSubpath()
+        // The body, with the latch notch.
+        path.move(to: p(20, 20))
+        path.addLine(to: p(20, 15))
+        path.addLine(to: p(13, 15))
+        path.addLine(to: p(13, 17))
+        path.addLine(to: p(11, 17))
+        path.addLine(to: p(11, 15))
+        path.addLine(to: p(4, 15))
+        path.addLine(to: p(4, 20))
+        path.closeSubpath()
+        // The lid's band.
+        path.move(to: p(17.868, 10))
+        path.addLine(to: p(19.668, 13))
+        path.addLine(to: p(4.332, 13))
+        path.addLine(to: p(6.132, 10))
+        path.closeSubpath()
+        return path
     }
 }
 
