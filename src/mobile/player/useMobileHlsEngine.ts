@@ -300,7 +300,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
           if (!live() || data.part) return;
           const { loaded, loading } = data.frag.stats;
-          reportSegment(loaded, loading.end - loading.start);
+          reportSegment(loaded, loading.end - loading.start, undefined, {
+            cc: data.frag.cc,
+            durationMs: data.frag.duration * 1000,
+          });
         });
       }
       // Where the cushion lives in hls.js (its start and resync position, and
@@ -411,7 +414,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           data.type === Hls.ErrorTypes.MEDIA_ERROR &&
           !codecReported &&
           video &&
-          isCodecFailure(data.details, video, firstFrame)
+          isCodecFailure(data.details)
         ) {
           codecReported = true;
           invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })

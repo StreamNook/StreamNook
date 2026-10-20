@@ -105,6 +105,10 @@ impl crate::services::link_adapt::Route for TwitchTileRoute {
     fn player_measures_link(&self) -> bool {
         true
     }
+
+    fn segment_secs(&self) -> Option<f64> {
+        Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS)
+    }
 }
 
 pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt::Route> {

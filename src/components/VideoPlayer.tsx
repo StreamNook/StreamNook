@@ -686,10 +686,10 @@ const VideoPlayer = () => {
     // not the saved preference (settings.quality). They diverge whenever the
     // resolver fell back to the closest available quality because the
     // saved preference wasn't offered for this stream.
-    // "Auto" adapting to the link is still "best" in the menu, whatever
+    // "Auto" adapting to the link is still "auto" in the menu, whatever
     // rendition it plays right now (Rust names that in `autoQuality`).
     const autoNow = useAppStore.getState().autoQuality;
-    const displayedQuality = autoNow ? 'best' : (activeQuality ?? settings.quality);
+    const displayedQuality = autoNow ? 'auto' : (activeQuality ?? settings.quality);
 
     Logger.debug('[Quality] Setting up menu with available qualities:', availableQualities);
     Logger.debug('[Quality] Active quality:', activeQuality, 'saved preference:', settings.quality);
@@ -1743,7 +1743,6 @@ const VideoPlayer = () => {
       // second restart for the same codec on one channel, so this cannot loop.
       let failedCodecMime: string | null = null;
       let codecReported = false;
-      let everPlayed = false;
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
         Logger.error('[HLS] Error:', JSON.stringify({ type: data.type, details: data.details, fatal: data.fatal }));
@@ -1930,7 +1929,7 @@ const VideoPlayer = () => {
             return;
           }
 
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details, video, everPlayed)) {
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details)) {
             codecReported = true;
             invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })
               .catch(() => false)
@@ -2052,7 +2051,10 @@ const VideoPlayer = () => {
         hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
           if (data.part || hlsRef.current !== hls) return;
           const { loaded, loading } = data.frag.stats;
-          reportSegment(loaded, loading.end - loading.start);
+          reportSegment(loaded, loading.end - loading.start, undefined, {
+            cc: data.frag.cc,
+            durationMs: data.frag.duration * 1000,
+          });
         });
       }
 
@@ -2131,7 +2133,6 @@ const VideoPlayer = () => {
       };
 
       const onPlaying = () => {
-        everPlayed = true;
         Logger.debug(`[Video] Playing: ${video.videoWidth}x${video.videoHeight}, paused: ${video.paused}, readyState: ${video.readyState}`);
         Logger.debug(`[Video] Audio state: muted=${video.muted}, volume=${video.volume}`);
 
@@ -2790,7 +2791,7 @@ const VideoPlayer = () => {
   useEffect(() => {
     const value = containerRef.current?.querySelector('[data-plyr="quality"] .plyr__menu__value');
     if (!value) return;
-    value.textContent = qualityLabel(autoQuality ? 'best' : (activeQuality ?? settings.quality), autoQuality);
+    value.textContent = qualityLabel(autoQuality ? 'auto' : (activeQuality ?? settings.quality), autoQuality);
   }, [autoQuality, activeQuality, settings.quality]);
 
   // Inject a "Stats" toggle into the Plyr settings (gear) menu, alongside Quality

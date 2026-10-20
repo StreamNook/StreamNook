@@ -32,20 +32,40 @@ export function isSoloAdapt(event: PlaybackAdapt): boolean {
   return !event.streamId || event.streamId === SOLO_STREAM_ID;
 }
 
+/** What a player knows about the segment it downloaded. */
+export interface SegmentFacts {
+  /** The segment's discontinuity counter (hls.js `frag.cc`). */
+  cc: number;
+  /** How long the segment plays, in milliseconds. */
+  durationMs: number;
+}
+
 function report(
   event: 'frag' | 'stall' | 'stall_end',
   bytes: number | null,
   ms: number,
   streamId: string | undefined,
+  facts?: SegmentFacts,
 ): void {
-  invoke('report_playback_health', { event, bytes, ms, streamId: streamId ?? null }).catch(() => {
+  invoke('report_playback_health', {
+    event,
+    bytes,
+    ms,
+    streamId: streamId ?? null,
+    cc: facts ? facts.cc : null,
+    mediaMs: facts ? facts.durationMs : null,
+  }).catch(() => {
     /* best effort: a lost report only delays a decision */
   });
 }
 
-/** A whole segment downloaded from the network. */
-export function reportSegment(bytes: number, ms: number, streamId?: string): void {
-  if (bytes > 0 && ms > 0) report('frag', bytes, ms, streamId);
+/**
+ * A whole segment downloaded from the network. The facts let Rust leave the
+ * first segment of a new discontinuity run out and time what the rendition's
+ * content really needs.
+ */
+export function reportSegment(bytes: number, ms: number, streamId?: string, facts?: SegmentFacts): void {
+  if (bytes > 0 && ms > 0) report('frag', bytes, ms, streamId, facts);
 }
 
 /**

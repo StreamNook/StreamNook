@@ -1170,6 +1170,9 @@ async fn fetch_and_remux(&self, video: bool, sq: u64) -> Result<Vec<u8>> {
     let (vurl, aurl) = self.urls().ok_or_else(|| anyhow!("no session"))?;
     let base = if video { vurl } else { aurl };
     let fetch_started = Instant::now();
+    // Audio and video fragments download side by side; a video fetch that
+    // shared the link with one says nothing about the whole link.
+    let transfer = crate::services::link_adapt::begin_transfer(&self.id);
     let bytes = match self.fragment(&base, Some(sq), video).await {
         Ok(v) => v,
         Err(e) => {
@@ -1201,11 +1204,7 @@ async fn fetch_and_remux(&self, video: bool, sq: u64) -> Result<Vec<u8>> {
     // The player reads this from memory, so the link is measured here. Video
     // only: it is the transfer the rung's bitrate is about.
     if video {
-        crate::services::link_adapt::note_throughput(
-            &self.id,
-            raw_len as u64,
-            fetch_started.elapsed().as_secs_f64(),
-        );
+        transfer.finish(raw_len as u64);
     }
     let remux_started = Instant::now();
     let out: Result<Vec<u8>> = tokio::task::spawn_blocking(move || {

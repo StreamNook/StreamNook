@@ -487,7 +487,14 @@ const PlayerSettings = () => {
             className="w-full"
             ariaLabel="Default stream quality"
             options={[
-              { value: 'best', label: 'Auto' },
+              // The desktop offers Auto beside the fixed source; on the phones
+              // "best" has always been their Auto.
+              ...(IS_MOBILE
+                ? [{ value: 'best', label: 'Auto' }]
+                : [
+                    { value: 'auto', label: 'Auto' },
+                    { value: 'best', label: 'Source' },
+                  ]),
               { value: '1440p60', label: '1440p60' },
               { value: '1080p60', label: '1080p60' },
               { value: '720p60', label: '720p60' },

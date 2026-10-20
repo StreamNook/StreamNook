@@ -23,10 +23,17 @@ describe('playback-adapt routing', () => {
 });
 
 describe('quality labels', () => {
-  it('reads best as Auto, naming the rendition it plays once Rust has said', () => {
-    expect(qualityLabel('best')).toBe('Auto');
-    expect(qualityLabel('best', null)).toBe('Auto');
-    expect(qualityLabel('best', '720p60')).toBe('Auto (720p60)');
+  it('reads auto as Auto, naming the rendition it plays once Rust has said', () => {
+    expect(qualityLabel('auto')).toBe('Auto');
+    expect(qualityLabel('auto', null)).toBe('Auto');
+    expect(qualityLabel('auto', '720p60')).toBe('Auto (720p60)');
+  });
+
+  it('reads best as the fixed source on the desktop and as Auto on the phones', () => {
+    expect(qualityLabel('best', null, false)).toBe('Source');
+    expect(qualityLabel('source', null, false)).toBe('Source');
+    expect(qualityLabel('best', '720p60', true)).toBe('Auto (720p60)');
+    expect(qualityLabel('best', null, true)).toBe('Auto');
   });
 
   it('leaves a named quality as it is, capitalized', () => {

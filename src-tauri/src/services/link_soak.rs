@@ -376,7 +376,7 @@ async fn link_soak() {
             return;
         }
     };
-    let variants = crate::services::twitch_resolver::playable_variants(&r.master);
+    let variants = crate::services::twitch_resolver::playable_variants(&r.master, &channel);
     for v in &variants {
         println!(
             "[link-soak] ladder {} {}x{} fps={:?} bw={:?} codecs={:?}{}",
@@ -630,7 +630,13 @@ async fn link_soak() {
                 if let Ok(Some((bytes, took, pdt, dur, sn))) = h.await {
                     transfers.push(bytes as f64 * 8.0 / took / 1e6);
                     if adapt {
-                        crate::services::link_adapt::note_player_segment(crate::services::link_adapt::SOLO, bytes, took);
+                        crate::services::link_adapt::note_player_segment(
+                            crate::services::link_adapt::SOLO,
+                            bytes,
+                            took,
+                            Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS),
+                            None,
+                        );
                     }
                     let tn = t0.elapsed().as_secs_f64();
                     println!(

@@ -433,7 +433,6 @@ export const useMultiNookPlayer = ({
       // second restart for the same codec, so this cannot loop.
       let failedCodecMime: string | null = null;
       let codecReported = false;
-      let everPlayed = false;
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) {
@@ -464,7 +463,7 @@ export const useMultiNookPlayer = ({
 
         if (data.fatal) {
           Logger.error(`[MultiNook-${streamId}] Fatal error:`, data);
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details, video, everPlayed)) {
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details)) {
             codecReported = true;
             const unsupported = UNSUPPORTED_CODEC.has(data.details);
             invoke<boolean>('report_multi_nook_tile_codec_failure', { streamId, mimeType: failedCodecMime })
@@ -535,7 +534,6 @@ export const useMultiNookPlayer = ({
 
       let joinedSync = false;
       const onPlaying = () => {
-        everPlayed = true;
         setIsPlaying(true);
         setIsBuffering(false);
         setError(null);
@@ -563,7 +561,10 @@ export const useMultiNookPlayer = ({
         hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
           if (data.part || hlsRef.current !== hls) return;
           const { loaded, loading } = data.frag.stats;
-          reportSegment(loaded, loading.end - loading.start, streamId);
+          reportSegment(loaded, loading.end - loading.start, streamId, {
+            cc: data.frag.cc,
+            durationMs: data.frag.duration * 1000,
+          });
         });
       }
       const stalls = createStallReporter(streamId);
