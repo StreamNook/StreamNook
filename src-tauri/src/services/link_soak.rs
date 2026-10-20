@@ -405,8 +405,9 @@ async fn link_soak() {
             return;
         }
     };
-    // As `start_stream`: the origin's first downloads may move the start rung
-    // before the player loads.
+    // As `start_stream`: the first downloads may move the start rung before
+    // the player loads.
+    crate::services::link_adapt::start_measure(crate::services::link_adapt::SOLO, generation).await;
     if let Some(rung) =
         crate::services::link_adapt::start_check(crate::services::link_adapt::SOLO, generation)
     {

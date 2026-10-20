@@ -1196,12 +1196,14 @@ impl LlOrigin {
             .cloned()
             .collect();
         for (sn, pdt, url) in backfill {
-            let t0 = std::time::Instant::now();
             match client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok() {
                 Some(resp) => {
+                    // Timed from the response, so the connection's setup (and
+                    // the first one's handshake) is left out.
+                    let t0 = std::time::Instant::now();
                     let bytes = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
                     // A whole published segment at the link's full rate: the
-                    // parts path's best measure of it.
+                    // parts path's best measure of it, and the start pick's.
                     crate::services::link_adapt::note_throughput(
                         &self.adapt_id(),
                         bytes.len() as u64,

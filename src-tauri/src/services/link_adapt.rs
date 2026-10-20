@@ -116,6 +116,14 @@ const MEASURE_EVERY: f64 = 15.0;
 /// rung, and how many recent ones it keeps.
 const WARM_MIN: usize = 4;
 const WARM_KEEP: usize = 8;
+/// Desktop: the start pick moves off the rung only when even the faster of
+/// its first downloads ran below this share of what the rung's content
+/// measurably needs. A link that carries the rung, or nearly does, keeps it.
+const START_FACTOR: f64 = 0.8;
+/// Downloads the start pick needs, each timed from its first byte.
+const START_SAMPLES: usize = 2;
+/// How long the start pick reads each segment it downloads itself.
+const START_READ: Duration = Duration::from_millis(1500);
 /// How long one Twitch live segment plays. Twitch cuts every rendition into
 /// segments of this length, so a relay's own download of one also says what
 /// the rung's content really runs at.
@@ -225,6 +233,12 @@ pub struct Governor {
     tile: bool,
     /// Whether a switch now would be seamless (spliced, no reload).
     seamless: bool,
+    /// Desktop: the downloads before the first frame (the start pick's
+    /// evidence), until the pick is made.
+    start_samples: Vec<Measured>,
+    start_done: bool,
+    /// Why automatic switches are held now, once logged for this episode.
+    held: Option<&'static str>,
 }
 
 impl Governor {
@@ -258,6 +272,9 @@ impl Governor {
             ceiling_bw: None,
             tile: false,
             seamless: true,
+            start_samples: Vec::new(),
+            start_done: false,
+            held: None,
         }
     }
 
@@ -317,9 +334,37 @@ impl Governor {
         self.tile || (self.rules == Rules::Desktop && !self.seamless)
     }
 
+    /// Why automatic switches are held, while they are.
+    fn hold_reason(&self) -> Option<&'static str> {
+        if self.tile {
+            Some("a MultiNook tile never moves its own rung")
+        } else if self.rules == Rules::Desktop && !self.seamless {
+            Some("a switch here would reload the player")
+        } else {
+            None
+        }
+    }
+
+    /// The hold logged for this episode, if one is running.
+    pub fn holding(&self) -> Option<&'static str> {
+        self.held
+    }
+
+    /// A decision the hold stopped: logged once per hold episode.
+    fn hold(&mut self, would: &str) -> Option<Decision> {
+        let reason = self.hold_reason()?;
+        if self.held != Some(reason) {
+            self.held = Some(reason);
+            let rung = self.ladder.get(self.current).map_or("", |r| r.name.as_str());
+            info!("[LinkAdapt] holding {rung}: {reason} ({would})");
+        }
+        None
+    }
+
     /// One whole transfer: `bytes` in `secs`, of a segment that plays
     /// `content_secs` when that is known.
     pub fn note_throughput(&mut self, bytes: u64, secs: f64, content_secs: Option<f64>, now: f64) -> Option<Decision> {
+        self.note_start_sample(Measured { bytes, secs, content_secs });
         match self.rules {
             Rules::Phone => {
                 if !self.add_ewma(bytes, secs) {
@@ -474,7 +519,13 @@ impl Governor {
         if ended && secs >= 0.5 {
             self.add_trouble(now, CUSHION_PER_STALL);
         }
-        if !self.auto || self.holds() {
+        if !self.auto {
+            return None;
+        }
+        if self.holds() {
+            if self.rules == Rules::Desktop && (secs >= LONG_STALL || self.recent_troubles(now) >= 2) {
+                return self.hold("after stalls");
+            }
             return None;
         }
         match self.rules {
@@ -554,23 +605,69 @@ impl Governor {
         self.step_down_desktop(link, why)
     }
 
-    /// Before the player has loaded anything: when warm downloads already
-    /// show the link cannot carry this rung, the rung to start on instead.
-    /// The first downloads of a session are cold and land while it settles,
-    /// and those are never judged, so on a fresh start this keeps the start.
-    /// The phones never move here.
-    pub fn start_check(&mut self, now: f64) -> Option<usize> {
-        if self.rules == Rules::Phone || !self.auto || self.holds() {
+    /// A download before the first frame, timed from its first byte: the
+    /// start pick's evidence (desktop only, until the pick is made).
+    pub fn note_start_sample(&mut self, sample: Measured) {
+        if self.rules == Rules::Desktop
+            && !self.start_done
+            && self.start_samples.len() < 2 * START_SAMPLES
+            && sample.bytes >= MIN_SAMPLE_BYTES
+            && sample.secs > 0.0
+        {
+            self.start_samples.push(sample);
+        }
+    }
+
+    /// Whether the start pick still needs downloads of its own (the
+    /// whole-segment path's relay downloads nothing before the player).
+    pub fn start_wants_samples(&self) -> bool {
+        self.rules == Rules::Desktop
+            && !self.start_done
+            && self.auto
+            && !self.tile
+            && self.start_samples.len() < START_SAMPLES
+    }
+
+    /// The faster of the start pick's downloads, in bits per second.
+    pub fn start_link(&self) -> Option<f64> {
+        self.start_samples.iter().map(|m| m.bps()).reduce(f64::max)
+    }
+
+    /// The start pick, before the player has loaded anything: the rung to
+    /// start on instead when the link clearly cannot carry this one. Switching
+    /// now costs no freeze on any path, so it is made where later switches are
+    /// held, but never for a tile (the grid shares one link). It needs
+    /// `START_SAMPLES` downloads timed from their first byte and moves only
+    /// when even the faster one ran under `START_FACTOR` of the rung's
+    /// measured content rate, so a healthy link, one slow cold download or a
+    /// borderline link all keep the start. Any rung may be picked: nothing
+    /// has been decoded yet. Made once; the phones never move here.
+    pub fn start_check(&mut self, _now: f64) -> Option<usize> {
+        let samples = std::mem::take(&mut self.start_samples);
+        self.start_done = true;
+        if self.rules == Rules::Phone || !self.auto || self.tile || samples.len() < START_SAMPLES {
             return None;
         }
-        let link = self.warm_median(now)?;
-        if link >= self.content_rate() * SUSTAIN_FACTOR {
+        let link = samples.iter().map(|m| m.bps()).fold(0.0, f64::max);
+        let measured: Vec<f64> = samples
+            .iter()
+            .filter_map(|m| m.content_secs.filter(|s| *s > 0.0).map(|s| m.bytes as f64 * 8.0 / s))
+            .collect();
+        let declared = self.bw(self.current) as f64;
+        let content = if measured.is_empty() { declared } else { median(measured) };
+        if link >= content * START_FACTOR {
             return None;
         }
-        match self.step_down_desktop(link, "throughput below the bitrate")? {
-            Decision::Switch { to, .. } => Some(to),
-            _ => None,
+        let scale = if declared > 0.0 { content / declared } else { 1.0 };
+        let last = self.ladder.len().checked_sub(1)?;
+        if self.current >= last {
+            return None;
         }
+        Some(
+            (self.current + 1..=last)
+                .find(|&i| self.bw(i) as f64 * scale <= link * PICK_FACTOR)
+                .unwrap_or(last),
+        )
     }
 
     /// A periodic look with no new evidence: decays the cushion and considers a
@@ -714,9 +811,15 @@ impl Governor {
     /// what the rung measurably needs; step up only with room to spare, so the
     /// new rung clears the bar with margin and the two never alternate.
     fn decide_desktop(&mut self, now: f64) -> Option<Decision> {
-        if !self.auto || self.ladder.len() < 2 || self.settling(now) || self.holds() {
+        if !self.auto || self.ladder.len() < 2 || self.settling(now) {
             return None;
         }
+        if self.holds() {
+            // What it would do, to say so once.
+            let falls = self.warm_median(now).is_some_and(|link| link < self.content_rate() * SUSTAIN_FACTOR);
+            return if falls { self.hold("the link cannot carry it") } else { None };
+        }
+        self.held = None;
         if let Some(link) = self.warm_median(now) {
             if link < self.content_rate() * SUSTAIN_FACTOR {
                 return self.step_down_desktop(link, "throughput below the bitrate");
@@ -1126,7 +1229,7 @@ pub fn start_check(stream_id: &str, generation: Option<u64>) -> Option<Rung> {
             .get_mut(stream_id)
             .filter(|s| s.generation == generation && !s.applying)?;
         let now = s.epoch.elapsed().as_secs_f64();
-        let est = s.gov.estimate().unwrap_or(0.0);
+        let est = s.gov.start_link().unwrap_or(0.0);
         let to = s.gov.start_check(now)?;
         let from = s.gov.ladder().get(s.gov.current())?.name.clone();
         s.gov.switched(to, now);
@@ -1142,6 +1245,75 @@ pub fn start_check(stream_id: &str, generation: Option<u64>) -> Option<Rung> {
     };
     announce(stream_id, None, "start");
     Some(rung)
+}
+
+/// Before `start_check`, on a stream whose relay downloaded nothing of its own
+/// (the whole-segment path; the parts origin's backfill already timed two
+/// segments): download the starting rung's newest segments so the start pick
+/// has its evidence before the first frame. Desktop "Auto" solo only.
+pub async fn start_measure(stream_id: &str, generation: Option<u64>) {
+    let Some(generation) = generation else { return };
+    let url = {
+        let guard = sessions();
+        let Some(s) = guard.get(stream_id).filter(|s| s.generation == generation) else { return };
+        if !s.gov.start_wants_samples() {
+            return;
+        }
+        match s.gov.ladder().get(s.gov.current()) {
+            Some(rung) => rung.url.clone(),
+            None => return,
+        }
+    };
+    let samples = measure_start(&url).await;
+    let mut guard = sessions();
+    if let Some(s) = guard.get_mut(stream_id).filter(|s| s.generation == generation) {
+        for m in samples {
+            s.gov.note_start_sample(m);
+        }
+    }
+}
+
+/// The start pick's own downloads: the newest `START_SAMPLES` segments of
+/// `playlist_url`, one after the other, each timed from its first byte (its
+/// connection's setup left out) and read for at most `START_READ`. A part read
+/// carries the share of the segment's length its bytes are, from the length
+/// header, so what the rung's content runs at is known too.
+async fn measure_start(playlist_url: &str) -> Vec<Measured> {
+    let client = crate::services::http::client();
+    let Ok(resp) = client.get(playlist_url).timeout(Duration::from_secs(8)).send().await else {
+        return Vec::new();
+    };
+    let Ok(text) = resp.text().await else { return Vec::new() };
+    let Ok(base) = reqwest::Url::parse(playlist_url) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (uri, length) in newest_segments(&text, START_SAMPLES) {
+        let Ok(url) = base.join(&uri) else { continue };
+        let Ok(resp) = client.get(url).timeout(Duration::from_secs(10)).send().await else { continue };
+        let Ok(mut resp) = resp.error_for_status() else { continue };
+        let total = resp.content_length();
+        let started = Instant::now();
+        let mut first_at: Option<Instant> = None;
+        let mut bytes: u64 = 0;
+        while let Some(left) = START_READ.checked_sub(started.elapsed()) {
+            match tokio::time::timeout(left, resp.chunk()).await {
+                Ok(Ok(Some(chunk))) => {
+                    if first_at.is_none() {
+                        first_at = Some(Instant::now());
+                    } else {
+                        bytes += chunk.len() as u64;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let secs = first_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let content_secs = match (total, length) {
+            (Some(total), Some(len)) if total > 0 => Some(len * bytes as f64 / total as f64),
+            _ => None,
+        };
+        out.push(Measured { bytes, secs, content_secs });
+    }
+    out
 }
 
 /// Every MultiNook tile's session ends (the grid closed or was promoted).
@@ -1959,17 +2131,92 @@ mod tests {
     }
 
     #[test]
-    fn desktop_start_check_keeps_a_cold_start() {
-        // The parts origin's two backfill segments, both slow: one is cold and
-        // both land while the start settles.
+    fn desktop_a_weak_start_picks_the_rung_that_fits_before_the_first_frame() {
+        // The parts origin's two backfill segments of 8.2 Mbit/s content, both
+        // at 4 Mbit/s: 4 * 0.7 = 2.8 carries 480p30 (1.43), not 720p60.
         let mut g = desk(0);
-        let (b, s) = seg(8_200_000, 3e6);
+        let (b, s) = seg(8_200_000, 4e6);
+        g.note_throughput(b, s, Some(2.0), 1.0);
+        g.note_throughput(b, s, Some(2.0), 2.0);
+        assert_eq!(g.start_check(2.5), Some(2));
+        // Made once: later evidence goes to the running rules.
+        assert_eq!(g.start_check(3.0), None);
+    }
+
+    #[test]
+    fn desktop_a_healthy_start_keeps_the_top_even_after_one_slow_cold_download() {
+        let mut g = desk(0);
+        let (b, cold) = seg(8_200_000, 3e6);
+        let (_, warm) = seg(8_200_000, 270e6);
+        g.note_throughput(b, cold, Some(2.0), 1.0);
+        g.note_throughput(b, warm, Some(2.0), 2.0);
+        assert_eq!(g.start_check(2.5), None);
+        // One download is not enough to move at all.
+        let mut h = desk(0);
+        h.note_throughput(b, cold, Some(2.0), 1.0);
+        assert!(h.start_wants_samples(), "the start pick downloads its own");
+        assert_eq!(h.start_check(2.5), None);
+    }
+
+    #[test]
+    fn desktop_a_borderline_start_keeps_the_top() {
+        // 7 Mbit/s for 8.2 Mbit/s of content: 85%, above the 80% bar.
+        let mut g = desk(0);
+        let (b, s) = seg(8_200_000, 7e6);
         g.note_throughput(b, s, Some(2.0), 1.0);
         g.note_throughput(b, s, Some(2.0), 2.0);
         assert_eq!(g.start_check(2.5), None);
-        // Four warm samples are evidence.
-        let (_, t) = feed(&mut g, 8_200_000, 3e6, 10.0, 4);
-        assert_eq!(g.start_check(t), Some(2));
+        // Judged by what the content measurably runs at: 6 Mbit/s of real
+        // content (declared 8.2) arriving at 5.5 is 92% of it.
+        let mut h = desk(0);
+        let bytes = 1_500_000u64;
+        let secs = bytes as f64 * 8.0 / 5.5e6;
+        h.note_throughput(bytes, secs, Some(2.0), 1.0);
+        h.note_throughput(bytes, secs, Some(2.0), 2.0);
+        assert_eq!(h.start_check(2.5), None);
+    }
+
+    #[test]
+    fn desktop_the_start_pick_runs_where_later_switches_hold_but_never_for_a_tile() {
+        let (b, s) = seg(8_200_000, 2e6);
+        let mut g = desk(0);
+        g.set_seamless(false); // the parts path: no seamless switch after the start
+        g.note_throughput(b, s, Some(2.0), 1.0);
+        g.note_throughput(b, s, Some(2.0), 2.0);
+        // 2 * 0.7 = 1.4: 360p30 (0.63) is the best that fits, any family.
+        assert_eq!(g.start_check(2.5), Some(3));
+        let mut t = desk(0);
+        t.set_tile(true);
+        t.note_throughput(b, s, Some(2.0), 1.0);
+        t.note_throughput(b, s, Some(2.0), 2.0);
+        assert!(!t.start_wants_samples());
+        assert_eq!(t.start_check(2.5), None);
+        let mut p = phone(0, true);
+        p.note_throughput(b, s, None, 1.0);
+        p.note_throughput(b, s, None, 2.0);
+        assert_eq!(p.start_check(2.5), None, "the phones never move here");
+    }
+
+    #[test]
+    fn desktop_a_hold_is_logged_once_per_episode() {
+        let mut g = desk(0);
+        g.set_seamless(false);
+        let (d, t) = feed(&mut g, 8_200_000, 4e6, 10.0, 6);
+        assert_eq!(d, None);
+        assert_eq!(g.holding(), Some("a switch here would reload the player"));
+        // Still held: the episode is not logged again.
+        g.held = Some("a switch here would reload the player");
+        assert_eq!(g.note_stall(5.0, false, t), None);
+        assert_eq!(g.holding(), Some("a switch here would reload the player"));
+        // The switch becomes seamless: it moves, and the episode ends.
+        g.set_seamless(true);
+        assert!(matches!(feed(&mut g, 8_200_000, 4e6, t + 2.0, 4).0, Some(Decision::Switch { .. })));
+        assert_eq!(g.holding(), None);
+        // A healthy held stream logs nothing.
+        let mut h = desk(0);
+        h.set_seamless(false);
+        assert_eq!(feed(&mut h, 8_200_000, 40e6, 10.0, 6).0, None);
+        assert_eq!(h.holding(), None);
     }
 
     #[test]
@@ -2067,11 +2314,15 @@ mod tests {
         begin_ladder(id, ladder(), 0, true, Arc::new(Still));
         let newer = generation(id);
         assert_ne!(older, newer);
-        let (b, s) = seg(8_200_000, 6e6);
+        let (b, s) = seg(8_200_000, 2e6);
         note_throughput(id, b, s);
         note_throughput(id, b, s);
         assert!(start_check(id, older).is_none(), "the older start moved the newer stream");
-        assert!(start_check(id, newer).is_none(), "a cold start was judged");
+        assert_eq!(
+            start_check(id, newer).map(|r| r.name),
+            Some("360p30".to_string()),
+            "the start it owns is picked"
+        );
         end(id);
     }
 
