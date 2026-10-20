@@ -122,12 +122,18 @@ public final class FakeCore: CoreBridge {
             guard let login = args["login"] as? String else { throw CoreFailure.command(json: #""missing login""#) }
             var row = (args["seed"] as? [String: Any]) ?? [:]
             row["user_login"] = login.lowercased()
-            for (key, value) in ["id": "", "user_name": login, "title": "Watching \(login)", "viewer_count": 0,
-                                 "game_name": "", "thumbnail_url": ""] as [String: Any] where row[key] == nil {
+            // The real answer's shape: the completed row (ids, start, art) and the relay's start.
+            for (key, value) in ["id": "", "user_id": "", "user_name": login, "title": "Watching \(login)",
+                                 "viewer_count": 0, "game_id": "", "game_name": "", "thumbnail_url": "",
+                                 "started_at": "2026-10-19T00:00:00Z"] as [String: Any] where row[key] == nil {
                 row[key] = value
             }
             return try Self.json(["superseded": false, "row": row,
-                                  "stream": ["url": Self.testStreamURL, "quality": "best", "entitled": false]] as [String: Any])
+                                  "stream": ["url": Self.testStreamURL, "quality": "best", "entitled": false,
+                                             "available": ["best", "720p60", "480p", "audio_only"]]] as [String: Any])
+        case "get_stream_prefetch_present", "get_stream_low_latency":
+            // The fixture stream is a plain normal-latency one.
+            return "false"
         case "watch_open_room":
             let login = (args["login"] as? String ?? "").lowercased()
             return try Self.json(["superseded": false,
