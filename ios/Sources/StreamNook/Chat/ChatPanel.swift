@@ -148,8 +148,10 @@ struct ChatPanel: View {
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
                         if let rooms, !overlay, rooms.pinsShown {
-                            PinnedBanner(pins: rooms.activePins,
-                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
+                            let unrolled = Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 })
+                            PinnedBanner(pins: rooms.activePins, expanded: unrolled)
+                                // Unrolled, it floats over the rows: a tap outside rolls it up.
+                                .closesOnOutsideTap(unrolled, id: "pins")
                                 .padding(.horizontal, 10)
                                 .padding(.top, topGap)
                                 // Opened, the banner floats over the rows; the list keeps the
@@ -160,6 +162,8 @@ struct ChatPanel: View {
                         }
                         if let rooms, !overlay, let card = rooms.mentionCards[session.channel] {
                             MentionContextCard(entry: card) { rooms.dismissMentionCard(session.channel) }
+                                .closesOnOutsideTap(Binding(get: { true }, set: { if !$0 { rooms.dismissMentionCard(session.channel) } }),
+                                                    id: "mention-card")
                                 .padding(.horizontal, 10)
                                 .padding(.top, 6)
                                 .transition(.opacity.combined(with: .move(edge: .top)))

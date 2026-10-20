@@ -83,5 +83,7 @@ struct GroupedCard<Content: View>: View {
         }
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: shape)
         .clipShape(shape)
+        // A form's rows: a switch or a button pressed while typing acts, and the keyboard goes.
+        .tapsThroughKeyboard()
     }
 }

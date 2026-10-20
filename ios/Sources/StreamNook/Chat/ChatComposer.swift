@@ -38,7 +38,6 @@ private struct ComposerBar: View {
     @FocusState private var focused: Bool
     @Environment(\.inboxSurface) private var inboxSurface
     /// The right end's frame among the trays', while it is the tray.
-    @State private var endKey = UUID().uuidString
     @State private var smiley = "😀"
     @State private var smileyOut = false
 
@@ -63,6 +62,11 @@ private struct ComposerBar: View {
         }
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
+        // The composer is the field's own: its buttons act and the keyboard stays, and its emote
+        // picker and suggestions stay open while it is used (typing, sending, the emote button).
+        .keepsKeyboard()
+        .outsideTapAnchor("emotes")
+        .outsideTapAnchor("suggestions")
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         // The bar is for writing now: an open inbox goes first.
         .onChange(of: focused) { _, now in
@@ -87,6 +91,7 @@ private struct ComposerBar: View {
             if let roomID = session.roomID {
                 ManageChannelSheet(core: session.core, channelID: roomID, channelLogin: session.channel,
                                    toasts: session.rooms?.toasts)
+                    .tapsThroughKeyboard()
                     .presentationDetents([.large])
             }
         }
@@ -96,6 +101,7 @@ private struct ComposerBar: View {
                     // After this sheet has gone, so the two never present at once.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { model.manageOpen = true }
                 }
+                .tapsThroughKeyboard()
                 .presentationDetents([.medium, .large])
             }
         }
@@ -105,6 +111,7 @@ private struct ComposerBar: View {
                 model.commandsOpen = false
                 focused = true
             }
+            .tapsThroughKeyboard()
             .snSheetLight()
             .presentationDetents([.fraction(0.72), .large])
         }
@@ -125,6 +132,8 @@ private struct ComposerBar: View {
             }
             ZStack(alignment: .bottom) {
                 ChatEmotePicker(model: model)
+                    .closesOnOutsideTap(Binding(get: { model.panel == .emotes },
+                                                set: { if !$0 { model.panel = .none } }), id: "emotes")
                     .floatingSurface()
                     .opacity(model.panel == .emotes ? 1 : 0)
                     .offset(y: model.panel == .emotes ? 0 : 10)
@@ -135,6 +144,8 @@ private struct ComposerBar: View {
                     SuggestionStrip(model: model) {
                         if !model.fieldDisabled { focused = true }
                     }
+                    .closesOnOutsideTap(Binding(get: { showsStrip }, set: { if !$0 { model.suggestionsDismissed = true } }),
+                                        id: "suggestions")
                     .floatingSurface()
                     .transition(.opacity.combined(with: .offset(y: 4)))
                 }
@@ -146,7 +157,9 @@ private struct ComposerBar: View {
         .animation(.easeOut(duration: 0.12), value: showsStrip)
     }
 
-    private var showsStrip: Bool { !model.suggestions.isEmpty && session.style.suggestionsEnabled }
+    private var showsStrip: Bool {
+        !model.suggestions.isEmpty && session.style.suggestionsEnabled && !model.suggestionsDismissed
+    }
 
     private func replyChip(_ reply: ChatMessage) -> some View {
         HStack(spacing: 6) {
@@ -346,6 +359,8 @@ private struct ComposerBar: View {
             }
             if !session.isKick {
                 Button {
+                    // The sheet covers the picker: close it rather than leave it under there.
+                    model.panel = .none
                     model.commandsOpen = true
                 } label: {
                     Image(systemName: "slash.circle")
@@ -371,9 +386,9 @@ private struct ComposerBar: View {
 
     /// The bar's right end, one control with every job it has: Send the moment the field holds a
     /// message, whatever sits here otherwise (the chat menu, or the inbox tray when Settings swaps
-    /// the pair), and the way to put the keyboard away while you type with nothing written
-    /// (scrolling the chat never does). One button in one spot: the marks crossfade and the accent
-    /// fill grows in under Send, so nothing slides in or moves. Send is always on the right.
+    /// the pair), and the way to put the keyboard away while you type with nothing written (as a
+    /// tap anywhere outside the composer does). One button in one spot: the marks crossfade and the
+    /// accent fill grows in under Send, so nothing slides in or moves. Send is always on the right.
     private func endButton(slowWait: Int, tray: Bool) -> some View {
         let mentions = session.rooms?.mentions
         let mode: EndMode = model.canSend || model.sending ? .send : focused ? .keyboard : tray ? .tray : .menu
@@ -434,10 +449,9 @@ private struct ComposerBar: View {
             }
         }
         // A tap on the tray here is the tray's own, never a tap outside its sheet.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
-            InboxTrayFrames.frames[endKey] = tray ? frame : nil
+        .background {
+            if tray { Color.clear.outsideTapAnchor("inbox") }
         }
-        .onDisappear { InboxTrayFrames.frames[endKey] = nil }
         .disabled(mode == .send && (model.sending || slowWait > 0 || model.cheerBlocked))
         .opacity(mode == .send && (model.sending || model.cheerBlocked) ? 0.5 : 1)
         .accessibilityLabel(mode == .send

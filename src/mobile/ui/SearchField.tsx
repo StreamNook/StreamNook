@@ -44,6 +44,10 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
       {value && (
         <button
           type="button"
+          // Clearing keeps the keyboard for the next search: the press never
+          // takes focus from the field.
+          onPointerDown={(e) => e.preventDefault()}
+          data-keeps-keyboard=""
           onClick={() => onChange('')}
           aria-label="Clear search"
           className="absolute right-1 flex h-9 w-9 items-center justify-center text-textSecondary active:opacity-70"

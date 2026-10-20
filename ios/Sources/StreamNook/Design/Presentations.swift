@@ -57,8 +57,9 @@ extension View {
 
     /// A hide-keyboard button on the keyboard's bar, for a field whose own Return key does not
     /// close the keyboard: several lines (Return adds a line) or a number pad (no Return at all).
-    /// Scrolling never closes a keyboard (people scroll chat while they type), so this button and
-    /// a field's Done or Search key are the ways down.
+    /// Scrolling never closes a keyboard (people scroll chat while they type); this button, a
+    /// field's Done or Search key, a tap outside the field (`OutsideTap`) and, on the chat list, a
+    /// drag down into the keyboard are the ways down.
     func keyboardHideButton() -> some View {
         toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -95,6 +96,9 @@ private struct FittedSheet: ViewModifier {
         ScrollView {
             content
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+                // A fitted sheet is a small form or list: its buttons act on the tap that puts
+                // the keyboard away.
+                .tapsThroughKeyboard()
         }
         .scrollBounceBehavior(.basedOnSize)
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, now in

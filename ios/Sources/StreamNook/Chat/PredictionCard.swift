@@ -56,6 +56,8 @@ struct PredictionCard: View {
                     }
                     betControls
                 }
+                // A chip or Place pressed while typing an amount acts, and the number pad goes.
+                .tapsThroughKeyboard()
                 .padding(.top, 8)
                 .padding(.bottom, 12)
                 .overlay(alignment: .top) {

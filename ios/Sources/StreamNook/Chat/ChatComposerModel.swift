@@ -27,6 +27,7 @@ final class ChatComposerModel {
     var draft = "" {
         didSet {
             guard draft != oldValue else { return }
+            suggestionsDismissed = false
             suggest()
             checkCheer()
             // Editing the message that failed is a new message.
@@ -35,6 +36,8 @@ final class ChatComposerModel {
     }
     private(set) var sending = false
     private(set) var suggestions: [EmoteMatch] = []
+    /// A tap outside put the suggestion strip away; typing brings it back.
+    var suggestionsDismissed = false
     var panel: Panel = .none {
         didSet { if panel != oldValue { picker.setOpen(panel == .emotes) } }
     }

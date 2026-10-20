@@ -873,6 +873,7 @@ export const MobileChatPane: React.FC<{
       <div
         ref={listRef}
         style={listMask ? { WebkitMaskImage: listMask, maskImage: listMask } : undefined}
+        data-chat-list=""
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
         // long-press on text by starting its OWN text selection, which wins the
         // gesture and the fan never arms. Chat text needs no selection anyway —

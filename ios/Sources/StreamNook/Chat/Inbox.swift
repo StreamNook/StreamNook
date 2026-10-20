@@ -21,13 +21,6 @@ enum InboxMotion {
     static let arrivalSeconds = 4.0
 }
 
-/// The trays on screen, in window points, so a tap on one never reads as outside the sheet it
-/// toggles (the tray closes it itself).
-@MainActor
-enum InboxTrayFrames {
-    static var frames: [String: CGRect] = [:]
-}
-
 // MARK: The tray
 
 /// The inbox's way in at one end of the message bar (Settings > Chat > Inbox button picks which),
@@ -40,7 +33,6 @@ struct InboxTray: View {
     var plain = false
     /// The bar's end it sits at: the count rides the corner beside the field.
     var right = false
-    @State private var key = UUID().uuidString
 
     var body: some View {
         let open = store.sheetIn == surface
@@ -68,8 +60,8 @@ struct InboxTray: View {
                     .allowsHitTesting(false)
             }
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { InboxTrayFrames.frames[key] = $0 }
-        .onDisappear { InboxTrayFrames.frames[key] = nil }
+        // Pressing the tray while the sheet is open is the tray's own (its X), not a tap outside.
+        .outsideTapAnchor("inbox")
         .accessibilityLabel(open ? "Close the inbox" : unread > 0 ? "Inbox, \(unread) new" : "Inbox")
     }
 }
@@ -536,7 +528,6 @@ struct InboxSheetOverlay: View {
     /// The tray's end of the bar, where the sheet grows from.
     let leading: Bool
     @State private var drag: CGFloat = 0
-    @State private var frame: CGRect = .zero
 
     var body: some View {
         GeometryReader { geo in
@@ -558,8 +549,8 @@ struct InboxSheetOverlay: View {
                         .shadow(color: .black.opacity(0.35), radius: 12, y: -6)
                         .padding(.horizontal, 10)
                         .offset(y: drag)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
-                        .background(OutsideTap(inside: { [frame] + Array(InboxTrayFrames.frames.values) }, onOutside: close))
+                        .closesOnOutsideTap(Binding(get: { store.sheetIn == surface }, set: { if !$0 { close() } }),
+                                            id: "inbox")
                         .transition(.scale(scale: 0.12, anchor: leading ? .bottomLeading : .bottomTrailing)
                             .combined(with: .opacity))
                 }
@@ -678,64 +669,5 @@ struct InboxClearMask: View {
         }
         .animation(SNMotion.run(InboxMotion.spring), value: sheet)
         .animation(SNMotion.run(InboxMotion.spring), value: card)
-    }
-}
-
-// MARK: A tap outside
-
-/// Hears every tap in the window, without taking any, and reports one that lands outside the
-/// given frames. Until the shared tap-outside mechanism lands this is the inbox's own; switch to
-/// that one then.
-struct OutsideTap: UIViewRepresentable {
-    let inside: () -> [CGRect]
-    let onOutside: () -> Void
-
-    func makeUIView(context: Context) -> Catcher {
-        let view = Catcher()
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ view: Catcher, context: Context) {
-        view.inside = inside
-        view.onOutside = onOutside
-    }
-
-    static func dismantleUIView(_ view: Catcher, coordinator: ()) {
-        view.detach()
-    }
-
-    final class Catcher: UIView, UIGestureRecognizerDelegate {
-        var inside: () -> [CGRect] = { [] }
-        var onOutside: () -> Void = {}
-        private var tap: UITapGestureRecognizer?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            detach()
-            guard let window else { return }
-            let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
-            tap.cancelsTouchesInView = false
-            tap.delaysTouchesBegan = false
-            tap.delaysTouchesEnded = false
-            tap.delegate = self
-            window.addGestureRecognizer(tap)
-            self.tap = tap
-        }
-
-        func detach() {
-            if let tap { tap.view?.removeGestureRecognizer(tap) }
-            tap = nil
-        }
-
-        @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
-            guard let window else { return }
-            let point = recognizer.location(in: window)
-            guard !inside().contains(where: { $0.contains(point) }) else { return }
-            onOutside()
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     }
 }

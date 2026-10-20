@@ -1,5 +1,8 @@
 // The phone's way down for the keyboard, everywhere at once. Scrolling never
 // closes it (people scroll chat while they type), so:
+// - A tap outside the field puts it away (outsideTap.ts), the tap pressing
+//   nothing else except where it is plainly meant for what it lands on; a
+//   drag on the chat list that reaches the composer pulls it down.
 // - Enter in a single-line field puts the keyboard away once the field has
 //   done its own work with it (search, add, save); Android's keys otherwise
 //   leave it up.
@@ -9,11 +12,14 @@
 // Mounted once, beside the tab bar, which every screen keeps mounted.
 import React, { useEffect, useState } from 'react';
 import { KeyboardHideIcon } from './KeyboardHideIcon';
+import { installKeyboardTaps } from './outsideTap';
 
 const SINGLE_LINE = new Set(['text', 'search', 'email', 'url', 'tel', 'number', 'password']);
 
 export const KeyboardDismiss: React.FC = () => {
   const [editor, setEditor] = useState<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => installKeyboardTaps(), []);
 
   useEffect(() => {
     // Bubble phase, after the field's own Enter handling: a handler that
