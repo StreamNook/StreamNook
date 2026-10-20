@@ -59,6 +59,9 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
 
     let pacing = FramePacing()
     private var ticks = 0
+    /// A batch has been applied: before that the list has not been handed the room's rows yet,
+    /// so it says nothing about the room being empty.
+    private var drawnOnce = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -164,6 +167,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         if window != nil {
             startLink()
             for cell in cells.values { cell.resume() }
+            // Back on screen while another list drew the room: this one draws it again.
+            if let source, source.list !== self { claim(source) }
         } else {
             displayLink?.invalidate()
             displayLink = nil
@@ -198,7 +203,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         ticks += 1
         // While a thumb rests on (or swipes) a message the list holds still: new rows wait until
         // it lifts or turns the press into a scroll.
-        if let source, swipe == nil, touchPress == nil {
+        if let source, swipe == nil, touchPress == nil, holds(source) {
             let batches = source.takeReady()
             if !batches.isEmpty { apply(batches) }
         }
@@ -210,7 +215,24 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         self.style = style
     }
 
+    /// A room on two screens at once (Chats under the watch layer) is drawn by one list: the one
+    /// that came on screen last. The room's batches are taken once, so a second list pulling them
+    /// too would leave either list with half the rows, or none. Another list showing the room
+    /// takes over, with every row the room kept, once that one has left the window.
+    private func holds(_ source: ChatPipeline) -> Bool {
+        if source.list === self { return true }
+        guard source.list?.window == nil else { return false }
+        claim(source)
+        return true
+    }
+
+    private func claim(_ source: ChatPipeline) {
+        source.list = self
+        source.replay()
+    }
+
     private func apply(_ batches: [ChatPipeline.Batch]) {
+        drawnOnce = true
         defer { updateEmptyNote() }
         var newLive: [String] = []
         var animate = true
@@ -466,7 +488,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     private func updateEmptyNote() {
         emptyLabel.text = emptyNote
         emptyLabel.textColor = ChatTheme.textMuted
-        emptyLabel.isHidden = emptyNote == nil || !rows.isEmpty
+        emptyLabel.isHidden = emptyNote == nil || !drawnOnce || !rows.isEmpty
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

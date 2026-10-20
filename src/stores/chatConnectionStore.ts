@@ -948,7 +948,9 @@ async function seedKickHistory(key: string, channel: string): Promise<void> {
   try {
     history = await invoke<any[]>('kick_chat_history', { channel });
   } catch (e) {
+    // A failed scrollback is not an empty room: no "No recent messages".
     Logger.warn('[ChatStore] kick_chat_history failed:', e);
+    return;
   }
   withSlice(key, (slice) => {
     slice.historyLoaded = true;
@@ -1144,7 +1146,7 @@ function removeMessageAt(slice: ChannelSlice, index: number): void {
 // alongside the IRC connect instead of after it, while the slice holds the
 // first live rows so history and the live tail paint together.
 const HISTORY_HOLD_MS = 1500;
-const historyInFlight = new Map<string, Promise<any[]>>();
+const historyInFlight = new Map<string, Promise<any[] | null>>();
 
 interface HistoryWindow {
   limit?: number;
@@ -1152,7 +1154,9 @@ interface HistoryWindow {
   beforeMs?: number | null;
 }
 
-function loadHistory(key: string, window?: HistoryWindow): Promise<any[]> {
+/** The room's recent history, or null when the mirror did not answer (a
+ *  failure is not an empty room, so it shows no "No recent messages"). */
+function loadHistory(key: string, window?: HistoryWindow): Promise<any[] | null> {
   return invoke<any[]>('load_channel_history', {
     channel: key,
     limit: window?.limit,
@@ -1160,7 +1164,7 @@ function loadHistory(key: string, window?: HistoryWindow): Promise<any[]> {
     beforeMs: window?.beforeMs ?? undefined,
   }).catch((err) => {
     Logger.warn(`[ChatStore] load_channel_history failed for ${key}:`, err);
-    return [] as any[];
+    return null;
   });
 }
 
@@ -2138,12 +2142,14 @@ async function preloadChannel(
           })
         : (historyInFlight.get(key) ?? loadHistory(key));
     historyInFlight.delete(key);
-    const [, parsed] = await Promise.all([initializeBadgesForChannel(channelId), pendingHistory]);
+    const [, answer] = await Promise.all([initializeBadgesForChannel(channelId), pendingHistory]);
+    const parsed = answer ?? [];
     Logger.info(`[ChatPerf] preload: badges + history ${Math.round(performance.now() - __t)}ms (${parsed.length} rows, ${mode})`);
     if (parsed.length === 0) {
       withSlice(key, (slice) => {
         releaseHistoryHold(slice);
-        slice.historyLoaded = true;
+        // Only an answer with no rows is an empty room.
+        if (answer) slice.historyLoaded = true;
       });
       return;
     }
@@ -2201,7 +2207,6 @@ async function preloadChannel(
     Logger.error('[ChatStore] Failed to load recent messages:', err);
     withSlice(key, (slice) => {
       releaseHistoryHold(slice);
-      slice.historyLoaded = true;
     });
   }
 }

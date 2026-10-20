@@ -323,7 +323,7 @@ enum ChatDrive {
             }.joined(separator: ",")
             let streaks = rooms.activeStreaks
             let active = rooms.active
-            let empty = (rooms.activeSession?.historyLoaded ?? false) && (rooms.activeSession?.rowCount ?? 0) == 0
+            let empty = (rooms.activeSession?.historyEmpty ?? false) && (rooms.activeSession?.rowCount ?? 0) == 0
             log.notice("drive rooms live \(active.map { $0.live.map(String.init) ?? "nil" } ?? "-", privacy: .public) noRecent \(empty) picker \(rooms.tabs.isEmpty)")
             log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen) pinsShown \(rooms.pinsShown) pinMenu \(rooms.hiddenPinWaiting) pinStyle \(rooms.activeSession?.style.pinnedCollapsedStyle ?? "-", privacy: .public)")
         case "chatroomopen":

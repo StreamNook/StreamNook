@@ -38,6 +38,9 @@ final class ChatSession {
     /// The join backfill (recent history) landed or failed: a jump to an older message can look
     /// for it now.
     private(set) var historyLoaded = false
+    /// The join backfill answered, with no rows: the room says "No recent messages" until a row
+    /// arrives. A backfill that failed says nothing.
+    private(set) var historyEmpty = false
     /// The message a reply is drafted to, by room.
     var replyTo: ChatMessage?
     private(set) var paused = false
@@ -317,6 +320,7 @@ final class ChatSession {
             if let json = try? await core.invoke("kick_chat_history", args: ["channel": login]),
                let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
                 pipeline.prepend(rows)
+                historyEmpty = rows.isEmpty
                 chatLog.notice("kick history for \(self.login, privacy: .public): \(rows.count) rows")
             }
             historyLoaded = true
@@ -329,6 +333,7 @@ final class ChatSession {
            let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
             chatLog.notice("history for \(self.channel, privacy: .public): \(rows.count) rows in \(Int(Date().timeIntervalSince(asked) * 1000)) ms")
             pipeline.prepend(rows)
+            historyEmpty = rows.isEmpty
             if roomID == nil { roomID = rows.first?.tags["room-id"] }
         }
         historyLoaded = true
