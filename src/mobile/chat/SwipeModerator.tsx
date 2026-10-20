@@ -17,11 +17,12 @@
 // own state, so a moving finger re-renders this overlay and nothing else: the
 // pane's re-render storms are what once dropped chat swipes. A non-passive
 // touchmove stops the list scrolling under the pull.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
 import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
+import { isThemeDark } from '../../themes';
 import { stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
 
 export type { SwipeTarget, TouchSlider } from './swipeSteps';
@@ -293,12 +294,29 @@ function trace(line: string): void {
 
 /** The list fades its top edge; the chip stays below that. */
 const LIST_TOP_CLEAR = 30;
-const CHIP_RISE = 34;
+/** How far above the row the chip sits: clear of the descenders of the line above, its
+ *  words on that line's baseline. */
+const CHIP_RISE = 30;
 const CHIP_HEIGHT = 28;
 /** The chip keeps to the text column's inset, never the screen's edge. */
 const CHIP_INSET = 12;
 /** The Preview track along the row's bottom, which the chip never covers. */
 const TRACK = 3;
+/** A fully opaque raised surface for what sits over chat text (the chip and the rail): the
+ *  theme's tertiary floor over its background, both over black, so a theme color with any
+ *  opacity still paints solid and the message behind never shows through. */
+const SOLID_RAISED: CSSProperties = {
+  backgroundColor: '#000',
+  backgroundImage:
+    'linear-gradient(var(--color-background-tertiary), var(--color-background-tertiary)), linear-gradient(var(--color-background), var(--color-background))',
+};
+
+/** A step's color as legend text on the solid rail: a light theme darkens it so the light
+ *  amber timeouts still read on a light rail. */
+function railInk(step: TouchSlider['steps'][number]): string {
+  const tint = stepTint(step);
+  return isThemeDark() ? tint : `color-mix(in srgb, ${tint} 60%, #000)`;
+}
 
 function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
   const chipRef = useRef<HTMLDivElement>(null);
@@ -326,7 +344,9 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       aria-live="polite"
     >
       {slider.style === 'rail' ? (
-        <div className="absolute inset-x-1 inset-y-0.5 rounded-[10px] border border-white/[0.08] bg-surface">
+        // Solid: the rail covers the message, and a see-through one let its text clash with the
+        // step names.
+        <div className="absolute inset-x-1 inset-y-1 rounded-[10px] border border-borderSubtle" style={SOLID_RAISED}>
           {slider.steps.map((s, i) => {
             // A legend spread evenly along the rail, so short zones never crowd
             // their labels together; the lit pill marks the step under the finger.
@@ -338,7 +358,7 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
               <span
                 key={`${s.action}-${s.seconds ?? i}`}
                 className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[9px] px-2 py-0.5 text-[12px] font-semibold"
-                style={{ left: center, color: stepTint(s), background: pill }}
+                style={{ left: center, color: railInk(s), background: pill }}
               >
                 {s.label}
               </span>
@@ -347,11 +367,14 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
         </div>
       ) : (
         // glass-exempt: the pull's wash over the message, which must keep the message readable through it.
+        // None while a release would cancel (a gray box said nothing); soft at both ends.
         <div
           className="absolute inset-y-0 left-0"
           style={{
             width: finger,
-            background: `linear-gradient(to right, transparent, color-mix(in srgb, ${tint} 18%, transparent) 16px)`,
+            opacity: step == null ? 0 : 1,
+            transition: 'opacity 120ms ease-out',
+            background: `linear-gradient(to right, transparent, color-mix(in srgb, ${tint} 18%, transparent) 16px, color-mix(in srgb, ${tint} 18%, transparent) calc(100% - 10px), transparent)`,
           }}
         />
       )}
@@ -372,12 +395,17 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       )}
       <div
         ref={chipRef}
-        className="absolute flex h-7 items-center justify-center overflow-hidden whitespace-nowrap rounded-xl border bg-surface px-3 text-[13px] font-semibold"
+        className="absolute flex h-7 items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-3 text-[13px] font-semibold"
         style={{
+          // Solid and lifted off the chat, so the words read over any message on any theme.
+          ...SOLID_RAISED,
+          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.10), 0 4px 12px rgba(0, 0, 0, 0.14)',
           left: chipX,
           top: chipTop,
           maxWidth: view.width - CHIP_INSET * 2,
-          borderColor: view.resting ? 'color-mix(in srgb, var(--color-error) 55%, transparent)' : `color-mix(in srgb, ${tint} 55%, transparent)`,
+          borderColor: view.resting
+            ? 'color-mix(in srgb, var(--color-error) 55%, transparent)'
+            : `color-mix(in srgb, ${tint} ${step == null ? 35 : 55}%, transparent)`,
           color: lit ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
         }}
       >
