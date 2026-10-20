@@ -6,7 +6,7 @@ import SNKit
 /// FakeCore of its own, `whispers:fake`), never the signed-in account's, and a send there never
 /// leaves the fake:
 ///
-/// - `whispers` opens Whispers on the You tab; `whisper:KEY` opens one conversation
+/// - `whispers` opens Whispers on the You tab; `whisper:KEY` opens one conversation in its sheet
 /// - `whispers:fake` points Whispers at the fixture inbox (unread, read, a long thread, a refusing
 ///   sender); `whispers:empty` at an empty one
 /// - `whispernotify` files a new fixture whisper and posts its notification the way the core's
@@ -49,7 +49,7 @@ enum WhispersDrive {
                 model.openWhisper(row.key)
                 model.whispers.holdForDrive("on my way, five minutes", to: row)
             default:
-                guard case .whisper(let key)? = model.nav.paths[.you]?.last, let row = model.whispers.row(key) else {
+                guard let key = model.whisperSheet?.key, let row = model.whispers.row(key) else {
                     log.error("drive whispersend: no fixture conversation open")
                     return true
                 }

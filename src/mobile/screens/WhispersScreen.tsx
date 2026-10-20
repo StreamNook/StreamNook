@@ -1,8 +1,8 @@
 // Whispers: your Twitch private conversations, newest first, and one
-// conversation with a composer. Opened from the You tab (for now; the chat
-// inbox will open the same layer through `openWhispers` / `openWhisper`) and
-// from a tapped whisper notification. It sits over the watch
-// layer like Mentions, so a stream keeps playing underneath.
+// conversation with a composer. The list opens from the You tab (for now,
+// `openWhispers`); a conversation opens in the bottom sheet the chat menu
+// uses (`openWhisper`, which a tapped whisper notification uses too). Both sit
+// over the watch layer like Mentions, so a stream keeps playing underneath.
 //
 // Rust holds the conversations (services/whisper_inbox.rs): this reads the list
 // and a thread, marks the open one read, and sends through `whisper_send`. A
@@ -10,6 +10,7 @@
 // own copy) or as not sent with Twitch's reason, with Retry and Discard.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, WarningCircle } from 'phosphor-react';
+import { MobileSheet } from '../ui/MobileSheet';
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { EmptyNote } from '../ui/EmptyNote';
@@ -168,9 +169,10 @@ const PendingLine: React.FC<{ pending: PendingWhisper; row: WhisperListRow }> = 
   </div>
 );
 
-/** One conversation: the thread, oldest at the top, and the composer. */
+/** One conversation: the thread, oldest at the top, and the composer, inside
+ *  its bottom sheet (which brings the grabber, rides the keyboard and clears
+ *  the gesture bar). */
 const ConversationView: React.FC<{ conversationKey: string }> = ({ conversationKey }) => {
-  const closeWhisper = useMobileNavStore((s) => s.closeWhisper);
   const listRow = useWhispersStore((s) => s.rows.find((r) => r.key === conversationKey));
   const revision = useWhispersStore((s) => s.revision);
   const lastUpdate = useWhispersStore((s) => s.lastUpdate);
@@ -260,15 +262,9 @@ const ConversationView: React.FC<{ conversationKey: string }> = ({ conversationK
 
   const name = row ? shownName(row) : '';
   return (
-    <div className="absolute inset-0 bg-background flex flex-col" style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}>
-      <div className="flex items-center gap-2 px-2 py-2 shrink-0 border-b border-borderSubtle">
-        <button
-          onClick={closeWhisper}
-          className="sn-touch flex items-center justify-center text-textSecondary"
-          aria-label="Back"
-        >
-          <ArrowLeft size={22} />
-        </button>
+    // Edge to edge inside the sheet's padding.
+    <div className="-mx-4 -mb-4 h-[calc(100%+16px)] flex flex-col">
+      <div className="flex items-center gap-2 px-4 pb-2 shrink-0 border-b border-borderSubtle">
         {row && <Picture id={row.user_id} url={row.profile_image_url} size={30} name={name} />}
         <span className="flex-1 min-w-0 flex flex-col">
           <span className="truncate text-[16px] font-bold leading-[20px] text-textPrimary">{name}</span>
@@ -332,15 +328,8 @@ const ConversationView: React.FC<{ conversationKey: string }> = ({ conversationK
         </div>
       </div>
 
-      {/* The composer rides the keyboard (--sn-kb, from the native inset
-          bridge) and clears the gesture bar when the keyboard is closed. */}
-      <div
-        className="shrink-0 border-t border-borderSubtle"
-        style={{
-          paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
-          transition: 'padding-bottom 0.15s ease-out',
-        }}
-      >
+      {/* The sheet rides the keyboard and clears the gesture bar. */}
+      <div className="shrink-0 border-t border-borderSubtle pb-2.5">
         <div className="flex items-end gap-1.5 px-2.5 pt-2">
           <div className="glass-input flex-1 min-w-0 min-h-10 flex items-center px-3">
             <textarea
@@ -382,6 +371,7 @@ export const WhispersScreen: React.FC = () => {
   const openKey = useMobileNavStore((s) => s.whisperKey);
   const closeWhispers = useMobileNavStore((s) => s.closeWhispers);
   const openWhisper = useMobileNavStore((s) => s.openWhisper);
+  const closeWhisper = useMobileNavStore((s) => s.closeWhisper);
   const rows = useWhispersStore((s) => s.rows);
   const loaded = useWhispersStore((s) => s.loaded);
   const failed = useWhispersStore((s) => s.failed);
@@ -432,9 +422,10 @@ export const WhispersScreen: React.FC = () => {
           </div>
         </PullToRefresh>
       </DrillInScreen>
-      <DrillInScreen open={open && !!openKey} layerKey="whisper-thread" className="absolute inset-0 z-50">
+      {/* `fill`: the thread arrives after it opens, so it never grows under the finger. */}
+      <MobileSheet open={!!openKey} onClose={closeWhisper} maxHeightFraction={0.85} fill>
         {openKey && <ConversationView key={openKey} conversationKey={openKey} />}
-      </DrillInScreen>
+      </MobileSheet>
     </>
   );
 };

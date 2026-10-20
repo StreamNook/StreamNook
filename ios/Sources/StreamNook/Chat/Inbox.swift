@@ -4,7 +4,8 @@ import UIKit
 
 // The inbox: one timeline, newest first, of every mention, reply and highlight (and whispers once
 // their store joins the core's view), with chips across the top to narrow it. One panel, two ways
-// in: the sheet that grows up out of the message bar's tray, and You > Mentions. The core builds
+// in: the native sheet the message bar's tray opens (the chat menu's own presentation), and
+// You > Mentions. The core builds
 // the view (`get_inbox_view`): it filters by chip, folds identical messages in a row into one and
 // attaches the senders' pictures it has. This draws it, relays taps, and marks what was on screen
 // read when it closes. The same flow and words as Android's (src/mobile/mentions).
@@ -15,7 +16,7 @@ extension EnvironmentValues {
 }
 
 enum InboxMotion {
-    /// The desktop Dynamic Island's spring: the sheet, the card, the tray leaving while you type.
+    /// The desktop Dynamic Island's spring: the card, the tray leaving while you type.
     static let spring = Animation.interpolatingSpring(mass: 0.9, stiffness: 360, damping: 32)
     /// How long a new mention's card stays before it folds into the tray's count.
     static let arrivalSeconds = 4.0
@@ -60,8 +61,6 @@ struct InboxTray: View {
                     .allowsHitTesting(false)
             }
         }
-        // Pressing the tray while the sheet is open is the tray's own (its X), not a tap outside.
-        .outsideTapAnchor("inbox")
         .accessibilityLabel(open ? "Close the inbox" : unread > 0 ? "Inbox, \(unread) new" : "Inbox")
     }
 }
@@ -205,9 +204,6 @@ struct InboxPanel: View {
     let variant: Variant
     /// Called before a row opens its message (a sheet around the panel closes first).
     var onOpenRow: (() -> Void)?
-    /// The sheet's slide down, reported from its header band.
-    var onDrag: ((CGFloat) -> Void)?
-    var onDragEnd: ((CGFloat, CGFloat) -> Void)?
 
     @State private var filter = "all"
     @State private var view: InboxView?
@@ -240,19 +236,12 @@ struct InboxPanel: View {
 
     private var unread: Int { view?.unreadTotal ?? store.unreadTotal }
 
-    /// The grabber, then the title with its count and the quiet mark-all-read. A slide down here
-    /// closes the sheet.
+    /// The chat menu's title (`SheetTitle`), with the quiet mark-all-read at its end. The sheet
+    /// brings the system grabber and its own slide down.
     private var header: some View {
-        VStack(spacing: 0) {
-            Capsule().fill(SN.textMuted.opacity(0.5)).frame(width: 36, height: 4).padding(.top, 6)
-            HStack(spacing: 0) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Inbox").font(.sn(16, 700)).foregroundStyle(SN.textPrimary)
-                    if unread > 0 {
-                        Text("\(unread) new").font(.sn(12.5, 500)).monospacedDigit().foregroundStyle(SN.textMuted)
-                    }
-                }
-                Spacer(minLength: 8)
+        SheetTitle(text: "Inbox")
+            .accessibilityValue(unread > 0 ? "\(unread) new" : "")
+            .overlay(alignment: .bottomTrailing) {
                 if unread > 0 {
                     Button { Task { await store.markRead(nil) } } label: {
                         Image(systemName: "checkmark.circle")
@@ -262,22 +251,10 @@ struct InboxPanel: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .padding(.trailing, 8)
                     .accessibilityLabel("Mark all read")
                 }
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 3)
-            .frame(height: 40)
-        }
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 6, coordinateSpace: .global)
-                .onChanged { value in onDrag?(max(0, value.translation.height)) }
-                .onEnded { value in
-                    onDragEnd?(max(0, value.translation.height),
-                               value.predictedEndTranslation.height - value.translation.height)
-                }
-        )
     }
 
     private var chips: some View {
@@ -517,57 +494,7 @@ struct InboxRowLine: View {
     }
 }
 
-// MARK: The sheet over the chat
-
-/// The inbox sheet: it grows up out of the message bar from the tray's corner, flush on the bar,
-/// over the lower two thirds of the chat; the chat above stays live. It closes the way it came on a
-/// slide down, a tap anywhere outside it, the tray (its X), or focusing the message field.
-struct InboxSheetOverlay: View {
-    let store: MentionsStore
-    let surface: InboxSurface
-    /// The tray's end of the bar, where the sheet grows from.
-    let leading: Bool
-    @State private var drag: CGFloat = 0
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .bottom) {
-                if store.sheetIn == surface {
-                    let shape = UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
-                    InboxPanel(store: store, variant: .sheet,
-                               onDrag: { drag = $0 },
-                               onDragEnd: { distance, fling in
-                                   if distance > 90 || fling > 160 {
-                                       close()
-                                   } else {
-                                       withAnimation(.snappy(duration: 0.22)) { drag = 0 }
-                                   }
-                               })
-                        .frame(height: max(220, min(geo.size.height, geo.size.height * 0.68)))
-                        .snGlass(shape, light: .panel)
-                        .clipShape(shape)
-                        .shadow(color: .black.opacity(0.35), radius: 12, y: -6)
-                        .padding(.horizontal, 10)
-                        .offset(y: drag)
-                        .closesOnOutsideTap(Binding(get: { store.sheetIn == surface }, set: { if !$0 { close() } }),
-                                            id: "inbox")
-                        .transition(.scale(scale: 0.12, anchor: leading ? .bottomLeading : .bottomTrailing)
-                            .combined(with: .opacity))
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
-        }
-        .animation(SNMotion.run(InboxMotion.spring), value: store.sheetIn == surface)
-    }
-
-    private func close() {
-        withAnimation(SNMotion.run(InboxMotion.spring)) {
-            store.sheetIn = nil
-        } completion: {
-            drag = 0
-        }
-    }
-}
+// MARK: The card over the chat
 
 /// A new mention, reply or highlight, as a compact card risen out of the tray just above the
 /// message bar: who, where, and a line of what they said. It stays a few seconds and folds back
@@ -651,14 +578,13 @@ struct InboxArrivalCard: View {
     }
 }
 
-/// The chat list's mask while an inbox overlay is up: rows fade out over 24 points above it.
+/// The chat list's mask while the inbox's card is up: rows fade out over 24 points above it.
 struct InboxClearMask: View {
-    let sheet: Bool
     let card: Bool
 
     var body: some View {
         GeometryReader { geo in
-            let clear = sheet ? max(220, geo.size.height * 0.68) : card ? 64 : 0
+            let clear: CGFloat = card ? 64 : 0
             VStack(spacing: 0) {
                 Color.black
                 if clear > 0 {
@@ -667,7 +593,6 @@ struct InboxClearMask: View {
                 }
             }
         }
-        .animation(SNMotion.run(InboxMotion.spring), value: sheet)
         .animation(SNMotion.run(InboxMotion.spring), value: card)
     }
 }

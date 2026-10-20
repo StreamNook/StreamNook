@@ -852,18 +852,17 @@ export const MobileChatPane: React.FC<{
   );
 
 
-  // The inbox over this chat: its sheet, or a new mention's card. The watch
-  // pane stays mounted under the mini player and behind Chats, so the card
-  // rises only where the chat is on screen.
+  // The inbox over this chat: its bottom sheet, or a new mention's card. The
+  // watch pane stays mounted under the mini player and behind Chats, so the
+  // card rises only where the chat is on screen.
   const navTab = useMobileNavStore((s) => s.activeTab);
   const playerFull = useMobileNavStore((s) => s.playerMode === 'full');
   const onScreen = surface === 'chats' ? !paused : navTab !== 'chats' && playerFull;
   const inboxSide = useAppStore((s) => (s.settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'));
-  const sheetHere = useMentionsStore((s) => s.sheetIn === surface);
   const cardHere = useMentionsStore((s) => !!s.arrival && !s.composerBusy && !s.sheetIn) && onScreen && !readOnly;
-  // Rows under the overlay fade out above it instead of showing as slivers;
-  // the top fade stays when the pane draws one.
-  const clear = sheetHere ? (readOnly ? 'calc(68% + 60px)' : '68%') : cardHere ? '62px' : null;
+  // Rows under the card fade out above it instead of showing as slivers; the
+  // top fade stays when the pane draws one.
+  const clear = cardHere ? '62px' : null;
   const listMask = clear
     ? `linear-gradient(to bottom, ${strip ? '#000 0' : 'transparent 0, #000 24px'}, #000 calc(100% - ${clear} - 24px), transparent calc(100% - ${clear}))`
     : undefined;
@@ -947,9 +946,7 @@ export const MobileChatPane: React.FC<{
       </div>
       {/* Outside the list, so a press in them never reaches its gestures. */}
       {onScreen && !readOnly && <InboxArrival side={inboxSide} />}
-      {/* In landscape the column has no message bar: the sheet rises from the
-          overlay strip that holds its tray (ChatOverlayChrome, 60 px tall). */}
-      <InboxSheet surface={surface} side={readOnly ? 'left' : inboxSide} bottom={readOnly ? 60 : 0} />
+      <InboxSheet surface={surface} />
       </div>
       {!readOnly && (
         <MobileChatInput

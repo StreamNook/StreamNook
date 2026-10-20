@@ -38,7 +38,7 @@ interface MobileNavState {
   /** The whispers list, over everything else like Mentions (a notification
    *  tap and the chat inbox open it from anywhere). */
   whispersOpen: boolean;
-  /** The conversation open over the whispers list, by its inbox key. */
+  /** The conversation open in its bottom sheet, by its inbox key. */
   whisperKey: string | null;
   /** Watch presentation: full screen, or the draggable in-app mini player
    *  (the tab shell stays live behind it). System PiP is separate: that hands
@@ -74,14 +74,15 @@ interface MobileNavState {
   setMentionsOpen: (open: boolean) => void;
   /** The whispers list (the entry the inbox and the You tab use). */
   openWhispers: () => void;
-  /** One conversation, with the list under it so back lands on the list. */
+  /** One conversation, in the bottom sheet the chat menu uses, over whatever
+   *  is on screen (an open inbox goes first). */
   openWhisper: (key: string) => void;
-  /** Back out of the open conversation to the list. */
+  /** Close the conversation's sheet. */
   closeWhisper: () => void;
   /** Close the whispers layer entirely. */
   closeWhispers: () => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet -> whisper conversation -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet (a whisper conversation is one) -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -147,7 +148,7 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
   setMentionsOpen: (open) => set({ mentionsOpen: open }),
   openWhispers: () => set({ whispersOpen: true, whisperKey: null }),
-  openWhisper: (key) => set({ whispersOpen: true, whisperKey: key }),
+  openWhisper: (key) => set({ whisperKey: key, mentionsOpen: false }),
   closeWhisper: () => set({ whisperKey: null }),
   closeWhispers: () => set({ whispersOpen: false, whisperKey: null }),
   setPlayerMode: (mode) => set({ playerMode: mode }),
@@ -158,10 +159,6 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
     if (sheetStack.length > 0) {
       const top = sheetStack[sheetStack.length - 1];
       window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
-      return true;
-    }
-    if (get().whisperKey) {
-      set({ whisperKey: null });
       return true;
     }
     if (get().whispersOpen) {
