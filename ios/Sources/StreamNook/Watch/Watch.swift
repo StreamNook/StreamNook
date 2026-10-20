@@ -182,9 +182,13 @@ final class Watch {
         ]
     }
 
-    /// The quality `start_stream` is asked for: a drive step's, else this session's pick, else
-    /// the saved one, else `best` (capped to the screen by the core).
-    private var askedQuality: String { requestedQuality ?? pickedQuality ?? savedQuality ?? "best" }
+    /// The quality a start asks for: a drive step's, else this session's pick. Nil lets the core
+    /// use the saved quality (`watch_start`), so nothing here stands in for a setting not yet read.
+    private var askedQuality: String? { requestedQuality ?? pickedQuality }
+
+    /// For the commands that need a name (`start_stream`: a restart, a VOD): the pick, else what
+    /// is playing now, else the saved one, and `best` only when none is known.
+    private var restartQuality: String { askedQuality ?? quality ?? savedQuality ?? "best" }
 
     /// Starts `stream`, replacing whatever played. The same channel already open stays as it is.
     /// The player is never rebuilt: only its item changes.
@@ -243,7 +247,7 @@ final class Watch {
         try? await Task.sleep(for: .milliseconds(300))
         do {
             let start = try await core.invoke(
-                "start_stream", args: ["url": stream.playbackURL, "quality": askedQuality],
+                "start_stream", args: ["url": stream.playbackURL, "quality": restartQuality],
                 as: StreamStart.self
             )
             guard self.stream?.id == stream.id else { return nil }
@@ -351,7 +355,7 @@ final class Watch {
         reloading()
         vodTitle = title
         vodThumbnail = thumbnail
-        let asked = askedQuality
+        let asked = restartQuality
         tasks.append(Task {
             do {
                 let start = try await core.invoke(
@@ -622,8 +626,9 @@ final class Watch {
             log.notice("link: \(adapt.quality, privacy: .public) (\(adapt.reason, privacy: .public)), cushion \(adapt.extraCushion)")
             guard let url = adapt.url else { continue }
             startURL = url
-            let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
-            let chosen: PlayRoute = route == .auto ? (lowLatency ? .ll : .plain) : (playing ?? .plain)
+            let chosen: PlayRoute = route == .auto
+                ? await Self.route(for: StreamStart(url: url, quality: quality ?? "best"), asked: .auto, core: core)
+                : (playing ?? .plain)
             reloading()
             load(url, route: chosen)
         }
@@ -639,7 +644,18 @@ final class Watch {
         guard let stream, channel == nil || channel?.lowercased() == stream.userLogin.lowercased() else { return }
         log.notice("ad pivot to \(url, privacy: .public)")
         startURL = url
-        load(url, route: playing ?? .plain)
+        // The route is picked again for the new upstream, as a link change does.
+        guard let core else {
+            load(url, route: playing ?? .plain)
+            return
+        }
+        let asked = route
+        Task { [weak self] in
+            let start = StreamStart(url: url, quality: self?.quality ?? "best")
+            let chosen = await Self.route(for: start, asked: asked, core: core)
+            guard let self, self.startURL == url else { return }
+            self.load(url, route: chosen)
+        }
     }
 
     func pause() {
@@ -808,7 +824,11 @@ final class Watch {
         if start.url.contains("/audio.m3u8") || !start.url.contains("/stream.m3u8") { return .direct }
         guard asked == .auto else { return asked }
         let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
-        return lowLatency ? .ll : .plain
+        if lowLatency { return .ll }
+        // A low-latency broadcast the parts origin did not take rides its in-progress segments, as
+        // on the desktop and Android (the relay's prefetch probe).
+        let promoted = (try? await core.invoke("get_stream_prefetch_present", args: [:], as: Bool.self)) ?? false
+        return promoted ? .promote : .plain
     }
 
     /// The low-latency playlist failed to play (AVPlayer refuses some part layouts outright):
