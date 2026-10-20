@@ -18,6 +18,40 @@ struct CatalogRow: Decodable, Identifiable, Hashable {
     var place: String { [settingsSection?.title ?? page, section == settingsSection?.title ? nil : section].compactMap { $0 }.joined(separator: " › ") }
 }
 
+extension CatalogRow {
+    /// The rows a catalog command answers (`search_settings`, `get_changed_settings`), every one
+    /// this build can read. A row it cannot read, or one on a page it has no section for, is
+    /// logged and left out, so one row never blanks the list; Android draws what it knows the
+    /// same way.
+    @MainActor
+    static func load(_ cmd: String, args: [String: Any?] = [:], core: CoreBridge) async -> [CatalogRow] {
+        let json: String
+        do {
+            json = try await core.invoke(cmd, args: args)
+        } catch {
+            log.error("\(cmd, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return []
+        }
+        guard let items = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [Any] else {
+            log.error("\(cmd, privacy: .public) answered no list: \(String(json.prefix(300)), privacy: .public)")
+            return []
+        }
+        return items.compactMap { item in
+            guard JSONSerialization.isValidJSONObject(item),
+                  let data = try? JSONSerialization.data(withJSONObject: item),
+                  let row = try? JSONDecoder().decode(CatalogRow.self, from: data) else {
+                log.error("settings row skipped, unreadable: \(String(describing: item), privacy: .public)")
+                return nil
+            }
+            guard row.settingsSection != nil else {
+                log.error("settings row skipped, no page \(row.page, privacy: .public): \(row.title, privacy: .public)")
+                return nil
+            }
+            return row
+        }
+    }
+}
+
 /// Opens the page a catalog row lives on and brings its section into view.
 @MainActor
 func openSettingsRow(_ row: CatalogRow, model: AppModel) {
@@ -112,7 +146,7 @@ struct SettingsDirectory: View {
             guard !text.isEmpty else { results = []; return }
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
-            results = (try? await model.core.invoke("search_settings", args: ["query": text], as: [CatalogRow].self)) ?? []
+            results = await CatalogRow.load("search_settings", args: ["query": text], core: model.core)
         }
     }
 }
@@ -221,7 +255,8 @@ struct ChangedPanel: View {
     }
 
     private func load() async {
-        rows = (try? await model.core.invoke("get_changed_settings", args: [:], as: [CatalogRow].self)) ?? []
+        rows = await CatalogRow.load("get_changed_settings", core: model.core)
+        log.notice("changed settings: \(rows?.count ?? 0) rows")
     }
 }
 

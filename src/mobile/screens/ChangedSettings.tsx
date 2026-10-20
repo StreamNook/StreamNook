@@ -13,7 +13,7 @@ import { GROUP_ICON, GROUP_ICON_STROKE, GroupIcon } from '../ui/GroupedList';
 import { useGroupRowFrame } from '../ui/groupSurface';
 import { CatalogLogo } from './SettingsSearch';
 import { settingIcon } from './settingsIcons';
-import { CATALOG_PAGES, catalogRowKey, openCatalogRow, pageViewOf, type CatalogRow } from './settingsCatalog';
+import { CATALOG_PAGES, catalogRowKey, knownRows, openCatalogRow, pageViewOf, type CatalogRow } from './settingsCatalog';
 import { Logger } from '../../utils/logger';
 
 /** One changed setting: its glyph and name (a tap opens its page), where it
@@ -68,7 +68,7 @@ const ChangedSettings: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      setRows(await invoke<CatalogRow[]>('get_changed_settings'));
+      setRows(knownRows(await invoke<CatalogRow[]>('get_changed_settings'), 'ChangedSettings'));
     } catch (e) {
       Logger.warn('[ChangedSettings] get_changed_settings failed:', e);
       setRows((prev) => prev ?? []);
