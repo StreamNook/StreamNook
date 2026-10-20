@@ -70,3 +70,22 @@ import Testing
         await #expect(throws: CoreFailure.self) { _ = try await core.editSliderTimeouts("add", seconds: 0) }
     }
 }
+
+@Suite struct MessageReachTests {
+    @Test func aModeratorMayDeleteOnlyTheirOwnMessage() {
+        let own = MessageReach.of(viewerModerates: true, viewerIsBroadcaster: false, viewerID: "7", targetID: "7", badges: ["moderator/1"])
+        #expect(own == .deleteOnly)
+        #expect(own.canDelete && !own.canTimeout)
+    }
+
+    @Test func nobodyActsOnTheBroadcastersMessages() {
+        #expect(MessageReach.of(viewerModerates: true, viewerIsBroadcaster: true, viewerID: "1", targetID: "1", badges: []) == .nothing)
+        #expect(MessageReach.of(viewerModerates: true, viewerIsBroadcaster: false, viewerID: "7", targetID: "1", badges: ["broadcaster"]) == .nothing)
+    }
+
+    @Test func moderatorsAndEachOther() {
+        #expect(MessageReach.of(viewerModerates: true, viewerIsBroadcaster: false, viewerID: "7", targetID: "8", badges: ["moderator"]) == .nothing)
+        #expect(MessageReach.of(viewerModerates: true, viewerIsBroadcaster: true, viewerID: "1", targetID: "8", badges: ["moderator/1"]) == .noDelete)
+        #expect(MessageReach.of(viewerModerates: true, viewerIsBroadcaster: false, viewerID: "7", targetID: "9", badges: ["subscriber/12"]) == .all)
+    }
+}

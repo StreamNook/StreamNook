@@ -19,6 +19,7 @@ import { ChatPicker } from '../chat/ChatPicker';
 import { useChatTabsStore, type ChatTab } from '../chat/chatTabsStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
+import { usePinsOpen } from '../watch/pinsOpen';
 import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
 import { useChannelState } from '../../stores/channelStateStore';
@@ -91,10 +92,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   // A pin opens or folds per channel: each channel starts as Chat > Pinned
   // Messages > Collapsed says, and a tap holds until the chat switches.
   const chatChannelId = useActiveChatChannelId();
-  const pinsStartCollapsed = useAppStore((s) => s.settings.chat_design?.pinned_start_collapsed) ?? true;
-  const pinnedStyle = useAppStore((s) => s.settings.chat_design?.pinned_collapsed_style) ?? 'bar';
-  const [pinsState, setPinsState] = useState<{ channel: string | null; open: boolean } | null>(null);
-  const pinsOpen = pinsState && pinsState.channel === chatChannelId ? pinsState.open : !pinsStartCollapsed;
+  const pins = usePinsOpen();
+  const pinsOpen = pins.open;
   // The closed banner's height: the list starts under it. Opened, the banner
   // floats over the rows, so nothing below it moves.
   const pinsRef = useRef<HTMLDivElement | null>(null);
@@ -108,7 +107,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 
   const pinned = useRoomPins(shown && tabs.length > 0);
-  const hasPins = pinned.length > 0;
+  // Folded with Style set to Hidden, a pin draws nothing and holds no room.
+  const hasPins = pinned.length > 0 && (pinsOpen || pins.style !== 'hidden');
   useLayoutEffect(() => {
     const el = pinsRef.current;
     if (!hasPins || !el) {
@@ -355,8 +355,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
                   pins={pinned}
                   channelId={chatChannelId ?? undefined}
                   expanded={pinsOpen}
-                  onToggle={() => setPinsState({ channel: chatChannelId, open: !pinsOpen })}
-                  collapsedStyle={pinnedStyle}
+                  onToggle={() => pins.setOpen(!pinsOpen)}
+                  collapsedStyle={pins.style}
                 />
               </div>
             )}

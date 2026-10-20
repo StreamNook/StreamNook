@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, At, BookmarkSimple, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, At, BookmarkSimple, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import { useMobileNavStore } from '../navStore';
 import { useMentionsStore } from '../mentions/mentionInbox';
 import {
@@ -59,6 +59,9 @@ interface Props {
   onManageChannel?: () => void;
   /** The room's moderation sheet (moderators, Twitch). */
   onModeration?: () => void;
+  /** Opens the room's pin, folded away by Pinned Messages > Style: Hidden.
+   *  Absent while no pin waits there. */
+  onShowPinned?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
 }
@@ -79,6 +82,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onBrowseCommands,
   onManageChannel,
   onModeration,
+  onShowPinned,
   onCloseChat,
 }) => {
   // The stream's own chat closes with the player unless you keep it; every
@@ -236,6 +240,18 @@ export const ComposerMenuSheet: React.FC<Props> = ({
         >
           Mentions
         </GroupRow>
+
+        {onShowPinned && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              onShowPinned();
+            }}
+            icon={<PushPin size={ICON} className="text-textSecondary" />}
+          >
+            Pinned message
+          </GroupRow>
+        )}
 
         <GroupRow
           onClick={() => {

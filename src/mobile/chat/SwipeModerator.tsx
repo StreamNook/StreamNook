@@ -46,8 +46,8 @@ interface Props {
   broadcasterId: string | null;
   /** The chatter behind a row the viewer may swipe, or null. */
   targetFor: (messageId: string) => SwipeTarget | null;
-  /** The core's slider for a press `startX` px into a row `width` px wide, on `name`'s message. */
-  sliderFor: (width: number, startX: number, name: string) => Promise<TouchSlider | null>;
+  /** The core's slider for a press `startX` px into a row `width` px wide, on `target`'s message. */
+  sliderFor: (width: number, startX: number, target: SwipeTarget) => Promise<TouchSlider | null>;
   /** The long-press fan owns the finger once armed. */
   fanArmed: () => boolean;
   /** A swipe started (the one-time hint goes). */
@@ -169,7 +169,7 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null };
       press = current;
       trace(`down on ${messageId} at x ${Math.round(e.clientX - r.left)} of ${Math.round(r.width)}; slider requested`);
-      void live.current.sliderFor(r.width, e.clientX - r.left, target.name).then((s) => {
+      void live.current.sliderFor(r.width, e.clientX - r.left, target).then((s) => {
         trace(s ? `slider ready: enabled ${s.enabled} steps ${s.steps.length} start ${Math.round(s.start)}` : 'slider missing');
         if (press === current) current.slider = s;
       });

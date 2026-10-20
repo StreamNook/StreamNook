@@ -1,9 +1,9 @@
 //! Every kind of alert StreamNook sends, with the setting that switches it,
 //! the OS category it posts under (the Android notification channel, the
 //! iPhone's notification category) and the platforms where it really
-//! notifies. Both phones draw their Notifications section and the setup
-//! wizard's Notifications step from this one list, in its order and with its
-//! words. A type a platform cannot send is left out there, never shown as
+//! notifies. Desktop and both phones draw their Notifications section and the
+//! setup wizard's Notifications step from this one list, in its order and with
+//! its words. A type a platform cannot send is left out there, never shown as
 //! missing: a type joins a platform by adding it to that type's platforms.
 //! The types live in `alert_types.json` beside this file.
 
@@ -12,14 +12,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct AlertType {
-    /// `live`, `favorite_live`, `mentions`, `drops`, `badges`.
+    /// `live`, `favorite_live`, `mentions`, `whispers`, `drops`, `badges`,
+    /// `gift_subs`, `twitch_rewards`, `channel_points`, `predictions`, `updates`.
     pub id: String,
-    /// The row's name, the same on every phone.
+    /// The row's name, the same on every platform that lists it.
     pub title: String,
     pub detail: String,
     /// The dotted settings path the type's switch writes.
     pub setting: String,
-    /// The OS category the alert posts under.
+    /// The OS category the alert posts under (an Android channel id; desktop
+    /// types name theirs the same way, unused there today).
     pub channel: String,
     /// Offered in the setup wizard's Notifications step.
     pub setup: bool,
@@ -80,7 +82,7 @@ mod tests {
 
     #[test]
     fn the_list_loads_with_unique_ids() {
-        assert!(TYPES.len() >= 5);
+        assert!(TYPES.len() >= 11);
         let mut seen = std::collections::HashSet::new();
         assert!(TYPES.iter().all(|t| seen.insert(t.id.clone())), "an id repeats");
         for t in TYPES.iter() {
@@ -112,6 +114,39 @@ mod tests {
     }
 
     #[test]
+    fn desktop_lists_everything_it_notifies_about() {
+        // Each of these reaches the Dynamic Island, a toast and, while
+        // StreamNook is not the window in use, a Windows, macOS or Linux
+        // notification (commands/notification_mirror.rs).
+        assert_eq!(
+            ids_on("desktop"),
+            [
+                "live",
+                "favorite_live",
+                "mentions",
+                "whispers",
+                "drops",
+                "badges",
+                "gift_subs",
+                "twitch_rewards",
+                "channel_points",
+                "predictions",
+                "updates",
+            ]
+        );
+        // Desktop-only types stay off both phones.
+        for id in ["whispers", "gift_subs", "twitch_rewards", "channel_points", "predictions", "updates"] {
+            assert!(works_on(id, "desktop") && !works_on(id, "android") && !works_on(id, "ios"), "{id}");
+        }
+    }
+
+    #[test]
+    fn each_type_writes_its_own_switch() {
+        let mut seen = std::collections::HashSet::new();
+        assert!(TYPES.iter().all(|t| seen.insert(t.setting.clone())), "two types write one setting");
+    }
+
+    #[test]
     fn the_wizard_offers_go_live_and_mentions() {
         let setup: Vec<String> = TYPES.iter().filter(|t| t.setup).map(|t| t.id.clone()).collect();
         assert_eq!(setup, ["live", "mentions"]);
@@ -119,6 +154,8 @@ mod tests {
         assert_eq!(android, ["live", "mentions"]);
         let ios: Vec<String> = for_platform("ios").into_iter().filter(|t| t.setup).map(|t| t.id).collect();
         assert_eq!(ios, ["live", "mentions"]);
+        let desktop: Vec<String> = for_platform("desktop").into_iter().filter(|t| t.setup).map(|t| t.id).collect();
+        assert_eq!(desktop, ["live", "mentions"]);
     }
 
     #[test]

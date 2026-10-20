@@ -397,8 +397,12 @@ pub struct Row {
 }
 
 /// How many emotes matched per provider, counted before the row cap, so the
-/// emote menu's tabs can say how many each one holds.
+/// emote menu's tabs can say how many each one holds. `favorites` counts the
+/// matches that are favorites, whatever their provider.
 pub type ProviderCounts = std::collections::BTreeMap<&'static str, usize>;
+
+/// The `ProviderCounts` key for matches that are favorites.
+pub const FAVORITES_COUNT: &str = "favorites";
 
 pub struct Collector<'a> {
     ctx: Context<'a>,
@@ -672,6 +676,10 @@ impl<'a> Collector<'a> {
         let mut counts = ProviderCounts::new();
         for r in &merged {
             *counts.entry(r.hit.slot.wire()).or_default() += 1;
+            // The emote menu's Favorites tab counts its hits before the cap too.
+            if r.hit.favorite {
+                *counts.entry(FAVORITES_COUNT).or_default() += 1;
+            }
         }
         let cmp = |a: &Ranked, b: &Ranked| compare(profile, browse, a, b);
         if browse {
@@ -1293,6 +1301,7 @@ mod tests {
         assert_eq!(counts.get("7tv"), Some(&2));
         assert_eq!(counts.get("bttv"), Some(&1));
         assert_eq!(counts.get("ffz"), Some(&1));
+        assert_eq!(counts.get(FAVORITES_COUNT), Some(&1), "favorites among the matches, before the cap");
         let pogu = rows.iter().find(|r| r.name == "PogU").unwrap();
         assert!(pogu.favorite);
         assert_eq!(pogu.owner_name.as_deref(), Some("Alpha"));
