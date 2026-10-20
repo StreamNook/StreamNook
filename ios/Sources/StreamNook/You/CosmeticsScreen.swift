@@ -46,7 +46,6 @@ struct CosmeticsScreen: View {
                 store.scrollTarget = nil
             }
         }
-        .scrollIndicators(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) { pinned }
         .background(SN.background)
         .environment(\.themeLightOff, true)

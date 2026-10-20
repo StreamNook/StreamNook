@@ -49,7 +49,6 @@ struct YouScreen: View {
             }
             .padding(.bottom, 24)
         }
-        .scrollIndicators(.hidden)
         .snShellBackground()
         .navigationTitle("You")
         .toolbar(.hidden, for: .navigationBar)

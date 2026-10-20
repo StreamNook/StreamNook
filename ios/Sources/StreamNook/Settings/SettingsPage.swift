@@ -34,7 +34,6 @@ struct SettingsPage: View {
                     .id("page-end")
             }
             .snGroupedList()
-            .scrollIndicators(.hidden)
             .onChange(of: SettingsAnchor.shared.target) { _, target in
                 guard let target else { return }
                 // "NAME@end" brings a section's last rows into view.
