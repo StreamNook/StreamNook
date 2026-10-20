@@ -7,16 +7,26 @@ use crate::services::irc_service::IrcService;
 use crate::services::twitch_service::TwitchService;
 use anyhow::Result;
 
-/// Result of a send. `message_id` is Twitch's authoritative id when the message
-/// went out over Helix (so the optimistic copy can be stamped and deleted
-/// without waiting on the IRC echo); it is None on the IRC fallback path
-/// (slash-commands, or Helix unavailable). `is_sent` is false when Twitch
-/// dropped the message (e.g. AutoMod), with `drop_reason` set.
+/// Result of a send. `message_id` is Twitch's id for the posted message (from
+/// Helix's answer, or the USERSTATE that answers an IRC send), so the
+/// optimistic copy can be stamped and deleted, replied to and moderated. It is
+/// None only for slash-commands and an IRC send Twitch never answered.
+/// `is_sent` is false when Twitch did not post it, with `drop_reason` in
+/// Twitch's words; `held` when AutoMod is holding it for the moderators.
 #[derive(serde::Serialize)]
 pub struct SendResult {
     pub message_id: Option<String>,
     pub is_sent: bool,
     pub drop_reason: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
+}
+
+impl SendResult {
+    fn dropped(drop_reason: Option<String>) -> Self {
+        let held = drop_reason.as_deref().is_some_and(crate::services::chat_send_ack::is_held);
+        SendResult { message_id: None, is_sent: false, drop_reason, held }
+    }
 }
 
 pub struct ChatService;
@@ -65,13 +75,9 @@ impl ChatService {
             // Slash-commands need the account's own IRC connection, which only the
             // primary has. Don't silently post them as literal text from an alt.
             if is_command {
-                return Ok(SendResult {
-                    message_id: None,
-                    is_sent: false,
-                    drop_reason: Some(
-                        "Slash commands can only be sent from your main account.".to_string(),
-                    ),
-                });
+                return Ok(SendResult::dropped(Some(
+                    "Slash commands can only be sent from your main account.".to_string(),
+                )));
             }
 
             let bid = broadcaster_id.ok_or_else(|| {
@@ -94,24 +100,22 @@ impl ChatService {
                     message_id,
                     is_sent: true,
                     drop_reason: None,
+                    held: false,
                 }),
-                Ok((_, false, drop_reason)) => Ok(SendResult {
-                    message_id: None,
-                    is_sent: false,
-                    drop_reason,
-                }),
+                Ok((_, false, drop_reason)) => Ok(SendResult::dropped(drop_reason)),
                 // No IRC fallback for secondaries: the IRC connection belongs to the
                 // primary, so falling back would send the message from the wrong
                 // account. Surface the failure instead.
-                Err(e) => Ok(SendResult {
-                    message_id: None,
-                    is_sent: false,
-                    drop_reason: Some(format!("Could not send from this account: {}", e)),
-                }),
+                Err(e) => Ok(SendResult::dropped(Some(format!("Could not send from this account: {}", e)))),
             };
         }
 
-        // ----- PRIMARY path (unchanged behavior) -----
+        // ----- PRIMARY path -----
+        // The sender is the signed-in account unless the caller named it. The
+        // iPhone named none, so every one of its sends went over IRC, where
+        // nothing came back: no id, and a refusal never reached the row.
+        let primary_sender = AccountStore::primary().map(|p| p.user_id);
+        let sender_id = sender_id.or(primary_sender.as_deref());
         if !is_command {
             if let (Some(bid), Some(sid)) = (broadcaster_id, sender_id) {
                 match TwitchService::send_chat_message_helix(bid, sid, message, reply_parent_msg_id)
@@ -127,6 +131,7 @@ impl ChatService {
                             message_id,
                             is_sent: true,
                             drop_reason: None,
+                            held: false,
                         });
                     }
                     Ok((_, false, drop_reason)) => {
@@ -140,11 +145,7 @@ impl ChatService {
                                 crate::services::chat_warning::on_refusal(&ch, None, text.as_deref()).await;
                             });
                         }
-                        return Ok(SendResult {
-                            message_id: None,
-                            is_sent: false,
-                            drop_reason,
-                        });
+                        return Ok(SendResult::dropped(drop_reason));
                     }
                     Err(e) => {
                         log::warn!("[Chat] Helix send failed ({}); falling back to IRC", e);
@@ -154,17 +155,42 @@ impl ChatService {
             }
         }
 
-        // IRC path: slash-commands, or Helix unavailable / errored. No id here, so
-        // the optimistic copy keeps its local id and relies on echo matching.
+        // IRC path: slash-commands, or Helix unavailable / errored. A chat line
+        // waits for Twitch's answer (chat_send_ack): the USERSTATE that carries its
+        // id, or the NOTICE that refuses it. Commands get no such answer.
+        let waiting = match target_channel {
+            Some(ch) if !is_command => Some(crate::services::chat_send_ack::expect(ch)),
+            _ => None,
+        };
         IrcService::send_message(message, reply_parent_msg_id, target_channel).await?;
-        if let Some(ch) = target_channel {
-            crate::services::chat_send_limiter::record_sent(ch, message);
+        let Some(waiting) = waiting else {
+            if let Some(ch) = target_channel {
+                crate::services::chat_send_limiter::record_sent(ch, message);
+            }
+            return Ok(SendResult { message_id: None, is_sent: true, drop_reason: None, held: false });
+        };
+        use crate::services::chat_send_ack::{Answer, ANSWER_WAIT};
+        match tokio::time::timeout(ANSWER_WAIT, waiting).await {
+            Ok(Ok(Answer::Sent(id))) => {
+                if let Some(ch) = target_channel {
+                    crate::services::chat_send_limiter::record_sent(ch, message);
+                }
+                Ok(SendResult { message_id: Some(id), is_sent: true, drop_reason: None, held: false })
+            }
+            Ok(Ok(Answer::Refused { code, words })) => {
+                log::info!("[Chat] IRC send refused in {:?}: {}", target_channel, code);
+                let reason = if words.is_empty() { code.clone() } else { words };
+                let mut result = SendResult::dropped(Some(reason));
+                result.held |= crate::services::chat_send_ack::is_held(&code);
+                Ok(result)
+            }
+            // Twitch answers every PRIVMSG it takes; silence means it was not posted
+            // (a connection that cannot send, a dropped socket).
+            Ok(Err(_)) | Err(_) => {
+                log::warn!("[Chat] IRC send got no answer in {:?}", target_channel);
+                Ok(SendResult::dropped(Some("Twitch never confirmed it".to_string())))
+            }
         }
-        Ok(SendResult {
-            message_id: None,
-            is_sent: true,
-            drop_reason: None,
-        })
     }
 
     /// Stop chat because the USER is done with it (stopped a stream, `/disconnect`).

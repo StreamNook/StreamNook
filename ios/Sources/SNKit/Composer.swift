@@ -126,28 +126,35 @@ public enum SlashAfterDispatch: Equatable, Sendable {
     }
 }
 
-/// The core's answer to a Twitch send (`send_chat_message`): accepted or dropped with a reason.
+/// The core's answer to a Twitch send (`send_chat_message`): posted with Twitch's message id, or
+/// not posted with Twitch's reason (held when AutoMod is holding it for the moderators).
 public struct SendResult: Decodable, Sendable, Equatable {
     public var isSent: Bool
     public var dropReason: String?
     public var messageID: String?
+    /// AutoMod is holding it: not posted, not refused, waiting on a moderator.
+    public var held: Bool
     /// The message cheers, so Rust held it rather than sending it as chat.
     public var cheer: CheerCheck?
 
     enum CodingKeys: String, CodingKey {
-        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id", cheer
+        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id", cheer, held
     }
 
-    public init(isSent: Bool, dropReason: String? = nil, messageID: String? = nil, cheer: CheerCheck? = nil) {
+    public init(isSent: Bool, dropReason: String? = nil, messageID: String? = nil, cheer: CheerCheck? = nil,
+                held: Bool = false) {
         self.isSent = isSent
         self.dropReason = dropReason
         self.messageID = messageID
         self.cheer = cheer
+        self.held = held
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        isSent = try c.decodeIfPresent(Bool.self, forKey: .isSent) ?? true
+        // An answer that does not say it was sent was not: never show a line as sent on a guess.
+        isSent = try c.decodeIfPresent(Bool.self, forKey: .isSent) ?? false
+        held = try c.decodeIfPresent(Bool.self, forKey: .held) ?? false
         dropReason = try c.decodeIfPresent(String.self, forKey: .dropReason)
         messageID = try c.decodeIfPresent(String.self, forKey: .messageID)
         cheer = try c.decodeIfPresent(CheerCheck.self, forKey: .cheer)

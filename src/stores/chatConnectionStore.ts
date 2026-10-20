@@ -3649,6 +3649,8 @@ export interface SendChannelOutcome {
   message_id: string | null;
   is_sent: boolean;
   drop_reason: string | null;
+  /** AutoMod is holding it for the room's moderators: not posted, not refused. */
+  held?: boolean;
   pin_error?: string;
   /** The message cheers, so Rust held it for the cheer card instead. */
   cheer?: CheerCheck;
@@ -3769,7 +3771,12 @@ export async function sendChannelMessage(
       // The phone's composer says it beside the kept draft, with Retry and
       // Discard, so a row here would say it twice.
       if (result.drop_reason && !IS_MOBILE) {
-        injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
+        injectSystemMessage(
+          key,
+          result.held
+            ? 'Your message is held for review by the moderators.'
+            : `Your message was not sent: ${result.drop_reason}`,
+        );
       }
       // Held, not dropped: the chat box showing this channel asks before any
       // bits are spent.
