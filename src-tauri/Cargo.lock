@@ -56,6 +56,7 @@ dependencies = [
  "sevenz-rust",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "sn-mention-rule",
  "sn-tauri-headless",
  "spellbook",
  "sys-locale",
@@ -6649,6 +6650,10 @@ dependencies = [
  "borsh",
  "serde_core",
 ]
+
+[[package]]
+name = "sn-mention-rule"
+version = "0.1.0"
 
 [[package]]
 name = "sn-tauri-headless"
