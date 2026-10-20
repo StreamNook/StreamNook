@@ -49,8 +49,13 @@ struct SettingsPage: View {
         .environment(model)
         .task {
             let toasts = model.toasts
-            model.settingsStore.onError = { text in toasts.show(text) }
+            model.settingsStore.onError = { text in
+                log.error("settings read failed: \(text, privacy: .public)")
+                toasts.show(text)
+            }
+            log.notice("settings page \(section.rawValue, privacy: .public): reading, loaded \(model.settingsStore.loaded)")
             await model.settingsStore.refresh()
+            log.notice("settings page \(section.rawValue, privacy: .public): read, loaded \(model.settingsStore.loaded)")
         }
     }
 }

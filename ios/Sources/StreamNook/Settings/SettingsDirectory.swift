@@ -22,19 +22,19 @@ extension CatalogRow {
     /// The rows a catalog command answers (`search_settings`, `get_changed_settings`), every one
     /// this build can read. A row it cannot read, or one on a page it has no section for, is
     /// logged and left out, so one row never blanks the list; Android draws what it knows the
-    /// same way.
+    /// same way. Nil when the call itself failed.
     @MainActor
-    static func load(_ cmd: String, args: [String: Any?] = [:], core: CoreBridge) async -> [CatalogRow] {
+    static func load(_ cmd: String, args: [String: Any?] = [:], core: CoreBridge) async -> [CatalogRow]? {
         let json: String
         do {
             json = try await core.invoke(cmd, args: args)
         } catch {
             log.error("\(cmd, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-            return []
+            return nil
         }
         guard let items = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [Any] else {
             log.error("\(cmd, privacy: .public) answered no list: \(String(json.prefix(300)), privacy: .public)")
-            return []
+            return nil
         }
         return items.compactMap { item in
             guard JSONSerialization.isValidJSONObject(item),
@@ -146,7 +146,7 @@ struct SettingsDirectory: View {
             guard !text.isEmpty else { results = []; return }
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
-            results = await CatalogRow.load("search_settings", args: ["query": text], core: model.core)
+            results = await CatalogRow.load("search_settings", args: ["query": text], core: model.core) ?? []
         }
     }
 }
@@ -199,6 +199,11 @@ struct ChangedPanel: View {
     @Environment(SettingsStore.self) private var store
     @Environment(AppModel.self) private var model
     @State private var rows: [CatalogRow]?
+    /// The list did not come: the call failed, or gave no answer in `patience`.
+    @State private var failed = false
+    /// Bumped by Try again, which asks once more.
+    @State private var attempt = 0
+    private static let patience: Duration = .seconds(10)
 
     var body: some View {
         Section {
@@ -208,9 +213,14 @@ struct ChangedPanel: View {
             } icon: {
                 Image(systemName: "slider.horizontal.below.square.and.square.filled")
             }
-            .task(id: store.changed.count) { await load() }
+            .task(id: "\(store.changed.count)-\(attempt)") { await load() }
         }
-        if let rows {
+        if rows == nil, failed {
+            Section {
+                EmptyNote(text: "Your changed settings did not load.", hint: nil)
+                SettingButton(title: "Try again", symbol: "arrow.clockwise") { attempt += 1 }
+            }
+        } else if let rows {
             if rows.isEmpty {
                 Section { EmptyNote(text: "Every setting is at its default.", hint: nil) }
             }
@@ -254,9 +264,26 @@ struct ChangedPanel: View {
         }
     }
 
+    /// Asks the core for the changed rows. The page never waits on it for good: a failed call, or
+    /// none within `patience`, shows Try again instead of the spinner. Both ends are logged.
     private func load() async {
-        rows = await CatalogRow.load("get_changed_settings", core: model.core)
-        log.notice("changed settings: \(rows?.count ?? 0) rows")
+        failed = false
+        log.notice("changed settings: asking")
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(for: Self.patience)
+            guard !Task.isCancelled, rows == nil else { return }
+            log.error("changed settings: no answer after \(String(describing: Self.patience), privacy: .public)")
+            failed = true
+        }
+        let answer = await CatalogRow.load("get_changed_settings", core: model.core)
+        watchdog.cancel()
+        if let answer {
+            rows = answer
+            log.notice("changed settings: \(answer.count) rows")
+        } else {
+            log.error("changed settings: the call failed")
+            failed = true
+        }
     }
 }
 
