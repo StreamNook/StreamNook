@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The go-live banner extension needs no capability: the app holds aps-environment, and the
+     extension only edits a push that has already arrived. Without this file xtool gives the
+     extension the app's entitlements (and so Push on its App ID). -->
+<plist version="1.0">
+<dict/>
+</plist>

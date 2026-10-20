@@ -4,3 +4,9 @@ product: StreamNook
 infoPath: Resources/Info.plist
 iconPath: Resources/AppIcon.png
 entitlementsPath: Resources/StreamNook.entitlements
+# The go-live banner picture (UNNotificationServiceExtension). Packed as
+# PlugIns/NotificationService.appex, bundle id app.streamnook.NotificationService.
+extensions:
+  - product: NotificationService
+    infoPath: Resources/NotificationService-Info.plist
+    entitlementsPath: Resources/NotificationService.entitlements
