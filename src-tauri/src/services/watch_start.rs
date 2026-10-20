@@ -395,6 +395,12 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     )
     .await;
     log::info!("[WatchStart] {login}: drops, points and the watch session follow it");
+    // Can this broadcast be rewound, and where did the viewer leave its recording: the
+    // cached lookup also files the archive for the live bookmark. Every app shares it here;
+    // the desktop still reads the answer for its Rewind button (cached, so no second fetch).
+    if current(ticket) {
+        let _ = streaming::get_live_rewind_info(login.clone()).await;
+    }
 }
 
 /// An offline room opened: the room's facts, or the live row when the card that
