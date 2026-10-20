@@ -96,6 +96,8 @@ struct ChatPanel: View {
     /// Where the column's bottom (the composer and any banner over it) starts, in global points,
     /// so the mini player can rest clear of it.
     var onFloor: ((CGFloat) -> Void)?
+    /// Another screen covers this one (the full player over Chats): the list on top draws the room.
+    var covered = false
 
     @State private var toast: String?
     @AppStorage(SwipeHint.key) private var hintLearned = false
@@ -105,7 +107,8 @@ struct ChatPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show, onOutcome: show)
+            ChatListHost(session: session, readOnly: overlay, covered: covered, onProfile: onProfile, onToast: show,
+                         onOutcome: show)
                 .padding(.top, inlineTop)
                 // Rows fade out under a pinned banner rather than showing a cut sliver above it.
                 // Under the tab strip (or under inline pins), a short fade instead of a hard cut.
@@ -287,17 +290,18 @@ struct ChatPanel: View {
 struct ChatListHost: UIViewRepresentable {
     let session: ChatSession
     var readOnly: Bool
+    var covered = false
     var onProfile: (ProfileTarget) -> Void
     var onToast: (String) -> Void
     var onOutcome: (ChatModActions.Outcome) -> Void
 
     func makeUIView(context: Context) -> ChatListView {
         let list = ChatListView()
+        list.covered = covered
+        // The list takes the room, with every row it kept, once it is on screen and uncovered.
         list.source = session.pipeline
         list.readOnly = readOnly
         let pipeline = session.pipeline
-        // A room coming back on screen hands the new list every row it kept meanwhile.
-        pipeline.replay()
         list.onWidthChange = { [weak list] width in
             pipeline.setWidth(width, scale: list?.traitCollection.displayScale ?? 3)
         }
@@ -428,6 +432,7 @@ struct ChatListHost: UIViewRepresentable {
 
     func updateUIView(_ list: ChatListView, context: Context) {
         list.readOnly = readOnly
+        list.covered = covered
         // The join's history answered with nothing: the room says so until a row arrives.
         list.emptyNote = session.historyEmpty ? "No recent messages" : nil
         list.setStyle(session.style)

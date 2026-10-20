@@ -43,7 +43,9 @@ struct ChatsScreen: View {
                               // A slide down moves the whole screen; the mini box keeps its rest.
                               guard drop == 0, model.nav.chatsFloor != top else { return }
                               withAnimation(SNMotion.run(.snappy(duration: 0.25))) { model.nav.chatsFloor = top }
-                          })
+                          },
+                          // Under the full player the player's chat draws the room.
+                          covered: model.nav.shellCovered)
                     .id(ObjectIdentifier(session))
             } else {
                 Color.clear

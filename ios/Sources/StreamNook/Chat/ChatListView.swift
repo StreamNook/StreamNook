@@ -17,8 +17,20 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     }
 
     /// Batches made off the main thread, applied at the next display frame.
+    /// The room's rows. The list takes them only while it holds the room (`RoomListRule`); it
+    /// takes the room when it comes on screen.
     var source: ChatPipeline? {
-        didSet { oldValue?.list = nil; source?.list = self }
+        didSet { if oldValue?.list === self { oldValue?.list = nil } }
+    }
+
+    /// Another screen covers this list (the full player over Chats): it takes none of its room's
+    /// rows and never holds the room, so the list on top draws it. Uncovered, it takes the room
+    /// back with every row the room kept meanwhile.
+    var covered = false {
+        didSet {
+            guard covered != oldValue, !covered, window != nil, let source, source.list !== self else { return }
+            claim(source)
+        }
     }
 
     var readOnly = false { didSet { updateOverlay() } }
@@ -167,8 +179,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         if window != nil {
             startLink()
             for cell in cells.values { cell.resume() }
-            // Back on screen while another list drew the room: this one draws it again.
-            if let source, source.list !== self { claim(source) }
+            // On screen (new, or back while another list drew the room): this one draws it.
+            if !covered, let source, source.list !== self { claim(source) }
         } else {
             displayLink?.invalidate()
             displayLink = nil
@@ -203,7 +215,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         ticks += 1
         // While a thumb rests on (or swipes) a message the list holds still: new rows wait until
         // it lifts or turns the press into a scroll.
-        if let source, swipe == nil, touchPress == nil, holds(source) {
+        if let source, swipe == nil, touchPress == nil, takesRows(from: source) {
             let batches = source.takeReady()
             if !batches.isEmpty { apply(batches) }
         }
@@ -215,15 +227,21 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         self.style = style
     }
 
-    /// A room on two screens at once (Chats under the watch layer) is drawn by one list: the one
-    /// that came on screen last. The room's batches are taken once, so a second list pulling them
-    /// too would leave either list with half the rows, or none. Another list showing the room
-    /// takes over, with every row the room kept, once that one has left the window.
-    private func holds(_ source: ChatPipeline) -> Bool {
-        if source.list === self { return true }
-        guard source.list?.window == nil else { return false }
-        claim(source)
-        return true
+    /// A room on two screens at once (Chats under the full player, the player's chat on top) is
+    /// drawn by one list, the one a person can see: the room's batches are taken once, so a second
+    /// list pulling them too leaves either list with half the rows, or none (`RoomListRule`).
+    private func takesRows(from source: ChatPipeline) -> Bool {
+        let holder = source.list.map { RoomListRule.Holder(inWindow: $0.window != nil, covered: $0.covered) }
+        switch RoomListRule.step(inWindow: window != nil, covered: covered, holds: source.list === self,
+                                 holder: holder) {
+        case .draw:
+            return true
+        case .claim:
+            claim(source)
+            return true
+        case .wait:
+            return false
+        }
     }
 
     private func claim(_ source: ChatPipeline) {
