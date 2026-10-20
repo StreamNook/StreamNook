@@ -2555,7 +2555,7 @@ pub fn run() {
             watch_channel_state,
             unwatch_channel_state,
             get_channel_state,
-            wallet_split_line,
+            wallet_split_layout,
             submit_media_frame,
             sample_media_glow,
             get_window_flags,

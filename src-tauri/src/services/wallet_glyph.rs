@@ -1,27 +1,28 @@
-//! Where the wallet button's split glyph draws its divider.
+//! How the wallet button's split glyph lays out its two marks and divider.
 //!
-//! A channel with both channel points and Bits shows one 22 px square: the
-//! points art in an 11 px box at the upper left, the Bits gem in an 11 px box
-//! at the lower right, and a hairline across the diagonal gap between them.
-//! A line placed by the boxes alone looks wrong for most art: a round icon
-//! leaves a wide gap at its box corner, a full-bleed square leaves none, art
-//! with transparent padding sits deep inside its box, and the gem is a tall
-//! diamond whose tip barely reaches the gap. So this reads the art itself.
+//! A channel with both channel points and Bits shows one 24 px square: the
+//! points art in a box at the upper left, the Bits gem in a box at the lower
+//! right, and a hairline across the diagonal gap between them. Laid out by the
+//! boxes alone it looks wrong for most art: round art leaves a wide gap at its
+//! box corner, full-bleed square art leaves almost none, art with transparent
+//! padding sits deep inside its box, and the gem is a tall diamond whose tip is
+//! all that reaches the gap. So this reads the art itself.
 //!
-//! Each mark's alpha is reduced to two things on the 22 px grid:
-//! - how far its visible mass reaches toward the gap, measured along the
-//!   glyph's main diagonal (`x + y`). The reach is a low percentile of the
-//!   mark's own pixels rather than its single nearest pixel: a broad round
-//!   edge facing the gap reads as close, a lone tip does not, and the eye
-//!   judges the gap by mass;
-//! - how wide it spans across the gap (`x - y`), so the line is as long as
-//!   the two marks' outer bounds along that diagonal and never longer.
+//! Each mark's alpha gives its nearest visible pixel to the gap, measured along
+//! the glyph's main diagonal (`x + y`), and its visible bounds. Then:
+//! - the points art slides toward the gem (up to `MAX_SLIDE`) until the gap
+//!   between the two marks is `GAP`, so every channel's art sits the same
+//!   distance from the gem;
+//! - the line sits in the middle of that gap, `TOWARD_GEM` nearer the gem's tip
+//!   than the art: a broad round or straight edge reads closer than a lone tip
+//!   at the same distance (tuned by eye on screenshots of real channel art);
+//! - it runs as long as the two boxes span across the gap, inside the square;
+//! - the whole glyph shifts so its visible marks are centered in the square.
 //!
-//! The line sits midway between the two reaches and runs the union of the two
-//! spans. Twitch's default points glyph is drawn here from its own geometry.
-//! Every answer is cached by its pair of URLs, so a channel's art is fetched
-//! and measured once per session; until it arrives, and for art that cannot
-//! be read, the shells draw `SplitLine::FALLBACK`.
+//! Twitch's default points glyph is measured from its own geometry. Answers are
+//! cached by the pair of URLs, so a channel's art is fetched and measured once
+//! per session; until it arrives, and for art that cannot be read, the shells
+//! draw `SplitLayout::FALLBACK`.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -29,61 +30,64 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-/// The glyph's grid.
-const GRID: f32 = 22.0;
-/// Each mark's box: its top-left corner on the grid and its side.
-const POINTS_BOX: (f32, f32) = (0.5, 0.5);
-const GEM_BOX: (f32, f32) = (10.5, 10.5);
-const MARK: f32 = 11.0;
-/// Alpha at or above this counts as visible (the glyph's own edge AA does not).
-const VISIBLE_ALPHA: u8 = 40;
-/// The share of a mark's visible pixels, counted from the gap side, at which
-/// its edge is judged to be. Tuned by eye on screenshots: Twitch's ring
-/// against the 100-bit gem looks evenly spaced at this value.
-const REACH_PERCENTILE: f32 = 0.06;
-/// The line never comes nearer than this to either mark's nearest pixel
-/// (half the 1 px stroke plus a hair).
+/// The glyph's square.
+const GRID: f32 = 24.0;
+/// Each mark's box side. The gem's box sits in the lower-right corner; the
+/// art's starts in the upper-left corner and slides along the diagonal.
+const MARK: f32 = 11.5;
+const GEM_AT: f32 = GRID - MARK;
+/// The visible gap between the two marks, nearest pixel to nearest pixel.
+const GAP: f32 = 5.0;
+/// How far the art may slide toward the gem to close a wider gap.
+const MAX_SLIDE: f32 = 3.0;
+/// The line's offset from the middle of the gap toward the gem.
+const TOWARD_GEM: f32 = 0.4;
+/// The line never comes nearer than this to either mark (half the 1 px
+/// stroke plus a hair).
 const MIN_CLEARANCE: f32 = 0.9;
+/// Alpha at or above this counts as visible.
+const VISIBLE_ALPHA: u8 = 40;
 /// Art bigger than this is not points art; it is not fetched.
 const MAX_ART_BYTES: usize = 256 * 1024;
 const MAX_TRACKED: usize = 128;
+const SQRT_2: f32 = std::f32::consts::SQRT_2;
 
-/// The divider on the 22 px grid, from its upper-right end to its lower-left.
+/// The glyph's layout on its 24 px square.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
-pub struct SplitLine {
+pub struct SplitLayout {
+    /// The grid's side and each mark's box side, so the shells draw what was measured.
+    pub grid: f32,
+    pub mark: f32,
+    /// The points art's box: its top-left corner at (`art_at`, `art_at`).
+    pub art_at: f32,
+    /// The gem's box: its top-left corner at (`gem_at`, `gem_at`).
+    pub gem_at: f32,
+    /// The divider, from its upper-right end to its lower-left.
     pub x1: f32,
     pub y1: f32,
     pub x2: f32,
     pub y2: f32,
+    /// Moves the whole glyph so its visible marks are centered.
+    pub shift_x: f32,
+    pub shift_y: f32,
 }
 
-impl SplitLine {
-    /// The line for Twitch's ring against the 100-bit gem, which the shells
-    /// draw until (or unless) the art is measured.
-    pub const FALLBACK: SplitLine = SplitLine { x1: 15.71, y1: 8.79, x2: 8.79, y2: 15.71 };
-
-    /// The line at `s` (its `x + y`) running from `d_max` to `d_min` (its `x - y`).
-    fn at(s: f32, d_min: f32, d_max: f32) -> SplitLine {
-        let round = |v: f32| (v * 100.0).round() / 100.0;
-        SplitLine {
-            x1: round((s + d_max) / 2.0),
-            y1: round((s - d_max) / 2.0),
-            x2: round((s + d_min) / 2.0),
-            y2: round((s - d_min) / 2.0),
-        }
-    }
-}
-
-/// One mark reduced to what the line needs, on the grid.
-#[derive(Clone, Copy, Debug)]
-struct Reach {
-    /// The `x + y` its visible mass reaches toward the gap.
-    mass: f32,
-    /// The `x + y` of its single nearest pixel.
-    hard: f32,
-    /// Its span across the gap, `x - y`.
-    d_min: f32,
-    d_max: f32,
+impl SplitLayout {
+    /// Twitch's ring against the 100-bit gem, which the shells draw until (or
+    /// unless) the art is measured. `fallback_is_the_ring_against_the_gem`
+    /// keeps it in step with the measurement.
+    pub const FALLBACK: SplitLayout = SplitLayout {
+        grid: GRID,
+        mark: MARK,
+        art_at: 2.5,
+        gem_at: GEM_AT,
+        x1: 19.83,
+        y1: 8.26,
+        x2: 8.26,
+        y2: 19.83,
+        shift_x: -1.07,
+        shift_y: -1.13,
+    };
 }
 
 /// A mark's alpha, row by row, `w` x `h`.
@@ -91,6 +95,17 @@ struct Alpha {
     w: usize,
     h: usize,
     a: Vec<u8>,
+}
+
+/// One mark placed in its box: its nearest pixel to the gap and its visible bounds.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    /// The `x + y` of its pixel nearest the gap.
+    near: f32,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
 }
 
 impl Alpha {
@@ -108,9 +123,7 @@ impl Alpha {
                 let px = (x as f32 + 0.5) / side as f32 * 24.0 - 12.0;
                 let py = (y as f32 + 0.5) / side as f32 * 24.0 - 12.0;
                 let r = (px * px + py * py).sqrt();
-                let ring = (9.0..=11.0).contains(&r);
-                let arc = (5.0..=7.0).contains(&r) && px >= 0.0 && py <= 0.0;
-                if ring || arc {
+                if (9.0..=11.0).contains(&r) || ((5.0..=7.0).contains(&r) && px >= 0.0 && py <= 0.0) {
                     a[y * side + x] = 255;
                 }
             }
@@ -118,53 +131,73 @@ impl Alpha {
         Alpha { w: side, h: side, a }
     }
 
-    /// The mark drawn into its box at `origin` with `object-fit: contain`
-    /// (centered, aspect kept), reduced to its reach. `toward_gap_is_high`:
-    /// the points art faces the gap with its highest `x + y`, the gem with its
-    /// lowest. `None` when nothing is visible.
-    fn reach(&self, origin: (f32, f32), toward_gap_is_high: bool) -> Option<Reach> {
+    /// The mark drawn into the box at (`at`, `at`) with `object-fit: contain`
+    /// (centered, aspect kept). `gap_is_high`: the art faces the gap with its
+    /// highest `x + y`, the gem with its lowest. `None` when nothing is visible.
+    fn place(&self, at: f32, gap_is_high: bool) -> Option<Placed> {
         let scale = MARK / self.w.max(self.h) as f32;
-        let off_x = origin.0 + (MARK - self.w as f32 * scale) / 2.0;
-        let off_y = origin.1 + (MARK - self.h as f32 * scale) / 2.0;
-        let mut sums = Vec::new();
-        let (mut d_min, mut d_max) = (f32::MAX, f32::MIN);
+        let off_x = at + (MARK - self.w as f32 * scale) / 2.0;
+        let off_y = at + (MARK - self.h as f32 * scale) / 2.0;
+        let half = scale / 2.0;
+        let mut p = Placed { near: if gap_is_high { f32::MIN } else { f32::MAX }, min_x: f32::MAX, min_y: f32::MAX, max_x: f32::MIN, max_y: f32::MIN };
+        let mut any = false;
         for y in 0..self.h {
             for x in 0..self.w {
                 if self.a[y * self.w + x] < VISIBLE_ALPHA {
                     continue;
                 }
-                let gx = off_x + (x as f32 + 0.5) * scale;
-                let gy = off_y + (y as f32 + 0.5) * scale;
-                sums.push(gx + gy);
-                d_min = d_min.min(gx - gy);
-                d_max = d_max.max(gx - gy);
+                any = true;
+                let (gx, gy) = (off_x + (x as f32 + 0.5) * scale, off_y + (y as f32 + 0.5) * scale);
+                // The pixel's own edge, not its center, is what shows.
+                p.near = if gap_is_high { p.near.max(gx + gy + scale) } else { p.near.min(gx + gy - scale) };
+                p.min_x = p.min_x.min(gx - half);
+                p.min_y = p.min_y.min(gy - half);
+                p.max_x = p.max_x.max(gx + half);
+                p.max_y = p.max_y.max(gy + half);
             }
         }
-        if sums.is_empty() {
-            return None;
-        }
-        sums.sort_by(|a, b| a.total_cmp(b));
-        if toward_gap_is_high {
-            sums.reverse();
-        }
-        let at = ((sums.len() as f32 * REACH_PERCENTILE) as usize).min(sums.len() - 1);
-        // Half a source pixel: the pixel's own edge, not its center, is what shows.
-        let half = scale / 2.0 * if toward_gap_is_high { 1.0 } else { -1.0 };
-        Some(Reach { mass: sums[at] + half, hard: sums[0] + half, d_min: d_min - scale / 2.0, d_max: d_max + scale / 2.0 })
+        any.then_some(p)
+    }
+
+    fn moved(p: Placed, by: f32) -> Placed {
+        Placed { near: p.near + 2.0 * by, min_x: p.min_x + by, min_y: p.min_y + by, max_x: p.max_x + by, max_y: p.max_y + by }
     }
 }
 
-/// The line between the points art's reach and the gem's.
-fn line_between(points: Reach, gem: Reach) -> SplitLine {
-    let mut s = (points.mass + gem.mass) / 2.0;
-    // `x + y` moves 1.414 per pixel of perpendicular distance.
-    let clear = MIN_CLEARANCE * std::f32::consts::SQRT_2;
-    let (low, high) = (points.hard + clear, gem.hard - clear);
-    s = if low <= high { s.clamp(low, high) } else { (points.hard + gem.hard) / 2.0 };
-    // The union of the two spans, kept inside the glyph's own square.
-    let d_max = points.d_max.max(gem.d_max).min(GRID - (s - GRID).abs());
-    let d_min = points.d_min.min(gem.d_min).max(-(GRID - (s - GRID).abs()));
-    SplitLine::at(s, d_min, d_max)
+fn round(v: f32) -> f32 {
+    (v * 100.0).round() / 100.0
+}
+
+/// The layout for the points art against the gem.
+fn layout(art: &Alpha, gem: &Alpha) -> Option<SplitLayout> {
+    let gem_p = gem.place(GEM_AT, false)?;
+    let art_0 = art.place(0.0, true)?;
+    // `x + y` moves sqrt(2) per pixel of distance across the gap, and sliding
+    // the art by d along the diagonal moves its `x + y` by 2d.
+    let slide = ((gem_p.near - art_0.near - GAP * SQRT_2) / 2.0).clamp(0.0, MAX_SLIDE);
+    let art_p = Alpha::moved(art_0, slide);
+    let clear = MIN_CLEARANCE * SQRT_2;
+    let (low, high) = (art_p.near + clear, gem_p.near - clear);
+    let s = (art_p.near + gem_p.near) / 2.0 + TOWARD_GEM * SQRT_2;
+    let s = if low <= high { s.clamp(low, high) } else { (art_p.near + gem_p.near) / 2.0 };
+    // As long as the boxes span across the gap (x - y from -MARK to MARK), kept inside the square.
+    let reach = MARK.min(GRID - (s - GRID).abs());
+    let min_x = art_p.min_x.min(gem_p.min_x);
+    let max_x = art_p.max_x.max(gem_p.max_x);
+    let min_y = art_p.min_y.min(gem_p.min_y);
+    let max_y = art_p.max_y.max(gem_p.max_y);
+    Some(SplitLayout {
+        grid: GRID,
+        mark: MARK,
+        art_at: round(slide),
+        gem_at: GEM_AT,
+        x1: round((s + reach) / 2.0),
+        y1: round((s - reach) / 2.0),
+        x2: round((s - reach) / 2.0),
+        y2: round((s + reach) / 2.0),
+        shift_x: round(GRID / 2.0 - (min_x + max_x) / 2.0),
+        shift_y: round(GRID / 2.0 - (min_y + max_y) / 2.0),
+    })
 }
 
 fn decode(bytes: &[u8]) -> Option<Alpha> {
@@ -172,7 +205,7 @@ fn decode(bytes: &[u8]) -> Option<Alpha> {
     Some(Alpha::from_rgba(w, h, &rgba))
 }
 
-static CACHE: Lazy<Mutex<(HashMap<String, SplitLine>, VecDeque<String>)>> = Lazy::new(Default::default);
+static CACHE: Lazy<Mutex<(HashMap<String, SplitLayout>, VecDeque<String>)>> = Lazy::new(Default::default);
 
 async fn fetch(url: &str) -> Option<Vec<u8>> {
     let parsed = reqwest::Url::parse(url).ok()?;
@@ -187,41 +220,40 @@ async fn fetch(url: &str) -> Option<Vec<u8>> {
     (bytes.len() <= MAX_ART_BYTES).then(|| bytes.to_vec())
 }
 
-/// The divider for this pair of marks: `points_icon` is the channel's own
+/// The layout for this pair of marks: `points_icon` is the channel's own
 /// points art (None for Twitch's glyph), `gem` the Bits gem. Art that cannot
-/// be fetched or read gets the fallback, and is tried again next session.
-pub async fn split_line(points_icon: Option<&str>, gem: &str) -> SplitLine {
+/// be fetched or read gets the fallback, and is tried again next time.
+pub async fn split_layout(points_icon: Option<&str>, gem: &str) -> SplitLayout {
     let key = format!("{}|{gem}", points_icon.unwrap_or(""));
-    if let Some(line) = CACHE.lock().await.0.get(&key) {
-        return *line;
+    if let Some(found) = CACHE.lock().await.0.get(&key) {
+        return *found;
     }
     let points_bytes = match points_icon {
         Some(url) => match fetch(url).await {
             Some(b) => Some(b),
-            None => return SplitLine::FALLBACK,
+            None => return SplitLayout::FALLBACK,
         },
         None => None,
     };
     let Some(gem_bytes) = fetch(gem).await else {
-        return SplitLine::FALLBACK;
+        return SplitLayout::FALLBACK;
     };
     let measured = tokio::task::spawn_blocking(move || {
-        let points = match points_bytes {
+        let art = match points_bytes {
             Some(b) => decode(&b)?,
             None => Alpha::default_points(96),
         };
-        let gem = decode(&gem_bytes)?;
-        Some(line_between(points.reach(POINTS_BOX, true)?, gem.reach(GEM_BOX, false)?))
+        layout(&art, &decode(&gem_bytes)?)
     })
     .await
     .ok()
     .flatten();
-    let Some(line) = measured else {
-        return SplitLine::FALLBACK;
+    let Some(found) = measured else {
+        return SplitLayout::FALLBACK;
     };
     let mut guard = CACHE.lock().await;
     let (map, order) = &mut *guard;
-    if map.insert(key.clone(), line).is_none() {
+    if map.insert(key.clone(), found).is_none() {
         order.push_back(key);
         while order.len() > MAX_TRACKED {
             if let Some(old) = order.pop_front() {
@@ -229,7 +261,7 @@ pub async fn split_line(points_icon: Option<&str>, gem: &str) -> SplitLine {
             }
         }
     }
-    line
+    found
 }
 
 #[cfg(test)]
@@ -270,68 +302,83 @@ mod tests {
         Alpha { w: side, h: side, a }
     }
 
-    fn gap(line: SplitLine, reach: Reach, high: bool) -> f32 {
-        let s = line.x1 + line.y1;
-        (if high { s - reach.hard } else { reach.hard - s }) / std::f32::consts::SQRT_2
+    /// The visible gaps on each side of the line, in px: (art side, gem side).
+    fn gaps(art: &Alpha, gem: &Alpha, l: SplitLayout) -> (f32, f32) {
+        let s = l.x1 + l.y1;
+        let a = art.place(l.art_at, true).unwrap();
+        let g = gem.place(l.gem_at, false).unwrap();
+        ((s - a.near) / SQRT_2, (g.near - s) / SQRT_2)
+    }
+
+    fn arts() -> Vec<(&'static str, Alpha)> {
+        vec![("square", square(112)), ("disc", disc(112, 0)), ("padded", disc(112, 24)), ("ring", Alpha::default_points(96))]
     }
 
     #[test]
-    fn the_line_clears_every_kind_of_art() {
-        let gem = diamond().reach(GEM_BOX, false).unwrap();
-        for art in [square(112), disc(112, 0), disc(112, 20), Alpha::default_points(96)] {
-            let points = art.reach(POINTS_BOX, true).unwrap();
-            let line = line_between(points, gem);
-            assert!(gap(line, points, true) >= MIN_CLEARANCE - 0.01, "{line:?} hugs the points art");
-            assert!(gap(line, gem, false) >= MIN_CLEARANCE - 0.01, "{line:?} hugs the gem");
-            // It stays a diagonal: x + y is the same at both ends.
-            assert!(((line.x1 + line.y1) - (line.x2 + line.y2)).abs() < 0.02);
+    fn every_kind_of_art_sits_the_same_gap_from_the_gem() {
+        let gem = diamond();
+        for (name, art) in arts() {
+            let l = layout(&art, &gem).unwrap();
+            let (a, g) = gaps(&art, &gem, l);
+            // The gap is GAP (less the stroke) wherever the slide could close it.
+            assert!((a + g + 0.0 - GAP).abs() < 0.6 || l.art_at == 0.0, "{name}: {a} + {g} with {l:?}");
+            assert!(a >= MIN_CLEARANCE - 0.01 && g >= MIN_CLEARANCE - 0.01, "{name}: the line hugs a mark ({a}, {g})");
+            // Nearer the gem's tip than the art, by about twice TOWARD_GEM.
+            assert!(a > g, "{name}: {a} vs {g}");
+            // A diagonal, inside the square.
+            assert!(((l.x1 + l.y1) - (l.x2 + l.y2)).abs() < 0.02);
+            for v in [l.x1, l.y1, l.x2, l.y2] {
+                assert!((0.0..=GRID).contains(&v), "{name}: {l:?}");
+            }
         }
     }
 
     #[test]
-    fn padded_art_brings_the_line_in_and_full_art_pushes_it_out() {
-        let gem = diamond().reach(GEM_BOX, false).unwrap();
-        let full = line_between(square(112).reach(POINTS_BOX, true).unwrap(), gem);
-        let padded = line_between(disc(112, 20).reach(POINTS_BOX, true).unwrap(), gem);
-        assert!(full.x1 + full.y1 > padded.x1 + padded.y1);
+    fn padded_art_slides_further_than_full_bleed_art() {
+        let gem = diamond();
+        let full = layout(&square(112), &gem).unwrap();
+        let padded = layout(&disc(112, 24), &gem).unwrap();
+        assert!(padded.art_at > full.art_at, "{padded:?} vs {full:?}");
+        assert!(padded.art_at <= MAX_SLIDE);
     }
 
     #[test]
-    fn the_line_spans_the_marks_and_no_further() {
-        let gem = diamond().reach(GEM_BOX, false).unwrap();
-        let ring = Alpha::default_points(96).reach(POINTS_BOX, true).unwrap();
-        let line = line_between(ring, gem);
-        let span = line.x1 - line.y1;
-        assert!(span <= ring.d_max.max(gem.d_max) + 0.01);
-        // As wide as the ring, the wider of the two: about 11 px of line.
-        let length = ((line.x1 - line.x2).powi(2) + (line.y1 - line.y2).powi(2)).sqrt();
-        assert!((10.5..=11.5).contains(&length), "{length}");
-        // A full-bleed square spans its whole box corner to corner.
-        let sq = line_between(square(112).reach(POINTS_BOX, true).unwrap(), gem);
-        let sq_length = ((sq.x1 - sq.x2).powi(2) + (sq.y1 - sq.y2).powi(2)).sqrt();
-        assert!(sq_length > 15.0, "{sq_length}");
+    fn the_line_spans_both_boxes() {
+        let l = layout(&Alpha::default_points(96), &diamond()).unwrap();
+        let length = ((l.x1 - l.x2).powi(2) + (l.y1 - l.y2).powi(2)).sqrt();
+        assert!((length - MARK * SQRT_2).abs() < 0.1, "{length}");
     }
 
-    /// Prints the line for local art, for the screenshot harness:
-    /// `SN_GLYPH_GEM=gem.png SN_GLYPH_ART=a.png,b.png,default cargo test print_lines -- --ignored --nocapture`.
+    #[test]
+    fn the_marks_end_up_centered() {
+        for (name, art) in arts() {
+            let l = layout(&art, &diamond()).unwrap();
+            let a = art.place(l.art_at, true).unwrap();
+            let g = diamond().place(l.gem_at, false).unwrap();
+            let cx = (a.min_x.min(g.min_x) + a.max_x.max(g.max_x)) / 2.0 + l.shift_x;
+            let cy = (a.min_y.min(g.min_y) + a.max_y.max(g.max_y)) / 2.0 + l.shift_y;
+            assert!((cx - GRID / 2.0).abs() < 0.02 && (cy - GRID / 2.0).abs() < 0.02, "{name}: {cx}, {cy}");
+        }
+    }
+
+    #[test]
+    fn fallback_is_the_ring_against_the_gem() {
+        let l = layout(&Alpha::default_points(96), &diamond()).unwrap();
+        let f = SplitLayout::FALLBACK;
+        for (a, b) in [(l.art_at, f.art_at), (l.x1, f.x1), (l.y1, f.y1), (l.x2, f.x2), (l.y2, f.y2), (l.shift_x, f.shift_x), (l.shift_y, f.shift_y)] {
+            assert!((a - b).abs() < 0.3, "measured {l:?}, fallback {f:?}");
+        }
+    }
+
+    /// Prints the layout for local art, for the screenshot harness:
+    /// `SN_GLYPH_GEM=gem.png SN_GLYPH_ART=default,a.png cargo test print_layouts -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn print_lines() {
+    fn print_layouts() {
         let gem = decode(&std::fs::read(std::env::var("SN_GLYPH_GEM").unwrap()).unwrap()).unwrap();
-        let gem = gem.reach(GEM_BOX, false).unwrap();
         for art in std::env::var("SN_GLYPH_ART").unwrap().split(',') {
             let alpha = if art == "default" { Alpha::default_points(96) } else { decode(&std::fs::read(art).unwrap()).unwrap() };
-            let line = line_between(alpha.reach(POINTS_BOX, true).unwrap(), gem);
-            println!("LINE {art} {} {} {} {}", line.x1, line.y1, line.x2, line.y2);
-        }
-    }
-
-    #[test]
-    fn the_fallback_is_the_ring_against_the_diamond() {
-        let line = line_between(Alpha::default_points(96).reach(POINTS_BOX, true).unwrap(), diamond().reach(GEM_BOX, false).unwrap());
-        let f = SplitLine::FALLBACK;
-        for (a, b) in [(line.x1, f.x1), (line.y1, f.y1), (line.x2, f.x2), (line.y2, f.y2)] {
-            assert!((a - b).abs() < 0.35, "measured {line:?}, fallback {f:?}");
+            println!("LAYOUT {art} {}", serde_json::to_string(&layout(&alpha, &gem).unwrap()).unwrap());
         }
     }
 }
