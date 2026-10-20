@@ -97,7 +97,8 @@ struct ChatsScreen: View {
             .accessibilityLabel("Close chats")
             if model.signedIn, !rooms.tabs.isEmpty {
                 // 40 pt capsules with 7 pt of air above and below, clear of the separator.
-                ChatTabStrip(rooms: rooms, trailing: AnyView(controls), height: 54, leading: groupChip)
+                ChatTabStrip(rooms: rooms, trailing: AnyView(controls), height: 54, leading: groupChip,
+                             edge: AnyView(ChatsMinimizeButton { model.nav.exitChats() }.padding(.leading, -6)))
             }
         }
         .contentShape(Rectangle())
@@ -223,8 +224,6 @@ struct ChatsScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Add a chat")
-            // The way out, always on show in the corner; the grabber and a slide down still work.
-            ChatsCloseButton { model.nav.exitChats() }
         }
     }
 
@@ -238,25 +237,25 @@ struct ChatsScreen: View {
     }
 }
 
-/// Chats' close: the strip's own 40 pt glass circle (as + beside it) with the X the offline
-/// room's corner uses, so every way out of a chat reads the same. Leaving Chats keeps its chats.
-struct ChatsCloseButton: View {
+/// Chats' way out: the player's minimize arrow (the same glyph, size and weight), at the left
+/// edge of the row, so leaving Chats reads like putting the player away. The room pills keep
+/// their own X for closing a room, so the row has one X. Leaving Chats keeps its chats; the
+/// grabber and a slide down still work.
+struct ChatsMinimizeButton: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: Symbol.close)
-                .font(.system(size: 13, weight: .semibold))
+            Image(systemName: Symbol.minimize)
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(SN.textSecondary)
-                .frame(width: 40, height: 40)
-                .snGlass(Circle())
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Pressed while typing it still closes Chats on that tap; the keyboard goes with it.
+        // Pressed while typing it still leaves Chats on that tap; the keyboard goes with it.
         .tapsThroughKeyboard()
-        .accessibilityLabel("Close chats")
+        .accessibilityLabel("Minimize chats")
     }
 }
 

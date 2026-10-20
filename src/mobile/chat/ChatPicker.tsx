@@ -9,7 +9,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Check, MagnifyingGlass, Plus } from 'phosphor-react';
-import { ChatsCloseButton } from './ChatsCloseButton';
+import { ChatsMinimizeButton } from './ChatsMinimizeButton';
 import { useAppStore } from '../../stores/AppStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { Logger } from '../../utils/logger';
@@ -237,6 +237,8 @@ export const ChatPicker: React.FC<{
   return (
     <div className={`flex flex-col min-h-0 ${scrolls ? 'flex-1' : ''}`}>
       <div className="flex items-center gap-1.5 mx-1 mb-1 shrink-0">
+        {/* Chats' way out, the header's minimize arrow, left of the search on its center line. */}
+        {onClose && <ChatsMinimizeButton onMinimize={onClose} className="-ml-2.5" />}
       <div className="flex-1 min-w-0 flex items-center gap-2 glass-input px-3">
         <MagnifyingGlass size={16} className="text-textMuted shrink-0" />
         <input
@@ -252,8 +254,6 @@ export const ChatPicker: React.FC<{
           }}
         />
       </div>
-        {/* Chats' way out, beside the search on its center line. */}
-        {onClose && <ChatsCloseButton onClose={onClose} className="-mr-0.5" />}
       </div>
       <div
         className={`flex flex-col ${scrolls ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}

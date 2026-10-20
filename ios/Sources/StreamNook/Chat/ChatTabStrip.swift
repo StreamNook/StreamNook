@@ -19,6 +19,9 @@ struct ChatTabStrip: View {
     /// What sits in the left side, opposite the controls (the Chats tab's Shared Chat or Together
     /// group for the room on screen).
     var leading: AnyView?
+    /// What sits at the row's very left edge, outside the centered group (the Chats tab's
+    /// minimize arrow).
+    var edge: AnyView?
 
     static let height: CGFloat = 45
 
@@ -26,6 +29,7 @@ struct ChatTabStrip: View {
         // The group (the room's group chip, the rooms, their controls) sits centered as one, so a
         // single room never reads lopsided; past the width the rooms give way first.
         HStack(spacing: 6) {
+            if let edge { edge }
             Spacer(minLength: 0)
             if let leading { leading }
             ViewThatFits(in: .horizontal) {

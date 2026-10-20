@@ -10,7 +10,7 @@
 // a desk still sleeps.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChatsCircle, MonitorPlay, Play, Plus } from 'phosphor-react';
-import { ChatsCloseButton } from '../chat/ChatsCloseButton';
+import { ChatsMinimizeButton } from '../chat/ChatsMinimizeButton';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
 import { MobileChatPane } from '../chat/MobileChatPane';
@@ -344,9 +344,6 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           <Plus size={15} weight="bold" />
         </span>
       </button>
-      {/* The way out, always on show in the corner. */}
-      {/* Its 40 px circle meets the edge at the room capsule's margin. */}
-      <ChatsCloseButton onClose={exitChats} className="-mr-0.5" />
     </>
   );
 
@@ -356,7 +353,15 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           moves to it; the room row still scrolls sideways). */}
       <div className="shrink-0 flex flex-col [touch-action:pan-x]" {...headerHandlers}>
         {grabber}
-        {tabs.length > 0 && <ChatTabStrip always trailing={trailing} leading={leading} height={CHATS_STRIP_H} />}
+        {tabs.length > 0 && (
+          <ChatTabStrip
+            always
+            trailing={trailing}
+            leading={leading}
+            edge={<ChatsMinimizeButton onMinimize={exitChats} className="-ml-1.5" />}
+            height={CHATS_STRIP_H}
+          />
+        )}
       </div>
       {tabs.length === 0 ? (
         // No chat open: the tab is the picker itself.
