@@ -9,6 +9,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Check, MagnifyingGlass, Plus } from 'phosphor-react';
+import { ChatsCloseButton } from './ChatsCloseButton';
 import { useAppStore } from '../../stores/AppStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { Logger } from '../../utils/logger';
@@ -146,7 +147,10 @@ export const ChatPicker: React.FC<{
   /** Scroll the lists here, under a search field that stays put and never
    *  fades (the Chats screen). In a sheet, the sheet scrolls everything. */
   scrolls?: boolean;
-}> = ({ onPicked, bottomClearance, scrolls = false }) => {
+  /** Where the picker is the whole Chats screen: a Close beside the search
+   *  leaves Chats. */
+  onClose?: () => void;
+}> = ({ onPicked, bottomClearance, scrolls = false, onClose }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   const revision = useChatTabsStore((s) => s.revision);
   const addTab = useChatTabsStore((s) => s.addTab);
@@ -232,7 +236,8 @@ export const ChatPicker: React.FC<{
 
   return (
     <div className={`flex flex-col min-h-0 ${scrolls ? 'flex-1' : ''}`}>
-      <div className="flex items-center gap-2 glass-input px-3 mx-1 mb-1 shrink-0">
+      <div className="flex items-center gap-1.5 mx-1 mb-1 shrink-0">
+      <div className="flex-1 min-w-0 flex items-center gap-2 glass-input px-3">
         <MagnifyingGlass size={16} className="text-textMuted shrink-0" />
         <input
           value={query}
@@ -246,6 +251,9 @@ export const ChatPicker: React.FC<{
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur();
           }}
         />
+      </div>
+        {/* Chats' way out, beside the search on its center line. */}
+        {onClose && <ChatsCloseButton onClose={onClose} />}
       </div>
       <div
         className={`flex flex-col ${scrolls ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}

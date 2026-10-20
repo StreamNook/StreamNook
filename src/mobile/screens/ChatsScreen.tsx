@@ -9,7 +9,8 @@
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChatsCircle, Play, Plus } from 'phosphor-react';
+import { ChatsCircle, MonitorPlay, Play, Plus } from 'phosphor-react';
+import { ChatsCloseButton } from '../chat/ChatsCloseButton';
 import { useAppStore } from '../../stores/AppStore';
 import type { TwitchStream } from '../../types';
 import { MobileChatPane } from '../chat/MobileChatPane';
@@ -47,7 +48,7 @@ function asStream(tab: ChatTab): TwitchStream {
     started_at: '',
     profile_image_url: tab.avatar ?? undefined,
     provider: tab.provider,
-    is_live: true,
+    is_live: tab.live === true,
   } as TwitchStream;
 }
 
@@ -126,10 +127,16 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The stream's own tab is already playing; nothing to start.
   const canWatch = !!active && active.live === true && !active.pinnedToStream;
+  // An offline Twitch room's way in: its channel page (latest broadcast, clips),
+  // the same room a search opens. Rust starts the stream if it is live after all.
+  const canOpenRoom = !!active && active.live !== true && active.provider === 'twitch' && !active.pinnedToStream;
 
   const watch = useCallback(() => {
     if (active) void startStream(active.login, asStream(active));
   }, [active, startStream]);
+  const openRoom = useCallback(() => {
+    if (active) void useAppStore.getState().startOfflineChat(active.login, asStream(active));
+  }, [active]);
   const openAdd = useCallback(() => setAddOpen(true), []);
   const closeAdd = useCallback(() => setAddOpen(false), []);
 
@@ -315,6 +322,17 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           </span>
         </button>
       )}
+      {canOpenRoom && (
+        <button
+          onClick={openRoom}
+          className="shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70"
+          aria-label={`Open ${active?.label ?? ''}'s channel`}
+        >
+          <span className="w-10 h-10 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+            <MonitorPlay size={16} weight="bold" />
+          </span>
+        </button>
+      )}
       <button
         onClick={openAdd}
         className="shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70"
@@ -324,6 +342,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           <Plus size={15} weight="bold" />
         </span>
       </button>
+      {/* The way out, always on show in the corner. */}
+      <ChatsCloseButton onClose={exitChats} />
     </>
   );
 
@@ -340,7 +360,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
         // The search field stays put and fully drawn; only the lists under it
         // scroll and fade.
         <div className="flex-1 min-h-0 flex flex-col px-2 pt-1">
-          <ChatPicker scrolls bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" />
+          <ChatPicker scrolls bottomClearance="calc(var(--sn-safe-b, 0px) + 16px)" onClose={exitChats} />
         </div>
       ) : (
         <>

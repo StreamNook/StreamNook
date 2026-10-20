@@ -111,6 +111,7 @@ final class AppModel {
         chat.mentions = mentions
         let home = home
         chat.followedLive = { home.lists.followingLive }
+        chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
     }
 

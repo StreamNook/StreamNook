@@ -137,7 +137,8 @@ struct ChatLabView: View {
 /// - `addchat[:QUERY]` opens the "Add a chat" sheet, searching QUERY; `addchat:close` closes it
 /// - `chatpins[:close]` unrolls (or rolls up) the pinned banner
 /// - `chatreload` reloads the room on screen (the core rebuilds the connection)
-/// - `chatrooms` logs the tabs, the room on screen, its pins and streaks
+/// - `chatrooms` logs the tabs, the room on screen (live, the No recent messages line, the picker), its pins and streaks;
+///   `chatroomopen` presses the Chats header's way into the room on screen (Watch, or its offline room)
 /// - `chatlifecycle[:TEXT]` logs the core's chat connection log (which transport authenticated,
 ///   reconnects, fallbacks), its last 20 lines, or only those holding TEXT (`_` for spaces)
 /// - `findpins` opens, beside the stream, the first Browse channel with pinned messages
@@ -321,7 +322,20 @@ enum ChatDrive {
                 "\($0.channel)\($0.pinnedToStream ? "*" : "")=\(rooms.sessions[$0.channel]?.rowCount ?? -1)"
             }.joined(separator: ",")
             let streaks = rooms.activeStreaks
+            let active = rooms.active
+            let empty = (rooms.activeSession?.historyLoaded ?? false) && (rooms.activeSession?.rowCount ?? 0) == 0
+            log.notice("drive rooms live \(active.map { $0.live.map(String.init) ?? "nil" } ?? "-", privacy: .public) noRecent \(empty) picker \(rooms.tabs.isEmpty)")
             log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0) pinsOpen \(rooms.pinsOpen) pinsShown \(rooms.pinsShown) pinMenu \(rooms.hiddenPinWaiting) pinStyle \(rooms.activeSession?.style.pinnedCollapsedStyle ?? "-", privacy: .public)")
+        case "chatroomopen":
+            // The Chats header's way into the room on screen: Watch while it is live, its offline
+            // room otherwise (as the header's button does).
+            guard let tab = model.chat.active else {
+                log.error("chatroomopen: no room")
+                return true
+            }
+            model.startWatching(ChatsScreen.stream(tab))
+            try? await Task.sleep(for: .seconds(2))
+            log.notice("drive roomopen \(tab.login, privacy: .public) live \(tab.live == true) room \(model.watch.room != nil) playing \(model.nav.playing?.userLogin ?? "-", privacy: .public)")
         case "chatlifecycle":
             let filter = value.replacingOccurrences(of: "_", with: " ")
             guard let json = try? await model.core.invoke("get_chat_lifecycle_log", "{}"),

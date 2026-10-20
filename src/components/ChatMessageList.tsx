@@ -207,6 +207,9 @@ const MessageRow = memo(function MessageRow({
 
 interface ChatMessageListProps {
   messages: (string | BackendChatMessage)[];
+  /** A quiet line in the middle while there are no rows ("No recent messages"
+   *  once the join's history answered with none). Gone with the first row. */
+  emptyNote?: string | null;
   /**
    * Bump this whenever the feed changed. It is not read in the body — it exists
    * purely so this component's `memo` has a reliable change signal.
@@ -282,6 +285,7 @@ interface ChatMessageListProps {
  */
 const ChatMessageList = memo(function ChatMessageList({
   messages: liveMessages,
+  emptyNote,
   isPaused,
   onScroll,
   onPauseIntent,
@@ -1043,6 +1047,11 @@ const ChatMessageList = memo(function ChatMessageList({
       </div>
       {marksOn && (
         <ScrollbarMarks scrollerRef={containerRef} contentRef={contentRef} marks={marks} overlay={IS_MAC} />
+      )}
+      {emptyNote && liveMessages.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
+          <p className="text-center text-[13px] text-textMuted">{emptyNote}</p>
+        </div>
       )}
     </div>
   );
