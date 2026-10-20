@@ -1,4 +1,8 @@
 import Foundation
+#if canImport(CoreGraphics)
+// On Apple platforms CGRect's geometry lives here; Linux has it in Foundation.
+import CoreGraphics
+#endif
 
 /// What one tap puts away. A tap outside the field being typed in puts the keyboard away, and a
 /// tap outside an open pop-out closes it; that tap does nothing else, so what sits under it is
@@ -8,7 +12,7 @@ import Foundation
 public enum OutsideTapRule {
     /// An open pop-out: its own frame and its toggles' frames (a tap on the button that opened
     /// it is that button's to handle).
-    public struct Popout: Equatable, Sendable {
+    public struct Popout: Sendable {
         public var id: String
         public var regions: [CGRect]
 
@@ -39,7 +43,7 @@ public enum OutsideTapRule {
         public var closesAnything: Bool { keyboard || !popouts.isEmpty }
 
         /// The tap closes something and stops there: nothing under it is pressed.
-        public var usedUp: Bool { !popouts.isEmpty || (keyboard && !passes) }
+        public var usedUp: Bool { closesAnything && !passes }
     }
 
     /// - Parameters:
