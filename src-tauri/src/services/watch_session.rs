@@ -641,7 +641,11 @@ pub fn refresh_raid_fallback(app: &AppHandle) {
     let grid_holds_socket = with_grid(|g| g.as_ref().is_some_and(|g| g.twitch.is_some()));
     let over = crate::services::eventsub_budget::over_budget(crate::services::eventsub_service::SocketOwner::Watch);
     let channel = raid_fallback_channel(session.as_ref(), grid_holds_socket, over);
+    // The PubSub raid connection is MultiNook's, which only the desktop has.
+    #[cfg(desktop)]
     crate::services::multi_nook_raids::set_solo(app, channel);
+    #[cfg(not(desktop))]
+    let _ = (app, channel);
 }
 
 /// Whether a raid to `target_id` at `now_ms` repeats the one followed last.
