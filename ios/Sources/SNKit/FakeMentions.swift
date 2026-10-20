@@ -128,6 +128,10 @@ public final class FakeMentions: Sendable {
             return try Self.encode(Self.object(found))
         case "set_visible_mention_rooms":
             return "null"
+        case "mention_watch_pull":
+            return "0"
+        case "mention_push_arrived":
+            return "true"
         case "get_inbox_view":
             let filter = args["filter"] as? String ?? "all"
             let before = Self.int(args["beforeMs"])

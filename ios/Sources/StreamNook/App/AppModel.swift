@@ -224,6 +224,10 @@ final class AppModel {
         }
         // Go-lives: the channel playing gets no banner, and a tap plays the stream.
         NotificationRouter.isPlaying = { [weak self] alert in self?.isPlaying(alert) ?? false }
+        // Mentions while you're away: the core decides whether a pushed one shows here.
+        NotificationRouter.mentionPushArrived = { [core] alert in
+            (try? await core.invoke("mention_push_arrived", args: ["id": alert.id, "room": alert.room], as: Bool.self)) ?? true
+        }
         NotificationRouter.handleLive { [weak self] alert in self?.openLiveAlert(alert) }
         // A whisper tapped while the app started opens its conversation once the tabs are up.
         NotificationRouter.handleWhisper { [weak self] key in self?.openWhisper(key) }

@@ -561,6 +561,8 @@ allow = [
   "clear_mention_inbox",
   "open_mention",
   "set_visible_mention_rooms",
+  "mention_watch_pull",
+  "mention_push_arrived",
   "get_ivr_user_summary",
   "get_ivr_subage_summary",
   "get_sub_standing",

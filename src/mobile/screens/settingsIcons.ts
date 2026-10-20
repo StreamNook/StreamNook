@@ -109,6 +109,7 @@ import {
   Pin,
   Play,
   Quote,
+  Radar,
   Radio,
   RectangleHorizontal,
   RefreshCw,
@@ -372,6 +373,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
     'Display name': UserCheck,
     'Highlight words': Highlighter,
     'Muted chats': BellOff,
+    "Mentions while you're away": Radar,
   },
 };
 

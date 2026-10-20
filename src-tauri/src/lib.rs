@@ -883,6 +883,8 @@ pub fn run() {
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
     services::mention_inbox::refresh(&settings);
+    // Mentions while you're away: told once at launch when on, then pulled.
+    services::mention_watch::client::seed(&settings);
     services::whisper_inbox::refresh_settings(&settings);
     services::hidden_channels::refresh(&settings);
 
@@ -2376,6 +2378,8 @@ pub fn run() {
             clear_mention_inbox,
             open_mention,
             set_visible_mention_rooms,
+            mention_watch_pull,
+            mention_push_arrived,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

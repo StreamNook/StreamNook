@@ -651,6 +651,9 @@ export interface MentionSettings {
   // Room keys (bare Twitch login, provider:slug otherwise) that never notify
   // or reach the inbox.
   muted_channels?: string[];
+  // Mentions while you're away: StreamNook's server watches chat in followed
+  // channels for your name and replies (services/mention_watch.rs). Default false.
+  away_alerts?: boolean;
 }
 
 // One entry in the mentions inbox (services/mention_inbox.rs `MentionEntry`).

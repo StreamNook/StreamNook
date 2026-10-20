@@ -310,6 +310,39 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_claimShow<'local>(
     crate::services::live_poll::poll::claim_push(&channel_id, &started_at, &login) as jboolean
 }
 
+/// The push lane's gate for a mention the mention server pushed: may it show.
+///
+/// Called from `SNMessagingService` for every FCM `mention` message. The same
+/// rules as the app's own mention notices (`mention_watch::claim_push`): the
+/// master switch and Mentions and replies on, the chat not muted, streamer
+/// mode off, and, when the app is running in this process, not a message it
+/// already caught or a chat on screen. A running app also pulls the entry into
+/// the inbox; a process Android started for the push alone leaves that to the
+/// next launch.
+#[no_mangle]
+pub extern "system" fn Java_app_streamnook_NotifyBridge_claimMention<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    base_dir: JString<'local>,
+    id: JString<'local>,
+    room: JString<'local>,
+) -> jboolean {
+    let get = |env: &mut JNIEnv<'local>, s: &JString<'local>| -> Option<String> {
+        env.get_string(s).ok().map(|v| v.into())
+    };
+    let (Some(candidate), Some(id), Some(room)) = (get(&mut env, &base_dir), get(&mut env, &id), get(&mut env, &room))
+    else {
+        return 0;
+    };
+    let Some(base) = resolve_base(&candidate) else {
+        return 0;
+    };
+    app_paths::set_base(base);
+    let show = crate::services::mention_watch::claim_push(&read_settings(), &id, &room);
+    crate::services::mention_watch::client::on_push_arrived();
+    show as jboolean
+}
+
 /// Avatars for the handful of channels actually being announced.
 ///
 /// The followed-streams response carries a stream thumbnail, not a profile
