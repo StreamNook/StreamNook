@@ -373,6 +373,10 @@ struct WatchLayer: View {
                 if dialStart == nil {
                     // Mostly vertical, or it is not a dial.
                     guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    // Not from the strips at the top and bottom edges, where the system's own
+                    // pulls start; a tap there still toggles the controls.
+                    guard Dial.canStart(y: value.startLocation.y, height: band.height,
+                                        edgeTop: insets.top, edgeBottom: insets.bottom) else { return }
                     let axis: DialAxis = value.startLocation.x < band.width / 2 ? .brightness : .volume
                     dial = axis
                     dialStart = axis == .brightness ? ScreenBrightness.level : Double(watch.player.volume)
