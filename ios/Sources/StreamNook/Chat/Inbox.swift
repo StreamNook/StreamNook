@@ -257,39 +257,16 @@ struct InboxPanel: View {
             }
     }
 
+    /// The categories as the system's segmented control, each with its unread count in its label
+    /// (no corner dot), the same control the iPhone draws everywhere.
     private var chips: some View {
         let list = view?.chips ?? ["all", "mentions", "highlights"].map { InboxChip(id: $0, unread: 0) }
-        return HStack(spacing: 6) {
+        return Picker("Show", selection: $filter) {
             ForEach(list) { chip in
-                let on = chip.id == filter
-                Button {
-                    guard !on else { return }
-                    filter = chip.id
-                } label: {
-                    // The bold label laid out invisibly underneath, so a chip keeps one width
-                    // chosen or not and the row never shifts.
-                    ZStack {
-                        Text(InboxText.chip(chip.id)).font(.sn(11.5, 600)).hidden()
-                        Text(InboxText.chip(chip.id)).font(.sn(11.5, on ? 600 : 400))
-                    }
-                        .foregroundStyle(on ? SN.textPrimary : SN.textSecondary)
-                        .padding(.horizontal, 10)
-                        .frame(height: 26)
-                        .background(Capsule().fill(on ? SN.textPrimary.opacity(0.11) : .clear))
-                        .overlay(Capsule().strokeBorder(on ? SN.textPrimary.opacity(0.18) : SN.borderSubtle, lineWidth: 1))
-                        .overlay(alignment: .topTrailing) {
-                            if chip.unread > 0, !on, chip.id != "all" {
-                                Circle().fill(SN.accent).frame(width: 6, height: 6)
-                                    .overlay(Circle().stroke(SN.backgroundTertiary.opacity(0.9), lineWidth: 2))
-                                    .offset(x: -2)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(on ? .isSelected : [])
+                Text(InboxText.segment(chip.id, unread: chip.unread)).tag(chip.id)
             }
-            Spacer(minLength: 0)
         }
+        .pickerStyle(.segmented)
         .padding(.horizontal, 12)
         .padding(.top, variant == .screen ? 8 : 0)
         .padding(.bottom, 8)

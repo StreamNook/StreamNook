@@ -14,6 +14,27 @@ public final class FakeMentions: Sendable {
         self.entries = Mutex(entries ?? Self.sample())
     }
 
+    /// A long backlog behind the canned inbox (`count` older mentions across a few chats), for a
+    /// list that has to scroll and page.
+    public static func backlog(count: Int, now: Date = Date()) -> [MentionEntry] {
+        let ms = Int64(now.timeIntervalSince1970 * 1000)
+        let rooms = ["nookstreamer", "midnightmod", "pixelplays", "quietcorner"]
+        let senders = [("glassowl", "GlassOwl", "#2dd4bf"), ("pixelpine", "PixelPine", "#f97316"),
+                       ("tidepool", "Tidepool", "#60a5fa"), ("kappakid", "kappakid", "#a78bfa")]
+        let kinds: [MentionEntry.Kind] = [.mention, .reply, .mention, .word]
+        let step: Int64 = 2 * 60 * 60_000
+        return (0..<count).map { i -> MentionEntry in
+            let room = rooms[i % rooms.count]
+            let sender = senders[(i / 2) % senders.count]
+            let kind = kinds[i % kinds.count]
+            return MentionEntry(id: "fb-\(i)", room: room, channelLogin: room, channelID: "90\(i % rooms.count)",
+                                senderID: "20\(i % senders.count)", senderLogin: sender.0, senderName: sender.1,
+                                senderColor: sender.2, text: "@nookviewer backlog message \(i + 1) in \(room)",
+                                kind: kind, replyParentID: kind == .reply ? "own-\(i)" : nil,
+                                atMs: ms - Int64(8 + i) * step, read: i % 3 != 0)
+        }
+    }
+
     /// The canned inbox, newest first, relative to `now`.
     public static func sample(now: Date = Date()) -> [MentionEntry] {
         let ms = Int64(now.timeIntervalSince1970 * 1000)

@@ -23,6 +23,10 @@ export interface MobileSheetProps {
    *  for a sheet whose content arrives late (a chatter's card and badge
    *  wall), so it never grows under the finger; the content scrolls inside. */
   fill?: boolean;
+  /** The content lays out and scrolls itself edge to edge (a list with its own
+   *  header and paging): the body neither pads nor scrolls, and its child fills
+   *  it. Use with `fill`. */
+  flush?: boolean;
 }
 
 const DISMISS_DISTANCE = 96;
@@ -45,6 +49,7 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   children,
   maxHeightFraction = 0.72,
   fill = false,
+  flush = false,
 }) => {
   const [dragY, setDragY] = useState(0);
   const cap = `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`;
@@ -143,8 +148,12 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
           {title && <div className="mt-2 text-[16px] font-semibold leading-5 text-textPrimary">{title}</div>}
         </div>
         <div
-          className={`flex-1 min-h-0 overflow-y-auto px-4 pb-4 ${scrolled ? 'sn-fade-top' : ''}`}
-          onScroll={onScroll}
+          className={
+            flush
+              ? 'flex-1 min-h-0 flex flex-col overflow-hidden'
+              : `flex-1 min-h-0 overflow-y-auto px-4 pb-4 ${scrolled ? 'sn-fade-top' : ''}`
+          }
+          onScroll={flush ? undefined : onScroll}
           // A sheet is a form or a list: a button, switch or row pressed while
           // typing acts, and the keyboard goes.
           data-taps-through-keyboard=""

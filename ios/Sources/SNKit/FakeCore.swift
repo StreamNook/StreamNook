@@ -53,6 +53,11 @@ public final class FakeCore: CoreBridge {
     /// Files a mention in the fixture inbox and asks for its card over the message bar and its
     /// notification, as the core does when a live message mentions you in a chat that is not on
     /// screen.
+    /// Files a mention quietly, as a backfill would: no arrival card.
+    public func fileMention(_ entry: MentionEntry) {
+        fixtures?.mentions.file(entry)
+    }
+
     public func simulateMention(_ entry: MentionEntry) {
         fixtures?.mentions.file(entry)
         guard let data = try? JSONEncoder().encode(entry) else { return }

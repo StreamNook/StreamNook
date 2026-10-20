@@ -400,6 +400,13 @@ public enum InboxText {
         }
     }
 
+    /// A chip as a segment's label: its name, then its unread count when it has one (a count in
+    /// the label, never a corner dot).
+    public static func segment(_ id: String, unread: Int) -> String {
+        guard unread > 0 else { return chip(id) }
+        return "\(chip(id)) \(unread > 99 ? "99+" : String(unread))"
+    }
+
     /// The empty list's words for a chip.
     public static func empty(_ id: String) -> (text: String, hint: String) {
         switch InboxFilterID(rawValue: id) {
