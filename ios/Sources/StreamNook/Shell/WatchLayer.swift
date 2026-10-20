@@ -50,14 +50,8 @@ struct WatchLayer: View {
             .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom ?? 0
     }
 
-    /// In landscape, whether the camera cutout is on the leading (left) edge: the top of the phone
-    /// faces left when the interface is landscape-right.
-    @State private var cutoutLeading = false
-
-    @MainActor private static func cutoutIsLeading() -> Bool {
-        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        return scene?.effectiveGeometry.interfaceOrientation == .landscapeRight
-    }
+    /// Which landscape edge the camera cutout is on, kept current from the scene itself.
+    @State private var cutout = CutoutEdge()
 
     private var chat: LandscapeChatLayout {
         LandscapeChatLayout(layout: store.string("fullscreen_chat.phone_layout", "beside"),
@@ -82,7 +76,7 @@ struct WatchLayer: View {
             // cutout on the edge that has one, and only of the rounded corner on the other.
             let edgeInset = chat.leading ? insets.leading : insets.trailing
             let outer = CGFloat(chat.textInset(edgeInset: Double(edgeInset),
-                                               cutoutOnChatSide: cutoutLeading == chat.leading))
+                                               cutoutOnChatSide: cutout.leading == chat.leading))
             let columnWidth = CGFloat(chat.width(screenWidth: screen.width, live: liveWidth))
             let beside = sideChat && chat.beside
             let band = beside
@@ -251,15 +245,7 @@ struct WatchLayer: View {
             }
         }
         .ignoresSafeArea()
-        // Which edge the camera cutout is on: a turn from one landscape to the other keeps the
-        // size, so the scene's orientation is read on every device turn.
-        .onAppear { cutoutLeading = Self.cutoutIsLeading() }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(250))
-                cutoutLeading = Self.cutoutIsLeading()
-            }
-        }
+        .onAppear { cutout.start() }
         .task(id: controlsTouch) {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))
@@ -583,5 +569,36 @@ private struct ChatArea: View {
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+/// In landscape, whether the camera cutout is on the leading (left) edge: the top of the phone
+/// faces left when the interface is landscape-right. It follows the scene's geometry rather than
+/// the device's turns, since the rotate button's `requestGeometryUpdate` turns the screen with no
+/// device-orientation notice, and a turn from one landscape to the other keeps the size.
+@MainActor @Observable
+private final class CutoutEdge {
+    private(set) var leading = false
+    @ObservationIgnored private var observation: NSKeyValueObservation?
+
+    func start() {
+        guard observation == nil,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
+        else { return }
+        leading = Self.isLeading(scene)
+        observation = scene.observe(\.effectiveGeometry, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+    }
+
+    private func refresh() {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
+        else { return }
+        let now = Self.isLeading(scene)
+        if leading != now { leading = now }
+    }
+
+    private static func isLeading(_ scene: UIWindowScene) -> Bool {
+        scene.effectiveGeometry.interfaceOrientation == .landscapeRight
     }
 }

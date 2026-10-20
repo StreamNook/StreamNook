@@ -145,7 +145,10 @@ import Testing
     @Test func theBackgroundIsClampedToAPercent() {
         let side = LandscapeChatLayout(layout: "beside", side: "right", width: 340, opacity: 55)
         #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: true) == 59)
-        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: false) == 12)
+        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: false) == 24)
+        #expect(side.textInset(edgeInset: 44, cutoutOnChatSide: false) == 18)
+        #expect(side.textInset(edgeInset: 20, cutoutOnChatSide: false) == 12)
+        #expect(side.textInset(edgeInset: 8, cutoutOnChatSide: false) == 8)
         #expect(side.textInset(edgeInset: 0, cutoutOnChatSide: false) == 0)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 140).opacity == 100)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 0).opacity == 0)
