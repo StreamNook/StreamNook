@@ -474,6 +474,10 @@ async fn refresh_viewers(inner: &Inner) {
     let at = now_secs();
     let mut changed: Vec<(String, Live)> = Vec::new();
     let mut went_live: Vec<TwitchStream> = Vec::new();
+    // Live channels whose title or category moved, and channels confirmed
+    // offline: the watch session's stand-ins while its socket has no slot.
+    let mut retitled: Vec<TwitchStream> = Vec::new();
+    let mut went_offline: Vec<(String, String)> = Vec::new();
     // Channels whose live/offline answer changed, or arrived for the first time.
     let mut live_flipped: Vec<String> = Vec::new();
     // Live channels and the start of the stream they are in.
@@ -507,6 +511,17 @@ async fn refresh_viewers(inner: &Inner) {
                 if before.started_at.is_none() && now.started_at.is_some() {
                     if let Some(row) = rows.get(id) {
                         went_live.push(row.clone());
+                    }
+                }
+                if s.answered && before.viewer_count.is_some() && now.viewer_count.is_none() {
+                    went_offline.push((id.clone(), login.clone()));
+                }
+                if s.answered
+                    && now.viewer_count.is_some()
+                    && (before.title != now.title || before.game_name != now.game_name)
+                {
+                    if let Some(row) = rows.get(id) {
+                        retitled.push(row.clone());
                     }
                 }
                 s.answered = true;
@@ -545,6 +560,12 @@ async fn refresh_viewers(inner: &Inner) {
     // An offline room waiting on one of these channels starts its stream.
     for row in went_live {
         crate::services::watch_session::on_channel_live(&inner.app, row);
+    }
+    for row in &retitled {
+        crate::services::watch_session::on_polled_update(&inner.app, row);
+    }
+    for (id, login) in &went_offline {
+        crate::services::watch_session::on_polled_offline(&inner.app, id, login);
     }
     let live_logins: Vec<String> = by_login
         .iter()
