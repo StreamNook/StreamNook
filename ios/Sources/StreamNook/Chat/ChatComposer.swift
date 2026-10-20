@@ -37,7 +37,6 @@ private struct ComposerBar: View {
     let session: ChatSession
     @FocusState private var focused: Bool
     @Environment(\.inboxSurface) private var inboxSurface
-    /// The right end's frame among the trays', while it is the tray.
     @State private var smiley = "😀"
     @State private var smileyOut = false
 
@@ -447,10 +446,6 @@ private struct ComposerBar: View {
                     .offset(x: -4, y: -4)
                     .allowsHitTesting(false)
             }
-        }
-        // A tap on the tray here is the tray's own, never a tap outside its sheet.
-        .background {
-            if tray { Color.clear.outsideTapAnchor("inbox") }
         }
         .disabled(mode == .send && (model.sending || slowWait > 0 || model.cheerBlocked))
         .opacity(mode == .send && (model.sending || model.cheerBlocked) ? 0.5 : 1)

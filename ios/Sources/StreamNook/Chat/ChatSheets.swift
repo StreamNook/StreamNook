@@ -106,7 +106,7 @@ struct ChatMenuSheet: View {
                             Button {
                                 dismiss()
                                 let surface = model.inboxSurface
-                                // After this sheet has gone, so the inbox grows out of the bar.
+                                // After this sheet has gone, so the two never present at once.
                                 Task {
                                     try? await Task.sleep(for: .milliseconds(350))
                                     withAnimation(SNMotion.run(InboxMotion.spring)) { mentions.sheetIn = surface }

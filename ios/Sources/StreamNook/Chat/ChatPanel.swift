@@ -124,25 +124,18 @@ struct ChatPanel: View {
                         Color.black
                     }
                 }
-                // Rows under the inbox's sheet or card fade out above it instead of showing as
-                // slivers beside it.
-                .mask { InboxClearMask(sheet: inboxSheetHere, card: inboxCardHere) }
+                // Rows under the inbox's card fade out above it instead of showing as slivers
+                // beside it.
+                .mask { InboxClearMask(card: inboxCardHere) }
                 // The stack's height cap and its short-column rule are Rust's, from this height.
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     votes?.setChatHeight(height)
                 }
-                // The inbox: a new mention's card risen from the tray, or the sheet grown out of
-                // the bar. Over the rows, flush on the composer below them.
+                // A new mention's card risen from the tray, over the rows, flush on the composer
+                // below them.
                 .overlay {
-                    if let mentions = rooms?.mentions {
-                        ZStack(alignment: .bottom) {
-                            if !overlay, mentions.onScreen == surface {
-                                InboxArrivalCard(store: mentions, leading: !session.style.inboxRight)
-                            }
-                            // In landscape the tray sits at the strip's leading end.
-                            InboxSheetOverlay(store: mentions, surface: surface,
-                                              leading: overlay || !session.style.inboxRight)
-                        }
+                    if let mentions = rooms?.mentions, !overlay, mentions.onScreen == surface {
+                        InboxArrivalCard(store: mentions, leading: !session.style.inboxRight)
                     }
                 }
                 .overlay(alignment: .top) {
@@ -225,6 +218,16 @@ struct ChatPanel: View {
                 votes.start()
             }
         }
+        // The inbox in the chat menu's own native sheet: the system grabber, medium and large,
+        // and a slide down or a tap above it closes it.
+        .sheet(isPresented: inboxSheetShown) {
+            if let mentions = rooms?.mentions {
+                InboxPanel(store: mentions, variant: .sheet)
+                    .snSheetLight()
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
     }
 
     /// The pins' gap under the header: the grabber's gap on Chats, a tight 6 under the player.
@@ -233,7 +236,10 @@ struct ChatPanel: View {
     /// Which chat this is, for the inbox: the Chats tab's, or the one under the player.
     private var surface: InboxSurface { pinsInline ? .chats : .watch }
 
-    private var inboxSheetHere: Bool { rooms?.mentions?.sheetIn == surface }
+    private var inboxSheetShown: Binding<Bool> {
+        Binding(get: { rooms?.mentions?.sheetIn == surface },
+                set: { if !$0, rooms?.mentions?.sheetIn == surface { rooms?.mentions?.sheetIn = nil } })
+    }
 
     private var inboxCardHere: Bool {
         guard !overlay, let mentions = rooms?.mentions else { return false }

@@ -58,6 +58,8 @@ final class AppModel {
     var replayShown = true
     /// The Channel sheet (a channel's videos and clips).
     var channelSheet: TwitchStream?
+    /// One whisper conversation, in the chat menu's native sheet.
+    var whisperSheet: WhisperSheetKey?
     private(set) var started = false
     /// The core's one start, shared by boot and a background live check.
     @ObservationIgnored private var coreStart: Task<Bool, Never>?
@@ -235,11 +237,20 @@ final class AppModel {
         nav.paths[.you] = [.whispers]
     }
 
-    /// One conversation, with the list under it so back lands on the list.
+    /// One conversation, in the native sheet the chat menu uses, over whatever is on screen. An
+    /// open inbox goes first, so the two sheets never present at once.
     func openWhisper(_ key: String) {
-        if nav.shellCovered { nav.playerMode = .mini }
-        nav.tab = .you
-        nav.paths[.you] = [.whispers, .whisper(key)]
+        let next = WhisperSheetKey(key: key)
+        guard mentions.sheetIn != nil || chat.mentionsOpen else {
+            whisperSheet = next
+            return
+        }
+        mentions.sheetIn = nil
+        chat.mentionsOpen = false
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            whisperSheet = next
+        }
     }
 
     /// Reads the settings, applies the look and hands the player its saved choices. A failed read

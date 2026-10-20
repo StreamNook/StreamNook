@@ -101,6 +101,9 @@ struct MainShell: View {
         .sheet(item: $model.channelSheet) { channel in
             ChannelSheet(channel: channel, model: model)
         }
+        .sheet(item: $model.whisperSheet) { sheet in
+            WhisperSheet(model: model, key: sheet.key)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
@@ -137,7 +140,7 @@ struct MainShell: View {
     /// Whether the tab's screen keeps the tab bar: a category's streams and Edit profile hide it.
     private func showsTabBar(_ tab: MobileTab) -> Bool {
         switch nav.paths[tab]?.last {
-        case .category, .cosmetics, .whisper: false
+        case .category, .cosmetics: false
         default: true
         }
     }
@@ -155,8 +158,6 @@ struct MainShell: View {
             MentionsScreen(model: model)
         case .whispers:
             WhispersScreen(model: model)
-        case .whisper(let key):
-            WhisperConversationScreen(model: model, key: key)
         case .myClips:
             MyClipsScreen(model: model)
         }

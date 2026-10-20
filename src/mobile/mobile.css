@@ -502,25 +502,12 @@ body:has(.sn-mobile) .glass-input:focus {
   max-width: none;
 }
 
-/* The inbox (mentions/InboxSheet, InboxArrival, InboxTray). Over chat the
-   glaze takes a fuller frost than chrome over chrome, so the words behind
-   never compete with the rows; its shadow falls up, onto the chat, never onto
-   the message bar it grows out of. */
-.sn-inbox-sheet,
+/* The inbox's card and tray (mentions/InboxArrival, InboxTray; the sheet is
+   MobileSheet's). Over chat the glaze takes a fuller frost than chrome over
+   chrome, so the words behind never compete with the card; its shadow falls
+   up, onto the chat, never onto the message bar. */
 .sn-inbox-arrival {
   --glaze-frost: 78%;
-}
-.sn-inbox-sheet {
-  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35);
-}
-/* Flush on the message bar: its shadow stops at the foot, and the glaze's rim
-   runs off the bottom (clipped) so the bar's own hairline is the only seam. */
-.sn-inbox-sheet--flush {
-  clip-path: inset(-48px -48px 0 -48px);
-}
-.sn-inbox-sheet--flush::before,
-.sn-inbox-sheet--flush::after {
-  bottom: -4px;
 }
 .sn-inbox-arrival {
   box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.3);
