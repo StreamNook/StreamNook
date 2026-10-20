@@ -42,6 +42,25 @@ import Testing
         #expect(ComposerText.completing("@lu", with: "@Lulu") == "@Lulu ")
     }
 
+    @Test func repeatsAlternatePlainAndVariedAsOnDesktop() {
+        let suffix = ComposerText.duplicateBypassSuffix
+        #expect(ComposerText.varyRepeat("gg", lastSent: nil) == "gg")
+        #expect(ComposerText.varyRepeat("gg", lastSent: "hi") == "gg")
+        let second = ComposerText.varyRepeat("gg ", lastSent: "gg")
+        #expect(second == "gg" + suffix)
+        #expect(ComposerText.varyRepeat("gg", lastSent: second) == "gg", "the third goes plain again")
+    }
+
+    @Test func plainTextAsksTheDispatcherOnlyWithASlashlessCommand() {
+        var style = ChatStyle()
+        style.apply(["chat_commands": ["user_commands": [["trigger": "hi", "enabled": true, "require_slash": true]]]])
+        #expect(!style.plainTextCommands, "slash commands only: ordinary chat makes no extra call")
+        style.apply(["chat_commands": ["user_commands": [["trigger": "gg", "enabled": true, "require_slash": false]]]])
+        #expect(style.plainTextCommands)
+        style.apply(["chat_commands": ["user_commands": [["trigger": "gg", "enabled": false, "require_slash": false]]]])
+        #expect(!style.plainTextCommands, "a disabled one does not count")
+    }
+
     @Test func aCommandPickReplacesTheWholeDraft() {
         #expect(ComposerText.command("ban") == "/ban ")
     }
@@ -80,6 +99,13 @@ import Testing
         #expect(result.rows[1].text == "lunar", "a localized name inserts the login")
         #expect(result.rows[0].text == "LULW")
         #expect(result.rows[0].key != result.rows[1].key)
+    }
+
+    @Test func aPinThatFailedSaysWhy() throws {
+        let pinned = try decode(SendResult.self, #"{"is_sent":true,"message_id":"abc"}"#)
+        #expect(pinned.pinError == nil)
+        let notPinned = try decode(SendResult.self, #"{"is_sent":true,"message_id":"abc","pin_error":"Sent, but not pinned: no rights"}"#)
+        #expect(notPinned.pinError == "Sent, but not pinned: no rights")
     }
 
     @Test func aDroppedMessageSaysWhy() throws {
@@ -258,6 +284,24 @@ import Testing
         let me = try JSONDecoder().decode(SlashOutcome.self, from: Data(try await fake.invoke(
             "run_slash_command", args: ["text": "/me waves"]).utf8))
         #expect(!me.handled)
+    }
+
+    @Test func aSendNamesItsSenderAndRoom() async throws {
+        let fake = FakeCore()
+        try fake.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "t",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        // No sender: the core would send over IRC and the row would never get Twitch's id.
+        await #expect(throws: CoreFailure.self) {
+            _ = try await fake.invoke("send_chat_message", args: [
+                "message": "hi", "targetChannel": "nook", "broadcasterId": "1", "senderId": nil,
+            ])
+        }
+        #expect(fake.sentMessages.isEmpty, "refused before it was sent")
+        // Named as the composer names it, it goes out (the fake then reports no sign-in).
+        _ = try? await fake.invoke("send_chat_message", args: [
+            "message": "hi", "targetChannel": "nook", "broadcasterId": "1", "senderId": "42",
+        ])
+        #expect(fake.sentMessages == ["hi"])
     }
 
     @Test func theFakePickerServesTheFixtureSet() async throws {

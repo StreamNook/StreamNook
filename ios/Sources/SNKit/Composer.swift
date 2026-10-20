@@ -86,6 +86,28 @@ public enum ComposerText {
         return String(draft.dropLast(word.count)) + text + " "
     }
 
+    /// The invisible tail a repeat carries so Twitch does not drop it as a duplicate.
+    public static let duplicateBypassSuffix = " \u{E0000}"
+
+    /// The text to send for `text` when the line sent just before it in the same chat was
+    /// `lastSent` (desktop's `varyRepeat`). Twitch compares a message only with the previous one,
+    /// so repeats alternate plain, varied, plain.
+    public static func varyRepeat(_ text: String, lastSent: String?) -> String {
+        guard let lastSent else { return text }
+        let base = trimmingTrailingWhitespace(text)
+        let lastVaried = lastSent.hasSuffix(duplicateBypassSuffix)
+        let lastBase = lastVaried ? String(lastSent.dropLast(duplicateBypassSuffix.count)) : lastSent
+        guard trimmingTrailingWhitespace(lastBase) == base else { return text }
+        return lastVaried ? base : base + duplicateBypassSuffix
+    }
+
+    /// `text` without trailing whitespace (JavaScript's `trimEnd`).
+    public static func trimmingTrailingWhitespace(_ text: String) -> String {
+        var end = text.endIndex
+        while end > text.startIndex, text[text.index(before: end)].isWhitespace { end = text.index(before: end) }
+        return String(text[..<end])
+    }
+
     /// A command picked from the commands sheet replaces the whole draft.
     public static func command(_ name: String) -> String {
         "/\(name) "
@@ -133,9 +155,11 @@ public struct SendResult: Decodable, Sendable, Equatable {
     public var messageID: String?
     /// The message cheers, so Rust held it rather than sending it as chat.
     public var cheer: CheerCheck?
+    /// `/pin <text>`: why the pin failed after the message went out (nil when it pinned).
+    public var pinError: String?
 
     enum CodingKeys: String, CodingKey {
-        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id", cheer
+        case isSent = "is_sent", dropReason = "drop_reason", messageID = "message_id", cheer, pinError = "pin_error"
     }
 
     public init(isSent: Bool, dropReason: String? = nil, messageID: String? = nil, cheer: CheerCheck? = nil) {
@@ -151,6 +175,7 @@ public struct SendResult: Decodable, Sendable, Equatable {
         dropReason = try c.decodeIfPresent(String.self, forKey: .dropReason)
         messageID = try c.decodeIfPresent(String.self, forKey: .messageID)
         cheer = try c.decodeIfPresent(CheerCheck.self, forKey: .cheer)
+        pinError = try c.decodeIfPresent(String.self, forKey: .pinError)
     }
 
     /// The chat line for a dropped message. A held cheer is no drop: the cheer bar takes it.

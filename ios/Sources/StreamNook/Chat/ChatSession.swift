@@ -54,6 +54,10 @@ final class ChatSession {
     private(set) var role = "unknown"
     /// The signed-in viewer's Twitch user id, once known.
     private(set) var viewerID = ""
+    /// The signed-in viewer's own chat color here, as Twitch's USERSTATE reports it
+    /// (`USER_COLOR:`), for the row the composer builds at send. Starts as the last color any
+    /// room reported, so a cold launch's first own row is not the default color.
+    private(set) var ownColor: String?
     /// The open rooms this one belongs to, for the chat menu's tab actions.
     @ObservationIgnored weak var rooms: ChatRooms?
 
@@ -76,9 +80,43 @@ final class ChatSession {
             }
         }, onRowCount: { count in
             Task { @MainActor in box.value?.rowCount = count }
+        }, onOwnColor: { color in
+            Task { @MainActor in box.value?.takeOwnColor(color) }
+        }, onPersonalEmotes: { userID, rows in
+            Task { @MainActor in box.value?.applyPersonalEmotes(userID: userID, rows: rows) }
         })
         box.value = self
         self.roomID = roomID.flatMap { $0.isEmpty ? nil : $0 }
+        ownColor = UserDefaults.standard.string(forKey: Self.ownColorKey)
+    }
+
+    /// Where the last own chat color any room reported is kept between launches.
+    static let ownColorKey = "streamnook.lastOwnChatColor"
+
+    private func takeOwnColor(_ color: String) {
+        UserDefaults.standard.set(color, forKey: Self.ownColorKey)
+        guard color != ownColor else { return }
+        ownColor = color
+    }
+
+    /// A chatter's 7TV personal set landed after some of their rows: each row's segments go back
+    /// to the core to have the set applied (`apply_personal_emotes`, the parser's own rule) and
+    /// are swapped in place.
+    private func applyPersonalEmotes(userID: String, rows: [ChatMessage]) {
+        let core = core
+        let pipeline = pipeline
+        Task {
+            var painted: [String: [ChatSegment]] = [:]
+            for row in rows {
+                guard let data = try? JSONEncoder().encode(row.segments),
+                      let segments = try? JSONSerialization.jsonObject(with: data),
+                      let applied = try? await core.invoke("apply_personal_emotes",
+                                                           args: ["userId": userID, "segments": segments],
+                                                           as: [ChatSegment]?.self) else { continue }
+                painted[row.id] = applied
+            }
+            pipeline.applySegments(painted)
+        }
     }
 
     /// A Kick room: its rows come from Kick's adapter, and nothing Twitch-backed applies.

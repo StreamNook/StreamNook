@@ -104,6 +104,16 @@ public struct ChatStyle: Sendable, Equatable {
     /// Show gains is Bonus chest only (chat_input.wallet_gains == "chest"): the "+N" floats only
     /// for a chest.
     public var walletGainsChestOnly = false
+    /// A moderator's clear leaves the rows as they were: no deleted, timed out or banned marks
+    /// (moderation.ignore_clear_chat).
+    public var ignoreClearChat = false
+    /// Deletes, timeouts, bans and clears each post a line in the room
+    /// (moderation.show_mod_messages).
+    public var showModMessages = false
+    /// One of your own commands runs without a slash (chat_commands.user_commands has one enabled
+    /// with require_slash false), so plain text is offered to the command dispatcher first. Without
+    /// one, ordinary chat makes no extra call (desktop's and Android's rule).
+    public var plainTextCommands = false
 
     public init() {}
 
@@ -140,6 +150,13 @@ public struct ChatStyle: Sendable, Equatable {
             paintShadows = shadows
         }
         if let h = root["chat_highlights"] as? [String: Any] { applyHighlights(h) }
+        if let m = root["moderation"] as? [String: Any] {
+            ignoreClearChat = m["ignore_clear_chat"] as? Bool ?? ignoreClearChat
+            showModMessages = m["show_mod_messages"] as? Bool ?? showModMessages
+        }
+        if let c = root["chat_commands"] as? [String: Any], let own = c["user_commands"] as? [[String: Any]] {
+            plainTextCommands = own.contains { ($0["enabled"] as? Bool ?? false) && ($0["require_slash"] as? Bool) == false }
+        }
     }
 
     public mutating func applyHighlights(_ h: [String: Any]) {

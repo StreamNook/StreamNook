@@ -23,6 +23,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { sliceLookupKey } from '../../utils/providerKey';
+import { varyRepeat } from '../../utils/sentContent';
 import type { EmoteSet } from '../../services/emoteService';
 import { Logger } from '../../utils/logger';
 import { EmotePickerPanel, useSwappingSmiley } from '../../components/chat/EmotePickerPanel';
@@ -75,10 +76,6 @@ const PANEL_CLASS =
 /** Twitch's message limit; the counter shows from COUNTER_FROM characters. */
 const MESSAGE_LIMIT = 500;
 const COUNTER_FROM = 400;
-
-/** Twitch refuses the same message twice in a row; a space and the invisible
- *  U+E0000 tag make the repeat a new message (the desktop composer's suffix). */
-const DUPLICATE_BYPASS_SUFFIX = ' \u{E0000}';
 
 /** A message the room did not take: the text as sent and why. */
 interface SendFailure {
@@ -220,7 +217,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const spellcheck = chatInput?.spellcheck_enabled ?? true;
   const hidePlaceholder = chatInput?.hide_placeholder ?? false;
   const hideEmoteButton = chatInput?.hide_emote_button ?? false;
-  // The last message each room took, for Duplicate sends.
+  // The last line sent to each room, as it went out, for Duplicate sends.
   const lastSent = useRef<Map<string, string>>(new Map());
 
   // Slow mode: when each room lets you send again, counted from your last
@@ -368,16 +365,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
       badges: '',
     };
     // Chat text to the room. With Duplicate sends on, a repeat of the last
-    // message this room took gets the invisible suffix; commands are never
+    // line sent here goes out varied or plain, whichever differs from that
+    // line (varyRepeat, the desktop composer's rule); commands are never
     // deduplicated by Twitch, so they go as typed.
     const chatSend = async (msg: string, reply?: string) => {
-      const repeat =
-        !!useAppStore.getState().settings.chat_input?.bypass_duplicate &&
-        !msg.startsWith('/') &&
-        lastSent.current.get(key) === msg;
-      const out = await sendChannelMessage(channel, repeat ? `${msg}${DUPLICATE_BYPASS_SUFFIX}` : msg, identity, reply);
-      if (out && out.is_sent !== false) lastSent.current.set(key, msg);
-      return out;
+      const text =
+        !!useAppStore.getState().settings.chat_input?.bypass_duplicate && !msg.startsWith('/')
+          ? varyRepeat(msg, lastSent.current.get(key))
+          : msg;
+      // What actually went out, so the next repeat flips the other way.
+      lastSent.current.set(key, text.trimEnd());
+      return sendChannelMessage(channel, text, identity, reply);
     };
     setSending(true);
     try {

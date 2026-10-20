@@ -74,6 +74,12 @@ public struct ChatRowPatch: Sendable, Equatable {
     public var id: String
     public var segments: [ChatSegment]
     public var view: ChatRowView?
+
+    public init(id: String, segments: [ChatSegment], view: ChatRowView? = nil) {
+        self.id = id
+        self.segments = segments
+        self.view = view
+    }
 }
 
 /// One frame from the core's chat socket, decoded. The socket sends JSON chat rows (they have
@@ -81,9 +87,22 @@ public struct ChatRowPatch: Sendable, Equatable {
 public enum ChatSocketFrame: Sendable, Equatable {
     case row(ChatMessage)
     case roomState(channel: String?, modes: ChatRoomModes?)
-    case clearMessage(channel: String?, targetID: String)
+    /// One message deleted. `login` names its author when the frame does; `reason` is the rule a
+    /// platform's automatic delete broke (Kick's auto-mod).
+    case clearMessage(channel: String?, targetID: String, login: String? = nil, reason: String? = nil)
     /// A timeout (`duration` seconds), a ban (`duration` nil) or, with no target, a full clear.
     case clearChat(channel: String?, targetUserID: String?, targetUser: String?, duration: Int?)
+    /// The signed-in viewer's own chat color (`USER_COLOR:`), for the room named or, when the
+    /// line names none, for the only room open.
+    case ownColor(channel: String?, color: String)
+    /// Users a settings save just hid (`HIDE_USERS`): their rows already held go. `room` is the
+    /// room's key (the bare login on Twitch, `kick:slug` on Kick); nil means every room.
+    case hideUsers(room: String?, logins: [String])
+    /// A chatter's 7TV personal set landed after some of their rows (`PERSONAL_EMOTES`): those
+    /// rows have the set applied again.
+    case personalEmotes(channel: String?, userID: String, messageIDs: [String])
+    /// A platform's own pin (`PINNED`, Kick's and YouTube's), or its removal (`UNPINNED`, nil).
+    case pinned(channel: String?, pin: PinnedChat?)
     /// A chatter's 7TV cosmetics that arrived after their first row. `userID` names the author as
     /// `ROW_MEMBER` does: a bare Twitch id, `kick:<id>` on another platform.
     case cosmetics(channel: String?, userID: String, paint: ChatPaint?, badge: ChatViewBadge?)
@@ -105,6 +124,7 @@ public enum ChatSocketFrame: Sendable, Equatable {
     public static func decode(_ raw: String) -> ChatSocketFrame {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("{"), let data = text.data(using: .utf8) else {
+            if let own = ChatFrame.ownColor(text) { return .ownColor(channel: own.channel, color: own.color) }
             if ChatFrame.statusWords.contains(text) { return .status(text) }
             if let prefix = ChatFrame.statusPrefixes.first(where: { text.hasPrefix($0) }) {
                 return .status(String(prefix.dropLast()))
@@ -123,7 +143,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
             return .roomState(channel: head.channel, modes: frame?.modes)
         case "CLEARMSG":
             guard let frame = try? decoder.decode(ClearMsgFrame.self, from: data) else { return .other(text) }
-            return .clearMessage(channel: head.channel, targetID: frame.targetMsgID)
+            return .clearMessage(channel: head.channel, targetID: frame.targetMsgID,
+                                 login: frame.login.flatMap { $0.isEmpty ? nil : $0 },
+                                 reason: frame.reason.flatMap { $0.isEmpty ? nil : $0 })
         case "CLEARCHAT":
             let frame = try? decoder.decode(ClearChatFrame.self, from: data)
             return .clearChat(channel: head.channel, targetUserID: frame?.targetUserID, targetUser: frame?.targetUser,
@@ -156,6 +178,19 @@ public enum ChatSocketFrame: Sendable, Equatable {
         case "AUTOMOD_HELD":
             guard let frame = try? decoder.decode(HeldFrame.self, from: data) else { return .other(text) }
             return .held(channel: head.channel, row: HeldRow(held: frame.held, line: frame.line, by: frame.by))
+        case "HIDE_USERS":
+            guard let frame = try? decoder.decode(HideUsersFrame.self, from: data) else { return .other(text) }
+            return .hideUsers(room: frame.channelKey.flatMap { Self.roomKey($0) }, logins: frame.logins)
+        case "PERSONAL_EMOTES":
+            guard let frame = try? decoder.decode(PersonalEmotesFrame.self, from: data) else { return .other(text) }
+            return .personalEmotes(channel: head.channel, userID: frame.userID, messageIDs: frame.messageIDs)
+        case "PINNED":
+            guard let frame = try? decoder.decode(PinnedFrame.self, from: data), let pin = frame.pin else {
+                return .other(text)
+            }
+            return .pinned(channel: head.channel, pin: pin)
+        case "UNPINNED":
+            return .pinned(channel: head.channel, pin: nil)
         default:
             return .other(text)
         }
@@ -198,9 +233,35 @@ public enum ChatSocketFrame: Sendable, Equatable {
         var modes: ChatRoomModes?
     }
 
+    /// A room as the core's filters key it (`twitch:xqc`, `kick:slug`) as a room here: the bare
+    /// login on Twitch, the key itself elsewhere.
+    static func roomKey(_ channelKey: String) -> String? {
+        let key = channelKey.trimmingCharacters(in: .whitespaces).lowercased()
+        let room = key.hasPrefix("twitch:") ? String(key.dropFirst("twitch:".count)) : key
+        return room.isEmpty ? nil : room
+    }
+
     private struct ClearMsgFrame: Decodable {
         var targetMsgID: String
-        enum CodingKeys: String, CodingKey { case targetMsgID = "target_msg_id" }
+        var login: String?
+        var reason: String?
+        enum CodingKeys: String, CodingKey { case targetMsgID = "target_msg_id", login, reason }
+    }
+
+    private struct HideUsersFrame: Decodable {
+        var channelKey: String?
+        var logins: [String]
+        enum CodingKeys: String, CodingKey { case channelKey = "channel_key", logins }
+    }
+
+    private struct PersonalEmotesFrame: Decodable {
+        var userID: String
+        var messageIDs: [String]
+        enum CodingKeys: String, CodingKey { case userID = "user_id", messageIDs = "message_ids" }
+    }
+
+    private struct PinnedFrame: Decodable {
+        var pin: PinnedChat?
     }
 
     private struct ClearChatFrame: Decodable {

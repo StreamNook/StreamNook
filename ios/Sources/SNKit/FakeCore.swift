@@ -158,6 +158,12 @@ public final class FakeCore: CoreBridge {
             return try FakeModTools.answer(cmd, args)
         case "send_chat_message":
             let text = args["message"] as? String ?? ""
+            // Every real caller names the room and the sender; without the sender the core sends
+            // over IRC and the row never gets Twitch's id. The fake refuses such a send.
+            guard let sender = args["senderId"] as? String, !sender.isEmpty,
+                  let room = args["broadcasterId"] as? String, !room.isEmpty else {
+                throw CoreFailure.command(json: #""send_chat_message needs senderId and broadcasterId""#)
+            }
             // Rust holds a message that cheers rather than sending it, as the real core does.
             if let held = FakeRewards.heldCheer(text, channel: args["targetChannel"] as? String ?? "") { return held }
             state.withLock { $0.sent.append(text) }

@@ -192,6 +192,9 @@ struct ChatRowLayoutBuilder {
     let style: ChatStyle
     let width: CGFloat
     let scale: CGFloat
+    /// The 7TV paint of each chatter the room has seen, by lowercased login: an @mention of them
+    /// wears it while Chat > Paint mentions is on.
+    var mentionPaints: [String: ChatPaint] = [:]
 
     static let attachmentKey = NSAttributedString.Key("sn.att")
     static let tapKey = NSAttributedString.Key("sn.tap")

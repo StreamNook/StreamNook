@@ -23,6 +23,23 @@ public struct ChatFrame: Sendable, Equatable {
         "HEARTBEAT", "IRC_CONNECTED", "RECONNECTED", "IRC_CONNECT_RETRY", "IRC_RECONNECTING",
     ]
 
+    /// The signed-in viewer's own chat color from a `USER_COLOR:` line (Twitch's USERSTATE), as
+    /// chatConnectionStore.ts reads it: `USER_COLOR:#<channel>:<color>`, or the older
+    /// `USER_COLOR:<color>` that names no room. Nil for any other line and for an empty color.
+    public static func ownColor(_ line: String) -> (channel: String?, color: String)? {
+        let prefix = "USER_COLOR:"
+        guard line.hasPrefix(prefix) else { return nil }
+        let payload = line.dropFirst(prefix.count)
+        var channel: String?
+        var color = String(payload)
+        if payload.hasPrefix("#"), let colon = payload.firstIndex(of: ":"),
+           payload.distance(from: payload.startIndex, to: colon) > 1 {
+            channel = payload[payload.index(after: payload.startIndex)..<colon].lowercased()
+            color = String(payload[payload.index(after: colon)...])
+        }
+        return color.isEmpty ? nil : (channel, color)
+    }
+
     public init(kind: Kind, author: String? = nil, text: String) {
         self.kind = kind
         self.author = author

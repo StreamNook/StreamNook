@@ -31,6 +31,11 @@ final class ChatPipeline: @unchecked Sendable {
     private var layouts: [String: ChatRowLayout] = [:]
     private let onModes: @Sendable (ChatRoomModes) -> Void
     private let onRowCount: @Sendable (Int) -> Void
+    /// The viewer's own chat color for this room, each time Twitch's USERSTATE reports it.
+    private let onOwnColor: @Sendable (String) -> Void
+    /// Rows a chatter's late 7TV personal set names (their author's id, the rows held), to have
+    /// the set applied by the core.
+    private let onPersonalEmotes: @Sendable (String, [ChatMessage]) -> Void
 
     /// Rows decoded so far, for the performance log.
     private let counters = Mutex<(frames: Int, rows: Int, layoutNanos: UInt64)>((0, 0, 0))
@@ -44,13 +49,19 @@ final class ChatPipeline: @unchecked Sendable {
     private var atmosphereObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
-         onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
+         onRowCount: @escaping @Sendable (Int) -> Void = { _ in },
+         onOwnColor: @escaping @Sendable (String) -> Void = { _ in },
+         onPersonalEmotes: @escaping @Sendable (String, [ChatMessage]) -> Void = { _, _ in }) {
         self.style = style
         self.scale = scale
         self.onModes = onModes
         self.onRowCount = onRowCount
+        self.onOwnColor = onOwnColor
+        self.onPersonalEmotes = onPersonalEmotes
         buffer = ChatRoomBuffer(cap: style.bufferCap)
         buffer.setHiddenEvents(style.hiddenEvents)
+        buffer.ignoreClearChat = style.ignoreClearChat
+        buffer.showModMessages = style.showModMessages
         failureObserver = NotificationCenter.default.addObserver(forName: ImagePipeline.failedNotification,
                                                                  object: nil, queue: nil) { [weak self] note in
             guard let url = note.userInfo?["url"] as? String else { return }
@@ -86,11 +97,39 @@ final class ChatPipeline: @unchecked Sendable {
 
     /// A frame the rooms' shared reader already decoded and routed here, from any thread.
     func ingest(frame: ChatSocketFrame) {
+        switch frame {
+        case .ownColor(_, let color):
+            onOwnColor(color)
+            return
+        case .personalEmotes(_, let userID, let ids):
+            queue.async { [self] in
+                // Rows still waiting for this batch are held first, so a row named here is found.
+                flush()
+                let wanted = Set(ids)
+                let named = buffer.rows.map(\.message).filter {
+                    wanted.contains($0.id) && $0.userID == userID && !$0.segments.isEmpty
+                }
+                if !userID.isEmpty, !named.isEmpty { onPersonalEmotes(userID, named) }
+            }
+            return
+        case .pinned:
+            // The open rooms keep a platform's pins beside the rows (ChatRooms).
+            return
+        default:
+            break
+        }
         queue.async { [self] in
             pending.append(frame)
             counters.withLock { $0.frames += 1 }
             scheduleFlush()
         }
+    }
+
+    /// Rows whose segments the core worked again (a late personal set applied), swapped in place
+    /// as a re-stamp is.
+    func applySegments(_ byID: [String: [ChatSegment]]) {
+        guard !byID.isEmpty else { return }
+        ingest(frame: .patch(channel: nil, rows: byID.map { ChatRowPatch(id: $0.key, segments: $0.value) }))
     }
 
     /// History rows that go above everything live (the join backfill).
@@ -140,6 +179,16 @@ final class ChatPipeline: @unchecked Sendable {
         }
     }
 
+    /// `/clearmessages`: the rows shown now go, for this viewer only; new rows still arrive.
+    func clearShown() {
+        queue.async { [self] in
+            pending.removeAll()
+            buffer.removeAll()
+            layouts.removeAll()
+            relayoutAll()
+        }
+    }
+
     /// A room behind another tab keeps its rows but lays none out until it is on screen again.
     func setVisible(_ visible: Bool) {
         queue.async { [self] in self.visible = visible }
@@ -180,6 +229,8 @@ final class ChatPipeline: @unchecked Sendable {
             self.style = style
             buffer.cap = style.bufferCap
             buffer.setHiddenEvents(style.hiddenEvents)
+            buffer.ignoreClearChat = style.ignoreClearChat
+            buffer.showModMessages = style.showModMessages
             relayoutAll()
         }
     }
@@ -229,6 +280,12 @@ final class ChatPipeline: @unchecked Sendable {
             for (id, _) in layouts where buffer.row(id) == nil { layouts[id] = nil }
             return
         }
+        if change.reset {
+            // Rows went from among the others (hidden users): the list takes every row again.
+            for (id, _) in layouts where buffer.row(id) == nil { layouts[id] = nil }
+            relayoutAll()
+            return
+        }
         var batch = Batch(trimmed: change.trimmed)
         // Rows pushed straight off by a burst never need a bitmap.
         let drawFrom = max(0, change.appended.count - 40)
@@ -245,7 +302,8 @@ final class ChatPipeline: @unchecked Sendable {
     private func layout(_ row: ChatRowModel, bitmap: Bool) -> ChatRowLayout {
         let start = DispatchTime.now().uptimeNanoseconds
         loadPaintImages(row)
-        let built = ChatRowLayoutBuilder(style: style, width: width, scale: scale).build(row)
+        let built = ChatRowLayoutBuilder(style: style, width: width, scale: scale,
+                                         mentionPaints: buffer.chatterPaints).build(row)
         if bitmap { built.renderBitmap(scale: scale) }
         layouts[row.id] = built
         let spent = DispatchTime.now().uptimeNanoseconds - start

@@ -116,6 +116,12 @@ final class AppModel {
         let home = home
         let signIn = signIn
         OwnAccount.user = { signIn.user }
+        StreamRouter.reload = { [weak self] in
+            // A live stream on screen (not an offline room): restart it, as the player's own restart.
+            guard let self, self.watch.stream != nil, self.watch.room == nil else { return false }
+            Task { await self.restartStream() }
+            return true
+        }
         chat.followedLive = { home.lists.followingLive }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
         // A background live check that launches the app finds the core here.

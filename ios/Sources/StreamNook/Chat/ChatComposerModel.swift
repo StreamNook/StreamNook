@@ -22,6 +22,12 @@ enum OwnAccount {
     static var user: @MainActor () -> TwitchUser? = { nil }
 }
 
+/// `/reload` from chat: restarts the live stream on screen. False when none is playing.
+@MainActor
+enum StreamRouter {
+    static var reload: (@MainActor () -> Bool)?
+}
+
 /// What the composer is doing: the draft, the send in flight, the suggestion strip and which
 /// panel is open. Kept apart from the list so arriving messages never rebuild it. The rules
 /// live in the core (sending, slash commands, gating, matching) and in SNKit's `ComposerText`;
@@ -215,7 +221,7 @@ final class ChatComposerModel {
             await runSlash(text)
         case .chat(let text):
             // Plain text can still be one of your own commands (those that need no slash).
-            if session.roomID != nil {
+            if session.roomID != nil, session.style.plainTextCommands {
                 await runSlash(text)
             } else {
                 await sendChat(text, reply: session.replyTo, clearsReply: true)
@@ -231,8 +237,13 @@ final class ChatComposerModel {
         sending = true
         defer { sending = false }
         var message = text
-        // Twitch refuses the same message twice in a row; an invisible tag makes the repeat new.
-        if session.style.bypassDuplicate, message == lastSent { message += " \u{E0000}" }
+        // Twitch refuses the same message twice in a row: with Duplicate sends on, a repeat
+        // alternates plain and varied (desktop's varyRepeat); commands go as typed. What goes out
+        // is remembered whatever happens to it, as on desktop and Android.
+        if session.style.bypassDuplicate, !text.hasPrefix("/") {
+            message = ComposerText.varyRepeat(text, lastSent: lastSent)
+        }
+        lastSent = ComposerText.trimmingTrailingWhitespace(message)
         // The sender is the signed-in account, read from the sign-in as Android and desktop read
         // currentUser: with it the core sends through Helix and answers with Twitch's message id
         // (without it a line went over IRC, which has none). No account, no send, as on Android.
@@ -259,7 +270,8 @@ final class ChatComposerModel {
                 return false
             }
             await showOwnRow(text: message, reply: reply, id: result.messageID)
-            lastSent = text
+            // `/pin <text>`: sent, then pinned or not, in the words desktop and Android use.
+            if pin { show(result.pinError ?? "Sent and pinned") }
             startSlowCountdown()
             failure = nil
             draft = ""
@@ -294,6 +306,7 @@ final class ChatComposerModel {
                     return
                 }
                 lastSent = text
+                startSlowCountdown()
                 failure = nil
                 draft = ""
                 session.replyTo = nil
@@ -310,8 +323,8 @@ final class ChatComposerModel {
     /// leaves as chat text.
     private func runSlash(_ text: String) async {
         guard let roomID = session.roomID else {
+            // The command stays in the box for when the room is known, as on Android.
             show(SlashOutcome.noRoomToast)
-            draft = ""
             return
         }
         sending = true
@@ -373,6 +386,17 @@ final class ChatComposerModel {
         case "create_clip":
             ClipRouter.create?(action.channel ?? session.channel, action.channelID ?? session.roomID ?? "",
                                action.title ?? "")
+        case "clear_local_chat":
+            // /clearmessages: hides what this chat shows now, for you only; new lines still come.
+            session.pipeline.clearShown()
+        case "reload_stream":
+            // /reload: the stream restarts and the chat reconnects, as desktop and Android do.
+            guard StreamRouter.reload?() == true else {
+                show("/reload: no active live stream")
+                return
+            }
+            show("Reloading stream and chat...")
+            ChatReload.reload(session)
         default:
             let command = typed.split(separator: " ").first.map(String.init) ?? typed
             show("\(command) is not on iPhone yet")
@@ -384,8 +408,8 @@ final class ChatComposerModel {
     /// carries the id Twitch gave the message when the send answered with one, so Delete, reply
     /// and pin reach it; only a send that gave no id keeps a provisional `local-` one.
     private func showOwnRow(text: String, reply: ChatMessage?, id: String?) async {
-        guard let userJSON = try? await session.core.invoke("get_user_info", "{}"),
-              let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) else { return }
+        // The sign-in's cached account, as the send named it (desktop and Android read currentUser).
+        guard let user = OwnAccount.user() else { return }
         var args: [String: Any] = [
             "channel": session.channel,
             "text": text,
@@ -393,6 +417,9 @@ final class ChatComposerModel {
             "sender_id": user.id,
             "sender_login": user.login,
             "sender_display_name": user.displayName,
+            // Your chat color as Twitch last said it (USER_COLOR), else Twitch's default, as the
+            // desktop and Android rows are built.
+            "color": session.ownColor ?? "#9147FF",
             "room_id": session.roomID ?? "",
         ]
         if let reply {

@@ -416,9 +416,10 @@ extension ChatSocketFrame {
         let raw: String?
         switch self {
         case .row(let message): raw = message.channel
-        case .roomState(let channel, _), .clearMessage(let channel, _), .clearChat(let channel, _, _, _),
+        case .roomState(let channel, _), .clearMessage(let channel, _, _, _), .clearChat(let channel, _, _, _),
              .cosmetics(let channel, _, _, _), .patch(let channel, _), .notice(let channel, _, _),
-             .held(let channel, _):
+             .held(let channel, _), .ownColor(let channel, _), .hideUsers(let channel, _),
+             .personalEmotes(let channel, _, _), .pinned(let channel, _):
             raw = channel
         case .status, .other, .member, .preview: raw = nil
         }

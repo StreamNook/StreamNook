@@ -10,6 +10,20 @@ vi.mock('../../stores/AppStore', () => ({ useAppStore: vi.fn() }));
 vi.mock('../../stores/pinStore', () => ({ usePinStore: vi.fn() }));
 vi.mock('../chat/ChatTabStrip', () => ({ useActiveChatChannelId: vi.fn() }));
 vi.mock('../../components/chat/PinnedChatter', () => ({ PinnedChatter: () => null }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+
+// The room on screen and your own badges in it, for the Unpin gate.
+const room = vi.hoisted(() => ({
+  tab: { channel: 'streamer', provider: 'twitch' } as { channel: string; provider: string },
+  badges: null as string | null,
+}));
+vi.mock('../chat/chatTabsStore', () => ({
+  useChatTabsStore: (sel: (s: unknown) => unknown) =>
+    sel({ tabs: [room.tab], activeChannel: room.tab.channel }),
+}));
+vi.mock('../../stores/chatConnectionStore', () => ({
+  useChannelChatMeta: () => ({ userBadges: room.badges }),
+}));
 
 import { pinsOpenFor } from './pinsOpen';
 import { PinnedBanner, type PinnedItem } from './PinnedBanner';
@@ -49,5 +63,30 @@ describe('Pinned Messages > Style', () => {
   it('keeps the bar and the open pin drawn', () => {
     expect(draw(false, 'bar')).toContain('Giveaway at 9');
     expect(draw(true, 'hidden')).toContain('Giveaway at 9');
+  });
+});
+
+describe('Unpin on the open pin', () => {
+  const draw = (channelId?: string) =>
+    renderToStaticMarkup(
+      createElement(PinnedBanner, { pins: [pin], expanded: true, onToggle: () => {}, channelId }),
+    );
+
+  it('shows for a moderator or the broadcaster, as on the desktop', () => {
+    room.tab = { channel: 'streamer', provider: 'twitch' };
+    room.badges = 'moderator/1,subscriber/12';
+    expect(draw('123')).toContain('Unpin message');
+    room.badges = 'broadcaster/1';
+    expect(draw('123')).toContain('Unpin message');
+  });
+
+  it('stays hidden for everyone else, without a channel id, or off Twitch', () => {
+    room.tab = { channel: 'streamer', provider: 'twitch' };
+    room.badges = 'subscriber/12';
+    expect(draw('123')).not.toContain('Unpin message');
+    room.badges = 'moderator/1';
+    expect(draw(undefined)).not.toContain('Unpin message');
+    room.tab = { channel: 'kick:streamer', provider: 'kick' };
+    expect(draw('123')).not.toContain('Unpin message');
   });
 });

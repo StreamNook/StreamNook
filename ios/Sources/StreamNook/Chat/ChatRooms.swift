@@ -108,10 +108,17 @@ final class ChatRooms {
     /// Twitch only: a Kick id would name an unrelated Twitch channel.
     var viewingStream: Bool { active?.pinnedToStream == true && active?.provider == "twitch" }
 
-    /// The active room's pins, when it is a Twitch room.
+    /// The active room's pins: a Twitch room's from the core's channel state, another platform's
+    /// from its own PINNED frames.
     var activePins: [PinnedChat] {
-        guard let tab = active, tab.provider == "twitch" else { return [] }
-        return pins[tab.login] ?? []
+        guard let tab = active else { return [] }
+        return pins[Self.pinsKey(tab)] ?? []
+    }
+
+    /// Where a room's pins are kept: the Twitch login, or the room's key (`kick:slug`) elsewhere,
+    /// so a Kick slug never reads a Twitch channel's pins.
+    private static func pinsKey(_ tab: ChatTabInfo) -> String {
+        tab.provider == "twitch" ? tab.login : tab.channel
     }
 
     // MARK: Tabs
@@ -350,6 +357,7 @@ final class ChatRooms {
         mentionCards[tab.channel.lowercased()] = nil
         routes.remove(tab.channel)
         if tab.provider == "kick" {
+            pins[Self.pinsKey(tab)] = nil
             leaveKick(tab, last: last)
             return
         }
@@ -404,9 +412,13 @@ final class ChatRooms {
     private func read(port: Int) {
         reader?.cancel()
         let routes = routes
+        let box = WeakBox<ChatRooms>()
+        box.value = self
         reader = Task.detached(priority: .userInitiated) {
             do {
-                try await Self.read(port: port, routes: routes)
+                try await Self.read(port: port, routes: routes) { room, pin in
+                    Task { @MainActor in box.value?.takePlatformPin(room: room, pin) }
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 chatLog.error("chat socket ended: \(String(describing: error), privacy: .public)")
@@ -420,7 +432,10 @@ final class ChatRooms {
         port = nil
     }
 
-    private nonisolated static func read(port: Int, routes: ChatRoutes) async throws {
+    /// Reads the bridge into the rooms. A platform's own pin (`PINNED`/`UNPINNED`) goes to
+    /// `onPin` with its room, since the open rooms keep pins beside the rows.
+    private nonisolated static func read(port: Int, routes: ChatRoutes,
+                                         onPin: @escaping @Sendable (String, PinnedChat?) -> Void) async throws {
         guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = 4 * 1024 * 1024
@@ -433,7 +448,12 @@ final class ChatRooms {
                 case .data(let data): text = String(decoding: data, as: UTF8.self)
                 @unknown default: continue
                 }
-                routes.deliver(ChatSocketFrame.decode(text))
+                let frame = ChatSocketFrame.decode(text)
+                if case .pinned(_, let pin) = frame {
+                    if let room = frame.room { onPin(room, pin) }
+                    continue
+                }
+                routes.deliver(frame)
             }
         } onCancel: {
             socket.cancel(with: .goingAway, reason: nil)
@@ -601,6 +621,13 @@ final class ChatRooms {
         pins[login] = pinned
     }
 
+    /// A platform's own pin for an open room (Kick's and YouTube's PINNED frames), or its removal:
+    /// the room's one pin, shown in the same banner as Twitch's.
+    private func takePlatformPin(room: String, _ pin: PinnedChat?) {
+        guard let tab = state.tabs.first(where: { $0.channel.lowercased() == room }), sessions[tab.channel] != nil else { return }
+        pins[Self.pinsKey(tab)] = pin.map { [$0] } ?? []
+    }
+
     /// The streaks to show for the room on screen, without those waved away.
     var activeStreaks: Streaks {
         guard let key = state.activeChannel, var found = streaks[key] else { return Streaks() }
@@ -715,6 +742,8 @@ final class ChatRoutes: Sendable {
     func deliver(_ frame: ChatSocketFrame) {
         let targets: [ChatPipeline] = table.withLock { table in
             if let room = frame.room { return table[room].map { [$0] } ?? [] }
+            // An own color that names no room is the viewer's there only while one room is open.
+            if case .ownColor = frame { return table.count == 1 ? Array(table.values) : [] }
             return Array(table.values)
         }
         for pipeline in targets { pipeline.ingest(frame: frame) }

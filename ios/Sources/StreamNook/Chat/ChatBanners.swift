@@ -25,10 +25,13 @@ struct StaticPopover: ViewModifier {
 /// The room's pinned messages as one container that grows downward: a header with the sender
 /// and a one-line preview, which unrolls into every pin. It starts as Chat > Pinned Messages >
 /// Collapsed says, and with Style set to Hidden the panel draws none of it while it is folded;
-/// tapping a pin never jumps to the message and there is no unpin here.
+/// tapping a pin never jumps to the message. Opened, each pin offers Unpin to a moderator or the
+/// broadcaster of the room on screen, as the desktop's pinned card does.
 struct PinnedBanner: View {
     let pins: [PinnedChat]
     @Binding var expanded: Bool
+    /// The room on screen, whose moderator standing and id the Unpin control needs.
+    var session: ChatSession? = nil
 
     var body: some View {
         if let first = pins.first {
@@ -87,28 +90,63 @@ struct PinnedBanner: View {
 
     private func pinsBody(_ first: PinnedChat) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(first.text)
-                .font(.sn(13))
-                .lineSpacing(3)
-                .foregroundStyle(SN.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                Text(first.text)
+                    .font(.sn(13))
+                    .lineSpacing(3)
+                    .foregroundStyle(SN.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                unpinButton(first)
+            }
             if pins.count > 1 {
                 SN.borderSubtle.frame(height: 1).accessibilityHidden(true)
                 ForEach(pins.dropFirst()) { pin in
-                    HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        PinnedSender(pin: pin, allBadges: true)
-                        Text(": \(pin.text)")
-                            .font(.sn(13))
-                            .foregroundStyle(SN.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 0) {
+                            PinnedSender(pin: pin, allBadges: true)
+                            Text(": \(pin.text)")
+                                .font(.sn(13))
+                                .foregroundStyle(SN.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        unpinButton(pin)
                     }
-                    .accessibilityElement(children: .combine)
                 }
             }
         }
         .padding(.horizontal, 10)
         .padding(.top, 2)
         .padding(.bottom, 8)
+    }
+
+    /// Unpin, for a moderator or the broadcaster only: the desktop's `unpin_chat_message` with the
+    /// room's id and the pin's message id. The core re-reads the room's pins until Twitch shows the
+    /// change, so the banner follows on its own.
+    @ViewBuilder
+    private func unpinButton(_ pin: PinnedChat) -> some View {
+        if let session, session.isModerator, let room = session.roomID {
+            Button {
+                let core = session.core
+                Task {
+                    _ = try? await core.invoke("unpin_chat_message", args: [
+                        "broadcasterId": room, "messageId": pin.messageID,
+                    ])
+                }
+            } label: {
+                Image(systemName: "pin.slash")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(SN.textSecondary.opacity(0.7))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, -6)
+            .padding(.trailing, -6)
+            .accessibilityLabel("Unpin message")
+        }
     }
 }
 

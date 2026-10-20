@@ -132,7 +132,8 @@ struct ChatPanel: View {
                     VStack(spacing: 4) {
                         if let rooms, !overlay, rooms.pinsShown {
                             PinnedBanner(pins: rooms.activePins,
-                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
+                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }),
+                                         session: session)
                                 .padding(.horizontal, 10)
                                 .padding(.top, topGap)
                                 // Opened, the banner floats over the rows; the list keeps the

@@ -199,6 +199,12 @@ struct RowText {
                 taps.append(.mention(login))
                 var extra = common
                 extra[ChatRowLayoutBuilder.tapKey] = tapIndex
+                // A fixed mention color wins; otherwise Paint mentions draws the name in the
+                // mentioned chatter's 7TV paint when the room has seen it, over their color.
+                if style.mentionTextColor == nil, style.paintMentionsInBody,
+                   let paint = builder.mentionPaints[login.lowercased()], Self.drawable(paint) {
+                    extra[ChatRowLayoutBuilder.paintKey] = PaintBox(paint)
+                }
                 if style.mentionStyle == "pill" { extra[ChatRowLayoutBuilder.capsuleKey] = tint }
                 append(text, builder.font(size, mentionWeight, italic: slanted), tint, extra: extra)
             case .link(let label, let url):

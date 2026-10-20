@@ -39,14 +39,18 @@ public struct ChatBufferChange: Sendable, Equatable {
     public var trimmed = 0
     /// Rows whose drawing changed, by id.
     public var updated: [ChatRowModel] = []
+    /// Rows were taken out from among the others (hidden users): the list takes every row the
+    /// room holds again instead of the changes above.
+    public var reset = false
 
-    public init(appended: [ChatRowModel] = [], trimmed: Int = 0, updated: [ChatRowModel] = []) {
+    public init(appended: [ChatRowModel] = [], trimmed: Int = 0, updated: [ChatRowModel] = [], reset: Bool = false) {
         self.appended = appended
         self.trimmed = trimmed
         self.updated = updated
+        self.reset = reset
     }
 
-    public var isEmpty: Bool { appended.isEmpty && trimmed == 0 && updated.isEmpty }
+    public var isEmpty: Bool { appended.isEmpty && trimmed == 0 && updated.isEmpty && !reset }
 }
 
 /// A room's rows: applies the core's frames and keeps the newest `cap` rows, plus up to 150 more
@@ -62,8 +66,18 @@ public struct ChatRoomBuffer: Sendable {
     /// Chat event kinds turned off (`provider:category`): a row the core keyed with one is never
     /// held, and setting this drops the held ones.
     public private(set) var hiddenEvents: Set<String> = []
+    /// A moderator's delete, timeout, ban or clear marks no row (moderation.ignore_clear_chat).
+    public var ignoreClearChat = false
+    /// Each delete, timeout, ban and clear posts a line in the room (moderation.show_mod_messages).
+    public var showModMessages = false
+    /// The 7TV paint each chatter seen here wears, by lowercased login, so an @mention of them
+    /// can wear it too (the shared store's chatter list). Learned from their rows and kept after
+    /// the rows scroll away.
+    public private(set) var chatterPaints: [String: ChatPaint] = [:]
 
     static let pausedOverflow = 150
+    /// Chatters whose paint is remembered before the memory starts over.
+    static let paintMemory = 1000
     static let decayPerBatch = 5
     private var pausedOverflowAllowance = 0
     private var index: [String: Int] = [:]
@@ -121,6 +135,7 @@ public struct ChatRoomBuffer: Sendable {
         for frame in frames {
             switch frame {
             case .row(let message):
+                notePaint(message)
                 if let i = index[message.id] {
                     var row = rows[i - base]
                     row.message = message
@@ -133,14 +148,48 @@ public struct ChatRoomBuffer: Sendable {
                     rows.append(row)
                     change.appended.append(row)
                 }
-            case .clearMessage(_, let targetID):
-                mark(id: targetID, .deleted, &updated, &change)
-            case .clearChat(_, let userID, _, let duration):
-                guard let userID else { continue }
-                let mark: ChatModeration = duration.map { .timedOut(seconds: $0) } ?? .banned
-                for (offset, row) in rows.enumerated() where row.message.userID == userID && row.moderation != mark {
-                    self.mark(id: rows[offset].id, mark, &updated, &change)
+            case .clearMessage(let channel, let targetID, let login, let reason):
+                if !ignoreClearChat { mark(id: targetID, .deleted, &updated, &change) }
+                if showModMessages, let channel {
+                    // The frame may not name the author (Kick's delete gives only the id): the
+                    // row is still held, a delete only marks it.
+                    let author = row(targetID).map { $0.message.displayName.isEmpty ? $0.message.username : $0.message.displayName }
+                    let who = login ?? author.flatMap { $0.isEmpty ? nil : $0 } ?? "a user"
+                    let line = reason.map { "\(who)'s message was deleted (\($0))." }
+                        ?? "\(who)'s message was deleted by a moderator."
+                    appendSystem(line, channel: channel, &change)
                 }
+            case .clearChat(let channel, let targetUserID, let targetUser, let duration):
+                let userID = targetUserID.flatMap { $0.isEmpty ? nil : $0 }
+                // A full clear marks nothing.
+                if let userID, !ignoreClearChat {
+                    let mark: ChatModeration = duration.map { .timedOut(seconds: $0) } ?? .banned
+                    for (offset, row) in rows.enumerated() where row.message.userID == userID && row.moderation != mark {
+                        self.mark(id: rows[offset].id, mark, &updated, &change)
+                    }
+                }
+                if showModMessages, let channel {
+                    let line: String
+                    if userID != nil {
+                        let who = targetUser ?? "A user"
+                        line = duration.map { "\(who) was timed out for \(Self.shortDuration($0))." } ?? "\(who) was banned."
+                    } else {
+                        line = "Chat was cleared by a moderator."
+                    }
+                    appendSystem(line, channel: channel, &change)
+                }
+            case .hideUsers(_, let logins):
+                let names = Set(logins.map { $0.lowercased() }.filter { !$0.isEmpty })
+                guard !names.isEmpty else { continue }
+                let hidden = { (row: ChatRowModel) -> Bool in
+                    names.contains(row.message.username.lowercased()) || names.contains(row.message.displayName.lowercased())
+                }
+                guard rows.contains(where: hidden) else { continue }
+                rows.removeAll(where: hidden)
+                change.appended.removeAll(where: hidden)
+                base = 0
+                index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+                change.reset = true
             case .cosmetics(_, let userID, let paint, let badge):
                 for (offset, row) in rows.enumerated() where Self.member(userID, wrote: row.message) {
                     guard var view = row.message.metadata.view else { continue }
@@ -152,6 +201,7 @@ public struct ChatRoomBuffer: Sendable {
                     next.message.metadata.view = view
                     next.revision += 1
                     rows[offset] = next
+                    notePaint(next.message)
                     replaceAppended(next, &change)
                     updated[next.id] = next
                 }
@@ -198,6 +248,7 @@ public struct ChatRoomBuffer: Sendable {
                     var row = rows[i - base]
                     if !patch.segments.isEmpty { row.message.segments = patch.segments }
                     if let view = patch.view { row.message.metadata.view = view }
+                    notePaint(row.message)
                     row.revision += 1
                     rows[i - base] = row
                     replaceAppended(row, &change)
@@ -258,6 +309,33 @@ public struct ChatRoomBuffer: Sendable {
         return try? JSONDecoder().decode(ChatMessage.self, from: data)
     }
 
+    /// A moderation line only the viewer sees, at the bottom of the room.
+    private mutating func appendSystem(_ line: String, channel: String, _ change: inout ChatBufferChange) {
+        guard let message = ChatSocketFrame.systemRow(line, channel: channel) else { return }
+        let row = ChatRowModel(message: message, live: true)
+        index[message.id] = base + rows.count
+        rows.append(row)
+        change.appended.append(row)
+    }
+
+    /// A timeout's length as the moderation line words it: whole days, hours, minutes or seconds.
+    static func shortDuration(_ seconds: Int) -> String {
+        let s = Double(seconds)
+        if seconds >= 86400 { return "\(Int((s / 86400).rounded()))d" }
+        if seconds >= 3600 { return "\(Int((s / 3600).rounded()))h" }
+        if seconds >= 60 { return "\(Int((s / 60).rounded()))m" }
+        return "\(seconds)s"
+    }
+
+    /// Remembers the paint a chatter's row wears, for mentions of them.
+    private mutating func notePaint(_ message: ChatMessage) {
+        guard let paint = message.metadata.view?.paint, !message.username.isEmpty else { return }
+        let login = message.username.lowercased()
+        guard chatterPaints[login] != paint else { return }
+        if chatterPaints.count >= Self.paintMemory { chatterPaints.removeAll() }
+        chatterPaints[login] = paint
+    }
+
     /// Rows a moderation mark touches are drawn again; the row stays unless the style hides it.
     private mutating func mark(id: String, _ mark: ChatModeration, _ updated: inout [String: ChatRowModel],
                                _ change: inout ChatBufferChange) {
@@ -299,6 +377,7 @@ public struct ChatRoomBuffer: Sendable {
         var seen = Set<String>()
         let fresh = messages.filter { index[$0.id] == nil && !Self.hides($0, hiddenEvents) && seen.insert($0.id).inserted }
         guard !fresh.isEmpty else { return false }
+        for message in fresh { notePaint(message) }
         var last: Int64 = 0
         var keyed: [(at: Int64, order: Int, row: ChatRowModel)] = []
         for (i, row) in (rows + fresh.map { ChatRowModel(message: $0, live: false) }).enumerated() {
