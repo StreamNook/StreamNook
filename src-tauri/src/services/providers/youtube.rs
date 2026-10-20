@@ -241,6 +241,7 @@ impl ChatProvider for YouTubeProvider {
             drop(conns);
             // Nothing reads this channel's 7TV set now, so its live feed goes too.
             crate::services::seventv_eventapi::unsubscribe_channel_on(&id_lc, "youtube").await;
+            youtube_emotes::release(&id_lc);
         }
         Ok(())
     }
@@ -266,6 +267,7 @@ impl ChatProvider for YouTubeProvider {
         drop(conns);
         for id_lc in dropped {
             crate::services::seventv_eventapi::unsubscribe_channel_on(&id_lc, "youtube").await;
+            youtube_emotes::release(&id_lc);
             // The send cooldown cached as ROOMSTATE belongs to this connection.
             crate::services::irc_service::remove_provider_room_state(&key::make_key("youtube", &id_lc)).await;
         }

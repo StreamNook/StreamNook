@@ -19,10 +19,12 @@
 //! lean on. YouTube's OWN emoji are a separate thing entirely and already work
 //! (`store_channel_emojis` scrapes them from the live_chat page).
 
+use super::table_repair::{self, HeldRows, Install, Retrying, Standing};
+use crate::models::chat_layout::ChatMessage;
 use crate::services::emote_service;
 use crate::services::emote_service::{Emote, EmoteProvider, EmoteSet};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -32,8 +34,8 @@ use std::time::{Duration, Instant};
 /// to globals. This runs in a background task, so waiting is free.
 const SEVENTV_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// How soon to retry after a channel-set fetch failed (vs the full TTL).
-const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// A partial table is fetched again by its retry loop (`table_repair::DELAYS`),
+/// not by this.
 const TTL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -55,12 +57,63 @@ pub struct YouTubeEmote {
 struct ChannelEmotes {
     map: HashMap<String, YouTubeEmote>, // emote name -> emote
     fetched_at: Instant,
+    standing: Standing,
 }
 
 static STORE: OnceLock<Mutex<HashMap<String, ChannelEmotes>>> = OnceLock::new();
 
 fn store() -> &'static Mutex<HashMap<String, ChannelEmotes>> {
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Channel (store key) -> the chats (by identifier) showing it, so a retry loop
+/// knows when to stop. One channel can be open by video id and by handle.
+static IN_USE: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
+/// One retry loop per channel while its 7TV table is partial.
+static RETRYING: Retrying = Retrying::new();
+/// Rows parsed before the channel's whole 7TV table landed.
+static HELD: HeldRows = HeldRows::new();
+
+fn in_use_map() -> &'static Mutex<HashMap<String, HashSet<String>>> {
+    IN_USE.get_or_init(Default::default)
+}
+
+fn in_use(key: &str) -> bool {
+    in_use_map().lock().map(|m| m.get(key).is_some_and(|ids| !ids.is_empty())).unwrap_or(false)
+}
+
+/// The chat opened as `identifier` was left: a channel no chat shows any more
+/// stops its retries and lets its held rows go.
+pub fn release(identifier: &str) {
+    let identifier = identifier.to_lowercase();
+    let mut gone = Vec::new();
+    if let Ok(mut m) = in_use_map().lock() {
+        m.retain(|key, ids| {
+            ids.remove(&identifier);
+            if ids.is_empty() {
+                gone.push(key.clone());
+                return false;
+            }
+            true
+        });
+    }
+    for key in gone {
+        HELD.drop_key(&key);
+    }
+}
+
+/// Keeps a published row for a re-bake when its channel's 7TV table is not
+/// whole yet (still loading, partial, or only the saved copy), so the row's
+/// 7TV words are patched in once the whole table lands.
+pub fn hold_row(msg: &ChatMessage) {
+    let key = store_key(&super::key::parse_key(&msg.channel).channel);
+    let whole = store()
+        .lock()
+        .map(|s| s.get(&key).is_some_and(|c| c.standing == Standing::Whole))
+        .unwrap_or(true);
+    if !whole {
+        HELD.hold(&key, msg);
+    }
 }
 
 /// The store key for a channel: its UC id.
@@ -173,173 +226,190 @@ fn build_set(identifier: &str) -> EmoteSet {
     set
 }
 
-/// Fetch + cache a YouTube channel's 7TV emotes (channel set over globals). Safe
+//// Fetch + cache a YouTube channel's 7TV emotes (channel set over globals). Safe
 /// to call repeatedly — it self-throttles to the TTL. Spawned when a chat
 /// connection resolves and the channel's UC id is known.
 pub async fn refresh(identifier: &str, channel_id: &str) {
-    refresh_inner(identifier, channel_id, false).await;
+    refresh_inner(identifier, channel_id, Mode::Normal).await;
 }
 
 /// Refetch right away after a live 7TV edit, skipping the TTL. The cached set
 /// keeps serving while the fetch runs (dropping it first left every 7TV word
 /// in this chat as text for as long as the fetch took, up to 90 s), and it is
-/// replaced, smaller or not, only by a complete answer: a removal must land,
+/// replaced, smaller or not, only by a whole answer: a removal must land,
 /// a failed fetch must not wipe the set.
 pub async fn refresh_after_edit(identifier: &str, channel_id: &str) {
-    refresh_inner(identifier, channel_id, true).await;
+    refresh_inner(identifier, channel_id, Mode::LiveEdit).await;
 }
 
-async fn refresh_inner(identifier: &str, channel_id: &str, live_edit: bool) {
-    // The channel id IS the key (see store_key); `identifier` is only for logs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Chat connect: throttled to the TTL.
+    Normal,
+    /// A live 7TV edit: right away.
+    LiveEdit,
+    /// The background retry of a partial table: right away, and it starts no
+    /// other loop.
+    Retry,
+}
+
+/// One fetch of the channel's table and what it did with it. True when the
+/// answer was whole.
+async fn refresh_inner(identifier: &str, channel_id: &str, mode: Mode) -> bool {
+    // The channel id IS the key (see store_key); `identifier` is only for logs
+    // and for knowing which chats hold the channel open.
     let key = channel_id.to_lowercase();
+    if mode == Mode::Normal {
+        if let Ok(mut s) = in_use_map().lock() {
+            s.entry(key.clone()).or_default().insert(identifier.to_lowercase());
+        }
+    }
     // No set in memory yet (first use this run): seed the saved one so this
     // chat parses 7TV words from its first message, marked stale so the fetch
-    // below still runs.
+    // below still runs. Only whole answers are ever saved.
     if let Ok(mut s) = store().lock() {
         if !s.contains_key(&key) {
             if let Some(map) = crate::services::emote_set_cache::load_provider::<HashMap<String, YouTubeEmote>>("youtube7tv", &key) {
                 log::debug!("[YouTube] seeded {} 7TV emote(s) for {} from disk", map.len(), key);
                 let stale = Instant::now().checked_sub(TTL).unwrap_or_else(Instant::now);
-                s.insert(key.clone(), ChannelEmotes { map, fetched_at: stale });
+                s.insert(key.clone(), ChannelEmotes { map, fetched_at: stale, standing: Standing::Saved });
             }
         }
     }
-    {
+    if mode == Mode::Normal {
         if let Ok(s) = store().lock() {
             if let Some(c) = s.get(&key) {
-                if !live_edit && c.fetched_at.elapsed() < TTL {
-                    return;
+                if c.fetched_at.elapsed() < TTL {
+                    return c.standing == Standing::Whole;
                 }
             }
         }
     }
 
     let client = crate::services::http::client_unbounded();
+    let (map, whole) = fetch_table(&client, channel_id).await;
+    let count = map.len();
+
+    let install = install_table(&key, map, whole);
+    if install == (Install::Replace { save: true }) {
+        if let Ok(s) = store().lock() {
+            if let Some(c) = s.get(&key) {
+                crate::services::emote_set_cache::save_provider("youtube7tv", &key, &c.map);
+            }
+        }
+    }
+
+    if install != Install::Keep {
+        log::info!(
+            "[YouTube] 7TV emotes for channel {channel_id} (as {identifier}): {count} loaded{}",
+            if whole { "" } else { " (partial)" }
+        );
+        repair_rows(&key, whole).await;
+    }
+    if !whole {
+        log::warn!("[YouTube] 7TV channel set for {} did not fully resolve; retrying in the background", key);
+        if mode != Mode::Retry {
+            spawn_retries(identifier.to_string(), channel_id.to_string());
+        }
+    }
+    whole
+}
+
+/// Puts a fetched table in place, or keeps the held one (`table_repair::decide`).
+/// A partial table is used only while nothing better is held; whatever is
+/// kept stops counting toward the TTL, since its retry loop fetches it again.
+fn install_table(key: &str, map: HashMap<String, YouTubeEmote>, whole: bool) -> Install {
+    let Ok(mut s) = store().lock() else { return Install::Keep };
+    let count = map.len();
+    let held = s.get(key).map(|c| (c.standing, c.map.len()));
+    let install = table_repair::decide(held, whole, count);
+    match install {
+        Install::Replace { .. } => {
+            let standing = if whole { Standing::Whole } else { Standing::Partial };
+            s.insert(key.to_string(), ChannelEmotes { map, fetched_at: Instant::now(), standing });
+        }
+        Install::Keep => {
+            if let Some(c) = s.get_mut(key) {
+                c.fetched_at = Instant::now();
+            }
+            log::debug!(
+                "[YouTube] 7TV refresh for {} was partial ({} emotes); keeping the held set ({})",
+                key,
+                count,
+                held.map(|(_, len)| len).unwrap_or(0)
+            );
+        }
+    }
+    install
+}
+
+/// Fetches the channel's 7TV table: the globals with the channel's set over
+/// them. Whole only when every part answered; a 404 for the channel means it
+/// is not on 7TV, which is a whole answer (the globals alone).
+async fn fetch_table(client: &reqwest::Client, channel_id: &str) -> (HashMap<String, YouTubeEmote>, bool) {
     let mut map: HashMap<String, YouTubeEmote> = HashMap::new();
     // Globals first so the channel set overrides on name collisions.
-    fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;
-    let globals_len = map.len();
-    // Whether 7TV says this channel HAS a set; with one, an answer holding only
-    // the globals means the set fetch failed.
-    let mut has_set = false;
+    let globals_ok = match table_repair::get_json(client, "https://7tv.io/v3/emote-sets/global", SEVENTV_TIMEOUT).await {
+        Ok(Some(v)) => {
+            collect_emotes(&v, "/emotes", &mut map);
+            true
+        }
+        _ => false,
+    };
     let chan_url = format!("https://7tv.io/v3/users/google/{channel_id}");
-    // Whether the CHANNEL half resolved. A failed fetch and a channel with no
-    // 7TV set both leave the map holding globals only, but they need opposite
-    // treatment: the first should be retried soon, the second is the final answer.
-    let mut channel_ok = false;
-    let fetched = fetch_user(&client, &chan_url).await;
-    if let Ok(none_or_user) = &fetched {
-        // Reached 7TV and got a definitive answer, even if that answer is
-        // "this channel has no set".
-        channel_ok = true;
-        let _ = none_or_user;
-    }
-    if let Ok(Some(user)) = fetched {
-        if user
-            .pointer("/emote_set/emotes")
-            .and_then(|e| e.as_array())
-            .is_some()
-        {
-            // Inline set (pre-change payload).
-            has_set = true;
-            collect_emotes(&user, "/emote_set/emotes", &mut map);
-        } else if let Some(set_id) = emote_service::seventv_active_set_id(&user) {
-            has_set = true;
-            // Post-change payload: fetch the active set by id.
-            let set_url = format!("https://7tv.io/v3/emote-sets/{set_id}");
-            fetch_into(&client, &set_url, "/emotes", &mut map).await;
+    let channel_ok = match table_repair::get_json(client, &chan_url, SEVENTV_TIMEOUT).await {
+        Err(()) => false,
+        // Not on 7TV: final.
+        Ok(None) => true,
+        Ok(Some(user)) => {
+            if user.pointer("/emote_set/emotes").and_then(|e| e.as_array()).is_some() {
+                // Inline set (pre-change payload).
+                collect_emotes(&user, "/emote_set/emotes", &mut map);
+                true
+            } else if let Some(set_id) = emote_service::seventv_active_set_id(&user) {
+                // Post-change payload: fetch the active set by id.
+                let set_url = format!("https://7tv.io/v3/emote-sets/{set_id}");
+                match table_repair::get_json(client, &set_url, SEVENTV_TIMEOUT).await {
+                    Ok(Some(v)) => {
+                        collect_emotes(&v, "/emotes", &mut map);
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                // On 7TV with no active set.
+                true
+            }
         }
-    }
-
-    // A channel-set fetch that failed leaves ONLY the globals in `map`. Writing
-    // that would clobber a good set with a worse one — observed live: xqc's 999
-    // emotes were replaced by the 45 globals when one of three concurrent
-    // refreshes lost its channel fetch. Same discipline `store_native` already
-    // uses: never let a partial result overwrite a fuller one.
-    // After a live edit a complete answer replaces the set even when smaller,
-    // since that is what a removal looks like.
-    let channel_complete = channel_ok && (!has_set || map.len() > globals_len);
-    if let Ok(s) = store().lock() {
-        let cached = s.get(&key);
-        if live_edit && !channel_complete && cached.is_some() {
-            log::debug!("[7TV] refetch after an edit for {} was incomplete; keeping the cached set", key);
-            return;
-        }
-        if !(live_edit && channel_complete) && cached.is_some_and(|c| c.map.len() > map.len()) {
-            log::debug!(
-                "[YouTube] 7TV refresh for {} returned {} vs {} cached; keeping the cached set",
-                key,
-                map.len(),
-                s.get(&key).map(|c| c.map.len()).unwrap_or(0)
-            );
-            return;
-        }
-    }
-    let count = map.len();
-    // A partial result is still worth serving (globals beat nothing), but it must
-    // not sit for the whole TTL: backdating `fetched_at` makes the next call retry
-    // in RETRY_AFTER instead of ten minutes. Seen live on xqc, whose 999-emote set
-    // failed to fetch three times in a row and would otherwise have left that chat
-    // with 45 emotes until the TTL lapsed.
-    let stamp = if channel_ok {
-        Instant::now()
-    } else {
-        log::warn!(
-            "[YouTube] 7TV channel set for {} did not resolve; serving {} global(s) and retrying shortly",
-            key,
-            count
-        );
-        Instant::now()
-            .checked_sub(TTL - RETRY_AFTER)
-            .unwrap_or_else(Instant::now)
     };
-    if channel_complete {
-        crate::services::emote_set_cache::save_provider("youtube7tv", &key, &map);
-    }
-    if let Ok(mut s) = store().lock() {
-        s.insert(
-            key.clone(),
-            ChannelEmotes {
-                map,
-                fetched_at: stamp,
-            },
-        );
-    }
-    log::info!("[YouTube] 7TV emotes for channel {channel_id} (as {identifier}): {count} loaded");
+    (map, globals_ok && channel_ok)
 }
 
-/// Fetch a 7TV USER document, keeping the distinction `fetch_json` throws away.
-///
-/// A channel that simply is not on 7TV answers 404, which is a FINAL answer and
-/// must be cached like any other; a timeout or a 5xx is transient and should be
-/// retried shortly. Collapsing both to `None` meant either caching "no emotes"
-/// for ten minutes after a blip, or retrying forever for a channel that will
-/// never have a set.
-async fn fetch_user(client: &reqwest::Client, url: &str) -> Result<Option<Value>, ()> {
-    let resp = match client.get(url).timeout(SEVENTV_TIMEOUT).send().await {
-        Ok(r) => r,
-        Err(_) => return Err(()),
-    };
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None); // not on 7TV: final
-    }
-    if !resp.status().is_success() {
-        return Err(()); // 5xx / rate limit: transient
-    }
-    resp.json().await.map(Some).map_err(|_| ())
+/// Fetches a partial table again in the background while a chat shows it.
+fn spawn_retries(identifier: String, channel_id: String) {
+    let key = channel_id.to_lowercase();
+    let open = key.clone();
+    table_repair::spawn(&RETRYING, key, move || in_use(&open), move || {
+        let identifier = identifier.clone();
+        let channel_id = channel_id.clone();
+        async move { refresh_inner(&identifier, &channel_id, Mode::Retry).await }
+    });
 }
 
-async fn fetch_json(client: &reqwest::Client, url: &str) -> Option<Value> {
-    let resp = client
-        .get(url)
-        .timeout(SEVENTV_TIMEOUT)
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+/// Bakes the held rows again with the channel's current table and patches the
+/// ones that changed.
+async fn repair_rows(key: &str, whole: bool) {
+    if HELD.len(key) == 0 {
+        return;
     }
-    resp.json().await.ok()
+    let table = store().lock().ok().and_then(|s| s.get(key).map(|c| c.map.clone()));
+    let Some(table) = table else { return };
+    let patches = HELD.repair(key, whole, |segments| table_repair::bake(segments, |word| baked(&table, word)));
+    table_repair::send_patches(patches).await;
+}
+
+fn baked(table: &HashMap<String, YouTubeEmote>, word: &str) -> Option<table_repair::Baked> {
+    table.get(word).map(|e| table_repair::Baked { id: e.id.clone(), url: e.url.clone(), zero_width: e.zero_width })
 }
 
 fn collect_emotes(v: &Value, pointer: &str, map: &mut HashMap<String, YouTubeEmote>) {
@@ -382,14 +452,132 @@ fn collect_emotes(v: &Value, pointer: &str, map: &mut HashMap<String, YouTubeEmo
     }
 }
 
-async fn fetch_into(
-    client: &reqwest::Client,
-    url: &str,
-    pointer: &str,
-    map: &mut HashMap<String, YouTubeEmote>,
-) {
-    if let Some(v) = fetch_json(client, url).await {
-        collect_emotes(&v, pointer, map);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::chat_layout::MessageSegment;
+
+    fn table(names: &[(&str, &str)]) -> HashMap<String, YouTubeEmote> {
+        names
+            .iter()
+            .map(|(name, id)| {
+                (
+                    name.to_string(),
+                    YouTubeEmote {
+                        id: id.to_string(),
+                        url: format!("https://cdn.7tv.app/emote/{id}/2x.webp"),
+                        zero_width: false,
+                        owner_name: None,
+                        original_name: None,
+                        owner_ref: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn standing(key: &str) -> Option<(Standing, usize)> {
+        store().lock().unwrap().get(key).map(|c| (c.standing, c.map.len()))
+    }
+
+    /// A row as the YouTube parser leaves it, with a YouTube emoji after the text.
+    fn row(id: &str, channel: &str, body: &str) -> ChatMessage {
+        let mut msg: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "user_id": "1",
+            "username": "a",
+            "display_name": "A",
+            "color": null,
+            "badges": [],
+            "timestamp": "",
+            "content": body,
+            "tags": {},
+            "provider": "youtube",
+            "channel": format!("youtube:{channel}"),
+        }))
+        .expect("a row");
+        msg.segments = vec![
+            MessageSegment::Text { content: format!("{body} ") },
+            MessageSegment::Emote {
+                content: ":yt:".into(),
+                emote_id: None,
+                emote_url: "https://yt3.ggpht.com/emoji".into(),
+                is_zero_width: None,
+                modifier_flags: None,
+                is_personal: None,
+            },
+        ];
+        msg
+    }
+
+    #[test]
+    fn a_partial_table_never_replaces_the_saved_copy() {
+        let key = "ucrule1saved";
+        store().lock().unwrap().insert(
+            key.to_string(),
+            ChannelEmotes {
+                map: table(&[("OMEGALUL", "chan1"), ("EZ", "glob1")]),
+                fetched_at: Instant::now(),
+                standing: Standing::Saved,
+            },
+        );
+        assert_eq!(install_table(key, table(&[("EZ", "glob1")]), false), Install::Keep);
+        assert_eq!(standing(key), Some((Standing::Saved, 2)));
+        assert_eq!(install_table(key, table(&[("EZ", "glob1")]), true), Install::Replace { save: true });
+        assert_eq!(standing(key), Some((Standing::Whole, 1)));
+    }
+
+    #[test]
+    fn a_partial_table_serves_only_when_nothing_is_held_and_is_never_saved() {
+        let key = "ucrule1empty";
+        assert_eq!(install_table(key, table(&[("EZ", "glob1")]), false), Install::Replace { save: false });
+        assert_eq!(standing(key), Some((Standing::Partial, 1)));
+        assert!(has_emotes(key), "the globals serve while nothing better is held");
+        assert_eq!(install_table(key, table(&[("EZ", "glob1")]), false), Install::Keep);
+        assert_eq!(
+            install_table(key, table(&[("EZ", "glob1"), ("OMEGALUL", "chan1")]), true),
+            Install::Replace { save: true }
+        );
+        assert_eq!(standing(key), Some((Standing::Whole, 2)));
+    }
+
+    #[test]
+    fn rows_parsed_before_the_whole_table_are_held_and_repaired_once_it_lands() {
+        let key = "ucrule4";
+        install_table(key, table(&[("EZ", "glob1")]), false);
+        hold_row(&row("m1", "UCrule4", "look OMEGALUL"));
+        assert_eq!(HELD.len(key), 1, "held while the table is partial");
+
+        install_table(key, table(&[("EZ", "glob1"), ("OMEGALUL", "chan1")]), true);
+        let whole = store().lock().unwrap().get(key).map(|c| c.map.clone()).unwrap();
+        let patches = HELD.repair(key, true, |s| table_repair::bake(s, |w| baked(&whole, w)));
+        let rows = patches.get("youtube:UCrule4").expect("patched in the chat it was shown in");
+        assert_eq!(rows.len(), 1);
+        let ids: Vec<Option<&str>> = rows[0]["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["type"] == "emote")
+            .map(|s| s["emote_id"].as_str())
+            .collect();
+        assert_eq!(ids, vec![Some("chan1"), None], "the 7TV word baked, the YouTube emoji kept");
+        assert_eq!(HELD.len(key), 0);
+
+        hold_row(&row("m2", "UCrule4", "OMEGALUL"));
+        assert_eq!(HELD.len(key), 0, "a whole table needs no repair");
+    }
+
+    #[test]
+    fn a_channel_stays_in_use_until_every_chat_showing_it_is_left() {
+        let key = "ucrule3";
+        in_use_map().lock().unwrap().entry(key.to_string()).or_default().extend(["videoid1".to_string(), "@handle".to_string()]);
+        hold_row(&row("m1", "UCrule3", "OMEGALUL"));
+        assert_eq!(HELD.len(key), 1, "no table yet: held");
+        release("VIDEOID1");
+        assert!(in_use(key), "still open by handle");
+        assert_eq!(HELD.len(key), 1);
+        release("@handle");
+        assert!(!in_use(key), "the retry loop sees no chat shows it");
+        assert_eq!(HELD.len(key), 0);
     }
 }
-
