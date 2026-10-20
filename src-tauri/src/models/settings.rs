@@ -398,6 +398,10 @@ pub struct ChatDesignSettings {
     /// The slider ends in Ban.
     #[serde(default = "default_true")]
     pub mod_slider_ban: bool,
+    /// The phones' press-and-hold menu offers Delete, Timeout and Ban.
+    /// Moderators only; the user card's Moderate row keeps them either way.
+    #[serde(default = "default_true")]
+    pub mod_hold_buttons: bool,
     /// How far the slider's steps sit apart, the same at every chat width:
     /// "short" (18 px), "medium" (22 px), "long" (28 px); a narrow chat
     /// squeezes them to fit.
@@ -699,6 +703,7 @@ impl Default for ChatDesignSettings {
             mod_slider_delete: true,
             mod_slider_timeouts: default_mod_slider_timeouts(),
             mod_slider_ban: true,
+            mod_hold_buttons: true,
             mod_slider_length: default_mod_slider_length(),
             mod_slider_style: default_mod_slider_style(),
             mod_line_buttons: false,

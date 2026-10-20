@@ -581,6 +581,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     }
     /// Whether a row can be moderated with a swipe (a Twitch chatter the viewer may act on).
     var swipeAllowed: ((ChatRowLayout) -> Bool)?
+    /// Why a row is not swipeable, for the log.
+    var swipeRefusal: ((ChatRowLayout) -> String?)?
     /// The slider for a press `startX` points into a row, and the release action, for that row.
     var prepareSwipe: ((ChatRowLayout, _ width: CGFloat, _ startX: CGFloat) async -> PreparedSwipe?)?
     /// A swipe started (the hint goes once one has).
@@ -603,7 +605,8 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             let point = g.location(in: scroll)
             guard let (row, cell) = row(at: point) else { return }
             guard swipeAllowed?(row.layout) == true else {
-                chatLog.notice("[swipe] down on \(row.id, privacy: .public): not swipeable here")
+                let why = swipeRefusal?(row.layout) ?? "not swipeable here"
+                chatLog.notice("[swipe] down on \(row.id, privacy: .public): not swipeable: \(why, privacy: .public)")
                 return
             }
             let startX = point.x - cell.frame.minX

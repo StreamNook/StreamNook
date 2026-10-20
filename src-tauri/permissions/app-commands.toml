@@ -38,6 +38,8 @@ allow = [
   "mirror_notification",
   "open_mirrored_notification",
   "test_system_notification",
+  "system_notification_permission",
+  "open_system_notification_settings",
   "test_points_notification",
   "take_notice_action",
   "grow_popout_width",

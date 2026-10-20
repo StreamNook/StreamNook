@@ -23,8 +23,9 @@ struct StaticPopover: ViewModifier {
 // MARK: Pinned messages
 
 /// The room's pinned messages as one container that grows downward: a header with the sender
-/// and a one-line preview, which unrolls into every pin. It always starts collapsed; tapping a
-/// pin never jumps to the message and there is no unpin here.
+/// and a one-line preview, which unrolls into every pin. It starts as Chat > Pinned Messages >
+/// Collapsed says, and with Style set to Hidden the panel draws none of it while it is folded;
+/// tapping a pin never jumps to the message and there is no unpin here.
 struct PinnedBanner: View {
     let pins: [PinnedChat]
     @Binding var expanded: Bool

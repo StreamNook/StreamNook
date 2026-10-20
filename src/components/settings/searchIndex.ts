@@ -2417,17 +2417,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     description: 'Block Twitch ads with the ad blocker plugin. Ad-free, TTV LOL, proxy, splice. Plugin integration panels appear here once installed.'
   },
   // === Notifications ===
+  // "Notify me about" rows are drawn from Rust's alert type list
+  // (src-tauri/src/services/alert_types.json, the desktop ones), with its
+  // titles; searchIndex.coverage.test.ts reads that list to check them.
   {
     tab: 'Notifications',
     section: 'Notifications',
     title: 'Notifications',
-    description: 'Control notification system settings.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notifications',
-    title: 'All notifications',
-    description: 'Turn this off to silence every notification at once; your choices below stay saved for when you turn it back on. Previously "Show notifications".'
+    description: 'Turn every notification on or off at once; your choices stay saved for when you turn them back on. Master switch, mute all, silence everything. Previously "All notifications".'
   },
   {
     tab: 'Notifications',
@@ -2465,7 +2462,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Notifications',
     section: 'Display',
     title: 'System notifications',
-    description: 'Windows, macOS or desktop notifications while you are in another app, or StreamNook is minimized or in the tray. Native notifications, Action Center, notification popups outside the app.'
+    description: 'Windows, macOS or desktop notifications while you are in another app, or StreamNook is minimized or in the tray. Native notifications, Action Center, notification popups outside the app, macOS permission, allow notifications.'
   },
   {
     tab: 'Notifications',
@@ -2476,143 +2473,116 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Notification Types',
-    description: 'Enable or disable specific types: live streams, whispers, updates, drops, channel points, badges.'
+    section: 'Notify me about',
+    title: 'Notify me about',
+    description: 'Pick which events are worth a notification: live channels, favorites, mentions, whispers, drops, badges, gift subs, rewards, channel points, predictions, app updates. Previously "Notification Types".'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Followed channels',
-    description: 'You get a notification the moment someone you follow starts streaming, and clicking it opens the stream. Previously "When a followed channel goes live".'
+    section: 'Notify me about',
+    title: 'Live channels',
+    description: 'When a channel you follow goes live, the moment it starts streaming, and clicking it opens the stream. Going live, followed channels. Previously "Followed channels".'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Favorite channels',
-    description: 'Channels you have favorited notify you even if you do not follow them on Twitch. Previously "When a favorite channel goes live".'
+    section: 'Notify me about',
+    title: 'Favorite channels live',
+    description: 'When a channel you favorited goes live, even one you do not follow on Twitch. Favorites. Previously "Favorite channels".'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Whispers',
-    description: 'A notification shows each new whisper, and clicking it opens the conversation. Previously "When you get a whisper".'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Mentions and replies',
+    section: 'Notify me about',
     title: 'Mentions and replies',
-    description: 'Everything that mentions you or replies to you lands in Mentions, beside Whispers in the title bar. Mentions inbox, @ mentions, replies to you, pings.'
+    description: 'When someone mentions or replies to you while that chat is not on screen, and clicking it opens the chat at that message. @ mentions, pings. Previously "Notify me" under Mentions and replies.'
   },
   {
     tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Notify me',
-    description: 'A notification shows when someone mentions you or replies to you while that chat is not on screen, and clicking it opens the chat at that message. Previously "Mentions and replies" under Notification Types.'
+    section: 'Notify me about',
+    title: 'Whispers',
+    description: 'When someone whispers you, and clicking it opens the conversation. DM, direct message. Previously "When you get a whisper".'
   },
   {
     tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Counts as a mention',
-    description: 'Your @name always counts as a mention. Choose what else does, in Mentions and for notifications.'
+    section: 'Notify me about',
+    title: 'Drops',
+    description: 'Campaign progress and claimable rewards: a notification confirms each drop StreamNook claims for you. Previously "Claimed drops".'
   },
   {
     tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Name without @',
-    parent: 'Counts as a mention',
-    description: 'Your login written as a word, without the @ in front, counts as a mention.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Display name',
-    parent: 'Counts as a mention',
-    description: 'Your display name counts as a mention when it differs from your login.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Highlight words',
-    parent: 'Counts as a mention',
-    description: 'Messages that match one of your highlight phrases land in Mentions and can notify you.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Mentions and replies',
-    title: 'Muted chats',
-    description: 'Chats whose mentions never notify you or land in Mentions. Mute a chat from its row in Mentions; unmute it here. Silence, ignore a channel.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'App updates',
-    description: 'You hear about new StreamNook versions as soon as they are available, and clicking takes you to the Updates page. Previously "When an app update is ready".'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Update straight from the toast',
-    description: 'Clicking the update toast starts installing right away instead of opening the Updates page first.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Claimed drops',
-    description: 'A notification confirms each drop StreamNook claims for you. Previously "When a drop is claimed".'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
     title: 'New drops',
-    parent: 'Claimed drops',
+    parent: 'Drops',
     description: 'At startup, StreamNook checks your favorite categories and tells you when they have new drops to earn. Previously "New drops in favorite categories".'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Channel points',
-    description: 'A notification for the points you earn: bonus chests, raids, watch streaks and prediction results, with the channel\'s face and its own name for its points. Points for watching update quietly in Action Center. Previously "When channel points are claimed".'
+    section: 'Notify me about',
+    title: 'New badges',
+    description: 'When a new global badge becomes available to earn. Previously "When new badges appear".'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
+    title: 'Gift subs',
+    description: 'When someone gifts you a sub, even for a channel you were not watching.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
+    title: 'Earned rewards',
+    description: 'When Twitch names a badge or drop reward you earned: which badge, or which drop reward is waiting, by name.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
+    title: 'Channel points',
+    description: 'Bonus chests, raids, watch streaks and prediction results, with the channel\'s face and its own name for its points. Points for watching update quietly in Action Center. Previously "When channel points are claimed".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
     title: 'Rewards button',
     parent: 'Channel points',
     description: 'A Rewards button on the Windows channel points notification that opens the channel\'s rewards, and a right-click item for these settings.'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
     title: 'Next reward',
     parent: 'Channel points',
     description: 'A progress bar on the Windows channel points notification toward the cheapest reward you cannot afford yet.'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
     title: 'Try one',
     parent: 'Channel points',
     description: 'Shows a sample channel points notification with the extras you turned on. Nothing is spent.'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
     title: 'Predictions',
-    description: 'A notification when a prediction opens on a channel you are watching while StreamNook is in the background, with its choices and how long betting stays open.'
+    description: 'When a prediction opens on a channel you are watching while StreamNook is in the background, with its choices and how long betting stays open.'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
+    section: 'Notify me about',
     title: 'Try one',
     parent: 'Predictions',
     description: 'Shows a sample prediction notification. Nothing is bet.'
   },
   {
     tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'New badges',
-    description: 'You hear about new badges as soon as they become available to earn. Previously "When new badges appear".'
+    section: 'Notify me about',
+    title: 'App updates',
+    description: 'When a new StreamNook version is out, and clicking it opens the changelog to what is new. Previously "When an app update is ready".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
+    title: 'Update straight from the toast',
+    description: 'Clicking the update toast starts installing right away instead of opening the Updates page first.'
   },
   {
     tab: 'Notifications',
@@ -2636,33 +2606,60 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Sound',
+    title: 'Volume',
+    parent: 'Sound',
+    description: 'How loud the notification sound plays. Notification volume, quieter, louder.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Sound',
     title: 'Test notification',
     description: 'Fires a sample notification so you can check the position, sound, and style you picked. Previously "Send a test".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Mentions',
+    description: 'Everything that mentions or replies to you is kept in the Dynamic Island\'s notification history. @ mentions, replies to you, pings. Previously "Mentions and replies".'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Counts as a mention',
+    description: 'Your @name always counts as a mention. Choose what else does, for notifications and in the Dynamic Island\'s notification history.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Name without @',
+    parent: 'Counts as a mention',
+    description: 'Your login written as a word, without the @ in front, counts as a mention.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Display name',
+    parent: 'Counts as a mention',
+    description: 'Your display name counts as a mention when it differs from your login.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Highlight words',
+    parent: 'Counts as a mention',
+    description: 'Messages that match one of your highlight phrases count as mentions: they can notify you and are kept in the notification history.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Mentions',
+    title: 'Muted chats',
+    description: 'Chats whose mentions never notify you or are kept in the Dynamic Island\'s notification history. Unmute them here. Silence, ignore a channel.'
   },
   {
     tab: 'Notifications',
     section: 'About',
     title: 'About',
     description: 'About notifications and how to use them.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Gift subs',
-    description: 'A notification when someone gifts you a sub, even for a channel you were not watching. When someone gifts you a sub.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Notification Types',
-    title: 'Earned rewards',
-    description: 'Hear which badge you earned or which drop reward is waiting, by name. When Twitch names a reward for you.'
-  },
-  {
-    tab: 'Notifications',
-    section: 'Sound',
-    title: 'Volume',
-    parent: 'Sound',
-    description: 'How loud the notification sound plays. Notification volume, quieter, louder.'
   },
   // === Cache ===
   {

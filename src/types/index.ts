@@ -383,6 +383,8 @@ export interface ChatDesignSettings {
   mod_slider_delete?: boolean;
   mod_slider_timeouts?: number[];
   mod_slider_ban?: boolean;
+  // The phones' press-and-hold menu offers Delete, Timeout and Ban (moderators).
+  mod_hold_buttons?: boolean;
   // How far the slider's steps sit apart: 18, 22 (default) or 28 px each, the
   // same at every chat width (a narrow chat squeezes them to fit).
   mod_slider_length?: 'short' | 'medium' | 'long';

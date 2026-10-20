@@ -322,7 +322,9 @@ public struct PickerCell: Decodable, Sendable, Equatable, Identifiable, Hashable
         name = try c.decode(String.self, forKey: .name)
         url = try c.decode(String.self, forKey: .url)
         provider = try c.decode(String.self, forKey: .provider)
+        // A picker cell says `local_url`, a search row (`match_emote_tokens`) `local_path`.
         localPath = try c.decodeIfPresent(String.self, forKey: .localPath)
+            ?? decoder.container(keyedBy: SearchKeys.self).decodeIfPresent(String.self, forKey: .localPath)
         isZeroWidth = try c.decodeIfPresent(Bool.self, forKey: .isZeroWidth) ?? false
         modifierFlags = try c.decodeIfPresent(Int.self, forKey: .modifierFlags)
         width = try c.decodeIfPresent(Int.self, forKey: .width)
@@ -334,8 +336,21 @@ public struct PickerCell: Decodable, Sendable, Equatable, Identifiable, Hashable
         replacedBy = try c.decodeIfPresent(ReplacedBy.self, forKey: .replacedBy)
     }
 
+    private enum SearchKeys: String, CodingKey {
+        case localPath = "local_path"
+    }
+
     public var id: String { "\(provider):\(emoteID)" }
+    /// Unique within a search answer, where one emote id can sit under two names.
+    public var key: String { "\(provider):\(emoteID):\(name)" }
     public var isModifier: Bool { modifierFlags != nil }
+
+    /// Grid cells the emote takes in the search results' 7-across grid, by its width as the
+    /// tabs group it: 1 up to 48 px, 2 up to 80 px, else 3 (the desktop menu's spans).
+    public var span: Int {
+        let w = width.flatMap { $0 > 0 ? $0 : nil } ?? 32
+        return w <= 48 ? 1 : w <= 80 ? 2 : 3
+    }
 
     /// The words a long press shows: the name, then who made it and what kind it is.
     public var detailLines: [String] {
@@ -379,8 +394,31 @@ public enum PickerTabs {
         return out
     }
 
+    /// The tabs while searching: All first, then the same tabs, which narrow the results.
+    public static func searchOrder(_ tabs: [String]) -> [String] {
+        ["all"] + tabs.filter { $0 != "all" && $0 != "gifs" }
+    }
+
+    /// A tab's number in at most four characters, floored as the desktop tabs show it
+    /// (`fitAmount`): 999, then 1K, 12K, 999K, 1M.
+    public static func countLabel(_ count: Int) -> String {
+        guard count > 0 else { return "0" }
+        if count < 1000 { return String(count) }
+        for (size, unit) in [(1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")] where count / size < 1000 {
+            return "\(count / size)\(unit)"
+        }
+        return "999B"
+    }
+
+    /// The scope a fresh search opens on: everything, except from the Emoji tab, where the
+    /// viewer is plainly after an emoji.
+    public static func searchScope(from tab: String) -> String {
+        tab == "emoji" ? "emoji" : "all"
+    }
+
     public static func title(_ id: String) -> String {
         switch id {
+        case "all": return "All"
         case "favorites": return "Favorites"
         case "emoji": return "Emoji"
         case "gifs": return "GIF"
@@ -391,6 +429,94 @@ public enum PickerTabs {
         case "kick": return "Kick"
         default: return id
         }
+    }
+}
+
+// MARK: Picker search (`match_emote_tokens`, picker mode)
+
+/// The core's ranked search across every emote source the room has, as the picker asks it
+/// (`profile` "search", `picker` true): the best rows first, how many matched in all, and how
+/// many in each source and among the favorites, all counted before the row cap.
+public struct PickerSearch: Decodable, Sendable, Equatable {
+    /// Rows the picker asks for, as the desktop menu does.
+    public static let limit = 200
+    /// Emoji shown after the emotes under All; the Emoji tab shows every match.
+    public static let emojiInAll = 24
+
+    public var rows: [PickerCell]
+    public var total: Int
+    /// False while the room's emote set is not in memory yet.
+    public var ready: Bool
+    /// Hits per source (`twitch`, `bttv`, `7tv`, `ffz`, `kick`, `youtube`) and `favorites`.
+    public var counts: [String: Int]
+
+    enum CodingKeys: String, CodingKey {
+        case rows, total, ready, counts
+    }
+
+    public init(rows: [PickerCell], total: Int, ready: Bool = true, counts: [String: Int]) {
+        self.rows = rows
+        self.total = total
+        self.ready = ready
+        self.counts = counts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rows = try c.decodeIfPresent([PickerCell].self, forKey: .rows) ?? []
+        total = try c.decodeIfPresent(Int.self, forKey: .total) ?? rows.count
+        ready = try c.decodeIfPresent(Bool.self, forKey: .ready) ?? true
+        counts = try c.decodeIfPresent([String: Int].self, forKey: .counts) ?? [:]
+    }
+
+    /// The rows a tab shows, in rank order: all of them, the favorites, or one source's.
+    public func cells(in scope: String) -> [PickerCell] {
+        switch scope {
+        case "all": return rows
+        case "emoji": return []
+        case "favorites": return rows.filter(\.favorite)
+        default: return rows.filter { $0.provider == scope }
+        }
+    }
+
+    /// A tab's hit count while searching. All counts the emoji too.
+    public func count(_ scope: String, emojiHits: Int) -> Int {
+        switch scope {
+        case "all": return total + emojiHits
+        case "emoji": return emojiHits
+        default: return counts[scope] ?? 0
+        }
+    }
+
+    /// How many emotes the tab matched, when more than the rows it shows: the results say they
+    /// are the best of that many.
+    public func cappedTotal(_ scope: String) -> Int? {
+        guard scope != "emoji" else { return nil }
+        let matched = scope == "all" ? total : counts[scope] ?? 0
+        return matched > cells(in: scope).count ? matched : nil
+    }
+}
+
+/// The search results' grid: rank order, 7 cells across, a wide emote taking 2 or 3 of them.
+/// A narrow emote that fits a gap an earlier wide one left goes back to fill it (the desktop
+/// grid's dense packing), so rows stay full without losing the order much.
+public enum SearchGrid {
+    public static let columns = 7
+
+    public static func lines(_ cells: [PickerCell], columns: Int = columns) -> [[PickerCell]] {
+        var lines: [[PickerCell]] = []
+        var used: [Int] = []
+        for cell in cells {
+            let span = min(cell.span, columns)
+            if let i = used.firstIndex(where: { $0 + span <= columns }) {
+                lines[i].append(cell)
+                used[i] += span
+            } else {
+                lines.append([cell])
+                used.append(span)
+            }
+        }
+        return lines
     }
 }
 
@@ -431,5 +557,10 @@ public struct EmojiCatalog: Decodable, Sendable {
             }
             return hits.isEmpty ? nil : Category(name: category.name, emoji: hits)
         }
+    }
+
+    /// Every emoji a search matches, in catalog order, for the search results' Emoji block.
+    public func matches(_ query: String) -> [String] {
+        filtered(query).flatMap(\.emoji)
     }
 }

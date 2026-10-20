@@ -32,7 +32,7 @@ interface Props {
   onToggle: () => void;
   /** Broadcaster id, so subscriber and bits badges resolve to this channel. */
   channelId?: string;
-  /** Chat > Pinned Messages > Style: `hidden` folds a collapsed pin down to its pin icon. */
+  /** Chat > Pinned Messages > Style: `hidden` draws nothing while the pin is folded. */
   collapsedStyle?: 'bar' | 'hidden';
 }
 
@@ -43,20 +43,9 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
   if (pins.length === 0) return null;
   const [first, ...rest] = pins;
 
-  // Hidden: no bar while collapsed, only the pin itself, which still opens it
-  // (the desktop keeps the same pin in its chat header).
-  if (!expanded && collapsedStyle === 'hidden') {
-    return (
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label="Show the pinned message"
-        className="sn-popover sn-popover--static pointer-events-auto self-start flex items-center justify-center w-7 h-7 active:opacity-80"
-      >
-        <PushPin size={12} weight="fill" className="text-accent" />
-      </button>
-    );
-  }
+  // Hidden: nothing over chat while folded, as on the desktop. The composer
+  // menu's "Pinned message" opens it (the desktop's is the pin in its header).
+  if (!expanded && collapsedStyle === 'hidden') return null;
 
   return (
     // The single container. Everything below lives inside this one box.

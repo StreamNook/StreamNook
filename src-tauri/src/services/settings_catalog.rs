@@ -400,12 +400,16 @@ mod tests {
     fn moderation_rows_live_on_their_own_page() {
         // Every moderation row sits on the Moderation page, none on Chat.
         for row in rows() {
-            let moderation = row.paths.iter().any(|p| p.starts_with("moderation.") || p.starts_with("chat_design.mod_slider"));
+            let moderation = row.paths.iter().any(|p| {
+                p.starts_with("moderation.") || p.starts_with("chat_design.mod_slider") || p == "chat_design.mod_hold_buttons"
+            });
             assert_eq!(moderation, row.page == "moderation", "{} is on {}", row.title, row.page);
         }
         for ios in [false, true] {
             let swipe = search_on("swipe to moderate", 3, ios, &nothing);
-            assert_eq!((swipe[0].page.as_str(), swipe[0].section.as_str()), ("moderation", "Swipe to Moderate"));
+            assert_eq!((swipe[0].page.as_str(), swipe[0].section.as_str()), ("moderation", "Moderating Messages"));
+            let hold = search_on("hold menu buttons", 3, ios, &nothing);
+            assert_eq!((hold[0].page.as_str(), hold[0].paths[0].as_str()), ("moderation", "chat_design.mod_hold_buttons"));
             let lengths = search_on("timeout lengths", 3, ios, &nothing);
             assert_eq!((lengths[0].page.as_str(), lengths[0].section.as_str()), ("moderation", "User Cards"));
         }
@@ -417,6 +421,16 @@ mod tests {
         assert_eq!(rows().iter().find(|r| r.title == "Steps").unwrap().paths.len(), 3);
     }
 
+    #[test]
+    fn pinned_messages_rows_show_on_every_phone() {
+        for ios in [false, true] {
+            let style = search_on("hide pinned", 3, ios, &nothing);
+            assert_eq!((style[0].section.as_str(), style[0].title.as_str()), ("Pinned Messages", "Style"), "ios {ios}");
+            assert_eq!(style[0].under.as_deref(), Some("Collapsed"));
+            let changed = changed_rows_on(&["chat_design.pinned_collapsed_style".to_string()], ios, &nothing);
+            assert_eq!(titles(&changed), ["Style"], "ios {ios}");
+        }
+    }
     #[test]
     fn keep_screen_on_is_searchable_in_the_chats_tab_section() {
         let hit = search_on("keep screen on", 3, false, &nothing);

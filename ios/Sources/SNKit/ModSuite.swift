@@ -111,9 +111,11 @@ public struct RoomModAction: Codable, Sendable, Equatable, Identifiable {
 extension CoreBridge {
     /// The swipe slider for a press `startX` points from the left of a row `width` points wide, on
     /// `name`'s message (the chip names them).
-    public func swipeSlider(width: Double, startX: Double = 0, name: String = "") async throws -> SwipeSlider {
+    public func swipeSlider(width: Double, startX: Double = 0, name: String = "", targetID: String? = nil,
+                            badges: [String]? = nil, channel: String? = nil) async throws -> SwipeSlider {
         try await invoke("get_touch_mod_slider", args: [
             "provider": "twitch", "rowWidth": width, "startX": startX, "targetName": name,
+            "targetId": targetID, "targetBadges": badges, "channel": channel,
         ], as: SwipeSlider.self)
     }
 
@@ -155,4 +157,30 @@ private struct ParsedStep: Decodable {
     var action: String
     var seconds: Int?
     var label: String
+}
+
+/// What the viewer may do to one message, by Twitch's rules: the core's
+/// `moderation::message_reach`, mirrored here because the hold menu decides while the finger
+/// rests and cannot wait on the core. Helix refuses deleting the broadcaster's messages or
+/// another moderator's, and banning or timing out the broadcaster, yourself, or (unless the
+/// broadcaster does it) a moderator.
+public enum MessageReach: Sendable, Equatable {
+    case all, deleteOnly, noDelete, nothing
+
+    public var canDelete: Bool { self == .all || self == .deleteOnly }
+    public var canTimeout: Bool { self == .all || self == .noDelete }
+
+    /// `badges` as names ("moderator") or with versions ("moderator/1").
+    public static func of(viewerModerates: Bool, viewerIsBroadcaster: Bool, viewerID: String,
+                          targetID: String, badges: [String]) -> MessageReach {
+        guard viewerModerates || viewerIsBroadcaster, !targetID.isEmpty else { return .nothing }
+        func has(_ name: String) -> Bool { badges.contains { $0 == name || $0.hasPrefix(name + "/") } }
+        let own = !viewerID.isEmpty && targetID == viewerID
+        if has("broadcaster") || (own && viewerIsBroadcaster) || has("staff") || has("admin") || has("global_mod") {
+            return .nothing
+        }
+        if own { return .deleteOnly }
+        if has("moderator") || has("lead_moderator") { return viewerIsBroadcaster ? .noDelete : .nothing }
+        return .all
+    }
 }

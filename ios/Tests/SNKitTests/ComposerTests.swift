@@ -147,6 +147,77 @@ import Testing
         #expect(PickerTabs.defaultTab(provider: "twitch") == "twitch")
         #expect(PickerTabs.defaultTab(provider: "youtube") == "emoji")
     }
+
+    @Test func searchingLeadsTheTabsWithAllAndOpensOnIt() {
+        let tabs = PickerTabs.order(coreTabs: ["favorites", "twitch", "bttv", "7tv", "ffz"], gif: false)
+        #expect(PickerTabs.searchOrder(tabs) == ["all", "favorites", "emoji", "twitch", "bttv", "7tv", "ffz"])
+        #expect(PickerTabs.title("all") == "All")
+        // A search typed on any tab looks everywhere; from Emoji it stays on the emoji.
+        #expect(PickerTabs.searchScope(from: "7tv") == "all")
+        #expect(PickerTabs.searchScope(from: "favorites") == "all")
+        #expect(PickerTabs.searchScope(from: "emoji") == "emoji")
+    }
+
+    @Test func tabNumbersFitTheirSlot() {
+        #expect([0, 7, 999, 1000, 1999, 12_345, 999_999, 1_000_000].map(PickerTabs.countLabel)
+            == ["0", "7", "999", "1K", "1K", "12K", "999K", "1M"])
+    }
+
+    /// The core's picker-mode search (`match_emote_tokens`), as its rows and counts come.
+    private let searchJSON = #"""
+    {"rows":[
+       {"id":"t1","name":"catKISS","url":"u","provider":"twitch","source_label":"Twitch Global","source_detail":"Global"},
+       {"id":"s1","name":"catJAM","url":"u","provider":"7tv","local_path":"/cache/s1.webp","width":32,"favorite":true},
+       {"id":"s2","name":"catWIDE","url":"u","provider":"7tv","width":70},
+       {"id":"b1","name":"catHUGE","url":"u","provider":"bttv","width":200},
+       {"id":"f1","name":"catSub","url":"u","provider":"ffz","locked":true}],
+     "total":9,"ready":true,
+     "counts":{"twitch":1,"7tv":4,"bttv":1,"ffz":3,"favorites":2}}
+    """#
+
+    @Test func searchRowsDecodeAsPickerCells() throws {
+        let search = try decode(PickerSearch.self, searchJSON)
+        #expect(search.rows.map(\.name) == ["catKISS", "catJAM", "catWIDE", "catHUGE", "catSub"])
+        let jam = search.rows[1]
+        #expect(jam.favorite && jam.localPath == "/cache/s1.webp")
+        #expect(search.rows[4].locked)
+        #expect(search.rows.map(\.span) == [1, 1, 2, 3, 1])
+        // Rows from an older core without counts still decode.
+        let bare = try decode(PickerSearch.self, #"{"rows":[],"total":0,"ready":false}"#)
+        #expect(!bare.ready && bare.counts.isEmpty)
+    }
+
+    @Test func theTabsNarrowTheResultsAndCountTheirHits() throws {
+        let search = try decode(PickerSearch.self, searchJSON)
+        #expect(search.cells(in: "all").count == 5)
+        #expect(search.cells(in: "7tv").map(\.name) == ["catJAM", "catWIDE"], "rank order kept")
+        #expect(search.cells(in: "favorites").map(\.name) == ["catJAM"])
+        #expect(search.cells(in: "emoji").isEmpty)
+        #expect(search.count("all", emojiHits: 3) == 12, "All counts the emoji too")
+        #expect(search.count("7tv", emojiHits: 3) == 4)
+        #expect(search.count("favorites", emojiHits: 3) == 2, "the core's count, before the cap")
+        #expect(search.count("kick", emojiHits: 3) == 0)
+        #expect(search.count("emoji", emojiHits: 3) == 3)
+        // More matched than the rows shown: the results say they are the best of that many.
+        #expect(search.cappedTotal("all") == 9)
+        #expect(search.cappedTotal("ffz") == 3)
+        #expect(search.cappedTotal("twitch") == nil)
+        #expect(search.cappedTotal("emoji") == nil)
+    }
+
+    @Test func theSearchGridPacksWideEmotesInRankOrder() throws {
+        func cell(_ name: String, _ width: Int) throws -> PickerCell {
+            try decode(PickerCell.self, #"{"id":"\#(name)","name":"\#(name)","url":"u","provider":"7tv","width":\#(width)}"#)
+        }
+        // 1+1+3+1 = 6, the 2-wide does not fit and opens a line, the narrow after it fills the
+        // first line's last cell.
+        let cells = try [cell("a", 32), cell("b", 32), cell("huge", 120), cell("c", 32), cell("wide", 70),
+                         cell("d", 32), cell("e", 32)]
+        let lines = SearchGrid.lines(cells)
+        #expect(lines.map { $0.map(\.name) } == [["a", "b", "huge", "c", "d"], ["wide", "e"]])
+        #expect(lines.allSatisfy { $0.map(\.span).reduce(0, +) <= SearchGrid.columns })
+        #expect(SearchGrid.lines([]).isEmpty)
+    }
 }
 
 @Suite struct EmojiCatalogTests {
@@ -164,6 +235,14 @@ import Testing
         #expect(hearts.flatMap(\.emoji).contains("😍"))
         #expect(catalog.filtered("zzzz-no-such-emoji").isEmpty)
         #expect(catalog.filtered("").count == catalog.categories.count)
+    }
+
+    @Test func searchMatchesAreOneListInCatalogOrder() throws {
+        let catalog = try #require(EmojiCatalog.bundled())
+        let hearts = catalog.matches("heart")
+        #expect(hearts == catalog.filtered("heart").flatMap(\.emoji))
+        #expect(hearts.contains("😍"))
+        #expect(catalog.matches("zzzz-no-such-emoji").isEmpty)
     }
 }
 
@@ -190,5 +269,17 @@ import Testing
         #expect(answer.ready)
         #expect(answer.tab == "twitch")
         #expect(answer.tabs.first?.id == "favorites")
+    }
+
+    @Test func theFakeSearchCountsEachSource() async throws {
+        let fake = FakeCore()
+        try fake.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "t",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        fake.chatFixture = try #require(ChatFixture.bundled())
+        let all = try await fake.invoke("match_emote_tokens", args: [
+            "query": "", "profile": "search", "limit": 1, "picker": true,
+        ], as: PickerSearch.self)
+        #expect(all.rows.count == 1)
+        #expect(all.counts.values.reduce(0, +) == all.total)
     }
 }

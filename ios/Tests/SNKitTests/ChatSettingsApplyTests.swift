@@ -124,3 +124,23 @@ private final class LiveSettingsCore: CoreBridge, @unchecked Sendable {
         #expect(SettingsPath.number("slide") == nil)
     }
 }
+
+/// Chat > Pinned Messages reaches the iPhone's banner: Collapsed decides how a room opens it, and
+/// Style: Hidden draws nothing while it is folded.
+@Suite struct PinnedSettingsTests {
+    @Test func aFreshPhoneFoldsPinsToTheBar() {
+        let fresh = ChatStyle()
+        #expect(fresh.pinnedStartCollapsed)
+        #expect(fresh.pinnedCollapsedStyle == "bar")
+        #expect(fresh.pinsShown(open: false))
+    }
+
+    @Test func hiddenDrawsNothingWhileFolded() {
+        let json = #"{"chat_design":{"pinned_start_collapsed":false,"pinned_collapsed_style":"hidden"}}"#
+        let style = ChatStyle(settingsJSON: Data(json.utf8))
+        #expect(!style.pinnedStartCollapsed)
+        #expect(style.pinnedCollapsedStyle == "hidden")
+        #expect(!style.pinsShown(open: false))
+        #expect(style.pinsShown(open: true))
+    }
+}

@@ -47,6 +47,13 @@ final class ChatSession {
     var moderatorTools = false
     /// The viewer moderates here (their moderator or broadcaster badge in this room).
     private(set) var isModerator = false
+    /// The viewer owns this room.
+    private(set) var isBroadcaster = false
+    /// The core's word for the viewer's standing here ("viewer", "vip", "moderator",
+    /// "broadcaster"), or "unknown" before it has answered.
+    private(set) var role = "unknown"
+    /// The signed-in viewer's Twitch user id, once known.
+    private(set) var viewerID = ""
     /// The open rooms this one belongs to, for the chat menu's tab actions.
     @ObservationIgnored weak var rooms: ChatRooms?
 
@@ -60,7 +67,13 @@ final class ChatSession {
         self.source = source
         let box = WeakBox<ChatSession>()
         pipeline = ChatPipeline(style: ChatStyle(), scale: UITraitCollection.current.displayScale, onModes: { modes in
-            Task { @MainActor in box.value?.modes = modes }
+            Task { @MainActor in
+                box.value?.modes = modes
+                // The core re-sends the room when Twitch's USERSTATE changes the viewer's role
+                // (in someone else's room the moderator role only arrives with it), so read the
+                // role again: reading it once at join left a moderator there as a viewer.
+                box.value?.loadRole()
+            }
         }, onRowCount: { count in
             Task { @MainActor in box.value?.rowCount = count }
         })
@@ -185,6 +198,7 @@ final class ChatSession {
     }
 
     /// Whether the viewer moderates this room, from the core's send budget (USERSTATE badges).
+    /// Read at join and again whenever the core re-sends the room's state.
     private func loadRole() {
         // The send budget reads Twitch's USERSTATE; Kick rooms carry no Twitch role.
         guard !isKick else { return }
@@ -194,9 +208,20 @@ final class ChatSession {
             guard let json = try? await core.invoke("chat_send_budget", args: ["channel": channel]),
                   let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
                   let role = budget["role"] as? String, let self else { return }
+            let changed = role != self.role
+            self.role = role
             self.isModerator = role == "moderator" || role == "broadcaster"
+            self.isBroadcaster = role == "broadcaster"
+            if self.viewerID.isEmpty,
+               let userJSON = try? await core.invoke("get_user_info", "{}"),
+               let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) {
+                self.viewerID = user.id
+            }
             // On by default; turned off for this room earlier this session, it stays off.
             self.moderatorTools = self.isModerator && !(self.rooms?.modToolsOff.contains(self.channel) ?? false)
+            if changed {
+                chatLog.notice("[swipe] room \(channel, privacy: .public): role \(role, privacy: .public), viewer \(self.viewerID.isEmpty ? "unknown" : self.viewerID, privacy: .public), mod tools \(self.moderatorTools ? "on" : "off", privacy: .public), room id \(self.roomID ?? "unknown", privacy: .public)")
+            }
         }
     }
 
@@ -312,4 +337,28 @@ final class ChatSession {
 /// A weak reference a Sendable closure can hold.
 final class WeakBox<T: AnyObject>: @unchecked Sendable {
     weak var value: T?
+}
+
+extension ChatSession {
+    /// What Twitch lets the viewer do to `message` here (the core's `message_reach`).
+    func reach(for message: ChatMessage) -> MessageReach {
+        MessageReach.of(viewerModerates: isModerator, viewerIsBroadcaster: isBroadcaster, viewerID: viewerID,
+                        targetID: message.userID, badges: message.badges.map { "\($0.name)/\($0.version)" })
+    }
+}
+
+extension ChatSession {
+    /// Why a press on `message` starts no swipe, in words for the log; nil when it may.
+    func swipeRefusal(_ message: ChatMessage?) -> String? {
+        guard let message else { return "the row has no message" }
+        if !moderatorTools { return "mod tools are off here (role \(role))" }
+        if roomID == nil { return "the room id is not known yet" }
+        if message.provider != "twitch" { return "not a Twitch row" }
+        if message.isSystem || message.tags["system-msg"] != nil { return "an event row" }
+        let reach = reach(for: message)
+        guard reach == .nothing else { return nil }
+        let own = !viewerID.isEmpty && message.userID == viewerID
+        let badges = message.badges.map(\.name).joined(separator: ",")
+        return "Twitch allows nothing on it (own \(own), role \(role), viewer \(viewerID.isEmpty ? "unknown" : viewerID), sender badges \(badges.isEmpty ? "none" : badges))"
+    }
 }
