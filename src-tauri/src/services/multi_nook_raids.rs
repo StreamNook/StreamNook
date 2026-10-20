@@ -304,7 +304,7 @@ async fn session(app: &AppHandle, rx: &mut watch::Receiver<HashSet<String>>) -> 
                                 "[MultiNook raids] {} raided {}",
                                 raid.source_id, raid.target_login
                             );
-                            let (to_grid, to_solo) = routes(&wanted(), &raid.source_id);
+                            let (to_grid, to_solo) = routes(&self::wanted(), &raid.source_id);
                             if to_grid {
                                 let _ = app.emit("multi-nook://raid", &raid);
                             }
