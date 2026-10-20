@@ -105,7 +105,18 @@ struct WatchLayer: View {
                     .overlay {
                         // An offline room takes the band (its latest broadcast gives it back).
                         if watch.room != nil, !watch.roomVod {
+                            // The room has no player controls, so its way out is always on show:
+                            // minimize and close in the corner, and the same swipe down as video.
                             OfflineRoomView(model: model, compact: mini)
+                                .simultaneousGesture(full && !landscape ? shrinkGesture(screen: screen) : nil)
+                                .overlay(alignment: .topTrailing) {
+                                    if full {
+                                        RoomExit(onMinimize: minimize, onClose: { model.stopWatching() })
+                                            .padding(.top, landscape ? insets.top + 4 : 4)
+                                            .padding(.trailing, (landscape ? insets.trailing : 0) + 4
+                                                     + (sideChat && !beside && !chat.leading ? columnWidth : 0))
+                                    }
+                                }
                         } else if full {
                             PlayerChrome(model: model, landscape: landscape,
                                          insets: landscape ? chromeInsets(sideChat: sideChat, leading: chat.leading) : EdgeInsets(),
@@ -441,6 +452,35 @@ private struct BandRim: View {
 }
 
 /// The mini box's close: the whole top-right 56 point corner, marked by an X in a dark circle.
+/// An offline room's way out, in the band's top corner: minimize (the room shrinks to the mini box
+/// over the page it was opened from) and close. Both always shown: the room has no controls to tap
+/// up first.
+private struct RoomExit: View {
+    let onMinimize: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            button(Symbol.minimize, size: 15, label: "Minimize", action: onMinimize)
+            button(Symbol.close, size: 13, label: "Close", action: onClose)
+        }
+    }
+
+    private func button(_ symbol: String, size: CGFloat, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.black.opacity(0.6)))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
 private struct MiniClose: View {
     let action: () -> Void
 

@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -660,6 +660,43 @@ export const MobilePlayer: React.FC<{
           when they go live. Not an error, so no Retry and no live chrome. The
           mini box shows it compact: the face and an Offline ring. */}
       {offline && !noticeLine && <MobileOfflineRoom mini={compact} cardBelow={offlineCardBelow} />}
+
+      {/* The room has no player controls, so its way out is always on show:
+          minimize (back to the page it was opened from, the room in the mini
+          box) and close, in the band's top corner. */}
+      {offline && !compact && (
+        <div
+          className="absolute right-1 z-20 flex"
+          style={{ top: immersive ? 'calc(var(--sn-safe-t, 0px) + 4px)' : 4 }}
+        >
+          {onMinimize && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMinimize();
+              }}
+              className="sn-touch flex items-center justify-center"
+              aria-label="Minimize"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
+                <CaretDown size={15} weight="bold" />
+              </span>
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void useAppStore.getState().exitStream();
+            }}
+            className="sn-touch flex items-center justify-center"
+            aria-label="Close"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
+              <X size={13} weight="bold" />
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Playback that cannot go on: what happened in plain words, and Retry.
           A provider stream that ended or never started says so here while its
