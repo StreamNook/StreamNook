@@ -6,7 +6,8 @@ import { resolveMemberIds } from '../services/memberAliasService';
 import {
   getCosmeticsFromMemoryCache,
   getCosmeticsWithFallback,
-  isUserCosmeticsHardFailed,
+  isUserCosmeticsRecheckDue,
+  isUserCosmeticsUsable,
   subscribeToCosmetics,
 } from '../services/cosmeticsCache';
 import { invoke } from '@tauri-apps/api/core';
@@ -728,6 +729,11 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       existingUser !== undefined &&
       (existingUser.paint !== undefined || existingUser.seventvBadge !== undefined);
     if (cosmeticsResolved) {
+      // A kept answer, drawn while 7TV was failing, is asked about again once
+      // its retry window passes; 7TV's answer repaints through the bridge below.
+      if (isUserCosmeticsRecheckDue(user.userId)) {
+        getCosmeticsWithFallback(user.userId).catch(() => {});
+      }
       const identityChanged =
         existingUser!.username !== user.username ||
         existingUser!.displayName !== user.displayName ||
@@ -798,8 +804,10 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       // UC channel id, so those chatters wear their real paints and badges.
       enqueueCosmeticUpdate(user.userId, null, null);
     } else {
+      // A hard failure that carries the chatter's kept answer is drawn; the fast
+      // path above asks 7TV again once its retry window passes.
       const cachedCosmetics = getCosmeticsFromMemoryCache(user.userId);
-      if (cachedCosmetics && !isUserCosmeticsHardFailed(user.userId)) {
+      if (cachedCosmetics && isUserCosmeticsUsable(user.userId)) {
         applyCosmetics(cachedCosmetics);
       } else {
         // The fetch records (or clears) the hard-fail mark before it resolves, so
@@ -807,7 +815,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         // unresolved so the next message retries once the 30s window elapses.
         getCosmeticsWithFallback(user.userId)
           .then(() => {
-            if (isUserCosmeticsHardFailed(user.userId)) return;
+            if (!isUserCosmeticsUsable(user.userId)) return;
             const resolved = getCosmeticsFromMemoryCache(user.userId);
             if (resolved) applyCosmetics(resolved);
           })
@@ -936,7 +944,7 @@ void listen<MemberTheme>('member-theme-changed', (event) => {
 // we refresh the matching user's paint/badge in the store so their chat
 // row repaints. Without this bridge a transient empty result earlier in
 // the session stays stuck on screen even after a later fetch succeeded.
-subscribeToCosmetics((userId, cosmetics, hardFail) => {
+subscribeToCosmetics((userId, cosmetics, hardFail, stale) => {
   const state = useChatUserStore.getState();
   const existing = state.users.get(userId);
   if (!existing) return;
@@ -944,7 +952,8 @@ subscribeToCosmetics((userId, cosmetics, hardFail) => {
   // A hard failure isn't a real answer. Don't stamp a null paint (which would
   // flip the addUser fast-path's cosmeticsResolved sentinel and stop retries);
   // leave whatever's already on the row so a later success can repaint it.
-  if (hardFail) return;
+  // One carrying the chatter's kept answer is drawn: the fast path re-asks it.
+  if (hardFail && !stale) return;
 
   const nextPaint = cosmetics?.paints?.find((p: any) => p.selected) ?? null;
   const nextBadge = cosmetics?.badges?.find((b: any) => b.selected) ?? null;

@@ -70,6 +70,10 @@ const isHardFailExpired = (userId: string): boolean => {
 
 const hasHardFailMark = (userId: string): boolean => hardFailTimestamps.has(userId);
 
+// Hard failures that came with the chatter's last real answer (kept on disk by
+// Rust) instead of nothing. They are drawn, and still re-asked after the TTL.
+const staleUsers = new Set<string>();
+
 // Public read so callers can distinguish "we got a real answer from 7TV"
 // (paint, or a genuine no-paint) from "the last fetch hard-failed." Chat's
 // addUser uses it to avoid stamping a null paint after a transient failure —
@@ -77,11 +81,20 @@ const hasHardFailMark = (userId: string): boolean => hardFailTimestamps.has(user
 // the whole session, defeating the 30s self-heal above.
 export const isUserCosmeticsHardFailed = (userId: string): boolean => hasHardFailMark(userId);
 
+// Whether the cached cosmetics are worth drawing: a real answer, or the kept
+// one standing in for a failure. A failure with nothing kept is not.
+export const isUserCosmeticsUsable = (userId: string): boolean =>
+  !hasHardFailMark(userId) || staleUsers.has(userId);
+
+// A kept answer drawn on a row whose retry window has passed: ask 7TV again.
+export const isUserCosmeticsRecheckDue = (userId: string): boolean =>
+  staleUsers.has(userId) && isHardFailExpired(userId);
+
 // Reactive subscription so anything that depends on a user's cosmetics
 // (chatUserStore, future surfaces) gets a push when the cache is updated.
 // Without this, a paint that arrived via a profile-card fetch was invisible
 // to the chat row that had already cached a "no paint" answer earlier.
-type CosmeticsListener = (userId: string, cosmetics: CachedCosmetics, hardFail: boolean) => void;
+type CosmeticsListener = (userId: string, cosmetics: CachedCosmetics, hardFail: boolean, stale: boolean) => void;
 const cosmeticsListeners = new Set<CosmeticsListener>();
 
 export function subscribeToCosmetics(listener: CosmeticsListener): () => void {
@@ -89,7 +102,7 @@ export function subscribeToCosmetics(listener: CosmeticsListener): () => void {
   return () => { cosmeticsListeners.delete(listener); };
 }
 
-function publishCosmetics(userId: string, cosmetics: CachedCosmetics, hardFail = false): void {
+function publishCosmetics(userId: string, cosmetics: CachedCosmetics, hardFail = false, stale = false): void {
   inMemoryCosmeticsCache.set(userId, cosmetics);
   // The short-TTL "retry me" mark only applies to hard failures (network /
   // 5xx / retry-exhausted). A successful response that says the user has
@@ -98,14 +111,17 @@ function publishCosmetics(userId: string, cosmetics: CachedCosmetics, hardFail =
   // every 30s from any caller that wasn't deduped by addUser's short-circuit.
   if (hardFail) {
     hardFailTimestamps.set(userId, Date.now());
+    if (stale) staleUsers.add(userId);
+    else staleUsers.delete(userId);
   } else {
     hardFailTimestamps.delete(userId);
+    staleUsers.delete(userId);
     // Persist OUR OWN accounts' cosmetics (never a hard-fail empty) so chat paints
     // the right paint/badge on frame one next launch, per account we've added.
     if (ownCosmeticAccounts.has(userId)) persistOwnCosmetics(userId);
   }
   for (const listener of cosmeticsListeners) {
-    try { listener(userId, cosmetics, hardFail); } catch (e) { Logger.warn('[cosmeticsCache] listener threw:', e); }
+    try { listener(userId, cosmetics, hardFail, hardFail && stale); } catch (e) { Logger.warn('[cosmeticsCache] listener threw:', e); }
   }
 }
 
@@ -168,6 +184,7 @@ export function invalidateUserCosmetics(userId: string): void {
   // too or the profile overlay keeps serving the old paint after a change.
   inMemoryProfileCache.delete(userId);
   hardFailTimestamps.delete(userId);
+  staleUsers.delete(userId);
 }
 
 /**
@@ -233,6 +250,7 @@ export async function forceRefreshCosmetics(userId: string): Promise<CachedCosme
   inMemoryCosmeticsCache.delete(userId);
   inMemoryProfileCache.delete(userId);
   hardFailTimestamps.delete(userId);
+  staleUsers.delete(userId);
   try {
     const { invalidateUserCosmeticsCache } = await import('./seventvService');
     await invalidateUserCosmeticsCache(userId);
@@ -326,10 +344,10 @@ export async function getCosmeticsWithFallback(userId: string): Promise<CachedCo
       // Fetch from API. seventvService returns a wrapper that flags hard
       // failures vs. successful responses (including legitimate empties).
       const { getUserCosmetics } = await import('./seventvService');
-      const { data, hardFail } = await getUserCosmetics(userId);
+      const { data, hardFail, stale } = await getUserCosmetics(userId);
 
       // Publish so listeners (chatUserStore et al.) react.
-      publishCosmetics(userId, data, hardFail);
+      publishCosmetics(userId, data, hardFail, stale === true);
 
       return data;
     } finally {
@@ -501,6 +519,7 @@ export async function getFullProfileWithFallback(
 export function clearCosmeticsMemoryCache(): void {
   inMemoryCosmeticsCache.clear();
   hardFailTimestamps.clear();
+  staleUsers.clear();
   pendingCosmeticsRequests.clear();
   inMemoryThirdPartyBadgesCache.clear();
   pendingThirdPartyBadgesRequests.clear();
