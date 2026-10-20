@@ -118,6 +118,8 @@ final class AppModel {
         chat.kick = kick
         chat.mentions = mentions
         let home = home
+        let signIn = signIn
+        OwnAccount.user = { signIn.user }
         chat.followedLive = { home.lists.followingLive }
         chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
