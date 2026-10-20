@@ -1707,6 +1707,10 @@ pub fn run() {
             services::push_alerts::server::push_unregister,
             #[cfg(target_os = "ios")]
             services::push_alerts::server::push_set_apns_device,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_check,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_seen,
             #[cfg(target_os = "android")]
             cast_plugin::cast_get_state,
             #[cfg(target_os = "android")]
