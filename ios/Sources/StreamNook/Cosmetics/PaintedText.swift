@@ -74,6 +74,10 @@ struct PaintFillView: View {
     var fallback: Color = SN.textPrimary
     @Environment(\.displayScale) private var scale
 
+    /// An animated image layer moves while the app's Motion setting is full (Reduce Motion
+    /// stills it through the shared clock).
+    private var moves: Bool { Look.shared.motion == .full }
+
     var body: some View {
         if paint.layers.isEmpty {
             ZStack {
@@ -84,7 +88,7 @@ struct PaintFillView: View {
                     }
                 }
                 if paint.kind == "image", let url = paint.imageURL {
-                    CosmeticImage(url, animate: true, stretch: true)
+                    CosmeticImage(url, animate: moves, stretch: true)
                 }
             }
         } else {
@@ -97,7 +101,7 @@ struct PaintFillView: View {
                 }
                 ForEach(Array(paint.layers.reversed().enumerated()), id: \.offset) { _, layer in
                     if layer.kind == "image", let url = layer.imageURL {
-                        CosmeticImage(url, animate: true, stretch: true)
+                        CosmeticImage(url, animate: moves, stretch: true)
                     } else {
                         Canvas { context, size in
                             context.withCGContext { cg in

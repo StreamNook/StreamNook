@@ -312,6 +312,24 @@ struct RowText {
         return placed
     }
 
+    /// A run's glyph outlines in `rect`'s own coordinates (y down), placed where the renderer draws
+    /// them: the line starts at `baseline`, and the run's positions are relative to it.
+    static func glyphOutline(_ run: CTRun, font: CTFont, baseline: CGPoint, in rect: CGRect) -> CGPath {
+        let count = CTRunGetGlyphCount(run)
+        var glyphs = [CGGlyph](repeating: 0, count: count)
+        var positions = [CGPoint](repeating: .zero, count: count)
+        CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+        CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+        let outline = CGMutablePath()
+        for i in 0..<count {
+            var place = CGAffineTransform(translationX: baseline.x + positions[i].x - rect.minX,
+                                          y: baseline.y - positions[i].y - rect.minY)
+                .scaledBy(x: 1, y: -1)
+            if let glyph = CTFontCreatePathForGlyph(font, glyphs[i], &place) { outline.addPath(glyph) }
+        }
+        return outline
+    }
+
     private static func ellipsis(_ font: UIFont) -> CTLine {
         CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: [.font: font, .foregroundColor: ChatTheme.textSecondary]))
     }
@@ -356,6 +374,19 @@ struct RowText {
             if let tap = attrs[ChatRowLayoutBuilder.tapKey] as? Int {
                 let rect = CGRect(x: x, y: lineTop, width: runWidth, height: lineBottom - lineTop)
                 tapRects[tap] = tapRects[tap].map { $0.union(rect) } ?? rect
+            }
+            // A paint whose top layer is an image moves: the bitmap holds its first frame, and the
+            // image goes over it as a layer of its own on the shared clock, stretched over the
+            // same box the renderer fills and masked to these glyphs. A paint with gradients over
+            // its image, or drawn see-through, stays as drawn.
+            if let box = attrs[ChatRowLayoutBuilder.paintKey] as? PaintBox, box.paint.opacity >= 1,
+               let top = box.paint.layers.first, top.kind == "image", let url = top.imageURL,
+               let font = attrs[NSAttributedString.Key.font] as? UIFont {
+                let rect = CGRect(x: x, y: origin.y - ascent, width: runWidth, height: ascent + descent)
+                var attachment = RowAttachment(kind: .paint, url: url, pixelHeight: Int((rect.height * builder.scale).rounded(.up)),
+                                               rect: rect, overlays: [], effects: 0, animate: true)
+                attachment.mask = Self.glyphOutline(run, font: font as CTFont, baseline: origin, in: rect)
+                placed.attachments.append(attachment)
             }
         }
         for (index, rect) in tapRects where index < taps.count {
