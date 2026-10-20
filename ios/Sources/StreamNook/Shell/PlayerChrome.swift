@@ -303,6 +303,100 @@ struct PlayerChrome: View {
         }
     }
 
+    /// The bar's buttons, left to right: the most used at the right, under the thumb, Minimize
+    /// last. One list, so a change of order is one line. A button a stream has no use for (Mute
+    /// and Reload on a VOD, Clip signed out, Chat in portrait) leaves its place out.
+    private enum BarSlot: Hashable { case cast, share, clip, mute, reload, settings, chat, rotate, minimize }
+    private static let barOrder: [BarSlot] = [.cast, .share, .clip, .mute, .reload, .settings, .chat, .rotate, .minimize]
+
+    @ViewBuilder
+    private func barButton(_ slot: BarSlot) -> some View {
+        switch slot {
+        case .cast:
+            // The system's AirPlay picker: an Apple TV, a HomePod, AirPods. UIKit draws its glyph
+            // a point high in its box, so it is set down to the row's bottom edge.
+            RoutePicker()
+                .barSlot()
+                .offset(y: 1.5)
+                .accessibilityLabel("Watch on a TV")
+        case .share:
+            if let stream {
+                let title = watch.vodTitle ?? watch.live?.title ?? stream.title
+                let link = watch.playingVod.flatMap { URL(string: "https://www.twitch.tv/videos/\($0.videoID)") }
+                    ?? stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!
+                ShareLink(item: link,
+                          subject: Text(title.isEmpty ? stream.userName : title),
+                          message: Text(watch.playingVod == nil ? "\(stream.userName) is live" : "\(stream.userName)'s broadcast")) {
+                    Image(systemName: Symbol.share)
+                        .font(.system(size: Self.barIcon, weight: .medium))
+                        .foregroundStyle(.white)
+                        .barSlot()
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(watch.playingVod == nil ? "Share stream" : "Share video")
+            }
+        case .clip:
+            if let stream, stream.isTwitch, model.signedIn {
+                BarButton(symbol: "scissors", label: "Create clip", size: Self.barIcon, weight: .medium, tint: .white) {
+                    onTouch()
+                    model.createClip(login: stream.userLogin, channelID: stream.userID ?? "")
+                }
+            }
+        case .mute:
+            // The speaker is short and wide, so centered in its box it ends higher than the
+            // taller symbols beside it; set down to share their bottom edge.
+            if watch.playingVod == nil {
+                BarButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
+                          size: Self.barIcon, weight: .medium, tint: .white) {
+                    watch.toggleMute()
+                    onTouch()
+                }
+                .offset(y: 2)
+            }
+        case .reload:
+            if watch.playingVod == nil {
+                Button {
+                    onTouch()
+                    Task { await model.restartStream() }
+                } label: {
+                    Image(systemName: Symbol.refresh)
+                        .font(.system(size: Self.barIcon, weight: .medium))
+                        .foregroundStyle(.white)
+                        .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
+                        .barSlot()
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Restart stream")
+            }
+        case .settings:
+            BarButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
+                qualityShown = true
+            }
+        case .chat:
+            if landscape {
+                let on = model.nav.landscapeChat
+                BarButton(symbol: Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
+                          size: 18, weight: .medium, tint: on ? SN.accent : .white) {
+                    onTouch()
+                    withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { model.nav.landscapeChat.toggle() }
+                }
+            }
+        case .rotate:
+            // Turns the screen whatever the phone's rotation lock says; it holds until the player
+            // closes or shrinks, which hands the screen back to the sensor.
+            BarButton(symbol: landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                      label: landscape ? "Rotate to portrait" : "Rotate to landscape",
+                      size: Self.barIcon, weight: .medium, tint: .white) {
+                onTouch()
+                Orientation.hold(landscape: !landscape)
+            }
+        case .minimize:
+            BarButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
+                      action: onMinimize)
+        }
+    }
+
     private var barRow: some View {
         HStack(spacing: 0) {
             if watch.roomVod {
@@ -336,71 +430,7 @@ struct PlayerChrome: View {
                 .layoutPriority(1)
             }
             Spacer(minLength: 8)
-            // The speaker is short and wide, so centered in its box it ends higher than the
-            // taller symbols beside it; set down to share their bottom edge.
-            if watch.playingVod == nil {
-                BarButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
-                           size: Self.barIcon, weight: .medium, tint: .white) {
-                    watch.toggleMute()
-                    onTouch()
-                }
-                .offset(y: 2)
-            }
-            // The system's AirPlay picker: an Apple TV, a HomePod, AirPods. UIKit draws its glyph
-            // a point high in its box, so it is set down to the row's bottom edge too.
-            RoutePicker()
-                .barSlot()
-                .offset(y: 1.5)
-                .accessibilityLabel("Watch on a TV")
-            if let stream, stream.isTwitch, model.signedIn {
-                BarButton(symbol: "scissors", label: "Create clip", size: Self.barIcon, weight: .medium, tint: .white) {
-                    onTouch()
-                    model.createClip(login: stream.userLogin, channelID: stream.userID ?? "")
-                }
-            }
-            if let stream {
-                let title = watch.vodTitle ?? watch.live?.title ?? stream.title
-                let link = watch.playingVod.flatMap { URL(string: "https://www.twitch.tv/videos/\($0.videoID)") }
-                    ?? stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")!
-                ShareLink(item: link,
-                          subject: Text(title.isEmpty ? stream.userName : title),
-                          message: Text(watch.playingVod == nil ? "\(stream.userName) is live" : "\(stream.userName)'s broadcast")) {
-                    Image(systemName: Symbol.share)
-                        .font(.system(size: Self.barIcon, weight: .medium))
-                        .foregroundStyle(.white)
-                        .barSlot()
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel(watch.playingVod == nil ? "Share stream" : "Share video")
-            }
-            BarButton(symbol: Symbol.minimize, label: "Minimize player", size: 22, weight: .medium, tint: .white,
-                       action: onMinimize)
-            if watch.playingVod == nil {
-                Button {
-                    onTouch()
-                    Task { await model.restartStream() }
-                } label: {
-                    Image(systemName: Symbol.refresh)
-                        .font(.system(size: Self.barIcon, weight: .medium))
-                        .foregroundStyle(.white)
-                        .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
-                        .barSlot()
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Restart stream")
-            }
-            BarButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
-                qualityShown = true
-            }
-            if landscape {
-                let on = model.nav.landscapeChat
-                BarButton(symbol: Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
-                           size: 18, weight: .medium, tint: on ? SN.accent : .white) {
-                    onTouch()
-                    withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { model.nav.landscapeChat.toggle() }
-                }
-            }
+            ForEach(Self.barOrder, id: \.self) { slot in barButton(slot) }
         }
         // The last icon's ink, not its 44 pt target, ends on the header's right edge.
         .padding(.trailing, -9)

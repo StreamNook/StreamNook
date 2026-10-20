@@ -3,6 +3,7 @@
 interface SNBridge {
   get?(): string;
   setImmersive?(immersive: boolean): void;
+  setPlayerOrientation?(mode: string): void;
   setBarsLightContent?(light: boolean): void;
   setKeepScreenOn?(on: boolean): void;
   setPreferredRefreshRate?(fps: number): void;
@@ -36,6 +37,17 @@ interface SNBridge {
 
 function bridge(): SNBridge | undefined {
   return (window as Window & { SNInsets?: SNBridge }).SNInsets;
+}
+
+/** The player's rotate button: hold the screen in `landscape` or `portrait`
+ *  whatever the phone's rotation lock says, or `release` it back to the sensor
+ *  (leaving the player). */
+export function setPlayerOrientation(mode: 'landscape' | 'portrait' | 'release'): void {
+  try {
+    bridge()?.setPlayerOrientation?.(mode);
+  } catch {
+    /* bridge absent */
+  }
 }
 
 export function setImmersive(immersive: boolean): void {

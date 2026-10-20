@@ -44,6 +44,20 @@ enum Orientation {
         }
     }
 
+    /// The player's rotate button: turns the screen to landscape or portrait and holds it there,
+    /// whatever the phone's own rotation lock says. Leaving the full player calls
+    /// `allowLandscape(false)` and the next one `allowLandscape(true)`, which hands the screen back
+    /// to the sensor.
+    static func hold(landscape: Bool) {
+        AppDelegate.orientations = landscape ? .landscape : .portrait
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows { window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait)) { error in
+                log.error("rotate failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     #if DEBUG
     /// Turns the screen from code, for drive steps (the phone stays where it is).
     static func turn(landscape: Bool) {

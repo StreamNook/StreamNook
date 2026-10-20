@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -75,6 +75,11 @@ const GIVE_WAY_SUBSCRIBE = 3;
 const GAP_SUB = 8;
 const GAP_METRICS = 8;
 
+/** The bottom bar's buttons, left to right: the most used at the right, under
+ *  the thumb, Minimize last. Clip joins after Share once the phone clips land
+ *  (the iPhone has it there already). */
+const BAR_ORDER = ['cast', 'share', 'mute', 'reload', 'settings', 'chat', 'rotate', 'minimize'] as const;
+
 export const MobilePlayer: React.FC<{
   /** Landscape immersive mode: overlay carries no bottom rounding, adds insets. */
   immersive?: boolean;
@@ -82,6 +87,10 @@ export const MobilePlayer: React.FC<{
   /** Shrink into the floating player. In-app that is the mini box; leaving the
    *  app hands the same thing to the OS as system picture-in-picture. */
   onMinimize?: () => void;
+  /** Turns the screen between portrait and landscape full screen. */
+  onRotate?: () => void;
+  /** The screen is on its side now (the rotate button's glyph and label). */
+  landscapeNow?: boolean;
   /** Mini/PiP presentation: video only, no overlay chrome. */
   compact?: boolean;
   /** Current big-screen arrangement, for the toggle's icon and label. */
@@ -99,6 +108,8 @@ export const MobilePlayer: React.FC<{
   immersive = false,
   onToggleFullscreen,
   onMinimize,
+  onRotate,
+  landscapeNow = false,
   compact = false,
   layoutMode,
   onToggleLayout,
@@ -864,121 +875,171 @@ export const MobilePlayer: React.FC<{
               out-pulls another. The last icon's ink, not its 44 px target,
               ends on the header's right edge: 12px of target padding plus the
               glyph's own inset sit past the row's padding. */}
+          {/* The bar's buttons, left to right: the most used at the right,
+              under the thumb, Minimize last. One list, so a change of order is
+              one line (iPhone keeps the same list in PlayerChrome). */}
           <div className="flex items-center -mr-[13px]">
-            <button
-              onClick={toggleMute}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label={muted ? 'Unmute' : 'Mute'}
-            >
-              {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
-            </button>
-            {/* Cast and mirroring, together: the two ways onto a TV. Only on
-                builds that offer them (Rust cast_session::OFFERED). */}
-            {castOffered && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setCastOpen(true);
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label="Watch on a TV"
-              >
-                <Screencast size={BAR_ICON} />
-              </button>
-            )}
-            {currentStream && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // Our own share link on every platform, not a raw platform
-                  // URL: the landing page hands off to StreamNook when it is
-                  // installed and falls back to the platform's page when it is
-                  // not. Same Rust-built link the desktop share copies.
-                  const stream = currentStream;
-                  void shareLinkFor(stream)
-                    .catch(() => buildProviderUrl(streamProvider(stream), stream.user_login))
-                    .then((link) =>
-                      shareText(`${stream.user_name} is live: ${link}`, liveTitle || stream.title || stream.user_name),
-                    );
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label="Share stream"
-              >
-                <ShareNetwork size={BAR_ICON} />
-              </button>
-            )}
-            {onMinimize && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onMinimize();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label="Minimize player"
-              >
-                {/* A touch larger: its outline encloses empty space and reads
-                    lighter than the solid glyphs beside it at the same size. */}
-                <PictureInPicture size={BAR_ICON + 2} />
-              </button>
-            )}
-            {/* The unstick button. A frozen player looks exactly like a paused
-                one from the outside, so this reloads the whole pipeline via the
-                same restart the error screen's Retry uses; today's loading
-                crossfade makes the reload read as one smooth dip through the
-                logo instead of a teardown. */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setRestartPhase('kicked');
-                void restartStream();
-                scheduleHide();
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Restart stream"
-            >
-              <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setQualityOpen(true);
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Quality"
-            >
-              <Gear size={BAR_ICON} />
-            </button>
-            {/* Only on a screen where both arrangements genuinely work, so this
-                never appears as a control with one sensible setting. */}
-            {onToggleLayout && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleLayout();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label={
-                  layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
-                }
-              >
-                {layoutMode === 'columns' ? <Rows size={BAR_ICON} /> : <Columns size={BAR_ICON} />}
-              </button>
-            )}
-            {onToggleFullscreen && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleFullscreen();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
-              >
-                {/* One glyph, filled while chat is showing: this button is
-                    "chat" in both states, and a crossed-out icon read as a
-                    warning rather than as the way back. */}
-                <ChatTeardropText size={BAR_ICON} weight={chatOpen ? 'fill' : 'regular'} />
-              </button>
-            )}
+            {BAR_ORDER.map((slot) => (
+              <React.Fragment key={slot}>
+                {slot === 'cast' && (
+                  <>
+                  {/* Cast and mirroring, together: the two ways onto a TV. Only on
+                      builds that offer them (Rust cast_session::OFFERED). */}
+                  {castOffered && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCastOpen(true);
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label="Watch on a TV"
+                    >
+                      <Screencast size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'share' && (
+                  <>
+                  {currentStream && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Our own share link on every platform, not a raw platform
+                        // URL: the landing page hands off to StreamNook when it is
+                        // installed and falls back to the platform's page when it is
+                        // not. Same Rust-built link the desktop share copies.
+                        const stream = currentStream;
+                        void shareLinkFor(stream)
+                          .catch(() => buildProviderUrl(streamProvider(stream), stream.user_login))
+                          .then((link) =>
+                            shareText(`${stream.user_name} is live: ${link}`, liveTitle || stream.title || stream.user_name),
+                          );
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label="Share stream"
+                    >
+                      <ShareNetwork size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'mute' && (
+                  <>
+                  <button
+                    onClick={toggleMute}
+                    className="sn-touch flex items-center justify-center text-white"
+                    aria-label={muted ? 'Unmute' : 'Mute'}
+                  >
+                    {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
+                  </button>
+                  </>
+                )}
+                {slot === 'reload' && (
+                  <>
+                  {/* The unstick button. A frozen player looks exactly like a paused
+                      one from the outside, so this reloads the whole pipeline via the
+                      same restart the error screen's Retry uses; today's loading
+                      crossfade makes the reload read as one smooth dip through the
+                      logo instead of a teardown. */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRestartPhase('kicked');
+                      void restartStream();
+                      scheduleHide();
+                    }}
+                    className="sn-touch flex items-center justify-center text-white"
+                    aria-label="Restart stream"
+                  >
+                    <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
+                  </button>
+                  </>
+                )}
+                {slot === 'settings' && (
+                  <>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQualityOpen(true);
+                    }}
+                    className="sn-touch flex items-center justify-center text-white"
+                    aria-label="Quality"
+                  >
+                    <Gear size={BAR_ICON} />
+                  </button>
+                  {/* Only on a screen where both arrangements genuinely work, so this
+                      never appears as a control with one sensible setting. */}
+                  {onToggleLayout && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleLayout();
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label={
+                        layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
+                      }
+                    >
+                      {layoutMode === 'columns' ? <Rows size={BAR_ICON} /> : <Columns size={BAR_ICON} />}
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'chat' && (
+                  <>
+                  {onToggleFullscreen && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleFullscreen();
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
+                    >
+                      {/* One glyph, filled while chat is showing: this button is
+                          "chat" in both states, and a crossed-out icon read as a
+                          warning rather than as the way back. */}
+                      <ChatTeardropText size={BAR_ICON} weight={chatOpen ? 'fill' : 'regular'} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'rotate' && (
+                  <>
+                  {onRotate && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRotate();
+                        scheduleHide();
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label={landscapeNow ? 'Rotate to portrait' : 'Rotate to landscape'}
+                    >
+                      {landscapeNow ? <CornersIn size={BAR_ICON} /> : <CornersOut size={BAR_ICON} />}
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'minimize' && (
+                  <>
+                  {onMinimize && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onMinimize();
+                      }}
+                      className="sn-touch flex items-center justify-center text-white"
+                      aria-label="Minimize player"
+                    >
+                      <CaretDown size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+              </React.Fragment>
+            ))}
           </div>
         </div>
       </div>
