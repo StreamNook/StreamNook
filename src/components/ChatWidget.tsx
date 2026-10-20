@@ -34,7 +34,7 @@ import BlendBar, { type BlendView } from './chat/BlendBar';
 import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
-import { PROVIDERS, type ProviderId } from '../types/providers';
+import type { ProviderId } from '../types/providers';
 import { ChatCircle, Chats, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
 import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
@@ -1815,6 +1815,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // reason. The mode still shows in the message box.
   const isInputDisabled =
     !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
+  // A chat nothing can be sent to (a VOD's recorded chat, a platform with no
+  // send path) shows no composer at all, as on both phones: nothing explains
+  // what it cannot do. A platform whose account is only not connected yet
+  // keeps the composer and asks for the sign-in.
+  const composerHidden =
+    isReplayReadOnly || (!canSendHere && provider !== 'kick' && provider !== 'youtube' && provider !== 'tiktok');
   // The room's chat modes, worded by Rust (services/room_modes.rs) and shipped
   // on the ROOMSTATE frame, for every platform that reports them. One place
   // shows them, the viewer's pick: a chip at the field's end that stays while
@@ -1826,16 +1832,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const roomModesAsPrompt = settings.chat_input?.room_modes_style !== 'chip';
   const roomModePrompt = roomModesAsPrompt ? (roomModes?.prompt ?? null) : null;
   const roomModePromptShort = roomModesAsPrompt ? (roomModes?.prompt_short ?? null) : null;
-  const chatPlaceholder = isReplayReadOnly
-    ? 'Viewing chat replay (read-only)'
-    : !canSendHere
+  const chatPlaceholder = !canSendHere
     ? provider === 'kick'
       ? 'Connect your Kick account to send'
       : provider === 'youtube'
       ? 'Connect your YouTube account to send'
-      : provider === 'tiktok'
-      ? 'Connect your TikTok account to send'
-      : "Read-only — sending isn't available yet"
+      : 'Connect your TikTok account to send'
     : twitchSignInOwed
     ? 'Sign in again to chat'
     : isWatchStreakMode
@@ -1846,12 +1848,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
   // placeholder. utils/composerNarrow.ts swaps between the two.
-  const chatPlaceholderNarrow = isReplayReadOnly
-    ? 'Read-only'
-    : !canSendHere
-    ? provider === 'kick' || provider === 'youtube' || provider === 'tiktok'
-      ? 'Sign in'
-      : 'Read-only'
+  const chatPlaceholderNarrow = !canSendHere
+    ? 'Sign in'
     : twitchSignInOwed
     ? 'Sign in'
     : isWatchStreakMode || isResubMode
@@ -1859,7 +1857,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
-  // saying something the user can act on (read-only, connect your account,
+  // saying something the user can act on (connect your account,
   // sub-only, a room mode), so hiding it only ever drops the idle "Send a
   // message" prompt.
   const chatInputPrefs = settings.chat_input;
@@ -3402,7 +3400,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         await runModeration('unban', null);
         return;
       default:
-        notice(`/${cmd} isn't available on ${PROVIDERS[provider].label}.`);
+        notice(`/${cmd} works in Twitch chats only.`);
     }
   };
 
@@ -5788,6 +5786,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
               {/* In a narrow chat column the tools compress in place so the
                   field keeps a usable width (utils/composerNarrow.ts). */}
+              {!composerHidden && (
               <div ref={trackComposerWidth} className="sn-composer-row flex items-center gap-2 min-w-0">
                 {/* The channel wallet: points and bits, balances on the
                     button or on hover. While the watched channel has a bonus
@@ -6113,6 +6112,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 </button>
                 </Tooltip>
               </div>
+              )}
             </div>
             {!isConnected && <p className="text-xs text-yellow-400 mt-2">Chat is not connected. Messages cannot be sent.</p>}
             {/* Why Twitch sends are off, beside the same sign-in Home runs.
