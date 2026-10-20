@@ -10,6 +10,17 @@ const KEY = 'sn-last-kb';
 export const DEFAULT_KEYBOARD_PX = 300;
 /** Below this a reading is a toolbar or a closing frame, not a keyboard. */
 const MIN_KEYBOARD_PX = 120;
+/** The emote panel never opens shorter than this: the iPhone's panel under a
+ *  common keyboard (336 less the home-indicator strip and the gap above it).
+ *  Below it the search, tabs, section title and Emotes/GIFs bar leave the
+ *  grid one cut-off row; at it, three full rows show. */
+export const EMOTE_PANEL_MIN_PX = 320;
+
+/** The emote panel's height: the keyboard's, so the two trade places, but
+ *  never less than a panel you can browse. */
+export function emotePanelHeight(keyboardPx: number): number {
+  return Math.max(Math.round(keyboardPx), EMOTE_PANEL_MIN_PX);
+}
 
 /** The height to remember after reading `kb`: a real keyboard's, else the last one. */
 export function rememberedHeight(previous: number, kb: number): number {

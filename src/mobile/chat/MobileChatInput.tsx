@@ -17,7 +17,7 @@ import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
-import { useLastKeyboardHeight } from '../ui/keyboardHeight';
+import { emotePanelHeight, useLastKeyboardHeight } from '../ui/keyboardHeight';
 import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
 import { KeyboardHideIcon, KeyboardShowIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
@@ -1085,10 +1085,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
 
       </div>
 
-      {/* The emote menu in the keyboard's place, at its height. */}
+      {/* The emote menu in the keyboard's place, at its height, and never
+          shorter than one you can browse. */}
       <div
         className="overflow-hidden"
-        style={{ height: emotesOpen ? keyboardHeight : 0, marginTop: emotesOpen ? 8 : 0 }}
+        style={{ height: emotesOpen ? emotePanelHeight(keyboardHeight) : 0, marginTop: emotesOpen ? 8 : 0 }}
         onTouchStart={(e) => {
           const top = e.currentTarget.getBoundingClientRect().top;
           const t = e.touches[0];
