@@ -16,9 +16,11 @@ struct ProfilePreviewRow: View {
     var body: some View {
         let sn = picks.sn
         let ext = picks.ext
-        let badges = [ext?.twitchSelectable.first(where: \.isSelected)?.imageURL,
-                      ext?.sevenTvBadges.first(where: \.worn)?.badge.url,
-                      sn?.badges.first(where: \.worn)?.imageURL].compactMap { $0 }
+        // Chat's order: Twitch, 7TV, the chat apps, StreamNook last.
+        let badges = ([ext?.twitchSelectable.first(where: \.isSelected)?.imageURL,
+                       ext?.sevenTvBadges.first(where: \.worn)?.badge.url]
+                      + (ext?.chatClients.map { Optional($0.url) } ?? [])
+                      + [sn?.badges.first(where: \.worn)?.imageURL]).compactMap { $0 }
         let look = (sn?.showChatToggle == true && sn?.chatAtmosphere == true) ? AtmosphereCatalog.shared.look(sn?.theme) : nil
         CosmeticsPreviewRow(name: name, paint: ext?.paints.first(where: \.worn)?.paint ?? fallbackPaint, colorHex: ext?.chatColor,
                             badges: badges, look: look, framed: framed)

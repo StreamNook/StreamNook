@@ -41,6 +41,7 @@ final class ChatPipeline: @unchecked Sendable {
     private var paintImages: Set<String> = []
     private var failureObserver: NSObjectProtocol?
     private var themeObserver: NSObjectProtocol?
+    private var atmosphereObserver: NSObjectProtocol?
 
     init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
          onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -59,11 +60,17 @@ final class ChatPipeline: @unchecked Sendable {
         themeObserver = NotificationCenter.default.addObserver(forName: ChatTheme.changed, object: nil, queue: nil) { [weak self] _ in
             self?.themeChanged()
         }
+        // The Atmosphere catalog arriving (or changing) puts the washes on rows laid out without them.
+        atmosphereObserver = NotificationCenter.default.addObserver(forName: AtmosphereCatalog.changed, object: nil,
+                                                                    queue: nil) { [weak self] _ in
+            self?.themeChanged()
+        }
     }
 
     deinit {
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        if let atmosphereObserver { NotificationCenter.default.removeObserver(atmosphereObserver) }
     }
 
     private func themeChanged() {
@@ -274,9 +281,11 @@ final class ChatPipeline: @unchecked Sendable {
             paintImages.insert(url)
             // About the name's height on screen; the painter scales whatever size is loaded.
             let pixels = Int((CGFloat(style.fontSize) * 2 * scale).rounded(.up))
+            // Asked again after it lands, so art the image cache later drops is loaded again.
             ImagePipeline.shared.load(url, pixelHeight: pixels, animated: false) { [weak self] image in
-                guard image != nil else { return }
-                self?.redrawPaint(url)
+                guard let self else { return }
+                queue.async { self.paintImages.remove(url) }
+                if image != nil { redrawPaint(url) }
             }
         }
     }

@@ -172,6 +172,48 @@ import Testing
     }
 }
 
+@Suite struct LateCosmeticsTests {
+    private func row(_ id: String, user: String, provider: String = "twitch", badges: [ChatViewBadge]) -> ChatSocketFrame {
+        var metadata = ChatMetadata()
+        var view = ChatRowView(nameColor: "#ffffff")
+        view.badges = badges
+        metadata.view = view
+        return .row(ChatMessage(id: id, userID: user, username: "u", content: "x", provider: provider, metadata: metadata))
+    }
+
+    private let mod = ChatViewBadge(url: "m", provider: "twitch")
+    private let ffz = ChatViewBadge(url: "f", provider: "ffz")
+    private let member = ChatViewBadge(url: "s", provider: "streamnook")
+
+    @Test func aLate7TVBadgeSitsAfterThePlatformsAndBeforeTheChatAppsAndStreamNook() {
+        var buffer = ChatRoomBuffer(cap: 50)
+        _ = buffer.apply([row("a", user: "1", badges: [mod, ffz, member])])
+        let first = ChatViewBadge(url: "7a", provider: "7tv")
+        _ = buffer.apply([.cosmetics(channel: nil, userID: "1", paint: nil, badge: first)])
+        #expect(buffer.row("a")?.message.metadata.view?.badges.map(\.url) == ["m", "7a", "f", "s"])
+        // A changed 7TV badge replaces the old one rather than joining it.
+        _ = buffer.apply([.cosmetics(channel: nil, userID: "1", paint: nil, badge: ChatViewBadge(url: "7b", provider: "7tv"))])
+        #expect(buffer.row("a")?.message.metadata.view?.badges.map(\.url) == ["m", "7b", "f", "s"])
+    }
+
+    @Test func aTwitchChattersCosmeticsNeverDressAKickChatterWithTheSameNumber() {
+        var buffer = ChatRoomBuffer(cap: 50)
+        _ = buffer.apply([row("t", user: "676", badges: []), row("k", user: "676", provider: "kick", badges: [])])
+        _ = buffer.apply([.cosmetics(channel: nil, userID: "676", paint: nil, badge: ChatViewBadge(url: "7", provider: "7tv"))])
+        #expect(buffer.row("t")?.message.metadata.view?.badges.count == 1)
+        #expect(buffer.row("k")?.message.metadata.view?.badges.isEmpty == true)
+    }
+
+    @Test func theFrameNamesAKickAuthorByTheirPlatform() {
+        let frame = ChatSocketFrame.decode(#"{"type":"ROW_COSMETICS","channel":"x","provider":"kick","user_id":"676","paint":null,"badge":null}"#)
+        guard case .cosmetics(_, let userID, _, _) = frame else {
+            Issue.record("not a cosmetics frame")
+            return
+        }
+        #expect(userID == "kick:676")
+    }
+}
+
 @Suite struct ChatStyleTests {
     @Test func absentKeysKeepThePhonesFirstRunLook() {
         let style = ChatStyle(settingsJSON: Data("{}".utf8))

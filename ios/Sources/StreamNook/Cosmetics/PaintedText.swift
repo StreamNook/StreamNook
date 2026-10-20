@@ -66,31 +66,46 @@ private struct PaintShadowStack: ViewModifier {
     }
 }
 
-/// A paint's fill over a box: the base colour and gradients drawn by `PaintPainter`, with an
-/// image layer on top as a live (animated) image.
+/// A paint's fill over a box: its base color, then every layer in the paint's own order (the
+/// first listed on top, as in CSS), gradients drawn by `PaintPainter` and images as live
+/// (animated) images. A paint from an older core (one fill) draws that fill, with its image on top.
 struct PaintFillView: View {
     let paint: ChatPaint
     var fallback: Color = SN.textPrimary
     @Environment(\.displayScale) private var scale
 
-    private var imageLayer: String? {
-        paint.layers.isEmpty ? (paint.kind == "image" ? paint.imageURL : nil)
-            : paint.layers.first(where: { $0.kind == "image" })?.imageURL
-    }
-
     var body: some View {
-        ZStack {
-            Canvas { context, size in
-                let fallbackColor = UIColor(fallback).cgColor
-                var gradientOnly = paint
-                gradientOnly.layers.removeAll { $0.kind == "image" }
-                context.withCGContext { cg in
-                    PaintPainter.fill(gradientOnly, fallback: fallbackColor, in: CGRect(origin: .zero, size: size), cg,
-                                      imageScale: scale)
+        if paint.layers.isEmpty {
+            ZStack {
+                Canvas { context, size in
+                    context.withCGContext { cg in
+                        PaintPainter.fill(paint, fallback: UIColor(fallback).cgColor, in: CGRect(origin: .zero, size: size), cg,
+                                          imageScale: scale)
+                    }
+                }
+                if paint.kind == "image", let url = paint.imageURL {
+                    CosmeticImage(url, animate: true, stretch: true)
                 }
             }
-            if let imageLayer {
-                CosmeticImage(imageLayer, animate: true, stretch: true)
+        } else {
+            ZStack {
+                Canvas { context, size in
+                    context.withCGContext { cg in
+                        cg.setFillColor(paint.baseColor.flatMap(FillPainter.color) ?? UIColor(fallback).cgColor)
+                        cg.fill(CGRect(origin: .zero, size: size))
+                    }
+                }
+                ForEach(Array(paint.layers.reversed().enumerated()), id: \.offset) { _, layer in
+                    if layer.kind == "image", let url = layer.imageURL {
+                        CosmeticImage(url, animate: true, stretch: true)
+                    } else {
+                        Canvas { context, size in
+                            context.withCGContext { cg in
+                                PaintPainter.draw(layer, in: CGRect(origin: .zero, size: size), cg, imageScale: scale)
+                            }
+                        }
+                    }
+                }
             }
         }
     }

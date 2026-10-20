@@ -84,7 +84,8 @@ public enum ChatSocketFrame: Sendable, Equatable {
     case clearMessage(channel: String?, targetID: String)
     /// A timeout (`duration` seconds), a ban (`duration` nil) or, with no target, a full clear.
     case clearChat(channel: String?, targetUserID: String?, targetUser: String?, duration: Int?)
-    /// A chatter's 7TV cosmetics that arrived after their first row.
+    /// A chatter's 7TV cosmetics that arrived after their first row. `userID` names the author as
+    /// `ROW_MEMBER` does: a bare Twitch id, `kick:<id>` on another platform.
     case cosmetics(channel: String?, userID: String, paint: ChatPaint?, badge: ChatViewBadge?)
     /// A StreamNook member's look changed (their Atmosphere, Cologne look or member badge), for
     /// every row of theirs in every room.
@@ -129,7 +130,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
                               duration: frame?.banDuration)
         case "ROW_COSMETICS":
             guard let frame = try? decoder.decode(CosmeticsFrame.self, from: data) else { return .other(text) }
-            return .cosmetics(channel: head.channel, userID: frame.userID, paint: frame.paint, badge: frame.badge)
+            let provider = frame.provider ?? ""
+            let author = provider.isEmpty || provider == "twitch" ? frame.userID : "\(provider):\(frame.userID)"
+            return .cosmetics(channel: head.channel, userID: author, paint: frame.paint, badge: frame.badge)
         case "ROW_MEMBER":
             guard let frame = try? decoder.decode(MemberFrame.self, from: data) else { return .other(text) }
             return .member(userID: frame.userID, atmosphere: frame.atmosphere, cologne: frame.cologne, badge: frame.badge)
@@ -211,9 +214,10 @@ public enum ChatSocketFrame: Sendable, Equatable {
 
     private struct CosmeticsFrame: Decodable {
         var userID: String
+        var provider: String?
         var paint: ChatPaint?
         var badge: ChatViewBadge?
-        enum CodingKeys: String, CodingKey { case userID = "user_id", paint, badge }
+        enum CodingKeys: String, CodingKey { case userID = "user_id", provider, paint, badge }
     }
 
     private struct MemberFrame: Decodable {

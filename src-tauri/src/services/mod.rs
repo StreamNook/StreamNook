@@ -107,6 +107,7 @@ pub mod http;
 pub mod hype_train_watch;
 pub mod irc_service;
 pub mod ivr;
+pub mod late_third_party;
 pub mod irc_transport;
 pub mod kick_auth_service;
 pub mod layout_service;

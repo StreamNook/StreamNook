@@ -131,11 +131,17 @@ struct RowText {
 
     /// Whether a paint can be drawn into the bitmap now. An image paint (a 7TV paint made of art)
     /// draws once its art is loaded; the pipeline loads it and lays the row out again, so until
-    /// then the name keeps its own color rather than an empty fill. A paint from an older core
-    /// (one fill, no layers) has no image path.
+    /// then the name keeps its own color rather than an empty fill. An image that cannot load
+    /// does not hold the rest of the paint back (the painter skips it). A paint from an older
+    /// core (one fill, no layers) has no image path.
     static func drawable(_ paint: ChatPaint) -> Bool {
         if paint.layers.isEmpty { return paint.kind != "image" }
-        return PaintPainter.imageURLs(paint).allSatisfy { ImagePipeline.shared.cachedAnySize($0) != nil }
+        let urls = PaintPainter.imageURLs(paint)
+        let loaded = urls.filter { ImagePipeline.shared.cachedAnySize($0) != nil }
+        let waiting = urls.contains { ImagePipeline.shared.cachedAnySize($0) == nil && !ImagePipeline.shared.hasFailed($0) }
+        if waiting { return false }
+        // Everything failed: draw only if a color or gradient is left to fill the name with.
+        return !loaded.isEmpty || urls.isEmpty || paint.baseColor != nil || paint.layers.contains { $0.kind != "image" }
     }
 
     /// The author's name: bold, in their colour or 7TV paint, a tap that opens their profile.

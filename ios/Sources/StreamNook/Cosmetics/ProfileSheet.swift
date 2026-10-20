@@ -241,7 +241,8 @@ struct ProfileSheet: View {
         }
         .padding(.bottom, 8)
         .background(alignment: .top) {
-            AtmosphereGlow(look: sheet?.atmosphere?.look, tint: nameColor(sheet?.nameColor ?? target.color))
+            AtmosphereGlow(look: AtmosphereCatalog.shared.look(atmosphere: sheet?.atmosphere?.look, cologne: sheet?.cologne),
+                           tint: nameColor(sheet?.nameColor ?? target.color))
                 .frame(height: Self.glow)
         }
     }

@@ -166,31 +166,38 @@ enum PaintPainter {
         }
         ctx.setFillColor(paint.baseColor.flatMap(FillPainter.color) ?? fallback)
         ctx.fill(rect)
+        // The first layer listed is the top one, as in CSS.
         for layer in paint.layers.reversed() {
-            let stops = layer.stops.map { (color: $0.color, at: Double($0.at), px: false) }
-            switch layer.kind {
-            case "linear":
-                FillPainter.linear(angle: layer.angle, repeating: layer.repeating, stops: stops, in: rect, ctx)
-            case "radial":
-                FillPainter.radial(circle: layer.circle, size: nil, center: [0.5, 0.5], repeating: layer.repeating,
-                                   stops: stops, in: rect, ctx)
-            case "image":
-                if let url = layer.imageURL {
-                    // CSS `background-size: 100% 100%`: the image stretched over the name.
-                    let pixels = Int((rect.height * imageScale).rounded(.up))
-                    if let image = ImagePipeline.shared.cached(url, pixelHeight: pixels, animated: false)?.first
-                        ?? ImagePipeline.shared.cachedAnySize(url)?.first {
-                        ctx.saveGState()
-                        ctx.clip(to: rect)
-                        ctx.translateBy(x: 0, y: rect.maxY + rect.minY)
-                        ctx.scaleBy(x: 1, y: -1)
-                        ctx.draw(image, in: rect)
-                        ctx.restoreGState()
-                    }
+            draw(layer, in: rect, ctx, imageScale: imageScale)
+        }
+    }
+
+    /// One layer over what is already drawn: a gradient, or an image stretched over the box when
+    /// the pipeline has it.
+    static func draw(_ layer: ChatPaint.Layer, in rect: CGRect, _ ctx: CGContext, imageScale: CGFloat = 2) {
+        let stops = layer.stops.map { (color: $0.color, at: Double($0.at), px: false) }
+        switch layer.kind {
+        case "linear":
+            FillPainter.linear(angle: layer.angle, repeating: layer.repeating, stops: stops, in: rect, ctx)
+        case "radial":
+            FillPainter.radial(circle: layer.circle, size: nil, center: [0.5, 0.5], repeating: layer.repeating,
+                               stops: stops, in: rect, ctx)
+        case "image":
+            if let url = layer.imageURL {
+                // CSS `background-size: 100% 100%`: the image stretched over the name.
+                let pixels = Int((rect.height * imageScale).rounded(.up))
+                if let image = ImagePipeline.shared.cached(url, pixelHeight: pixels, animated: false)?.first
+                    ?? ImagePipeline.shared.cachedAnySize(url)?.first {
+                    ctx.saveGState()
+                    ctx.clip(to: rect)
+                    ctx.translateBy(x: 0, y: rect.maxY + rect.minY)
+                    ctx.scaleBy(x: 1, y: -1)
+                    ctx.draw(image, in: rect)
+                    ctx.restoreGState()
                 }
-            default:
-                break
             }
+        default:
+            break
         }
     }
 

@@ -105,6 +105,16 @@ public struct ChatRoomBuffer: Sendable {
         return twitch ? message.userID == id : "\(message.provider):\(message.userID)" == id
     }
 
+    /// Puts a late 7TV badge where the core's badge order has it (`surface_rank`): after the
+    /// platform's own badges, before the chat apps' and the member's StreamNook badge. It
+    /// replaces the 7TV badge the row wore, so a changed badge is never drawn twice.
+    static func wear(sevenTv badge: ChatViewBadge, in badges: inout [ChatViewBadge]) {
+        badges.removeAll { $0.provider == "7tv" }
+        let platform: Set<String> = ["", "twitch", "kick", "youtube", "tiktok"]
+        let at = badges.firstIndex { !platform.contains($0.provider) } ?? badges.endIndex
+        badges.insert(badge, at: at)
+    }
+
     public mutating func apply(_ frames: [ChatSocketFrame]) -> ChatBufferChange {
         var change = ChatBufferChange()
         var updated: [String: ChatRowModel] = [:]
@@ -132,11 +142,11 @@ public struct ChatRoomBuffer: Sendable {
                     self.mark(id: rows[offset].id, mark, &updated, &change)
                 }
             case .cosmetics(_, let userID, let paint, let badge):
-                for (offset, row) in rows.enumerated() where row.message.userID == userID {
+                for (offset, row) in rows.enumerated() where Self.member(userID, wrote: row.message) {
                     guard var view = row.message.metadata.view else { continue }
                     let before = view
                     view.paint = paint ?? view.paint
-                    if let badge, !view.badges.contains(badge) { view.badges.append(badge) }
+                    if let badge { Self.wear(sevenTv: badge, in: &view.badges) }
                     guard view != before else { continue }
                     var next = row
                     next.message.metadata.view = view
