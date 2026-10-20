@@ -9,7 +9,8 @@
 // comment in App.tsx).
 //
 // Deliberately NOT replicated (desktop-only surfaces): session resume, whisper
-// import, eventsub://channel-moderate (mod tools), drop-progress automation,
+// import (the phone reads and replies to whispers; the archive import from
+// twitch.tv is desktop's), eventsub://channel-moderate (mod tools), drop-progress automation,
 // snippet sync, window sizing, universal-cache disk sync (features.assetDiskCache).
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -39,7 +40,8 @@ import {
   stableNotifyId,
   syncBackgroundChecks,
 } from '../notifications';
-import { consumePendingChannel, consumePendingMention } from '../nativeBridge';
+import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
+import { openWhisperByKey } from '../whispers/whisperInbox';
 import { alertOn, loadAlertTypes } from '../alertTypes';
 import { openMentionById } from '../mentions/mentionInbox';
 import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
@@ -361,9 +363,18 @@ export function useMobileBoot(): void {
         consumePendingMention();
         if (id) void openMentionById(id);
       };
-      const tappedMention = consumePendingMention();
-      const tapped = tappedMention ? null : consumePendingChannel();
-      if (tappedMention) {
+      // A tapped whisper notification (also posted from Rust) opens its
+      // conversation, the same two ways.
+      (window as Window & { __SN_OPEN_WHISPER__?: (key: string) => void }).__SN_OPEN_WHISPER__ = (key) => {
+        consumePendingWhisper();
+        if (key) void openWhisperByKey(key);
+      };
+      const tappedWhisper = consumePendingWhisper();
+      const tappedMention = tappedWhisper ? null : consumePendingMention();
+      const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();
+      if (tappedWhisper) {
+        void openWhisperByKey(tappedWhisper);
+      } else if (tappedMention) {
         void openMentionById(tappedMention);
       } else if (tapped) {
         openChannel(tapped);

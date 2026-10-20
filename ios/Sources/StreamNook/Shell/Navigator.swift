@@ -10,6 +10,10 @@ enum Route: Hashable {
     case cosmetics
     /// The mentions inbox.
     case mentions
+    /// Your whisper conversations.
+    case whispers
+    /// One whisper conversation, by its inbox key.
+    case whisper(String)
     /// You › Your clips.
     case myClips
 }

@@ -11,7 +11,7 @@ import type { LiveNotificationSettings } from '../types';
 
 /** Mirrors Rust `alert_types::AlertType`. */
 export interface AlertType {
-  /** `live`, `mentions`, `drops`, `badges`, and on desktop `whispers`, `updates` and the rest. */
+  /** `live`, `mentions`, `whispers`, `drops`, `badges`, and on desktop `updates` and the rest. */
   id: string;
   title: string;
   detail: string;

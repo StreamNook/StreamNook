@@ -1,6 +1,6 @@
 use crate::models::settings::AppState;
 use crate::services::whisper_inbox::{
-    self, ImportSummary, SendTarget, WhisperExport, WhisperUpdate,
+    self, ImportSummary, SendTarget, WhisperExport, WhisperList, WhisperUpdate,
 };
 use crate::services::whisper_storage_service::{
     StoredConversation, WhisperStorage, WhisperStorageService,
@@ -141,6 +141,32 @@ pub async fn whisper_import(
     export: WhisperExport,
 ) -> Result<ImportSummary, String> {
     whisper_inbox::import_export(&app_handle, &owner_id, export).await
+}
+
+/// The signed-in account's conversations, newest first, with the unread
+/// total: what the phones' Whispers list draws. The owner is Rust's own
+/// signed-in account (empty with no rows when signed out); the writes take it
+/// back as `ownerId`.
+#[tauri::command]
+pub async fn whisper_list(app_handle: AppHandle) -> Result<WhisperList, String> {
+    let owner = match crate::services::account_roster::twitch_user_id() {
+        Some(id) => id,
+        None => crate::services::twitch_service::TwitchService::get_user_info()
+            .await
+            .map(|u| u.id)
+            .unwrap_or_default(),
+    };
+    whisper_inbox::list(&app_handle, &owner)
+}
+
+/// One conversation with all its messages, oldest first (None when it is gone).
+#[tauri::command]
+pub async fn whisper_thread(
+    app_handle: AppHandle,
+    owner_id: String,
+    key: String,
+) -> Result<Option<StoredConversation>, String> {
+    whisper_inbox::thread(&app_handle, &owner_id, &key)
 }
 
 /// Merge each conversation's latest page from Twitch; returns messages added.

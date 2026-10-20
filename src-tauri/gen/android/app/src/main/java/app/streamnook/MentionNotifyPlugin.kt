@@ -45,6 +45,32 @@ class MentionNotifyPlugin(private val activity: Activity) : Plugin(activity) {
     // chat lane that emitted the event.
     Thread { MentionNotifier.post(context, item) }.start()
   }
+
+  /**
+   * A whisper the core decided to announce (services::whisper_inbox: the
+   * setting, streamer mode, not the conversation on screen). The argument is
+   * the Rust `WhisperUpdate`: `key`, `meta` and the incoming `message`.
+   */
+  @Command
+  fun postWhisper(invoke: Invoke) {
+    val a = invoke.getArgs()
+    val meta = a.optJSONObject("meta")
+    val message = a.optJSONObject("message")
+    invoke.resolve()
+    if (meta == null || message == null || message.optBoolean("is_sent", false)) return
+    val item = WhisperNotifier.Item(
+      key = a.optString("key", ""),
+      id = message.optString("id", ""),
+      userId = meta.optString("user_id", ""),
+      login = meta.optString("user_login", message.optString("from_user_login", "")),
+      name = meta.optString("user_name", "").ifEmpty { message.optString("from_user_name", "") },
+      avatar = if (meta.isNull("profile_image_url")) "" else meta.optString("profile_image_url", ""),
+      text = message.optString("message", ""),
+      atMs = message.optLong("timestamp", System.currentTimeMillis()),
+    )
+    val context = activity.applicationContext
+    Thread { WhisperNotifier.post(context, item) }.start()
+  }
 }
 
 /**

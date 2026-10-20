@@ -54,4 +54,20 @@ object NotifyBridge {
     startedAt: String,
     login: String,
   ): Boolean
+
+  /**
+   * Sends a reply typed into a whisper notification, through the same Rust
+   * send the Whispers screen uses. Returns "" when Twitch took it, else the
+   * reason it was not sent (the words every platform shows).
+   *
+   * Blocking (a network call): only from a receiver's worker thread.
+   */
+  external fun replyWhisper(
+    baseDir: String,
+    userId: String,
+    login: String,
+    name: String,
+    avatar: String,
+    text: String,
+  ): String
 }

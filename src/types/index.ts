@@ -2695,6 +2695,28 @@ export interface WhisperUpdate {
   message: Whisper | null;
 }
 
+/** One row of Rust's `whisper_list`: the conversation's meta, flattened, with
+ *  its newest line. */
+export interface WhisperListRow {
+  key: string;
+  user_id: string;
+  user_login: string;
+  user_name: string;
+  profile_image_url: string | null;
+  last_message_timestamp: number;
+  unread_count: number;
+  last_text: string;
+  last_is_sent: boolean;
+}
+
+/** Rust's `whisper_list`: the signed-in account's conversations, newest
+ *  first. `owner_id` is empty when nobody is signed in; the writes take it. */
+export interface WhisperList {
+  owner_id: string;
+  conversations: WhisperListRow[];
+  unread_total: number;
+}
+
 // Hype Train Types
 export interface HypeTrainContributor {
   user_id: string;

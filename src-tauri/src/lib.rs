@@ -874,6 +874,7 @@ pub fn run() {
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
     services::mention_inbox::refresh(&settings);
+    services::whisper_inbox::refresh_settings(&settings);
     services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
@@ -2352,6 +2353,8 @@ pub fn run() {
             whisper_send,
             whisper_import,
             whisper_refresh,
+            whisper_list,
+            whisper_thread,
             // Mentions inbox
             get_mention_inbox,
             mark_mentions_read,

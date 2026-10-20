@@ -43,8 +43,8 @@ import { alertKey, alertOn, useAlertTypes } from '../alertTypes';
 
 // The "Notify me about" rows are the alert types Rust lists for this build
 // (services/alert_types.rs), the same list and words the iPhone draws. Types
-// the phone cannot send are not in it: no Whispers (not implemented here) and
-// no Channel points (a backgrounded WebView cannot poll, so the only state it
+// the phone cannot send are not in it: no Channel points (a backgrounded
+// WebView cannot poll, so the only state it
 // could fire in was picture-in-picture, where it flooded the shade; its OS
 // channel id stays reserved).
 

@@ -25,6 +25,7 @@ interface SNBridge {
   runNotifyCheckNow?(): void;
   consumePendingChannel?(): string;
   consumePendingMention?(): string;
+  consumePendingWhisper?(): string;
   mediaSessionStart?(title: string, artist: string, artUrl: string, playing: boolean): void;
   mediaSessionStop?(): void;
   displayShortEdge?(): number;
@@ -402,6 +403,20 @@ export function consumePendingMention(): string | null {
   try {
     const id = bridge()?.consumePendingMention?.();
     return id && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Conversation key from a tapped whisper notification, or null. Same contract
+ * as consumePendingMention; a warm tap arrives through
+ * `window.__SN_OPEN_WHISPER__`.
+ */
+export function consumePendingWhisper(): string | null {
+  try {
+    const key = bridge()?.consumePendingWhisper?.();
+    return key && key.length > 0 ? key : null;
   } catch {
     return null;
   }

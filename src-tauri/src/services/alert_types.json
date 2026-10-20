@@ -34,7 +34,7 @@
    "setting": "live_notifications.show_whisper_notifications",
    "channel": "whispers",
    "setup": false,
-   "platforms": ["desktop"]
+   "platforms": ["desktop", "android", "ios"]
   },
   {
    "id": "drops",

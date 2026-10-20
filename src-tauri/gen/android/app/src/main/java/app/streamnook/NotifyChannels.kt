@@ -22,6 +22,7 @@ object NotifyChannels {
   const val BADGES = "badges"
   const val POINTS = "channel-points"
   const val MENTIONS = "mentions"
+  const val WHISPERS = "whispers"
 
   /** Idempotent: creating a channel that already exists is a no-op. */
   fun ensure(nm: NotificationManager) {
@@ -39,6 +40,8 @@ object NotifyChannels {
       NotificationManager.IMPORTANCE_HIGH,
       "Someone mentioned or replied to you in a chat",
     )
+    // A private message: heads-up, like any messaging app's.
+    create(nm, WHISPERS, "Whispers", NotificationManager.IMPORTANCE_HIGH, "Someone whispered you on Twitch")
   }
 
   private fun create(

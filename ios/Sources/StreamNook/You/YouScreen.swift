@@ -21,11 +21,16 @@ struct YouScreen: View {
 
                 // Signed out, the card above already offers the sign-in; the accounts wait for it.
                 if user != nil {
-                    // Your mentions sit right under who you are, with their unread count.
-                    MentionsEntryRow(model: model)
-                        .snPanel()
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
+                    // Your mentions sit right under who you are, with their unread count, then your
+                    // whispers (here until the chat inbox opens them), in one panel.
+                    VStack(spacing: 0) {
+                        MentionsEntryRow(model: model)
+                        Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.leading, 48)
+                        WhispersEntryRow(model: model)
+                    }
+                    .snPanel()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
                     label("Accounts")
                     AccountsCard(model: model, picks: picks, sevenTvPicture: ownIdentity?.picture)
                         .padding(.horizontal, 16)
