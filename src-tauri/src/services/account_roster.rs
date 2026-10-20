@@ -332,6 +332,9 @@ pub fn notify() {
         if last.as_ref() == Some(&roster) {
             return;
         }
+        // A new account (or the first one this run) opts in and pulls its own
+        // mentions while you're away.
+        crate::services::mention_watch::client::on_account_changed();
         let _ = app.emit("account-roster-changed", &roster);
         *last = Some(roster);
     });

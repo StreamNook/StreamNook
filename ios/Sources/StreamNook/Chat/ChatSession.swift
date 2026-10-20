@@ -53,7 +53,8 @@ final class ChatSession {
     /// "broadcaster"), or "unknown" before it has answered.
     private(set) var role = "unknown"
     /// The signed-in viewer's Twitch user id, once known.
-    private(set) var viewerID = ""
+    /// The signed-in viewer's Twitch user id (the app's sign-in), or "" when signed out.
+    var viewerID: String { rooms?.viewerID() ?? "" }
     /// The open rooms this one belongs to, for the chat menu's tab actions.
     @ObservationIgnored weak var rooms: ChatRooms?
 
@@ -212,11 +213,6 @@ final class ChatSession {
             self.role = role
             self.isModerator = role == "moderator" || role == "broadcaster"
             self.isBroadcaster = role == "broadcaster"
-            if self.viewerID.isEmpty,
-               let userJSON = try? await core.invoke("get_user_info", "{}"),
-               let user = try? JSONDecoder().decode(TwitchUser.self, from: Data(userJSON.utf8)) {
-                self.viewerID = user.id
-            }
             // On by default; turned off for this room earlier this session, it stays off.
             self.moderatorTools = self.isModerator && !(self.rooms?.modToolsOff.contains(self.channel) ?? false)
             if changed {

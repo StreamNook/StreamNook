@@ -145,7 +145,10 @@ import Testing
     @Test func theBackgroundIsClampedToAPercent() {
         let side = LandscapeChatLayout(layout: "beside", side: "right", width: 340, opacity: 55)
         #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: true) == 59)
-        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: false) == 12)
+        #expect(side.textInset(edgeInset: 59, cutoutOnChatSide: false) == 24)
+        #expect(side.textInset(edgeInset: 44, cutoutOnChatSide: false) == 18)
+        #expect(side.textInset(edgeInset: 20, cutoutOnChatSide: false) == 12)
+        #expect(side.textInset(edgeInset: 8, cutoutOnChatSide: false) == 8)
         #expect(side.textInset(edgeInset: 0, cutoutOnChatSide: false) == 0)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 140).opacity == 100)
         #expect(LandscapeChatLayout(layout: "overlay", side: "", width: 340, opacity: 0).opacity == 0)
@@ -213,5 +216,14 @@ import Testing
         #expect(RoomText.waiting(0) == nil)
         #expect(RoomText.next(nil) == nil)
         #expect(RoomText.next(.init(startAt: "2026-10-17T19:00:00Z"), now: now)?.hasPrefix("Next stream") == true)
+    }
+}
+
+@Suite struct StreamUpdateTests {
+    @Test func aCategoryChangeCarriesTheGameID() {
+        let update = ChannelViewers.streamUpdate(#"{"title":"t","game_name":"Valorant","game_id":"516575"}"#)
+        #expect(update?.gameName == "Valorant")
+        #expect(update?.gameID == "516575")
+        #expect(ChannelViewers.streamUpdate(#"{"title":"t","game_name":"Just Chatting","game_id":""}"#)?.gameID == nil)
     }
 }

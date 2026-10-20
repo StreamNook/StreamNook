@@ -60,6 +60,8 @@ struct MainShell: View {
                     .zIndex(1)
             }
         }
+        // The tabs and the player hand out the core's share link, as desktop and Android do.
+        .environment(\.streamShareLink) { stream in await StreamShare.link(for: stream, core: model.core) }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { landscape = $0 }
         .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets = $0 }
         .statusBarHidden(immersive)
@@ -99,6 +101,9 @@ struct MainShell: View {
         .sheet(item: $model.channelSheet) { channel in
             ChannelSheet(channel: channel, model: model)
         }
+        .sheet(item: $model.whisperSheet) { sheet in
+            WhisperSheet(model: model, key: sheet.key)
+        }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)
@@ -135,7 +140,7 @@ struct MainShell: View {
     /// Whether the tab's screen keeps the tab bar: a category's streams and Edit profile hide it.
     private func showsTabBar(_ tab: MobileTab) -> Bool {
         switch nav.paths[tab]?.last {
-        case .category, .cosmetics, .whisper: false
+        case .category, .cosmetics: false
         default: true
         }
     }
@@ -153,8 +158,6 @@ struct MainShell: View {
             MentionsScreen(model: model)
         case .whispers:
             WhispersScreen(model: model)
-        case .whisper(let key):
-            WhisperConversationScreen(model: model, key: key)
         case .myClips:
             MyClipsScreen(model: model)
         }
@@ -176,6 +179,9 @@ extension EnvironmentValues {
     @Entry var shellCovered = false
     /// Opens a channel's chat on its own (a card's menu); nil where nothing hosts the chats.
     @Entry var openChat: ((TwitchStream) -> Void)? = nil
+    /// The core's share link for a stream (`share_link`); nil where no core is at hand, and a
+    /// share then hands out the channel's own page.
+    @Entry var streamShareLink: ((TwitchStream) async -> URL?)? = nil
 }
 
 /// The floor under the floating tab bar: the page's own background (the room, its light

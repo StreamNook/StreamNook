@@ -9,8 +9,13 @@ import UIKit
 /// the search and the answers survive closing and opening the picker.
 @Observable @MainActor
 final class EmotePickerModel {
-    /// The 7TV size thumbnails ask for: the smallest that covers a 28 pt emote on this screen.
-    static var tier: String { UITraitCollection.current.displayScale >= 3 ? "3x" : "2x" }
+    /// The 7TV size emotes ask for: the smallest tier that covers a 28 pt emote at the chat's
+    /// emote scale on this screen, the rule the desktop and Android phone use (`inlineEmoteTier`).
+    static func tier(emoteScale: Double) -> String {
+        let needed = 28 * emoteScale * Double(UITraitCollection.current.displayScale)
+        let tiers: [(name: String, px: Double)] = [("1x", 32), ("2x", 64), ("3x", 96), ("4x", 128)]
+        return tiers.first { $0.px >= needed }?.name ?? "4x"
+    }
 
     let session: ChatSession
     private(set) var tab = PickerTabs.defaultTab(provider: "twitch")
@@ -135,7 +140,7 @@ final class EmotePickerModel {
         let core = session.core
         let args: [String: Any?] = [
             "provider": session.provider, "channel": session.login, "channelId": session.roomID,
-            "tab": tab == "emoji" ? nil : tab, "query": "", "tier": Self.tier,
+            "tab": tab == "emoji" ? nil : tab, "query": "", "tier": Self.tier(emoteScale: session.style.emoteScale),
         ]
         loading = true
         defer { loading = false }
@@ -148,7 +153,7 @@ final class EmotePickerModel {
         if !first.ready, !session.isKick {
             // The room's emotes are not in the core yet; ask it to fetch them, then ask again.
             _ = try? await core.invoke("fetch_channel_emotes", args: [
-                "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier,
+                "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier(emoteScale: session.style.emoteScale),
             ])
             if let again = try? await core.invoke("emote_picker", args: args, as: PickerAnswer.self), !Task.isCancelled {
                 answer = again
@@ -164,7 +169,7 @@ final class EmotePickerModel {
         let core = session.core
         let args: [String: Any?] = [
             "provider": session.provider, "channel": session.login, "channelId": session.roomID,
-            "query": typed, "profile": "search", "limit": PickerSearch.limit, "picker": true, "tier": Self.tier,
+            "query": typed, "profile": "search", "limit": PickerSearch.limit, "picker": true, "tier": Self.tier(emoteScale: session.style.emoteScale),
         ]
         loading = true
         defer { loading = false }
@@ -173,7 +178,7 @@ final class EmotePickerModel {
         if !found.ready, session.provider == "twitch" {
             // The room's emotes are not in the core yet; ask it to fetch them, then ask again.
             _ = try? await core.invoke("fetch_channel_emotes", args: [
-                "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier,
+                "channelName": session.channel, "channelId": session.roomID, "provider": "twitch", "tier": Self.tier(emoteScale: session.style.emoteScale),
             ])
             guard let again = try? await core.invoke("match_emote_tokens", args: args, as: PickerSearch.self),
                   !Task.isCancelled else { return }

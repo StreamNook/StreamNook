@@ -7,7 +7,7 @@ public struct LandscapeChatLayout: Equatable, Sendable {
     public static let minWidth = 240.0
     /// The video keeps at least this much of the screen's width beside the column.
     public static let minVideo = 240.0
-    /// The column's text margin on an edge with no camera cutout (the rounded corner alone).
+    /// The least text margin on an edge with no camera cutout (the rounded corner alone).
     public static let cornerMargin = 12.0
 
     public var beside: Bool
@@ -39,9 +39,12 @@ public struct LandscapeChatLayout: Equatable, Sendable {
     /// How far the column's text stays in from the screen edge it sits against. The system
     /// reports the same landscape inset on both sides, but only one has the camera cutout: that
     /// side keeps the whole inset, the other only a corner margin, so no band of the column sits
-    /// empty.
+    /// empty. The screen's corners round more on the phones with the bigger inset, so the margin
+    /// is two fifths of it (18 pt at 44, 24 at 59), never under 12: the pinned card's corner at
+    /// the top and the composer's at the bottom stay clear of the rounded screen corner.
     public func textInset(edgeInset: Double, cutoutOnChatSide: Bool) -> Double {
-        cutoutOnChatSide ? edgeInset : min(edgeInset, Self.cornerMargin)
+        if cutoutOnChatSide { return edgeInset }
+        return min(edgeInset, max(Self.cornerMargin, (edgeInset * 0.4).rounded()))
     }
 
     /// A drag on the handle on the column's inner edge: pulling toward the picture widens it.

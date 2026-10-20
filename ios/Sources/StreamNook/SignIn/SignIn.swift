@@ -189,7 +189,9 @@ final class SignIn {
     }
 
     /// The profile, tried three times a second apart: right after a sign-in Twitch can take a
-    /// moment to answer for the new token. A stored sign-in stays signed in without it.
+    /// moment to answer for the new token. When it still fails, the sign-in is gone unless the
+    /// network is what failed, as desktop and Android read it (`checkAuthStatus`). A read also
+    /// asks for the viewer's FFZ subscriber status, which the core keeps for the emote picker.
     private func readUser(core: CoreBridge, signedInHint: Bool?) async {
         for attempt in 1...3 {
             do {
@@ -197,9 +199,10 @@ final class SignIn {
                 user = found
                 signedIn = true
                 log.notice("signed in as \(found.login, privacy: .public)")
+                Task { _ = try? await core.invoke("ffz_local_user_status", args: [:]) }
                 return
             } catch {
-                if signedInHint == nil {
+                if signedInHint == nil || (attempt == 3 && !Self.isNetwork(error)) {
                     user = nil
                     signedIn = false
                     log.notice("not signed in: \(String(describing: error), privacy: .public)")
@@ -209,5 +212,13 @@ final class SignIn {
                 if attempt < 3 { try? await Task.sleep(for: .seconds(1)) }
             }
         }
+    }
+
+    /// A failure the network caused rather than the sign-in, by the words desktop and Android
+    /// read in `checkAuthStatus`.
+    static func isNetwork(_ error: Error) -> Bool {
+        let text = String(describing: error).lowercased()
+        return ["error sending request", "timeout", "network", "dns error", "proxy", "failed to fetch",
+                "500", "502", "503", "504"].contains { text.contains($0) }
     }
 }

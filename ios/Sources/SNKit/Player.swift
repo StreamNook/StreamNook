@@ -9,6 +9,9 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
     public var startedAt: String?
     public var title: String?
     public var gameName: String?
+    /// The category's id, after a category change (`stream-update`), so the drop bar asks about
+    /// the game now being played.
+    public var gameID: String?
 
     enum CodingKeys: String, CodingKey {
         case login
@@ -16,15 +19,17 @@ public struct ChannelViewers: Decodable, Sendable, Equatable {
         case startedAt = "started_at"
         case title
         case gameName = "game_name"
+        case gameID = "game_id"
     }
 
     public init(login: String, viewerCount: Int? = nil, startedAt: String? = nil, title: String? = nil,
-                gameName: String? = nil) {
+                gameName: String? = nil, gameID: String? = nil) {
         self.login = login
         self.viewerCount = viewerCount
         self.startedAt = startedAt
         self.title = title
         self.gameName = gameName
+        self.gameID = gameID
     }
 
     /// The push when it is the viewers section, nil for any other section.
@@ -92,9 +97,10 @@ extension ChannelViewers {
         guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return nil }
         let title = object["title"] as? String
         let game = object["game_name"] as? String
+        let gameID = (object["game_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let viewers = object["viewer_count"] as? Int
         guard title != nil || game != nil || viewers != nil else { return nil }
-        return ChannelViewers(login: "", viewerCount: viewers, title: title, gameName: game)
+        return ChannelViewers(login: "", viewerCount: viewers, title: title, gameName: game, gameID: gameID)
     }
 }
 

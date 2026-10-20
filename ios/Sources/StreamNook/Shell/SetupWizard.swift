@@ -235,6 +235,10 @@ struct SetupWizard: View {
                 }
             }
             .snPanel()
+            // Mentions while you're away: its own card, since it is a server watching for you
+            // rather than an alert type. Its pushes follow the Mentions and replies alert.
+            awayRow
+                .snPanel()
             VStack(spacing: 10) {
                 Text("Notifications are turned off for StreamNook in iPhone Settings, so these alerts will not arrive until you allow them there.")
                     .font(.snCaption)
@@ -252,6 +256,29 @@ struct SetupWizard: View {
         }
         .frame(maxWidth: 320)
         .task { alertStatus = await MentionAlerts.status() }
+    }
+
+    private var awayRow: some View {
+        let title = "Mentions while you're away"
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: SettingIcons.symbol(paths: ["mentions.away_alerts"], title: title))
+                .font(.system(size: 16))
+                .foregroundStyle(SN.textSecondary)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.snRowTitle).foregroundStyle(SN.textPrimary)
+                Text("StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days.")
+                    .font(.snRowDetail).foregroundStyle(SN.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle(title, isOn: Binding(get: { model.settingsStore.bool("mentions.away_alerts", false) },
+                                        set: { on in Task { await model.settingsStore.set(["mentions.away_alerts": on]) } }))
+                .labelsHidden()
+                .tint(SN.accent)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private func alertRow(_ type: AlertType) -> some View {

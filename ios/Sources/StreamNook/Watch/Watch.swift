@@ -88,6 +88,8 @@ final class Watch {
     var onRow: ((TwitchStream) -> Void)?
     /// A message for the toast line.
     var onToast: ((String) -> Void)?
+    /// The player gave up on a live stream (its reloads spent): the core checks whether it ended.
+    var onPlayerGaveUp: (() -> Void)?
 
     /// Set by drive steps before a stream opens; wins over every saved choice.
     var route = PlayRoute.auto
@@ -118,6 +120,9 @@ final class Watch {
     private static let maxRecoveries = 2
     private var watchers: [NSKeyValueObservation] = []
     private var vodClock: Task<Void, Never>?
+    /// The login `follow` asked `watch_channel_state` for; close lets go of that one only, so a
+    /// room that watches the same channel (wallet, "+N", pins, chest) keeps its pushes.
+    private var watchedChannelState: String?
     /// The sleep timer's fade and the volume it began from (put back when playback stops).
     private var fadeTask: Task<Void, Never>?
     private var volumeBeforeFade: Float?
@@ -177,16 +182,20 @@ final class Watch {
         ]
     }
 
-    /// The quality `start_stream` is asked for: a drive step's, else this session's pick, else
-    /// the saved one, else `best` (capped to the screen by the core).
-    private var askedQuality: String { requestedQuality ?? pickedQuality ?? savedQuality ?? "best" }
+    /// The quality a start asks for: a drive step's, else this session's pick. Nil lets the core
+    /// use the saved quality (`watch_start`), so nothing here stands in for a setting not yet read.
+    private var askedQuality: String? { requestedQuality ?? pickedQuality }
+
+    /// For the commands that need a name (`start_stream`: a restart, a VOD): the pick, else what
+    /// is playing now, else the saved one, and `best` only when none is known.
+    private var restartQuality: String { askedQuality ?? quality ?? savedQuality ?? "best" }
 
     /// Starts `stream`, replacing whatever played. The same channel already open stays as it is.
     /// The player is never rebuilt: only its item changes.
     func open(_ stream: TwitchStream, core: CoreBridge) {
         // The same channel already playing stays as it is; its room or a failure gives way.
         // Twitch `xqc` and Kick `xqc` are two channels.
-        if self.stream?.rowKey == stream.rowKey, room == nil, error == nil { return }
+        if self.stream?.rowKey == stream.rowKey, room == nil, error == nil, playingVod == nil { return }
         close(core: core, stopping: false)
         self.core = core
         self.stream = stream
@@ -222,13 +231,23 @@ final class Watch {
     /// came back; the error otherwise (the caller decides between offline and a fresh start).
     func restart(core: CoreBridge) async -> Error? {
         guard let stream, !restarting else { return nil }
+        // A VOD comes back as a VOD, at its playhead; the live channel is not touched.
+        if let vod = playingVod {
+            let at = vodPosition
+            let title = vodTitle ?? stream.title
+            let thumbnail = vodThumbnail
+            endVod()
+            startVod(videoID: vod.videoID, title: title, thumbnail: thumbnail, at: at, core: core,
+                     failure: "Could not play this video")
+            return nil
+        }
         restarting = true
         player.pause()
         _ = try? await core.invoke("stop_stream", "{}")
         try? await Task.sleep(for: .milliseconds(300))
         do {
             let start = try await core.invoke(
-                "start_stream", args: ["url": stream.playbackURL, "quality": askedQuality],
+                "start_stream", args: ["url": stream.playbackURL, "quality": restartQuality],
                 as: StreamStart.self
             )
             guard self.stream?.id == stream.id else { return nil }
@@ -336,7 +355,7 @@ final class Watch {
         reloading()
         vodTitle = title
         vodThumbnail = thumbnail
-        let asked = askedQuality
+        let asked = restartQuality
         tasks.append(Task {
             do {
                 let start = try await core.invoke(
@@ -372,8 +391,8 @@ final class Watch {
         })
     }
 
-    /// Once a second: the seek bar's playhead, the chat replay's rows for it, and every ten
-    /// seconds of playing a saved position (pauses and the end save too).
+    /// Once a second: the seek bar's playhead, the chat replay's rows for it, and every five
+    /// seconds of playing a saved position (pauses, seeks and the end save too).
     private func beginVodClock(core: CoreBridge) {
         guard let vod = playingVod else { return }
         let login = vod.channelLogin ?? stream?.userLogin ?? ""
@@ -401,7 +420,7 @@ final class Watch {
                     self.onReplay?(step)
                 }
                 ticks += 1
-                if ticks % 10 == 0, !self.paused { self.reportVodPosition() }
+                if ticks % 5 == 0, !self.paused { self.reportVodPosition() }
                 // The card counts on its own from the rate; a periodic fix keeps it honest.
                 if ticks % 15 == 0 {
                     self.nowPlaying.vod(duration: self.vodDuration, elapsed: t, rate: self.paused ? 0 : self.vodRate)
@@ -481,7 +500,12 @@ final class Watch {
         guard playingVod != nil else { return }
         let target = max(0, vodDuration > 0 ? min(seconds, vodDuration - 1) : seconds)
         vodPosition = target
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero,
+                    toleranceAfter: .zero) { [weak self] done in
+            // A seek saves where it landed, as the desktop's reporter does.
+            guard done else { return }
+            Task { @MainActor in self?.reportVodPosition() }
+        }
         nowPlaying.vod(duration: vodDuration > 0 ? vodDuration : nil, elapsed: target, rate: paused ? 0 : vodRate)
     }
 
@@ -570,6 +594,7 @@ final class Watch {
     private func follow(_ stream: TwitchStream, core: CoreBridge) async {
         guard let id = stream.userID, !id.isEmpty else { return }
         let pushes = core.events.stream("channel-state")
+        watchedChannelState = stream.userLogin
         if let first = try? await core.invoke("watch_channel_state", args: ["login": stream.userLogin, "channelId": id],
                                               as: ChannelViewers.self) {
             take(first)
@@ -591,7 +616,7 @@ final class Watch {
         let old = live
         live = ChannelViewers(login: update.login.isEmpty ? old?.login ?? "" : update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
                               startedAt: update.startedAt ?? old?.startedAt, title: update.title ?? old?.title,
-                              gameName: update.gameName ?? old?.gameName)
+                              gameName: update.gameName ?? old?.gameName, gameID: update.gameID ?? old?.gameID)
         if live?.title != old?.title { showCard() }
     }
 
@@ -606,8 +631,9 @@ final class Watch {
             log.notice("link: \(adapt.quality, privacy: .public) (\(adapt.reason, privacy: .public)), cushion \(adapt.extraCushion)")
             guard let url = adapt.url else { continue }
             startURL = url
-            let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
-            let chosen: PlayRoute = route == .auto ? (lowLatency ? .ll : .plain) : (playing ?? .plain)
+            let chosen: PlayRoute = route == .auto
+                ? await Self.route(for: StreamStart(url: url, quality: quality ?? "best"), asked: .auto, core: core)
+                : (playing ?? .plain)
             reloading()
             load(url, route: chosen)
         }
@@ -623,7 +649,18 @@ final class Watch {
         guard let stream, channel == nil || channel?.lowercased() == stream.userLogin.lowercased() else { return }
         log.notice("ad pivot to \(url, privacy: .public)")
         startURL = url
-        load(url, route: playing ?? .plain)
+        // The route is picked again for the new upstream, as a link change does.
+        guard let core else {
+            load(url, route: playing ?? .plain)
+            return
+        }
+        let asked = route
+        Task { [weak self] in
+            let start = StreamStart(url: url, quality: self?.quality ?? "best")
+            let chosen = await Self.route(for: start, asked: asked, core: core)
+            guard let self, self.startURL == url else { return }
+            self.load(url, route: chosen)
+        }
     }
 
     func pause() {
@@ -637,7 +674,9 @@ final class Watch {
     /// Ends the stream: the player lets go of its item before the core stops the relay. A switch to
     /// another stream (`stopping` false) leaves the stop to the next start, which supersedes it.
     func close(core: CoreBridge, stopping: Bool = true) {
-        guard let login = stream?.userLogin else { return }
+        guard stream != nil else { return }
+        let watched = watchedChannelState
+        watchedChannelState = nil
         // A pause still waiting out its grace must not gate the next stream off.
         reportState("teardown")
         cancelFade()
@@ -678,7 +717,7 @@ final class Watch {
         Task.detached {
             // The relay, the watch session, drops and channel points (services/watch_start.rs).
             if stopping { _ = try? await core.invoke("watch_stop", args: [:]) }
-            _ = try? await core.invoke("unwatch_channel_state", args: ["login": login])
+            if let watched { _ = try? await core.invoke("unwatch_channel_state", args: ["login": watched]) }
         }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -733,6 +772,7 @@ final class Watch {
             // Kick has no offline room: the band says why and chat keeps running. A channel Kick
             // already called offline (a search hit) is offline, not a playback failure.
             pip.eligible = false
+            Task.detached { _ = try? await core.invoke("watch_stop", args: [:]) }
             if stream.isOffline {
                 error = "\(stream.userName) is offline. Chat keeps running."
                 status = "Offline"
@@ -760,6 +800,8 @@ final class Watch {
         status = "Failed"
         pip.eligible = false
         onToast?("Playback unavailable - showing chat only")
+        _ = try? await core.invoke("watch_open_room", args: ["login": stream.userLogin, "seed": stream.seed,
+                                                              "chatOnly": true])
     }
 
     /// Puts a new item for `url` on `route` in the player and plays it.
@@ -787,7 +829,11 @@ final class Watch {
         if start.url.contains("/audio.m3u8") || !start.url.contains("/stream.m3u8") { return .direct }
         guard asked == .auto else { return asked }
         let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
-        return lowLatency ? .ll : .plain
+        if lowLatency { return .ll }
+        // A low-latency broadcast the parts origin did not take rides its in-progress segments, as
+        // on the desktop and Android (the relay's prefetch probe).
+        let promoted = (try? await core.invoke("get_stream_prefetch_present", args: [:], as: Bool.self)) ?? false
+        return promoted ? .promote : .plain
     }
 
     /// The low-latency playlist failed to play (AVPlayer refuses some part layouts outright):
@@ -893,6 +939,9 @@ final class Watch {
                     continue
                 }
                 error = "Playback failed. Try again in a moment."
+                // As the desktop's player does: the core confirms whether the stream ended (room,
+                // switch) or reloads it when it is still live.
+                if playingVod == nil { onPlayerGaveUp?() }
                 status = "Failed"
                 let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
                 log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public) info \(String(describing: ns.userInfo), privacy: .public)")

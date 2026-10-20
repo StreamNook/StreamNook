@@ -2657,6 +2657,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Notifications',
+    section: 'Mentions',
+    title: "Mentions while you're away",
+    description: "StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days. Away, closed app, mentions in other chats, offline mentions."
+  },
+  {
+    tab: 'Notifications',
     section: 'About',
     title: 'About',
     description: 'About notifications and how to use them.'

@@ -58,6 +58,8 @@ final class AppModel {
     var replayShown = true
     /// The Channel sheet (a channel's videos and clips).
     var channelSheet: TwitchStream?
+    /// One whisper conversation, in the chat menu's native sheet.
+    var whisperSheet: WhisperSheetKey?
     private(set) var started = false
     /// The core's one start, shared by boot and a background live check.
     @ObservationIgnored private var coreStart: Task<Bool, Never>?
@@ -103,6 +105,7 @@ final class AppModel {
         }
         let toasts = toasts
         watch.onToast = { toasts.show($0) }
+        watch.onPlayerGaveUp = { [weak self] in Task { await self?.streamWentOffline(trigger: "player") } }
         watch.onVodChange = { [weak self] vod in self?.vodChanged(vod) }
         watch.onReplay = { [weak self] step in self?.replay?.pipeline.applyReplay(step) }
         watch.onLive = { [weak self] live in self?.startWatching(live) }
@@ -118,9 +121,13 @@ final class AppModel {
         chat.kick = kick
         chat.mentions = mentions
         let home = home
+        let signIn = signIn
+        OwnAccount.user = { signIn.user }
         chat.followedLive = { home.lists.followingLive }
         chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
+        let signIn = signIn
+        chat.viewerID = { signIn.user?.id }
         // A background live check that launches the app finds the core here.
         LiveCheck.model = self
     }
@@ -173,9 +180,22 @@ final class AppModel {
         Task { await settingsStore.refresh() }
         capVideoHeight()
         await signIn.boot(core: core)
+        // The drops token cannot be refreshed, and a stored one only says a file exists: the core
+        // clears it on a real 401 (never on a network failure), so a dead one shows as not
+        // connected. Once per launch, as desktop and Android do.
+        Task { [core] in _ = try? await core.invoke("validate_drops_token", args: [:]) }
         host.start(core: core, cookies: signIn.cookies)
         home.start()
         cosmetics.start(core: core)
+        // Keeps the 7TV session alive, past the boot burst; throttled inside, so most launches
+        // only read the expiry.
+        if let selfID = signIn.user?.id {
+            let core = core
+            Task {
+                try? await Task.sleep(for: .seconds(8))
+                await SevenTvSession.keepAlive(core: core, twitchID: selfID)
+            }
+        }
         kick.start(core: core, toasts: toasts)
         chat.start()
         let mentionCategory = alertTypes.first { $0.id == "mentions" }?.channel
@@ -204,6 +224,10 @@ final class AppModel {
         }
         // Go-lives: the channel playing gets no banner, and a tap plays the stream.
         NotificationRouter.isPlaying = { [weak self] alert in self?.isPlaying(alert) ?? false }
+        // Mentions while you're away: the core decides whether a pushed one shows here.
+        NotificationRouter.mentionPushArrived = { [core] alert in
+            (try? await core.invoke("mention_push_arrived", args: ["id": alert.id, "room": alert.room], as: Bool.self)) ?? true
+        }
         NotificationRouter.handleLive { [weak self] alert in self?.openLiveAlert(alert) }
         // A whisper tapped while the app started opens its conversation once the tabs are up.
         NotificationRouter.handleWhisper { [weak self] key in self?.openWhisper(key) }
@@ -217,11 +241,20 @@ final class AppModel {
         nav.paths[.you] = [.whispers]
     }
 
-    /// One conversation, with the list under it so back lands on the list.
+    /// One conversation, in the native sheet the chat menu uses, over whatever is on screen. An
+    /// open inbox goes first, so the two sheets never present at once.
     func openWhisper(_ key: String) {
-        if nav.shellCovered { nav.playerMode = .mini }
-        nav.tab = .you
-        nav.paths[.you] = [.whispers, .whisper(key)]
+        let next = WhisperSheetKey(key: key)
+        guard mentions.sheetIn != nil || chat.mentionsOpen else {
+            whisperSheet = next
+            return
+        }
+        mentions.sheetIn = nil
+        chat.mentionsOpen = false
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            whisperSheet = next
+        }
     }
 
     /// Reads the settings, applies the look and hands the player its saved choices. A failed read
@@ -260,10 +293,15 @@ final class AppModel {
         }
     }
 
+    /// What the iPhone's settings writes are signed with, so the update they cause is known as its
+    /// own (the desktop windows sign theirs the same way, `settingsBroadcast.ts`).
+    static let settingsSource = "iphone-app"
+
     /// Writes top-level settings keys through the core, then reads the look back.
     func patchSettings(_ patch: [String: Any?]) async {
         do {
-            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() }])
+            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() },
+                                                               "source": Self.settingsSource])
             await loadSettings()
         } catch {
             toasts.show("Failed to save settings")
@@ -372,14 +410,15 @@ final class AppModel {
         }
         log.error("restart failed: \(String(describing: failure), privacy: .public)")
         guard stream.isTwitch else {
-            toasts.show("Failed to restart stream")
+            // A provider stream that will not come back: the core decides (ended, or a blip).
+            await streamWentOffline()
             return
         }
         do {
             let online = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
                                                as: TwitchStream?.self)
             if online == nil {
-                watch.openRoom(stream, core: core)
+                await streamWentOffline()
                 return
             }
         } catch {
@@ -504,6 +543,8 @@ final class AppModel {
                 self.lastEvent = event.name
                 switch event.name {
                 case "streamnook-settings-updated":
+                    // Our own write already read the settings back.
+                    if Self.object(event.payloadJSON)["source"] as? String == Self.settingsSource { break }
                     await self.loadSettings()
                     if self.settingsStore.loaded { await self.settingsStore.refresh() }
                 case "sleep-timer://state":
@@ -521,19 +562,18 @@ final class AppModel {
                     let json = event.payloadJSON
                     Task { await self.followRaid(json) }
                 case "watch-session://offline":
+                    // Twitch or a provider: the core confirms and decides (the confirmation polls for
+                    // up to 40 s; other events keep flowing).
+                    Task { await self.streamWentOffline() }
+                case "provider-stream-offline":
+                    // The relay could not re-sign a Kick stream: the core confirms and decides, for the
+                    // channel being watched only.
                     let payload = Self.object(event.payloadJSON)
-                    if let provider = payload["provider"] as? String, provider != "twitch" {
-                        // Two missed provider checks: the stream ended.
-                        self.watch.providerEnded(provider: provider, channel: payload["login"] as? String ?? "")
-                    } else {
-                        // The confirmation polls Helix for up to 40 s; other events keep flowing.
+                    if let watched = self.watch.stream, !watched.isTwitch,
+                       watched.platform == (payload["provider"] as? String ?? "").lowercased(),
+                       watched.userLogin.lowercased() == (payload["channel"] as? String ?? "").lowercased() {
                         Task { await self.streamWentOffline() }
                     }
-                case "provider-stream-offline":
-                    // The relay could not re-sign a Kick stream and Kick confirmed it ended.
-                    let payload = Self.object(event.payloadJSON)
-                    self.watch.providerEnded(provider: payload["provider"] as? String ?? "",
-                                             channel: payload["channel"] as? String ?? "")
                 case "reward-granted":
                     // The core's reward claims granted something new (services/member_rewards.rs).
                     // Granting only unlocks it; Apply opens the look picker to wear it.
@@ -590,10 +630,12 @@ final class AppModel {
         startWatching(target)
     }
 
-    /// The watched stream looks offline: the core confirms it and says what to do.
-    private func streamWentOffline() async {
+    /// The watched stream looks offline: the core confirms it and says what to do. `player` is the
+    /// player giving up (a stream still live is then reloaded in place).
+    private func streamWentOffline(trigger: String? = nil) async {
         guard let ended = watch.stream else { return }
-        guard let decision = try? await core.invoke("watch_session_resolve_offline", args: [:], as: OfflineDecision.self)
+        guard let decision = try? await core.invoke("watch_session_resolve_offline", args: ["trigger": trigger],
+                                                    as: OfflineDecision.self)
         else {
             toasts.show("Auto-switch failed. Please select a new stream manually.")
             return
@@ -604,6 +646,10 @@ final class AppModel {
             if let n { self.toasts.show(n.message, n.error ? .error : .info) }
         }
         switch decision.action {
+        case "resume":
+            // Live after all, and the player was stuck on a manifest the streamer reconnected out
+            // of: the stream reloads in place.
+            await restartStream()
         case "notify":
             notice(decision.notice)
         case "offline_chat":
@@ -611,6 +657,12 @@ final class AppModel {
             _ = try? await core.invoke("stop_stream", args: [:])
             watch.openRoom(ended, core: core)
         case "stop":
+            if !ended.isTwitch {
+                // A provider stream that ended: the picture ends, the room does not (the band says
+                // so and chat keeps running), as on Android.
+                watch.providerEnded(provider: ended.platform, channel: ended.userLogin)
+                return
+            }
             notice(decision.notice)
             stopWatching()
         case "switch_to":

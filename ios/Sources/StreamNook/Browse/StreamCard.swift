@@ -167,9 +167,8 @@ struct StreamMenu: View {
     let open: () -> Void
     var openCategory: (() -> Void)?
 
-    private var link: URL { stream.channelLink ?? URL(string: "https://www.twitch.tv/\(stream.userLogin)")! }
-
     @Environment(\.openChat) private var openChat
+    @Environment(\.streamShareLink) private var shareLink
 
     var body: some View {
         MenuPick("Watch", symbol: Symbol.watch, action: open)
@@ -180,8 +179,15 @@ struct StreamMenu: View {
             MenuPick("Open \(stream.gameName)", symbol: Symbol.category, action: openCategory)
         }
         Divider()
-        ShareLink(item: link) { Label("Share channel", systemImage: Symbol.share) }
-        MenuPick("Copy channel link", symbol: Symbol.copy) { UIPasteboard.general.url = link }
+        // The core's link, as desktop and Android share and copy a channel.
+        StreamShareLink(stream: stream) { Label("Share channel", systemImage: Symbol.share) }
+        MenuPick("Copy channel link", symbol: Symbol.copy) {
+            let stream = stream
+            let shareLink = shareLink
+            Task { @MainActor in
+                UIPasteboard.general.url = await shareLink?(stream) ?? StreamShare.fallback(stream)
+            }
+        }
     }
 
     /// The same items, named, for a drive step's stand-in sheet.

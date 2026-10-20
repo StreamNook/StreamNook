@@ -2372,6 +2372,24 @@
   },
   {
    "page": "notifications",
+   "section": "Mentions",
+   "title": "Mentions while you're away",
+   "paths": [
+    "mentions.away_alerts"
+   ],
+   "nested": false,
+   "detail": "StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days.",
+   "logo": null,
+   "aliases": [
+    "away",
+    "closed app",
+    "offline mentions",
+    "mention push",
+    "other chats"
+   ]
+  },
+  {
+   "page": "notifications",
    "section": "Background checking",
    "title": "Instant alerts",
    "paths": [

@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
+import { closeInboxSheet } from '../mentions/mentionInbox';
 import { Logger } from '../../utils/logger';
 import type { WhisperConversation, WhisperList, WhisperListRow, WhisperUpdate } from '../../types';
 import { failureReason, type PendingWhisper } from './whisperModel';
@@ -204,6 +205,8 @@ function takeUpdate(update: WhisperUpdate): void {
 export async function openWhisperByKey(key: string): Promise<void> {
   if (!key) return;
   if (!useWhispersStore.getState().loaded) await refreshWhisperList();
+  // Two sheets never stack: an open inbox gives way to the conversation.
+  closeInboxSheet();
   useMobileNavStore.getState().openWhisper(key);
 }
 

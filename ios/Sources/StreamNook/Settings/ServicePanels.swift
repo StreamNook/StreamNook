@@ -297,6 +297,10 @@ struct MentionRuleSettings: View {
                 }
             }
             MutedChatsRow()
+            // The core tells the server and pulls what it finds into Mentions
+            // (services/mention_watch.rs).
+            ToggleRow(title: "Mentions while you're away", path: "mentions.away_alerts",
+                      detail: "StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days.")
         }
     }
 }

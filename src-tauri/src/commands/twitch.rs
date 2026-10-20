@@ -2329,8 +2329,8 @@ pub async fn vod_replay_stop() -> Result<(), String> {
 
 #[derive(serde::Serialize)]
 pub struct VodComment {
-    /// Playback offset (seconds into the VOD) this comment was posted at. The
-    /// frontend sync engine drips it into chat when the playhead passes this.
+    /// Playback offset (seconds into the VOD) this comment was posted at.
+    /// `vod_replay` drips it into chat when the playhead passes this.
     pub content_offset_seconds: f64,
     pub message: crate::models::chat_layout::ChatMessage,
 }
@@ -2509,21 +2509,10 @@ fn build_vod_comment_line(node: &VcNode, channel_lc: &str) -> String {
     )
 }
 
-/// Fetch a page of a VOD's historical chat starting at `offset_seconds`.
-/// `channel_login` keys the per-channel 7TV/BTTV emote set during parsing, so
-/// third-party emotes render exactly as in live chat. Returns comments in
-/// ascending offset order; the caller dedups same-second overlap by comment id.
-#[tauri::command]
-pub async fn get_vod_comments(
-    video_id: String,
-    channel_login: String,
-    offset_seconds: f64,
-    state: State<'_, AppState>,
-) -> Result<Vec<VodComment>, String> {
-    vod_comments_at(&video_id, &channel_login, offset_seconds, state.emote_service.clone()).await
-}
-
 /// One page of a VOD's recorded chat from `offset_seconds`, parsed like live rows.
+/// `channel_login` keys the per-channel 7TV/BTTV emote set during parsing, so
+/// third-party emotes render exactly as in live chat. Comments come in ascending
+/// offset order; `vod_replay` dedups same-second overlap by comment id.
 pub(crate) async fn vod_comments_at(
     video_id: &str,
     channel_login: &str,

@@ -94,15 +94,31 @@ import Testing
         #expect(payloads == [#"{"version":"0.1.0","core":"fake"}"#])
     }
 
-    @Test func browseListsTwentyStreamsAcrossCategories() async throws {
-        let core = try started()
-        let streams = try await Browse.load(core)
-        #expect(streams.count == 20)
-        #expect(Set(streams.map(\.id)).count == 20)
-        #expect(streams.first?.userLogin == "fakestreamer0")
-        #expect(streams.last?.gameName == "League of Legends")
-        // FakeCore has no home snapshot, so Browse falls back to the top categories.
-        #expect(core.calls == ["refresh_home_section", "get_top_games_paginated", "get_streams_by_game", "get_streams_by_game"])
+    @Test func browseReadsTheRecommendedSectionTheCoreKeeps() async throws {
+        let core = FakeCore(fixtures: FakeFixtures(signedIn: false))
+        try core.start(dirs: CoreDirs(data: "/d", cache: "/c", logs: "/l"), version: "0.1.0",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        // Only the section: the core reads the saved Discover languages and personalized choice.
+        _ = try await core.invoke("refresh_home_section", args: ["section": "recommended"])
+        let lists = try await core.invoke("get_home_snapshot", args: [:], as: HomeLists.self)
+        #expect(!lists.recommended.isEmpty)
+        #expect(core.calls == ["refresh_home_section", "get_home_snapshot"])
+    }
+
+    @Test func theFakeRefusesWhatTheCoreRefuses() async throws {
+        let core = FakeCore(fixtures: FakeFixtures(signedIn: false))
+        try core.start(dirs: CoreDirs(data: "/d", cache: "/c", logs: "/l"), version: "0.1.0",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        for (cmd, args) in [("refresh_home_section", [:]), ("refresh_home_section", ["section": "everything"]),
+                            ("patch_settings", [:]), ("set_settings_fields", [:]), ("reset_settings", [:]),
+                            ("edit_settings_list", ["path": "chat_design.link_preview_trusted_domains"]),
+                            ("edit_settings_list", ["path": "x", "edit": ["op": "update", "id": "a"]]),
+                            ("edit_settings_list", ["path": "x", "edit": ["op": "shuffle"]])] as [(String, [String: Any?])] {
+            await #expect(throws: CoreFailure.self, "\(cmd) \(args)") { _ = try await core.invoke(cmd, args: args) }
+        }
+        // Well-formed calls still pass.
+        _ = try await core.invoke("refresh_home_section", args: ["section": "followed_live"])
+        _ = try await core.invoke("set_settings_fields", args: ["changes": ["chat_design.mod_slider": false]])
     }
 
     @Test func streamsByGameNeedsTheTypeScriptArgumentName() async throws {

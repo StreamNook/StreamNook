@@ -1,0 +1,3 @@
+# Built standalone (cargo test --manifest-path ...): its own target and lock.
+/target
+/Cargo.lock

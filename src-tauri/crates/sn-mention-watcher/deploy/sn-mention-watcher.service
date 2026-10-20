@@ -1,0 +1,23 @@
+# StreamNook mention watcher. Installed only on Brandon's word (plan step D5):
+#   /opt/sn-mention-watcher/sn-mention-watcher   the release binary
+#   /etc/sn-mention-watcher.env                  SN_NOTIFY_URL, SN_WATCHER_SECRET (mode 600, root)
+[Unit]
+Description=StreamNook mention watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/sn-mention-watcher/sn-mention-watcher
+EnvironmentFile=/etc/sn-mention-watcher.env
+Restart=always
+RestartSec=5
+DynamicUser=yes
+RuntimeDirectory=sn-mention-watcher
+MemoryMax=256M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

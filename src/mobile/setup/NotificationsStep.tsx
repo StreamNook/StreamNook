@@ -20,8 +20,12 @@ interface Props {
   onChoose: (id: string, on: boolean) => void;
 }
 
+const AWAY_TITLE = "Mentions while you're away";
+const AWAY_DETAIL = "StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days.";
+
 const NotificationsStep: React.FC<Props> = ({ types, choices, onChoose }) => {
   const [delivery, setDelivery] = useState<NotifyDelivery | null>(null);
+  const awayOn = useAppStore((s) => s.settings.mentions?.away_alerts === true);
   // Bumped after a prompt, and read again on return from Android's settings.
   const [readToken, setReadToken] = useState(0);
 
@@ -62,6 +66,16 @@ const NotificationsStep: React.FC<Props> = ({ types, choices, onChoose }) => {
     if (delivery?.permission !== 'granted') {
       await ensureNotificationPermission();
       setReadToken((n) => n + 1);
+    }
+  };
+
+  // Off until chosen. Its pushes follow the Mentions and replies alert, so
+  // the permission is asked only when that one is on.
+  const chooseAway = async (on: boolean) => {
+    try {
+      await setSettingsFields({ 'mentions.away_alerts': on });
+    } catch (err) {
+      Logger.warn('[NotificationsStep] save failed:', err);
     }
   };
 
@@ -109,6 +123,41 @@ const NotificationsStep: React.FC<Props> = ({ types, choices, onChoose }) => {
           );
         })}
       </GroupCard>
+
+      {/* Mentions while you're away: its own card, since it is a server
+          watching for you rather than an alert type. */}
+      <div className="mt-3">
+        <GroupCard>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={awayOn}
+            onClick={() => void chooseAway(!awayOn)}
+            className="sn-touch w-full flex items-start gap-3 py-2.5 text-left active:opacity-70"
+          >
+            <GroupIcon>
+              {createElement(settingIcon('Mentions', AWAY_TITLE), {
+                size: GROUP_ICON,
+                strokeWidth: GROUP_ICON_STROKE,
+                className: 'text-textSecondary',
+              })}
+            </GroupIcon>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[15px] leading-6 text-textPrimary">{AWAY_TITLE}</span>
+              <span className="block text-[13px] leading-[18px] text-textSecondary text-pretty">{AWAY_DETAIL}</span>
+            </span>
+            <span
+              aria-hidden="true"
+              className={`shrink-0 w-11 h-6 rounded-full relative transition-colors ${awayOn ? 'bg-accent' : 'bg-surface'}`}
+            >
+              <span
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-[left] duration-200 ease-out"
+                style={{ left: awayOn ? 22 : 2 }}
+              />
+            </span>
+          </button>
+        </GroupCard>
+      </div>
 
       {/* Its room is kept while hidden: the page is centered, so a line
           appearing under the card would otherwise shift the switches. */}

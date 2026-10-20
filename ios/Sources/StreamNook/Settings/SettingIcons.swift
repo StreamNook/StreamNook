@@ -129,6 +129,7 @@ enum SettingIcons {
         "mentions.match_display_name": "person.crop.circle.badge.checkmark",
         "mentions.highlight_words": "highlighter",
         "mentions.muted_channels": "bell.slash",
+        "mentions.away_alerts": "antenna.radiowaves.left.and.right",
         // Cache, support, theme
         "cache.enabled": "internaldrive",
         "cache.expiry_days": "calendar.badge.clock",

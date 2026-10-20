@@ -8,7 +8,7 @@ import SNKit
 @Observable @MainActor
 final class HomeStore {
     private(set) var lists = HomeLists()
-    /// The Browse list: the recommended section, or the busiest categories' streams without it.
+    /// The Browse list: the snapshot's recommended section.
     private(set) var recommended: [TwitchStream] = []
     private(set) var followedLoaded = false
     private(set) var recommendedLoaded = false
@@ -52,10 +52,12 @@ final class HomeStore {
         followedLoaded = true
     }
 
+    /// The recommended section, asked of the core as Android asks it: the core reads the saved
+    /// Discover languages and personalized choice, and the list lands in the snapshot.
     func loadRecommended(pulled: Bool = false) async {
         if pulled { previewStamp += 1 }
         do {
-            recommended = try await Browse.load(core)
+            _ = try await core.invoke("refresh_home_section", args: ["section": "recommended"])
         } catch {
             log.error("browse failed: \(String(describing: error), privacy: .public)")
         }

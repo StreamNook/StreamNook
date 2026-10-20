@@ -282,7 +282,7 @@ struct TwitchProfileSection: View {
                                             args: ["kind": kind.rawValue, "dataBase64": prepared.jpeg.base64EncodedString()])
             // Twitch serves the new image a few seconds later; the header re-reads after it.
             try? await Task.sleep(for: .seconds(4))
-            await model.signIn.refresh()
+            await model.signIn.refresh(force: true)
         } catch {
             if kind == .picture { picture = nil } else { banner = nil }
             let reason = (error as? CoreFailure)?.description ?? ""
@@ -318,7 +318,7 @@ struct TwitchProfileSection: View {
         do {
             _ = try await model.core.invoke("update_twitch_display_name", args: ["displayName": draftName])
             nameFocused = false
-            await model.signIn.refresh()
+            await model.signIn.refresh(force: true)
         } catch {
             let reason = (error as? CoreFailure)?.description ?? ""
             model.toasts.show(reason.isEmpty ? "Could not change your name." : reason)
