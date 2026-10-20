@@ -130,3 +130,19 @@ html[data-mobile='true'] .sn-rail {
 html[data-mobile='true'] .sn-chat-live {
   scrollbar-width: none;
 }
+
+/* The same rails and live chat, for the bar Chromium builds from
+   ::-webkit-scrollbar (the desktop's 8px bar in globals.css). The phone's
+   WebView drew that bar over the Chats room strip and live chat with
+   scrollbar-width: none set, so the standard property alone does not hide it
+   there. A zero-size, undisplayed pseudo-element hides it whichever of the two
+   the WebView honors; the rails still scroll by touch. */
+html[data-mobile='true'] .overflow-x-auto::-webkit-scrollbar,
+html[data-mobile='true'] .overflow-x-scroll::-webkit-scrollbar,
+html[data-mobile='true'] .scrollbar-none::-webkit-scrollbar,
+html[data-mobile='true'] .sn-rail::-webkit-scrollbar,
+html[data-mobile='true'] .sn-chat-live::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
