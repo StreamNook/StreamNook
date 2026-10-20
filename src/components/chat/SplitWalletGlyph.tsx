@@ -1,11 +1,65 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 // The wallet's mark for a channel with both channel points and Bits: one square
 // split on the diagonal, the points art in the upper-left half and the Bits gem
-// in the lower-right, both whole and the same size, with a short hairline
-// across the gap between them. Nothing sits on a corner, so it never reads as an
-// unread badge. The iPhone's SplitWalletGlyph (WalletButton.swift) draws the
-// same geometry on the same 22px grid.
+// in the lower-right, both whole and the same size, with a hairline across the
+// gap between them. Nothing sits on a corner, so it never reads as an unread
+// badge. Where each part goes is Rust's (services/wallet_glyph.rs): it measures
+// the channel's art, so round, full-bleed and padded art all sit the same gap
+// from the gem. The iPhone's SplitWalletGlyph (WalletButton.swift) draws the
+// same layout.
+
+/** Rust's `SplitLayout`, on its own grid. */
+interface SplitLayout {
+  grid: number;
+  mark: number;
+  art_at: number;
+  gem_at: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  shift_x: number;
+  shift_y: number;
+}
+
+/** Rust's `SplitLayout::FALLBACK`: Twitch's ring against the 100-bit gem,
+ *  drawn until the measured layout arrives. */
+const FALLBACK: SplitLayout = {
+  grid: 24,
+  mark: 11.5,
+  art_at: 2.42,
+  gem_at: 12.5,
+  x1: 19.74,
+  y1: 8.24,
+  x2: 8.24,
+  y2: 19.74,
+  shift_x: -0.73,
+  shift_y: -1.35,
+};
+
+// One answer per art pair for the whole page; Rust caches it too.
+const layouts = new Map<string, SplitLayout>();
+
+function useSplitLayout(pointsIcon: string | null, gem: string): SplitLayout {
+  const key = `${pointsIcon ?? ''}|${gem}`;
+  const [, setReady] = useState(0);
+  useEffect(() => {
+    if (layouts.has(key)) return;
+    let live = true;
+    invoke<SplitLayout>('wallet_split_layout', { pointsIcon, gem })
+      .then((layout) => {
+        layouts.set(key, layout);
+        if (live) setReady((n) => n + 1);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [key, pointsIcon, gem]);
+  return layouts.get(key) ?? FALLBACK;
+}
 
 /** A bonus chest waiting: the whole wallet button becomes the chest, in the
  *  theme's warning amber with a soft glow, never a mark on a corner. The
@@ -31,45 +85,48 @@ export function WalletChestGlyph({ size = 18 }: { size?: number }) {
 
 export function SplitWalletGlyph({
   points,
+  pointsIcon,
   gemUrl,
-  size = 22,
+  size = 24,
   className = '',
 }: {
   /** Draws the points art at the size it gets inside the glyph. */
   points: (size: number) => ReactNode;
+  /** The channel's points art URL (null: Twitch's glyph), which Rust measures. */
+  pointsIcon: string | null;
   gemUrl: string;
   size?: number;
   className?: string;
 }) {
-  const u = size / 22;
-  const mark = size / 2;
+  const l = useSplitLayout(pointsIcon, gemUrl);
+  const u = size / l.grid;
+  const mark = l.mark * u;
   return (
     <span className={`relative inline-block flex-shrink-0 ${className}`} style={{ width: size, height: size }}>
-      <span className="absolute flex" style={{ left: 0.5 * u, top: 0.5 * u, width: mark, height: mark }}>
-        {points(mark)}
-      </span>
-      <img
-        src={gemUrl}
-        alt=""
-        draggable={false}
-        className="absolute object-contain"
-        style={{ left: 10.5 * u, top: 10.5 * u, width: mark, height: mark }}
-      />
-      {/* Only across the gap: 10px long, ending just inside the marks' width, and
-          centered on the gap you see (a gem's nearest point sits farther from the
-          middle than the round points art's), so it rides 1px toward the gem. */}
-      <svg className="absolute inset-0" width={size} height={size} viewBox="0 0 22 22" aria-hidden="true">
-        <line
-          x1={15.2}
-          y1={8.13}
-          x2={8.13}
-          y2={15.2}
-          stroke="var(--color-text-secondary)"
-          strokeOpacity={0.45}
-          strokeWidth={1}
-          vectorEffect="non-scaling-stroke"
+      <span className="absolute inset-0" style={{ transform: `translate(${l.shift_x * u}px, ${l.shift_y * u}px)` }}>
+        <span className="absolute flex" style={{ left: l.art_at * u, top: l.art_at * u, width: mark, height: mark }}>
+          {points(mark)}
+        </span>
+        <img
+          src={gemUrl}
+          alt=""
+          draggable={false}
+          className="absolute object-contain"
+          style={{ left: l.gem_at * u, top: l.gem_at * u, width: mark, height: mark }}
         />
-      </svg>
+        <svg className="absolute inset-0" width={size} height={size} viewBox={`0 0 ${l.grid} ${l.grid}`} aria-hidden="true">
+          <line
+            x1={l.x1}
+            y1={l.y1}
+            x2={l.x2}
+            y2={l.y2}
+            stroke="var(--color-text-secondary)"
+            strokeOpacity={0.45}
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      </span>
     </span>
   );
 }

@@ -824,7 +824,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   <img src={walletBits.gem_url} alt="" className="w-[19px] h-[19px] object-contain" draggable={false} />
                 ) : walletBits?.gem_url ? (
                   // Bits live here too: points and the gem share one split glyph.
-                  <SplitWalletGlyph points={pointsArt} gemUrl={walletBits.gem_url} />
+                  <SplitWalletGlyph points={pointsArt} pointsIcon={points.iconUrl} gemUrl={walletBits.gem_url} />
                 ) : (
                   pointsArt(19)
                 )}

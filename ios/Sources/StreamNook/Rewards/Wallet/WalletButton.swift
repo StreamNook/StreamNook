@@ -97,7 +97,7 @@ struct WalletButton: View {
             // The whole button becomes the chest, like the desktop's, never a mark on a corner.
             WalletChest()
         } else if let points = wallet.points, let gem = wallet.bits?.gemURL {
-            SplitWalletGlyph(pointsIconURL: points.iconURL, gemURL: gem)
+            SplitWalletGlyph(pointsIconURL: points.iconURL, gemURL: gem, layout: wallet.split)
         } else if let points = wallet.points {
             PointsArt(iconURL: points.iconURL, size: 19)
         } else if let gem = wallet.bits?.gemURL {
@@ -201,32 +201,34 @@ struct PointsArt: View {
 }
 
 /// The wallet's mark for a channel with both channel points and Bits: one square split on the
-/// diagonal, the points art in the upper-left half and the Bits gem in the lower-right, both
-/// whole and the same size, with a short hairline across the gap between them. Nothing sits on a
-/// corner, so it never reads as an unread badge. Same geometry as the desktop and Android
-/// `SplitWalletGlyph`, on a 22 point grid.
+/// diagonal, the points art in the upper-left half and the Bits gem in the lower-right, both whole
+/// and the same size, with a hairline across the gap between them. Nothing sits on a corner, so it
+/// never reads as an unread badge. Where each part goes is the core's (`wallet_split_layout`): it
+/// measures the channel's art, so round, full-bleed and padded art all sit the same gap from the
+/// gem. Same layout as the desktop and Android `SplitWalletGlyph`.
 struct SplitWalletGlyph: View {
     let pointsIconURL: String?
     let gemURL: String
-    var size: CGFloat = 22
+    var layout: SplitLayout = .fallback
+    var size: CGFloat = 24
 
     var body: some View {
-        let u = size / 22
+        let u = size / CGFloat(layout.grid)
+        let mark = CGFloat(layout.mark) * u
         ZStack(alignment: .topLeading) {
-            PointsArt(iconURL: pointsIconURL, size: 11 * u)
-                .offset(x: 0.5 * u, y: 0.5 * u)
-            RewardArt(url: gemURL, width: 11 * u, height: 11 * u, radius: 0, fit: true, placeholder: nil)
-                .offset(x: 10.5 * u, y: 10.5 * u)
-            // Only across the gap: 10 points long, ending just inside the marks' width, and centered
-            // on the gap you see (a gem's nearest point sits farther out than round points art's).
+            PointsArt(iconURL: pointsIconURL, size: mark)
+                .offset(x: CGFloat(layout.artAt) * u, y: CGFloat(layout.artAt) * u)
+            RewardArt(url: gemURL, width: mark, height: mark, radius: 0, fit: true, placeholder: nil)
+                .offset(x: CGFloat(layout.gemAt) * u, y: CGFloat(layout.gemAt) * u)
             Path { path in
-                path.move(to: CGPoint(x: 15.2 * u, y: 8.13 * u))
-                path.addLine(to: CGPoint(x: 8.13 * u, y: 15.2 * u))
+                path.move(to: CGPoint(x: CGFloat(layout.x1) * u, y: CGFloat(layout.y1) * u))
+                path.addLine(to: CGPoint(x: CGFloat(layout.x2) * u, y: CGFloat(layout.y2) * u))
             }
             .stroke(SN.textSecondary.opacity(0.45), lineWidth: 1)
             .accessibilityHidden(true)
         }
         .frame(width: size, height: size, alignment: .topLeading)
+        .offset(x: CGFloat(layout.shiftX) * u, y: CGFloat(layout.shiftY) * u)
     }
 }
 

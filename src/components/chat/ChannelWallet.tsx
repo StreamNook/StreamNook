@@ -206,6 +206,7 @@ export function WalletFace({ points, bits: bitsFace, mode, gains, open, onToggle
               // Bits live here too: points and the gem share one split glyph.
               <SplitWalletGlyph
                 points={(size) => <PointsGlyph iconUrl={points.iconUrl} name={points.name} size={size} />}
+                pointsIcon={points.iconUrl}
                 gemUrl={bits.gem_url}
                 className={glow}
               />

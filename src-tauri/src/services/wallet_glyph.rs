@@ -73,20 +73,20 @@ pub struct SplitLayout {
 }
 
 impl SplitLayout {
-    /// Twitch's ring against the 100-bit gem, which the shells draw until (or
-    /// unless) the art is measured. `fallback_is_the_ring_against_the_gem`
-    /// keeps it in step with the measurement.
+    /// Twitch's ring against the 100-bit gem (measured on the real gem), which
+    /// the shells draw until (or unless) the art is measured. The desktop,
+    /// Android and iPhone copies carry these numbers too.
     pub const FALLBACK: SplitLayout = SplitLayout {
         grid: GRID,
         mark: MARK,
-        art_at: 2.5,
+        art_at: 2.42,
         gem_at: GEM_AT,
-        x1: 19.83,
-        y1: 8.26,
-        x2: 8.26,
-        y2: 19.83,
-        shift_x: -1.07,
-        shift_y: -1.13,
+        x1: 19.74,
+        y1: 8.24,
+        x2: 8.24,
+        y2: 19.74,
+        shift_x: -0.73,
+        shift_y: -1.35,
     };
 }
 
@@ -320,8 +320,8 @@ mod tests {
         for (name, art) in arts() {
             let l = layout(&art, &gem).unwrap();
             let (a, g) = gaps(&art, &gem, l);
-            // The gap is GAP (less the stroke) wherever the slide could close it.
-            assert!((a + g + 0.0 - GAP).abs() < 0.6 || l.art_at == 0.0, "{name}: {a} + {g} with {l:?}");
+            // The gap is GAP wherever the slide could close it (not at its limit).
+            assert!((a + g - GAP).abs() < 0.05 || l.art_at >= MAX_SLIDE || l.art_at == 0.0, "{name}: {a} + {g} with {l:?}");
             assert!(a >= MIN_CLEARANCE - 0.01 && g >= MIN_CLEARANCE - 0.01, "{name}: the line hugs a mark ({a}, {g})");
             // Nearer the gem's tip than the art, by about twice TOWARD_GEM.
             assert!(a > g, "{name}: {a} vs {g}");
