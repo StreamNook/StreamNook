@@ -21,20 +21,20 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { parseMessage } from '../../services/twitchChat';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import { Logger } from '../../utils/logger';
+import { moderateWithToast } from '../../services/moderation';
 import { MobileChatInput, type ChatGating } from './MobileChatInput';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
 import { ChatTabStrip } from './ChatTabStrip';
 import { AddChatSheet } from './AddChatSheet';
 import { useChatTabsStore } from './chatTabsStore';
 import { useChatWatchdog } from './useChatWatchdog';
-import { banUser, deleteMessage, isModeratorFrom, pinMessage, unbanUser } from './modActions';
+import { isModeratorFrom, pinMessage } from './modActions';
 import { ChatFanOut, type FanAction, type FanTarget } from './ChatFanOut';
 import { hapticCommit } from '../ui/haptics';
 import { usePhonePrefs } from '../phonePrefs';
 import { isWindowHidden } from '../../utils/windowVisibility';
 import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
-import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 import { useMentionJump } from '../mentions/useMentionJump';
 import { useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
@@ -641,7 +641,7 @@ export const MobileChatPane: React.FC<{
         Logger.debug('[Swipe] slider unavailable:', err);
         return null;
       }),
-    [],
+    [activeTab?.login, activeChannel],
   );
   // The fan's quick Timeout is the swipe's first timeout length.
   const sliderSettings = useAppStore((s) => (s.settings.chat_design?.mod_slider_timeouts ?? []).join(','));
@@ -778,38 +778,41 @@ export const MobileChatPane: React.FC<{
             color: '#9147FF',
           });
           break;
+        // The same door as desktop's hover dock: Rust's words and Undo on
+        // success, Twitch's reason on a refusal, and the first saved reason on
+        // a timeout or ban.
         case 'delete':
           if (broadcasterId) {
-            void deleteMessage(broadcasterId, t.messageId).then(
-              (ok) => !ok && addToast('Could not delete that message.', 'error'),
-            );
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'delete', messageId: t.messageId },
+            });
           }
           break;
         case 'timeout':
           if (broadcasterId && t.userId) {
-            void banUser(broadcasterId, t.userId, timeoutSecs ?? 600).then((ok) => {
-              if (!ok) addToast('Could not time out that user.', 'error');
-              else
-                addToast(
-                  `Timed out ${t.username} for ${formatDuration(timeoutSecs ?? 600)}`,
-                  'success',
-                  {
-                    label: 'Undo',
-                    onClick: () => void unbanUser(broadcasterId, t.userId),
-                  },
-                );
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'timeout', seconds: timeoutSecs ?? 600 },
+              useSavedReason: true,
             });
           }
           break;
         case 'ban':
           if (broadcasterId && t.userId) {
-            void banUser(broadcasterId, t.userId, null).then((ok) => {
-              if (!ok) addToast('Could not ban that user.', 'error');
-              else
-                addToast(`Banned ${t.username}`, 'success', {
-                  label: 'Undo',
-                  onClick: () => void unbanUser(broadcasterId, t.userId),
-                });
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'ban' },
+              useSavedReason: true,
             });
           }
           break;

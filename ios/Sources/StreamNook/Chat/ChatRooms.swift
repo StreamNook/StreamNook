@@ -98,6 +98,9 @@ final class ChatRooms {
     /// Kick rooms closed within their release grace, by room key.
     @ObservationIgnored private var releasing: [String: Task<Void, Never>] = [:]
 
+    /// The signed-in Twitch account's id (set by the app model from its sign-in).
+    @ObservationIgnored var viewerID: @MainActor () -> String? = { nil }
+
     init(core: CoreBridge) {
         self.core = core
     }
