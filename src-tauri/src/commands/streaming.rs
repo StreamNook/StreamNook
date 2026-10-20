@@ -774,10 +774,11 @@ async fn start_stream_inner(
     let port = StreamServer::start_proxy_server(serve_url)
         .await
         .map_err(|e| e.to_string())?;
-    // The parts origin's first downloads just measured the link. When they say
-    // this rung cannot be carried, restart on one that can before the player
-    // loads anything: a longer load instead of a freeze and a reload a few
-    // seconds into the stream.
+    // The parts origin's first downloads just measured the link (on the
+    // whole-segment path the start pick downloads two segments itself). When
+    // they say this rung clearly cannot be carried, restart on one that can
+    // before the player loads anything: a longer load instead of freezes.
+    crate::services::link_adapt::start_measure(crate::services::link_adapt::SOLO, generation).await;
     let port = match crate::services::link_adapt::start_check(
         crate::services::link_adapt::SOLO,
         generation,
