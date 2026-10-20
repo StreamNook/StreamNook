@@ -2677,10 +2677,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       try {
         const { currentMediaType, originalMediaUrl } = get();
-        const targetUrl =
-          currentMediaType !== 'live' && originalMediaUrl
-            ? originalMediaUrl
-            : `https://twitch.tv/${currentStream.user_login}`;
+        // A Kick or YouTube stream re-resolves through its own adapter, as
+        // changeStreamQuality does: a twitch.tv URL sent the slug to the Twitch
+        // resolver, which could start the wrong stream on a screen lock.
+        const provider = streamProvider(currentStream);
+        const liveUrl =
+          provider === 'twitch'
+            ? `https://twitch.tv/${currentStream.user_login}`
+            : buildProviderUrl(provider, currentStream.user_login);
+        const targetUrl = currentMediaType !== 'live' && originalMediaUrl ? originalMediaUrl : liveUrl;
         const result = await invoke<StreamStartResult>('change_stream_quality', {
           url: targetUrl,
           quality,
