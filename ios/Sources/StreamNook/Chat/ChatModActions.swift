@@ -41,10 +41,11 @@ enum ChatModActions {
         let core = session.core
         let room = session.roomID ?? ""
         /// One action through the core's mod door (`moderate_chatter`), which words the answer.
-        func moderate(_ action: [String: Any]) async throws -> ModOutcome {
+        /// `saved`: the first saved reason rides along (timeout and ban, as on desktop).
+        func moderate(_ action: [String: Any], saved: Bool = false) async throws -> ModOutcome {
             try await core.invoke("moderate_chatter", args: ["request": [
                 "provider": "twitch", "broadcasterId": room, "targetUserId": message.userID,
-                "targetName": message.shownName, "action": action,
+                "targetName": message.shownName, "action": action, "useSavedReason": saved,
             ] as [String: Any]], as: ModOutcome.self)
         }
         let undo: @MainActor (Bool) -> Void = { timeout in
@@ -71,14 +72,14 @@ enum ChatModActions {
             }
         case .timeout:
             do {
-                let outcome = try await moderate(["kind": "timeout", "seconds": seconds ?? 600])
+                let outcome = try await moderate(["kind": "timeout", "seconds": seconds ?? 600], saved: true)
                 return Outcome(text: outcome.message, success: true, undo: { undo(true) })
             } catch {
                 return Outcome(text: ChatComposerModel.words(error))
             }
         case .ban:
             do {
-                let outcome = try await moderate(["kind": "ban"])
+                let outcome = try await moderate(["kind": "ban"], saved: true)
                 return Outcome(text: outcome.message, success: true, undo: { undo(false) })
             } catch {
                 return Outcome(text: ChatComposerModel.words(error))

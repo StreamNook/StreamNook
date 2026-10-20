@@ -121,6 +121,8 @@ final class AppModel {
         chat.followedLive = { home.lists.followingLive }
         chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
+        let signIn = signIn
+        chat.viewerID = { signIn.user?.id }
         // A background live check that launches the app finds the core here.
         LiveCheck.model = self
     }
