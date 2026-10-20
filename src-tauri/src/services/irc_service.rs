@@ -7382,6 +7382,8 @@ mod chat_fixture_tests {
     const INPUTS: &str = include_str!("../../../ios/Tests/Fixtures/chat-inputs.json");
 
     fn frames() -> (Value, Vec<String>) {
+        // The rule tests set their own account; hold the identity until done.
+        let _own = crate::services::chat_rules::ChatRules::own_identity_test_lock();
         let inputs: Value = serde_json::from_str(INPUTS).expect("chat inputs parse");
         let channel = inputs["channel"].as_str().unwrap().to_string();
         let set: EmoteSet = serde_json::from_value(inputs["emotes"].clone()).expect("emote set");

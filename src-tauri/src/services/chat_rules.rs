@@ -988,6 +988,15 @@ impl ChatRules {
         }
     }
 
+    /// Held by every test that sets the process-wide own identity, so two of
+    /// them never interleave: the IRC parity fixtures sign in as another
+    /// account than the rule tests, and both run in one `cargo test`.
+    #[cfg(test)]
+    pub(crate) fn own_identity_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     pub(crate) fn own_identity() -> Option<(String, String)> {
         own_cell().read().ok().and_then(|g| g.clone())
     }
@@ -2148,6 +2157,7 @@ mod tests {
 
     #[test]
     fn mention_suppresses_rule_highlight_and_sets_flag() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("Brandon", "999");
         let rules = rules_from(
             r##"{"phrases":[{"id":"a","pattern":"hey","enabled":true,"color":"#1"}]}"##,
@@ -2168,6 +2178,7 @@ mod tests {
 
     #[test]
     fn another_platforms_ids_never_match_the_twitch_identity() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         let rules = rules_from("{}", "{}", "{}");
         let reply_to = |provider: &str, sender_id: &str| {
@@ -2198,6 +2209,7 @@ mod tests {
 
     #[test]
     fn ignores_drop_bots_users_channels_and_phrases() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         let rules = rules_from(
             "{}",
@@ -2224,6 +2236,7 @@ mod tests {
 
     #[test]
     fn hide_commands_drops_prefix_and_exact_matches_only() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         // No patterns: the default is anything starting with !.
         let rules = rules_from("{}", r##"{"hide_commands":true}"##, "{}");
@@ -2252,6 +2265,7 @@ mod tests {
 
     #[test]
     fn built_in_precedence_and_defaults() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         let rules = rules_from(r##"{"built_in":{"raider":{"enabled":true}}}"##, "{}", "{}");
         let mut m = msg("bob", "hi");
@@ -2387,6 +2401,7 @@ mod tests {
 
     #[test]
     fn scrollbar_marks_classify_mentions_highlights_and_events() {
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         let mut rules = rules_from(
             r##"{"phrases":[{"id":"p","pattern":"clutch","enabled":true,"color":"#00ff88"}],
@@ -2502,6 +2517,7 @@ mod tests {
         assert!(m.metadata.scrollbar_mark.is_none());
 
         // No mention colour configured: the tick falls back to the theme.
+        let _own = ChatRules::own_identity_test_lock();
         ChatRules::set_own_identity("brandon", "999");
         let mut m = msg("bob", "@brandon hi");
         eval_with(&rules, &mut m);
