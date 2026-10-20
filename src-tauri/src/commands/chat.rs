@@ -741,7 +741,7 @@ pub async fn send_chat_message(
         .await
         {
             return Ok(SentMessage {
-                sent: SendResult { message_id: None, is_sent: false, drop_reason: None, held: false },
+                sent: SendResult { message_id: None, is_sent: false, drop_reason: None },
                 pin_error: None,
                 cheer: Some(cheer),
             });

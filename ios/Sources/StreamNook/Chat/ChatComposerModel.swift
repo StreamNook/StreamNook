@@ -83,8 +83,6 @@ final class ChatComposerModel {
     struct Failure: Equatable {
         var text: String
         var why: String
-        /// AutoMod is holding it for the moderators: no Retry, it is not refused.
-        var held = false
     }
     private(set) var failure: Failure?
 
@@ -238,12 +236,7 @@ final class ChatComposerModel {
                 "senderAccountId": nil,
                 "pinAfterSend": pin ? true : nil,
             ])
-            // An answer that cannot be read is not a send: the row never shows as sent on a guess.
-            guard let result = try? JSONDecoder().decode(SendResult.self, from: Data(json.utf8)) else {
-                failure = Failure(text: text, why: "no answer from chat")
-                chatLog.notice("send answer unreadable: \(json, privacy: .public)")
-                return false
-            }
+            let result = (try? JSONDecoder().decode(SendResult.self, from: Data(json.utf8))) ?? SendResult(isSent: true)
             if let held = result.cheer {
                 // The message cheers: Rust held it. The cheer bar takes it from here, and the
                 // text stays in the box until a cheer actually goes out.
@@ -251,12 +244,9 @@ final class ChatComposerModel {
                 return false
             }
             if result.dropLine != nil {
-                failure = Failure(text: text, why: result.dropReason ?? "the room refused it", held: result.held)
-                chatLog.notice("send not posted in \(self.session.channel, privacy: .public): held \(result.held) \(result.dropReason ?? "-", privacy: .public)")
+                failure = Failure(text: text, why: result.dropReason ?? "the room refused it")
                 return false
             }
-            // Twitch's id for the row, so delete, reply and mod actions reach the real message.
-            chatLog.notice("send posted in \(self.session.channel, privacy: .public): id \(result.messageID ?? "none", privacy: .public)")
             await showOwnRow(text: message, reply: reply, id: result.messageID)
             lastSent = text
             startSlowCountdown()

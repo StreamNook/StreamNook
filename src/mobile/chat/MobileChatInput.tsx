@@ -84,8 +84,6 @@ const DUPLICATE_BYPASS_SUFFIX = ' \u{E0000}';
 interface SendFailure {
   text: string;
   why: string;
-  /** AutoMod is holding it for the moderators: no Retry, it is not refused. */
-  held?: boolean;
 }
 
 /** An invoke rejection in words: Rust commands reject with a plain string. */
@@ -326,7 +324,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       setDraftFor(key, '');
       setFailureFor(key, null);
     };
-    const failed = (why: string, held = false) => setFailureFor(key, { text: message, why, held });
+    const failed = (why: string) => setFailureFor(key, { text: message, why });
     if (!isTwitch) {
       // Slash commands are Twitch calls; typed here they would post as text.
       if (message.startsWith('/')) {
@@ -436,7 +434,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         return;
       }
       if (outcome.is_sent === false) {
-        failed(outcome.drop_reason || 'the room refused it', !!outcome.held);
+        failed(outcome.drop_reason || 'the room refused it');
         return;
       }
       sent();
@@ -569,19 +567,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
       {shownFailure && (
         <div className="flex items-center gap-1.5 px-3 pt-1.5 text-[12.5px]" role="alert">
           <WarningCircle size={14} weight="fill" className="shrink-0 text-warning" />
-          {/* Held: AutoMod has it and the moderators decide; a retry would only repeat it. */}
-          <span className="min-w-0 flex-1 line-clamp-2 text-textSecondary">
-            {shownFailure.held ? 'Held for review by the moderators' : `Not sent: ${shownFailure.why}`}
-          </span>
-          {!shownFailure.held && (
-            <button
-              onClick={() => void send()}
-              disabled={sending || slowWait > 0}
-              className="shrink-0 px-1.5 py-1 font-semibold text-accent active:opacity-70 disabled:opacity-50"
-            >
-              Retry
-            </button>
-          )}
+          <span className="min-w-0 flex-1 line-clamp-2 text-textSecondary">Not sent: {shownFailure.why}</span>
+          <button
+            onClick={() => void send()}
+            disabled={sending || slowWait > 0}
+            className="shrink-0 px-1.5 py-1 font-semibold text-accent active:opacity-70 disabled:opacity-50"
+          >
+            Retry
+          </button>
           <button
             onClick={discardFailure}
             className="shrink-0 px-1.5 py-1 text-textMuted active:text-textPrimary"

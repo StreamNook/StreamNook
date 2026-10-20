@@ -2846,9 +2846,6 @@ impl IrcService {
             // USERSTATE arrives on join (and after own sends) — a JOIN ack.
             if let Some(ref ch) = channel_name {
                 confirm_join(ch).await;
-                // After an own PRIVMSG its `id` tag is the message's id: the send
-                // waiting on Twitch's answer takes it (chat_send_ack).
-                crate::services::chat_send_ack::on_userstate(ch, Self::extract_tag_value(trimmed, "id").as_deref());
             }
 
             // Extract badges from USERSTATE and cache them per channel
@@ -2954,9 +2951,6 @@ impl IrcService {
 
             // A running /spam or /pyramid there hears refusals and bans.
             if let (Some(id), Some(ch)) = (msg_id.as_deref(), extract_channel_from_irc_line(trimmed)) {
-                // A refused line answers the send waiting on it, in Twitch's words.
-                let words = trimmed.rfind(" :").map(|idx| trimmed[idx + 2..].trim()).unwrap_or("");
-                crate::services::chat_send_ack::on_notice(&ch, id, words);
                 crate::services::chat_burst::note_notice(&ch, id);
                 // A send refused because of a warning locks the box behind
                 // its Acknowledge button.

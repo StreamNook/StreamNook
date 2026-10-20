@@ -43,7 +43,6 @@ pub mod chat_row_view;
 pub mod shared_chat_emotes;
 pub mod history_cosmetics;
 pub mod command_catalog;
-pub mod chat_send_ack;
 pub mod chat_send_limiter;
 pub mod recent_emotes;
 pub mod room_modes;

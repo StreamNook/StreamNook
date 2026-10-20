@@ -164,17 +164,14 @@ private struct ComposerBar: View {
                 .font(.system(size: 13))
                 .foregroundStyle(ComposerInk.warning)
                 .frame(width: 36)
-            // Held: AutoMod has it and the room's moderators decide; a retry would only repeat it.
-            Text(failure.held ? "Held for review by the moderators" : "Not sent: \(failure.why)")
+            Text("Not sent: \(failure.why)")
                 .font(.sn(12.5))
                 .foregroundStyle(SN.textSecondary)
                 .lineLimit(2)
             Spacer(minLength: 8)
-            if !failure.held {
-                Button("Retry") { Task { await model.send() } }
-                    .font(.sn(12.5, 600))
-                    .disabled(model.sending)
-            }
+            Button("Retry") { Task { await model.send() } }
+                .font(.sn(12.5, 600))
+                .disabled(model.sending)
             Button("Discard") { model.discardFailure() }
                 .font(.sn(12.5))
                 .foregroundStyle(ComposerInk.quiet)

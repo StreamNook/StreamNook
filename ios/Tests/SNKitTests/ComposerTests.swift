@@ -89,13 +89,6 @@ import Testing
         #expect(refused.dropLine == "Your message was not sent: the room refused it")
         let sent = try decode(SendResult.self, #"{"is_sent":true,"message_id":"abc"}"#)
         #expect(sent.dropLine == nil)
-        #expect(sent.messageID == "abc" && !sent.held)
-        // AutoMod holding it: not sent, and said so.
-        let held = try decode(SendResult.self, #"{"is_sent":false,"drop_reason":"Your message is being checked by mods and has not been sent.","held":true}"#)
-        #expect(held.held && held.dropLine != nil)
-        // An answer that never says it was sent is not taken as sent.
-        let silent = try decode(SendResult.self, #"{"message_id":null}"#)
-        #expect(!silent.isSent && silent.dropLine != nil)
     }
 
     @Test func slashOutcomesDecodeWithDefaults() throws {
