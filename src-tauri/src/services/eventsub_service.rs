@@ -32,6 +32,25 @@ pub(crate) type WsStream =
 /// sockets hold one while the old connection keeps delivering.
 pub(crate) type PendingSession = Pin<Box<dyn Future<Output = Result<(WsStream, Session)>> + Send>>;
 
+/// How the watch socket's subscribes went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchSubscribed {
+    /// Posted (each subscription stands alone; a refused one is reported).
+    Done,
+    /// The account's socket limit refused it: nothing more is posted, and the
+    /// socket closes instead of waiting for Twitch to drop it.
+    OverBudget,
+}
+
+/// How one watch connection ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchEnded {
+    /// It was up this long.
+    Lasted(Duration),
+    /// The account's socket limit refused its subscribes.
+    OverBudget,
+}
+
 /// The wait before the next fresh reconnect, and the wait after that.
 fn reconnect_backoff(retry_secs: u64, healthy: bool) -> (u64, u64) {
     if healthy {
@@ -85,6 +104,9 @@ fn known_sessions() -> Vec<KnownSession> {
 /// future) retires the session.
 pub struct LiveSession {
     id: String,
+    /// The session holds subscriptions, so it takes one of the account's
+    /// socket slots; its close may free one for a socket waiting out the limit.
+    subscribed: bool,
 }
 
 impl LiveSession {
@@ -96,12 +118,29 @@ impl LiveSession {
             owner,
             live: true,
         });
-        Self { id: id.to_string() }
+        Self { id: id.to_string(), subscribed: false }
+    }
+
+    /// The session's subscriptions went through.
+    pub fn mark_subscribed(&mut self) {
+        self.subscribed = true;
+    }
+
+    /// The socket moved to Twitch's reconnect URL: the new id is registered
+    /// before the old guard drops, and the slot (with the subscriptions)
+    /// carries over, so nothing is told a slot freed.
+    pub fn moved(mut self, owner: SocketOwner, id: &str) -> LiveSession {
+        let mut next = LiveSession::open(owner, id);
+        next.subscribed = std::mem::take(&mut self.subscribed);
+        next
     }
 }
 
 impl Drop for LiveSession {
     fn drop(&mut self) {
+        if self.subscribed {
+            crate::services::eventsub_budget::wake();
+        }
         let mut book = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(s) = book.iter_mut().find(|s| s.id == self.id) {
             s.live = false;
@@ -549,16 +588,21 @@ impl EventSubService {
         my_generation: u64,
     ) {
         let mut retry = RECONNECT_MIN_SECS;
+        let mut budget_retry = crate::services::eventsub_budget::OVER_BUDGET_MIN_SECS;
+        // The last attempt met the socket limit, so it created nothing to
+        // clean up: the next one skips the subscription list.
+        let mut nothing_left = false;
         loop {
             // This socket's leftovers from earlier sessions go before it
             // subscribes again, so they never count against the cost budget.
-            Self::cleanup_existing_subscriptions().await;
-            let healthy = match Self::run_connection(broadcaster_id, app_handle, connected, session_id).await
-            {
-                Ok(lasted) => lasted >= HEALTHY_CONNECTION,
+            if !nothing_left {
+                Self::cleanup_existing_subscriptions().await;
+            }
+            let ended = match Self::run_connection(broadcaster_id, app_handle, connected, session_id).await {
+                Ok(ended) => ended,
                 Err(e) => {
                     error!("EventSub connection error: {}", e);
-                    false
+                    WatchEnded::Lasted(Duration::ZERO)
                 }
             };
 
@@ -567,10 +611,27 @@ impl EventSubService {
                 *session_id.write().await = None;
             }
 
-            let (wait, next) = reconnect_backoff(retry, healthy);
-            retry = next;
-            info!("[EventSub] watch socket ended, reconnecting in {}s", wait);
-            sleep(Duration::from_secs(wait)).await;
+            if ended == WatchEnded::OverBudget {
+                nothing_left = true;
+                let (wait, next) = crate::services::eventsub_budget::over_budget_wait(budget_retry);
+                budget_retry = next;
+                if crate::services::eventsub_budget::note_over_budget(SocketOwner::Watch) {
+                    crate::services::eventsub_budget::log_episode("watch", wait);
+                    // The solo player's raids come over PubSub meanwhile.
+                    crate::services::watch_session::refresh_raid_fallback(app_handle);
+                }
+                if crate::services::eventsub_budget::wait(wait).await {
+                    debug!("[EventSub] watch socket: a slot may have freed, trying now");
+                }
+            } else {
+                nothing_left = false;
+                budget_retry = crate::services::eventsub_budget::OVER_BUDGET_MIN_SECS;
+                let healthy = matches!(ended, WatchEnded::Lasted(lasted) if lasted >= HEALTHY_CONNECTION);
+                let (wait, next) = reconnect_backoff(retry, healthy);
+                retry = next;
+                info!("[EventSub] watch socket ended, reconnecting in {}s", wait);
+                sleep(Duration::from_secs(wait)).await;
+            }
 
             if TwitchService::get_token().await.is_err() {
                 debug!("[EventSub] signed out, watch socket stays down");
@@ -619,7 +680,7 @@ impl EventSubService {
         app_handle: &AppHandle,
         connected: &Arc<RwLock<bool>>,
         session_id: &Arc<RwLock<Option<String>>>,
-    ) -> Result<Duration> {
+    ) -> Result<WatchEnded> {
         debug!("Connecting to Twitch EventSub...");
         let (ws_stream, session_info) = Self::open_session(EVENTSUB_URL.to_string()).await?;
         let started = Instant::now();
@@ -649,11 +710,16 @@ impl EventSubService {
         let sess_id = current_id.clone();
         let broadcaster = broadcaster_id.to_string();
         let app_handle_subs = app_handle.clone();
+        let (subscribed_tx, mut subscribed_rx) = tokio::sync::oneshot::channel::<WatchSubscribed>();
         let _subscriber = AbortOnDrop(tokio::spawn(async move {
-            if let Err(e) = Self::subscribe_to_events(&broadcaster, &sess_id, &app_handle_subs).await {
-                error!("Failed to subscribe to EventSub events: {}", e);
+            match Self::subscribe_to_events(&broadcaster, &sess_id, &app_handle_subs).await {
+                Ok(outcome) => {
+                    let _ = subscribed_tx.send(outcome);
+                }
+                Err(e) => error!("Failed to subscribe to EventSub events: {}", e),
             }
         }));
+        let mut subscribe_pending = true;
 
         // The new connection Twitch asked for, opening while this one keeps
         // delivering. Twitch's rule: close the old one only after the new
@@ -670,6 +736,27 @@ impl EventSubService {
             let keepalive_deadline = Duration::from_secs(keepalive_timeout + 5);
             let frame = tokio::select! {
                 frame = timeout(keepalive_deadline, read.next()) => frame,
+                outcome = &mut subscribed_rx, if subscribe_pending => {
+                    subscribe_pending = false;
+                    match outcome {
+                        Ok(WatchSubscribed::OverBudget) => {
+                            // Closed now rather than left for Twitch to drop
+                            // 10 s later, subscription-less.
+                            let _ = write.send(Message::Close(None)).await;
+                            drop(live);
+                            return Ok(WatchEnded::OverBudget);
+                        }
+                        Ok(WatchSubscribed::Done) => {
+                            live.mark_subscribed();
+                            if crate::services::eventsub_budget::note_room(SocketOwner::Watch) {
+                                crate::services::eventsub_budget::log_room("watch");
+                                crate::services::watch_session::refresh_raid_fallback(app_handle);
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                    continue;
+                }
                 moved = async { migrating.as_mut().expect("guarded by is_some").await }, if migrating.is_some() => {
                     migrating = None;
                     match moved {
@@ -679,7 +766,7 @@ impl EventSubService {
                             keepalive_timeout = session.keepalive_timeout_seconds.unwrap_or(keepalive_timeout);
                             if session.id != current_id {
                                 // Register the new id before the old guard drops.
-                                live = LiveSession::open(SocketOwner::Watch, &session.id);
+                                live = live.moved(SocketOwner::Watch, &session.id);
                                 current_id = session.id;
                                 *session_id.write().await = Some(current_id.clone());
                             }
@@ -737,7 +824,7 @@ impl EventSubService {
         let _ = write.send(Message::Close(None)).await;
         drop(live);
 
-        Ok(started.elapsed())
+        Ok(WatchEnded::Lasted(started.elapsed()))
     }
 
     /// The URL from a `session_reconnect` payload.
@@ -873,7 +960,7 @@ impl EventSubService {
         broadcaster_id: &str,
         session_id: &str,
         app_handle: &AppHandle,
-    ) -> Result<()> {
+    ) -> Result<WatchSubscribed> {
         let token = TwitchService::get_token().await?;
         let client_id = env!("TWITCH_APP_CLIENT_ID");
         let client = crate::services::http::client().clone();
@@ -926,7 +1013,8 @@ impl EventSubService {
 
         // Each subscription stands alone: one that fails does not stop the
         // rest. A request with no answer, a 429 or a 5xx is retried once; any
-        // other refusal is final.
+        // other refusal is final. The account's socket limit is the
+        // exception: every later post would meet it too, so none is sent.
         for (event_type, version, condition) in &subscriptions {
             let subscription_body = serde_json::json!({
                 "type": event_type,
@@ -960,6 +1048,10 @@ impl EventSubService {
                     Ok(response) => {
                         let status = response.status();
                         let error_text = response.text().await.unwrap_or_default();
+                        if crate::services::eventsub_budget::is_transport_limit(status.as_u16(), &error_text) {
+                            debug!("[EventSub] {} refused by the socket limit: {}", event_type, error_text);
+                            return Ok(WatchSubscribed::OverBudget);
+                        }
                         failure = Some((status.as_u16(), error_text));
                         if status.as_u16() != 429 && !status.is_server_error() {
                             break;
@@ -990,7 +1082,7 @@ impl EventSubService {
         // the inbox; a second subscription here would deliver whispers that
         // bypass the inbox and die with the watched stream.
 
-        Ok(())
+        Ok(WatchSubscribed::Done)
     }
 
     pub async fn disconnect(&self) {
