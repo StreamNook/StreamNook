@@ -135,6 +135,9 @@ export interface MediaInfo {
    *  when the clip came from a grid; the resolver supplies it for a clip opened from a
    *  link. Absent when the parent VOD has expired. */
   clip_source?: ClipSource;
+  /** Videos only: where to begin, in seconds (a clip's moment in its broadcast).
+   *  Wins over the saved position Rust answers with. */
+  start_at?: number;
 }
 
 /** Pull the chat-replay coordinates off a clip. Returns undefined when the clip has no
@@ -2186,7 +2189,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentStream: parsedInfo,
         currentMediaType: type,
         originalMediaUrl: url,
-        vodPlayback: type === 'video' ? (result.vod ?? null) : null,
+        vodPlayback:
+          type === 'video' && result.vod
+            ? info.start_at != null
+              ? { ...result.vod, start_position_secs: info.start_at }
+              : result.vod
+            : null,
         liveRewind: null,
         liveRewindAvailable: null,
         liveRewindAnchor: null,

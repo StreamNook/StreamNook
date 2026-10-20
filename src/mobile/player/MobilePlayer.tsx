@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -29,6 +29,9 @@ import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { registerReplayClock } from '../../stores/vodReplayStore';
+import { VodSeekBar, VodTransport, useVodClock } from './VodControls';
+import { recordedLine, seekTarget } from '../watch/channelMedia';
+import { useChannelSheet } from '../watch/MobileChannelSheet';
 
 const CONTROLS_HIDE_MS = 3000;
 // Every bottom-bar glyph at one size, so no button out-pulls another.
@@ -150,6 +153,41 @@ export const MobilePlayer: React.FC<{
   const currentStream = useAppStore((s) => s.currentStream);
   // A channel that is not streaming, opened as its offline room.
   const offline = useAppStore((s) => s.streamUrl === 'offline');
+  // A VOD plays (a channel's video, or an offline room's latest broadcast): its
+  // own header line and transport, and no mute or reload, as on the iPhone. A
+  // live rewind (media type live) keeps the live chrome.
+  const currentMediaType = useAppStore((s) => s.currentMediaType);
+  const vod = vodPlayback && currentMediaType !== 'live' && !offline ? vodPlayback : null;
+  const roomVod = !!vod && currentMediaType === 'offline_chat';
+  const leaveRoomVod = useAppStore((s) => s.leaveOfflineRoomVod);
+  const vodClock = useVodClock(videoRef, vod);
+  // The VOD's speed, back to 1x for the next one. Set on the element and as its
+  // default, so a reload of the same VOD keeps it.
+  const [vodRate, setVodRate] = useState(1);
+  const [rateFor, setRateFor] = useState<string | null>(null);
+  if ((vod?.video_id ?? null) !== rateFor) {
+    setRateFor(vod?.video_id ?? null);
+    setVodRate(1);
+  }
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !vod) return;
+    const apply = () => {
+      video.defaultPlaybackRate = vodRate;
+      video.playbackRate = vodRate;
+    };
+    apply();
+    video.addEventListener('loadedmetadata', apply);
+    return () => {
+      video.removeEventListener('loadedmetadata', apply);
+      video.defaultPlaybackRate = 1;
+      video.playbackRate = 1;
+    };
+  }, [vod, vodRate]);
+  const seekVod = (seconds: number) => {
+    const video = videoRef.current;
+    if (video) video.currentTime = seekTarget(seconds, vodClock.length);
+  };
   // A provider stream that ended or could not start keeps its chat, and the
   // band says which (AppStore's playbackNotice). Read only for the stream it
   // was written for.
@@ -773,21 +811,38 @@ export const MobilePlayer: React.FC<{
             style={immersive ? { paddingTop: 'calc(var(--sn-safe-t, 0px) + 8px)' } : undefined}
           >
             <div className="flex items-start gap-2.5">
-              {currentStream.profile_image_url ? (
-                <SevenTvAvatar
-                  cosmeticsId={sevenTvIdForStream(currentStream)}
-                  px={32}
-                  motion="animate"
-                  src={currentStream.profile_image_url}
-                  alt=""
-                  draggable={false}
-                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-live/80"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ring-live/80">
-                  {currentStream.user_name?.charAt(0).toUpperCase()}
-                </div>
-              )}
+              {/* The face opens the channel's videos and clips (Twitch's), as on
+                  the iPhone. The live red ring is for live alone. */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (streamIsTwitch && currentStream.user_id) useChannelSheet.getState().open(currentStream);
+                }}
+                disabled={!streamIsTwitch || !currentStream.user_id}
+                aria-label={`${currentStream.user_name}'s videos and clips`}
+                className="shrink-0 rounded-full"
+              >
+                {currentStream.profile_image_url ? (
+                  <SevenTvAvatar
+                    cosmeticsId={sevenTvIdForStream(currentStream)}
+                    px={32}
+                    motion="animate"
+                    src={currentStream.profile_image_url}
+                    alt=""
+                    draggable={false}
+                    className={`w-8 h-8 rounded-full object-cover shrink-0 ring-2 ${vod ? 'ring-white/25' : 'ring-live/80'}`}
+                  />
+                ) : (
+                  <div
+                    className={`w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ${
+                      vod ? 'ring-white/25' : 'ring-live/80'
+                    }`}
+                  >
+                    {currentStream.user_name?.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </button>
               <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 {/* Identity row: the name, then Subscribe, then the live
                     numbers opposite. One line always; parts give way in order
@@ -797,9 +852,11 @@ export const MobilePlayer: React.FC<{
                   {canSubscribe && giveWay < GIVE_WAY_SUBSCRIBE && (
                     <span className="ml-2 shrink-0 flex">{subscribePill(true)}</span>
                   )}
-                  <span className="ml-auto pl-2 shrink-0 flex">
-                    {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
-                  </span>
+                  {!vod && (
+                    <span className="ml-auto pl-2 shrink-0 flex">
+                      {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
+                    </span>
+                  )}
                   {/* Full-size copies for the give-way measurement. Invisible,
                       out of the accessibility tree, and in a zero-size clip so
                       their width never adds overflow to the row; clipped boxes
@@ -829,11 +886,24 @@ export const MobilePlayer: React.FC<{
                     </div>
                   </div>
                 </div>
-                {liveTitle && (
-                  <div className="text-[13px] leading-[17px] text-white/85 truncate">{liveTitle}</div>
-                )}
-                {liveCategory && (
-                  <div className="text-[12px] leading-4 text-white/70 truncate">{liveCategory}</div>
+                {vod ? (
+                  <>
+                    {(vod.title || currentStream.title) && (
+                      <div className="text-[13px] leading-[17px] text-white/85 truncate">
+                        {vod.title || currentStream.title}
+                      </div>
+                    )}
+                    <div className="text-[12px] leading-4 text-white/70 truncate">{recordedLine(vod.recorded_at)}</div>
+                  </>
+                ) : (
+                  <>
+                    {liveTitle && (
+                      <div className="text-[13px] leading-[17px] text-white/85 truncate">{liveTitle}</div>
+                    )}
+                    {liveCategory && (
+                      <div className="text-[12px] leading-4 text-white/70 truncate">{liveCategory}</div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -858,23 +928,60 @@ export const MobilePlayer: React.FC<{
             the avatar ring's outer edge (pl-2.5: px-3 less the 2px ring), and
             the last icon's ink ends where the uptime text does. */}
         <div
-          className="absolute inset-x-0 bottom-0 flex items-center justify-between pl-2.5 pr-3 pb-2"
+          className="absolute inset-x-0 bottom-0 flex flex-col pl-2.5 pr-3 pb-2"
           style={immersive ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' } : undefined}
         >
-          {/* A status, not a control: a dot and the word, no filled badge.
-              Gone while playback has failed, which is not live. */}
-          <div
-            className={`flex shrink-0 items-center gap-[5px] ${state === 'error' ? 'opacity-0' : ''}`}
-            role="img"
-            aria-label="Live"
-            aria-hidden={state === 'error'}
-          >
-            <span
-              className="w-[7px] h-[7px] rounded-full bg-live shrink-0"
-              style={{ boxShadow: '0 0 3px color-mix(in srgb, var(--color-live) 60%, transparent)' }}
+          {vod && (
+            <VodSeekBar
+              vod={vod}
+              position={vodClock.position}
+              length={vodClock.length}
+              onSeek={seekVod}
+              onTouch={scheduleHide}
             />
-            <span className="text-[12px] font-bold tracking-[0.4px] text-white leading-none">LIVE</span>
-          </div>
+          )}
+          <div className="flex items-center justify-between">
+          {vod ? (
+            // Where LIVE sits on a live stream: the way back to the room when its
+            // latest broadcast plays, then back and forward ten seconds and the speed.
+            <div className="-ml-3 flex shrink-0 items-center">
+              {roomVod && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void leaveRoomVod();
+                  }}
+                  className="flex h-11 items-center gap-1 pl-3 pr-1.5 text-[12px] font-bold text-white"
+                  aria-label="Back to the room"
+                >
+                  <CaretLeft size={13} weight="bold" />
+                  Room
+                </button>
+              )}
+              <VodTransport
+                rate={vodRate}
+                onSkip={(by) => seekVod((videoRef.current?.currentTime ?? vodClock.position) + by)}
+                onRate={setVodRate}
+                onTouch={scheduleHide}
+                iconSize={BAR_ICON}
+              />
+            </div>
+          ) : (
+            /* A status, not a control: a dot and the word, no filled badge.
+               Gone while playback has failed, which is not live. */
+            <div
+              className={`flex shrink-0 items-center gap-[5px] ${state === 'error' ? 'opacity-0' : ''}`}
+              role="img"
+              aria-label="Live"
+              aria-hidden={state === 'error'}
+            >
+              <span
+                className="w-[7px] h-[7px] rounded-full bg-live shrink-0"
+                style={{ boxShadow: '0 0 3px color-mix(in srgb, var(--color-live) 60%, transparent)' }}
+              />
+              <span className="text-[12px] font-bold tracking-[0.4px] text-white leading-none">LIVE</span>
+            </div>
+          )}
           {/* One size and one weight for every bar icon, so no button
               out-pulls another. The last icon's ink, not its 44 px target,
               ends on the header's right edge: 12px of target padding plus the
@@ -928,7 +1035,7 @@ export const MobilePlayer: React.FC<{
                   )}
                   </>
                 )}
-                {slot === 'mute' && (
+                {slot === 'mute' && !vod && (
                   <>
                   <button
                     onClick={toggleMute}
@@ -939,7 +1046,7 @@ export const MobilePlayer: React.FC<{
                   </button>
                   </>
                 )}
-                {slot === 'reload' && (
+                {slot === 'reload' && !vod && (
                   <>
                   {/* The unstick button. A frozen player looks exactly like a paused
                       one from the outside, so this reloads the whole pipeline via the
@@ -1044,6 +1151,7 @@ export const MobilePlayer: React.FC<{
                 )}
               </React.Fragment>
             ))}
+          </div>
           </div>
         </div>
       </div>

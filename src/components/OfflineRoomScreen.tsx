@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CalendarClock, Loader2, Play, Users } from 'lucide-react';
+import { CalendarClock, Film, Loader2, Play, Users } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../stores/AppStore';
 import ConfettiBurst from './ConfettiBurst';
@@ -94,6 +94,8 @@ export interface OfflineCardProps {
    *  to play it in (a MultiNook tile shows the card only). */
   onPlayVod?: () => void;
   vodBusy?: boolean;
+  /** The channel's videos and clips (the phone's Channel sheet). */
+  onVideos?: () => void;
   onWatchLive?: (live: TwitchStream) => void;
   /** A MultiNook tile: smaller avatar and padding, no latest broadcast. */
   compact?: boolean;
@@ -117,6 +119,7 @@ export function OfflineCard({
   joining,
   onPlayVod,
   vodBusy,
+  onVideos,
   onWatchLive,
   compact = false,
   part = 'all',
@@ -232,6 +235,19 @@ export function OfflineCard({
               style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
             />
           )}
+        </button>
+      )}
+
+      {/* The channel's videos and clips, where the phone has a sheet for them. */}
+      {state !== 'joining' && onVideos && (
+        <button
+          type="button"
+          onClick={onVideos}
+          aria-label="Videos and clips"
+          className="glass-button flex h-9 items-center gap-2 rounded-lg px-3 text-left text-xs font-medium text-textPrimary"
+        >
+          <Film size={13} className="shrink-0" />
+          Videos
         </button>
       )}
 

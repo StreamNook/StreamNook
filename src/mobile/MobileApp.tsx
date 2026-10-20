@@ -39,6 +39,7 @@ import { installMentionInbox } from './mentions/mentionInbox';
 import { WhispersScreen } from './screens/WhispersScreen';
 import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
+import { MobileChannelSheet } from './watch/MobileChannelSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
@@ -222,6 +223,8 @@ const MobileApp: React.FC = () => {
               MobileSheet, so it clears the watch layer regardless of position
               here. */}
           <MobileClipSheet />
+          {/* A channel's videos and clips, from the player's avatar and the offline room. */}
+          <MobileChannelSheet />
         </>
       )}
 
