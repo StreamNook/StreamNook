@@ -61,9 +61,10 @@ struct WatchDropReader: View {
                 drops.claimer = { [model, drops] drop in await Self.claim(drop, model: model, drops: drops) }
                 drops.opener = { [model] drop in Self.jump(to: drop.campaignID, model: model) }
             }
-            .task(id: "\(stream?.userLogin ?? "")|\(stream?.gameName ?? "")|\(phase == .active)") {
+            .task(id: "\(stream?.userLogin ?? "")|\(model.watch.live?.gameName ?? stream?.gameName ?? "")|\(phase == .active)") {
                 drops.set(nil)
-                guard stream != nil else { return }
+                // Drops are Twitch's: a Kick stream asks nothing (the desktop's DropProgressBar guard).
+                guard let stream, stream.isTwitch else { return }
                 while !Task.isCancelled {
                     if phase == .active { await read() }
                     try? await Task.sleep(for: .seconds(60))
@@ -77,17 +78,22 @@ struct WatchDropReader: View {
 
     private static func read(model: AppModel, drops: WatchDropModel, reported: String?,
                              report: (String) -> Void) async {
-        guard let stream = model.watch.stream else { return }
+        guard let stream = model.watch.stream, stream.isTwitch else { return }
+        // After a category change the game comes from the live push, not the row the stream opened with.
+        let live = model.watch.live
+        let gameName = live?.gameName ?? stream.gameName
+        let sameGame = live?.gameName == nil || live?.gameName == stream.gameName
+        let gameID = live?.gameID ?? (sameGame ? stream.gameID : nil) ?? ""
         do {
             let next = try await model.core.invoke(
                 "get_watch_drop",
                 args: ["channelId": stream.userID ?? "", "login": stream.userLogin,
-                       "gameId": stream.gameID ?? "", "gameName": stream.gameName],
+                       "gameId": gameID, "gameName": gameName],
                 as: WatchDrop?.self)
             guard model.watch.stream?.userLogin == stream.userLogin else { return }
             if next != drops.drop || reported != stream.userLogin {
                 report(stream.userLogin)
-                log.notice("drop bar \(stream.userLogin, privacy: .public) game '\(stream.gameName, privacy: .public)' (\(stream.gameID ?? "-", privacy: .public)): \(next.map { "\($0.name) \($0.trailing)" } ?? "nothing", privacy: .public), visible \(drops.visible)")
+                log.notice("drop bar \(stream.userLogin, privacy: .public) game '\(gameName, privacy: .public)' (\(gameID.isEmpty ? "-" : gameID, privacy: .public)): \(next.map { "\($0.name) \($0.trailing)" } ?? "nothing", privacy: .public), visible \(drops.visible)")
             }
             drops.set(next)
         } catch {

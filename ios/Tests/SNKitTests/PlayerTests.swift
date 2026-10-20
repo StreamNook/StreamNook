@@ -215,3 +215,12 @@ import Testing
         #expect(RoomText.next(.init(startAt: "2026-10-17T19:00:00Z"), now: now)?.hasPrefix("Next stream") == true)
     }
 }
+
+@Suite struct StreamUpdateTests {
+    @Test func aCategoryChangeCarriesTheGameID() {
+        let update = ChannelViewers.streamUpdate(#"{"title":"t","game_name":"Valorant","game_id":"516575"}"#)
+        #expect(update?.gameName == "Valorant")
+        #expect(update?.gameID == "516575")
+        #expect(ChannelViewers.streamUpdate(#"{"title":"t","game_name":"Just Chatting","game_id":""}"#)?.gameID == nil)
+    }
+}

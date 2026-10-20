@@ -261,10 +261,15 @@ final class AppModel {
         }
     }
 
+    /// What the iPhone's settings writes are signed with, so the update they cause is known as its
+    /// own (the desktop windows sign theirs the same way, `settingsBroadcast.ts`).
+    static let settingsSource = "iphone-app"
+
     /// Writes top-level settings keys through the core, then reads the look back.
     func patchSettings(_ patch: [String: Any?]) async {
         do {
-            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() }])
+            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() },
+                                                               "source": Self.settingsSource])
             await loadSettings()
         } catch {
             toasts.show("Failed to save settings")
@@ -506,6 +511,8 @@ final class AppModel {
                 self.lastEvent = event.name
                 switch event.name {
                 case "streamnook-settings-updated":
+                    // Our own write already read the settings back.
+                    if Self.object(event.payloadJSON)["source"] as? String == Self.settingsSource { break }
                     await self.loadSettings()
                     if self.settingsStore.loaded { await self.settingsStore.refresh() }
                 case "sleep-timer://state":

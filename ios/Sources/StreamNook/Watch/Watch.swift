@@ -391,8 +391,8 @@ final class Watch {
         })
     }
 
-    /// Once a second: the seek bar's playhead, the chat replay's rows for it, and every ten
-    /// seconds of playing a saved position (pauses and the end save too).
+    /// Once a second: the seek bar's playhead, the chat replay's rows for it, and every five
+    /// seconds of playing a saved position (pauses, seeks and the end save too).
     private func beginVodClock(core: CoreBridge) {
         guard let vod = playingVod else { return }
         let login = vod.channelLogin ?? stream?.userLogin ?? ""
@@ -420,7 +420,7 @@ final class Watch {
                     self.onReplay?(step)
                 }
                 ticks += 1
-                if ticks % 10 == 0, !self.paused { self.reportVodPosition() }
+                if ticks % 5 == 0, !self.paused { self.reportVodPosition() }
                 // The card counts on its own from the rate; a periodic fix keeps it honest.
                 if ticks % 15 == 0 {
                     self.nowPlaying.vod(duration: self.vodDuration, elapsed: t, rate: self.paused ? 0 : self.vodRate)
@@ -500,7 +500,12 @@ final class Watch {
         guard playingVod != nil else { return }
         let target = max(0, vodDuration > 0 ? min(seconds, vodDuration - 1) : seconds)
         vodPosition = target
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero,
+                    toleranceAfter: .zero) { [weak self] done in
+            // A seek saves where it landed, as the desktop's reporter does.
+            guard done else { return }
+            Task { @MainActor in self?.reportVodPosition() }
+        }
         nowPlaying.vod(duration: vodDuration > 0 ? vodDuration : nil, elapsed: target, rate: paused ? 0 : vodRate)
     }
 
@@ -611,7 +616,7 @@ final class Watch {
         let old = live
         live = ChannelViewers(login: update.login.isEmpty ? old?.login ?? "" : update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
                               startedAt: update.startedAt ?? old?.startedAt, title: update.title ?? old?.title,
-                              gameName: update.gameName ?? old?.gameName)
+                              gameName: update.gameName ?? old?.gameName, gameID: update.gameID ?? old?.gameID)
         if live?.title != old?.title { showCard() }
     }
 
