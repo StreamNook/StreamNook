@@ -195,6 +195,13 @@ final class SwipeModOverlay: UIView {
         return ChatTheme.warning.mixed(with: ChatTheme.error, amount: CGFloat(tone))
     }
 
+    /// A step's colour as legend text on the solid rail: a light theme darkens it so the light
+    /// amber timeouts still read on a light rail.
+    static func railInk(_ step: SwipeStep) -> UIColor {
+        let color = tint(step)
+        return ChatTheme.isDark ? color : color.mixed(with: .black, amount: 0.4)
+    }
+
     /// Where a pull of `x` points sits, from the row's left edge.
     private func at(_ x: Double) -> CGFloat { CGFloat(slider.start + x) }
 
@@ -207,7 +214,7 @@ final class SwipeModOverlay: UIView {
         clipsToBounds = false
         let local = CGRect(x: 0, y: Self.headroom, width: row.width, height: row.height)
         if slider.style == "rail" {
-            rail.frame = local.insetBy(dx: 4, dy: 2)
+            rail.frame = local.insetBy(dx: 4, dy: 4)
             // Solid: the rail covers the message, and a see-through one let its text clash with
             // the step names.
             rail.backgroundColor = ChatTheme.raisedSolid
@@ -223,7 +230,7 @@ final class SwipeModOverlay: UIView {
                 let label = UILabel()
                 label.text = step.label
                 label.font = .systemFont(ofSize: 12, weight: .semibold)
-                label.textColor = Self.tint(step)
+                label.textColor = Self.railInk(step)
                 label.textAlignment = .center
                 // A legend spread evenly along the rail, so short zones never crowd their labels
                 // together; the lit pill marks the step under the finger.
@@ -258,7 +265,7 @@ final class SwipeModOverlay: UIView {
         chip.textAlignment = .center
         // Solid, so the words read over any message text above the row, on every theme.
         chipBox.backgroundColor = ChatTheme.raisedSolid
-        chipBox.layer.cornerRadius = 12
+        chipBox.layer.cornerRadius = Self.chipHeight / 2
         chipBox.layer.cornerCurve = .continuous
         chipBox.layer.borderWidth = 1
         chipBox.clipsToBounds = true
@@ -266,12 +273,12 @@ final class SwipeModOverlay: UIView {
         chipBox.layer.addSublayer(dwellBar)
         chipBox.addSubview(chip)
         chipLift.backgroundColor = ChatTheme.raisedSolid
-        chipLift.layer.cornerRadius = 12
+        chipLift.layer.cornerRadius = Self.chipHeight / 2
         chipLift.layer.cornerCurve = .continuous
         chipLift.layer.shadowColor = UIColor.black.cgColor
-        chipLift.layer.shadowOpacity = 0.28
+        chipLift.layer.shadowOpacity = 0.16
         chipLift.layer.shadowRadius = 6
-        chipLift.layer.shadowOffset = CGSize(width: 0, height: 2)
+        chipLift.layer.shadowOffset = CGSize(width: 0, height: 3)
         addSubview(chipLift)
         addSubview(chipBox)
         alpha = 0
@@ -288,8 +295,12 @@ final class SwipeModOverlay: UIView {
         let washWidth = at(Double(slide))
         wash.frame.size.width = washWidth
         let lead = NSNumber(value: Double(min(1, 16 / max(washWidth, 1))))
-        wash.colors = [ink.withAlphaComponent(0).cgColor, ink.withAlphaComponent(0.18).cgColor, ink.withAlphaComponent(0.18).cgColor]
-        wash.locations = [0, lead, 1]
+        // Soft at both ends, and none while a release would cancel (a gray box said nothing).
+        let tail = NSNumber(value: Double(max(lead.doubleValue, 1 - 10 / max(washWidth, 1))))
+        wash.colors = [ink.withAlphaComponent(0).cgColor, ink.withAlphaComponent(0.18).cgColor,
+                       ink.withAlphaComponent(0.18).cgColor, ink.withAlphaComponent(0).cgColor]
+        wash.locations = [0, lead, tail, 1]
+        wash.opacity = tint == nil ? 0 : 1
         for (i, segment) in segments.enumerated() {
             segment.opacity = slider.starts[i] <= Double(slide) ? 1 : 0.32
         }
@@ -314,12 +325,12 @@ final class SwipeModOverlay: UIView {
         // its top 12 to 30 points, so the chip stays clear of that.
         let listTop = visibleTop - (row.minY - Self.headroom)
         // Never over the track along the row's bottom either.
-        let y = min(max(Self.headroom - 34, listTop + 30), Self.headroom + row.height - 3 - Self.chipHeight - 4)
+        let y = min(max(Self.headroom - 30, listTop + 30), Self.headroom + row.height - 3 - Self.chipHeight - 4)
         chipBox.frame = CGRect(x: x, y: y, width: width, height: Self.chipHeight)
         chip.frame = chipBox.bounds
         chipLift.frame = chipBox.frame
-        chipLift.layer.shadowPath = UIBezierPath(roundedRect: chipLift.bounds, cornerRadius: 12).cgPath
-        chipBox.layer.borderColor = (quiet ? ChatTheme.error.withAlphaComponent(0.55) : ink.withAlphaComponent(0.55)).cgColor
+        chipLift.layer.shadowPath = UIBezierPath(roundedRect: chipLift.bounds, cornerRadius: Self.chipHeight / 2).cgPath
+        chipBox.layer.borderColor = (quiet ? ChatTheme.error.withAlphaComponent(0.55) : ink.withAlphaComponent(tint == nil ? 0.35 : 0.55)).cgColor
         chip.textColor = tint == nil ? ChatTheme.textSecondary : ChatTheme.textPrimary
     }
 
