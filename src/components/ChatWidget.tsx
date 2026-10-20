@@ -336,6 +336,9 @@ const ChatMessagesPanel = ({
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
+  // The join's history answered: an empty room has no recent messages (rather
+  // than still waiting for them).
+  const historyLoaded = useChannelChatMeta(override ? null : channelKey).historyLoaded;
   // A saved filter narrows this pane to rows the Rust rule engine stamped
   // with its id (metadata.filter_ids). Render-time only, so switching the
   // filter never drops history; O(buffer) per flush, and the buffer is capped.
@@ -587,8 +590,12 @@ const ChatMessagesPanel = ({
       onMouseLeave={() => { hoveringRef.current = false; }}
     >
       {src.messages.length === 0 ? (
-        <div className="h-full flex items-center justify-center">
-          <p className="text-textSecondary text-sm">Waiting for messages...</p>
+        <div className="h-full flex items-center justify-center px-6">
+          {historyLoaded ? (
+            <p className="text-center text-[13px] text-textMuted">No recent messages</p>
+          ) : (
+            <p className="text-textSecondary text-sm">Waiting for messages...</p>
+          )}
         </div>
       ) : (
         <ErrorBoundary componentName="ChatWidgetList" reportToLogService={true}>

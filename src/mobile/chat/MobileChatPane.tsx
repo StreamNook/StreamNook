@@ -13,6 +13,7 @@ import ChatMessageList from '../../components/ChatMessageList';
 import {
   setChannelPaused,
   useChannelChat,
+  useChannelChatMeta,
   useChannelEmotes,
 } from '../../stores/chatConnectionStore';
 import { useAppStore } from '../../stores/AppStore';
@@ -112,6 +113,8 @@ export const MobileChatPane: React.FC<{
   );
 
   const chat = useChannelChat(paused ? null : activeChannel);
+  // The join's history answered with nothing: the room says so until a row arrives.
+  const historyLoaded = useChannelChatMeta(activeChannel).historyLoaded;
   const {
     messages,
     renderToken,
@@ -894,6 +897,7 @@ export const MobileChatPane: React.FC<{
       >
         <ChatMessageList
           messages={shownMessages}
+          emptyNote={historyLoaded ? 'No recent messages' : null}
           renderToken={renderToken}
           isPaused={isPaused}
           onPauseIntent={() => pause(true)}

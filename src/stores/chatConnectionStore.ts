@@ -250,6 +250,9 @@ interface ChannelSlice {
    *  send or system row, and by any immediate flush a moderation event asks
    *  for. */
   historyHold: { held: any[]; timer: ReturnType<typeof setTimeout> } | null;
+  /** The join's recent history has been asked for and has answered (rows or
+   *  none), so an empty room can say it has no recent messages. */
+  historyLoaded: boolean;
 }
 
 interface ChatConnectionState {
@@ -946,8 +949,10 @@ async function seedKickHistory(key: string, channel: string): Promise<void> {
     history = await invoke<any[]>('kick_chat_history', { channel });
   } catch (e) {
     Logger.warn('[ChatStore] kick_chat_history failed:', e);
-    return;
   }
+  withSlice(key, (slice) => {
+    slice.historyLoaded = true;
+  });
   if (!history.length) return;
   withSlice(key, (slice) => {
     const existingIds = new Set<string>();
@@ -1007,6 +1012,7 @@ function emptySlice(
     userBadgesFromIrc: null,
     userColorFromIrc: lastOwnChatColor(),
     historyHold: null,
+    historyLoaded: false,
   };
 }
 
@@ -2135,10 +2141,14 @@ async function preloadChannel(
     const [, parsed] = await Promise.all([initializeBadgesForChannel(channelId), pendingHistory]);
     Logger.info(`[ChatPerf] preload: badges + history ${Math.round(performance.now() - __t)}ms (${parsed.length} rows, ${mode})`);
     if (parsed.length === 0) {
-      withSlice(key, (slice) => { releaseHistoryHold(slice); });
+      withSlice(key, (slice) => {
+        releaseHistoryHold(slice);
+        slice.historyLoaded = true;
+      });
       return;
     }
     withSlice(key, (slice) => {
+      slice.historyLoaded = true;
       const source: any[] = parsed;
 
       // De-dupe against messages already in the slice. preloadChannel is async
@@ -2189,7 +2199,10 @@ async function preloadChannel(
     });
   } catch (err) {
     Logger.error('[ChatStore] Failed to load recent messages:', err);
-    withSlice(key, (slice) => { releaseHistoryHold(slice); });
+    withSlice(key, (slice) => {
+      releaseHistoryHold(slice);
+      slice.historyLoaded = true;
+    });
   }
 }
 
@@ -4045,6 +4058,7 @@ export function useChannelChatMeta(channel: string | null | undefined) {
         roomState: slice?.roomState ?? EMPTY_ROOM_STATE,
         userBadges: slice?.userBadges ?? null,
         pinnedMessage: slice?.pinnedMessage ?? null,
+        historyLoaded: slice?.historyLoaded ?? false,
       };
     }),
   );
