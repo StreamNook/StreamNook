@@ -4,8 +4,8 @@
 // pressed by the same touch. Where a tap is plainly meant for what it lands on
 // (a search result, a sheet's buttons and switches) the keyboard still goes
 // and the press lands too. A drag never closes it (people scroll chat while
-// they type), except a drag on the chat list that reaches the composer, which
-// rides the keyboard: that pulls the keyboard down, as in Messages.
+// they type), except a drag on the chat list that reaches the keyboard's top
+// edge: that pulls the keyboard down, as in Messages.
 //
 // Pages only mark themselves:
 // - data-chat-composer (or data-keeps-keyboard): the field's own controls; a
@@ -55,11 +55,27 @@ export function isTap(dx: number, dy: number): boolean {
   return Math.hypot(dx, dy) <= TAP_SLOP;
 }
 
+/** The soft keyboard's top edge in the viewport, null while it is down. The
+ *  app draws edge to edge, so the viewport never shrinks for it; the native
+ *  bridge reports its height as --sn-kb (less the gesture bar, --sn-safe-b). */
+function cssKeyboardTop(doc: Document): number | null {
+  const win = doc.defaultView;
+  if (!win) return null;
+  const css = win.getComputedStyle(doc.documentElement);
+  const kb = parseFloat(css.getPropertyValue('--sn-kb')) || 0;
+  if (kb <= 0) return null;
+  const safe = parseFloat(css.getPropertyValue('--sn-safe-b')) || 0;
+  return win.innerHeight - kb - safe;
+}
+
 /**
  * Listens on the document for the keyboard rule. Returns the cleanup. Mounted
  * once (KeyboardDismiss, beside the tab bar every screen keeps).
  */
-export function installKeyboardTaps(doc: Document = document): () => void {
+export function installKeyboardTaps(
+  doc: Document = document,
+  keyboardTop: () => number | null = () => cssKeyboardTop(doc),
+): () => void {
   let press: { id: number; x: number; y: number; verdict: KeyboardTap; field: HTMLElement } | null = null;
   // A drag on the chat list while typing: where it started, to see it head
   // down. Touch events, since a scroll cancels the pointer stream.
@@ -87,10 +103,8 @@ export function installKeyboardTaps(doc: Document = document): () => void {
   const onTouchMove = (e: TouchEvent) => {
     const t = e.touches[0];
     if (!drag || !t || t.clientY <= drag.y) return;
-    // The composer rides the keyboard: a finger dragged down onto it has
-    // reached the keyboard.
-    const composer = doc.querySelector('[data-chat-composer]');
-    if (composer && t.clientY >= composer.getBoundingClientRect().top) {
+    const top = keyboardTop();
+    if (top != null && t.clientY >= top) {
       drag.field.blur();
       drag = null;
     }

@@ -60,10 +60,11 @@ private struct ComposerBar: View {
         }
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
-        // The composer is the field's own: its buttons act and the keyboard stays, and the emote
-        // picker stays open while it is used (typing, sending, the emote button toggling it).
+        // The composer is the field's own: its buttons act and the keyboard stays, and its emote
+        // picker and suggestions stay open while it is used (typing, sending, the emote button).
         .keepsKeyboard()
         .outsideTapAnchor("emotes")
+        .outsideTapAnchor("suggestions")
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         // The wallet reads Rust's channel state for this room and follows its pushes.
         .task { await model.wallet?.start() }
@@ -279,6 +280,8 @@ private struct ComposerBar: View {
                 }
                 if !session.isKick {
                     Button {
+                        // The sheet covers the picker: close it rather than leave it under there.
+                        model.panel = .none
                         model.commandsOpen = true
                     } label: {
                         Image(systemName: "slash.circle")

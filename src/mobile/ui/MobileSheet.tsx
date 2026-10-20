@@ -96,6 +96,8 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
     >
       <div
         className="absolute inset-0 bg-black/50"
+        // One tap closes the sheet, the keyboard going with it.
+        data-taps-through-keyboard=""
         // Rides the Glassiness slider like every other frosted surface; a
         // fixed blur kept ghosting content at Glassiness 0.
         style={{

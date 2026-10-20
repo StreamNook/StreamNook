@@ -76,6 +76,8 @@ struct SettingsDirectory: View {
             .padding(.horizontal, 12)
             .frame(height: 44)
             .snGlass(Capsule())
+            // Clearing the search keeps the keyboard for the next one.
+            .keepsKeyboard()
             .padding(.horizontal, 16)
             .id(Self.fieldID)
 

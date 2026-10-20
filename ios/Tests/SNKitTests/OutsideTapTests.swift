@@ -34,6 +34,22 @@ import Testing
                 "a tap in the field itself")
     }
 
+    @Test func sendWorksWithTheSuggestionStripUp() {
+        // The composer anchors its own pop-outs: Send sends, the strip stays, the keyboard stays.
+        let strip = CGRect(x: 10, y: 680, width: 370, height: 72)
+        let open = [OutsideTapRule.Popout(id: "suggestions", regions: [strip, composer])]
+        let d = OutsideTapRule.decide(at: CGPoint(x: 360, y: 790), field: field, keepers: [composer], popouts: open)
+        #expect(!d.closesAnything && !d.usedUp)
+    }
+
+    @Test func tappingTheComposerClosesThePinsAndStillActs() {
+        let pins = CGRect(x: 10, y: 60, width: 370, height: 300)
+        let open = [OutsideTapRule.Popout(id: "pins", regions: [pins])]
+        let d = OutsideTapRule.decide(at: CGPoint(x: 100, y: 790), field: nil, keepers: [composer], popouts: open)
+        #expect(d.popouts == ["pins"])
+        #expect(!d.usedUp, "the field still takes the tap and the keyboard comes")
+    }
+
     @Test func withNoKeyboardAndNothingOpenATapIsJustATap() {
         #expect(!OutsideTapRule.decide(at: chatRow, field: nil, keepers: [composer], popouts: []).closesAnything)
     }
@@ -68,5 +84,6 @@ import Testing
         #expect(OutsideTapRule.isTap(distance: 4, duration: 0.12))
         #expect(!OutsideTapRule.isTap(distance: 24, duration: 0.12), "a drag scrolls")
         #expect(!OutsideTapRule.isTap(distance: 2, duration: 0.8), "a hold opens a hold menu")
+        #expect(OutsideTapRule.isTap(distance: 2, duration: 0.4), "a deliberate slow tap is still a tap")
     }
 }

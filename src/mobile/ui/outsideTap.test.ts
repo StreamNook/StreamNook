@@ -104,10 +104,10 @@ describe('installKeyboardTaps', () => {
     stop();
   });
 
-  it('a drag down the chat list that reaches the composer pulls the keyboard down', () => {
+  it('a drag down the chat list that reaches the keyboard pulls it down', () => {
     const field = el('TEXTAREA', ['data-chat-composer']);
     const doc = page(field);
-    const stop = installKeyboardTaps(doc as unknown as Document);
+    const stop = installKeyboardTaps(doc as unknown as Document, () => 700);
     const row = el('DIV', ['data-chat-list']);
     fire(doc, 'touchstart', { target: row, touches: [{ clientY: 300 }] });
     fire(doc, 'touchmove', { target: row, touches: [{ clientY: 650 }] });

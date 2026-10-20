@@ -705,7 +705,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
             ) : (
               roomModes &&
               !roomModesAsPrompt &&
-              !gating.blocked && <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
+              !gating.blocked && <RoomModeIndicator
+                  view={roomModes}
+                  inline
+                  onActivate={() => {
+                    setEmotesOpen(false);
+                    setMenuOpen(true);
+                  }}
+                />
             ))}
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as

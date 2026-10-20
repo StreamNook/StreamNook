@@ -57,6 +57,7 @@ struct ChatPicker: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .keepsKeyboard()
             .padding(.horizontal, 16)
             .padding(.bottom, 19)
 

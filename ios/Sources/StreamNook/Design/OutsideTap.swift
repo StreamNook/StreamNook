@@ -50,15 +50,32 @@ final class OutsideTap {
         FirstResponder.current as? UIView
     }
 
+    /// The view of the screen on top: the root, or the sheet presented last. What lies under
+    /// a sheet is covered, so it neither closes nor keeps anything.
+    static func topView(of window: UIWindow) -> UIView? {
+        var top = window.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top?.view
+    }
+
+    /// Alerts own their taps: their buttons and their own field.
+    static func alertOnTop(of window: UIWindow) -> Bool {
+        var top = window.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top is UIAlertController
+    }
+
     /// Something would close: the keyboard is up or a pop-out is open.
     func armed(in window: UIWindow) -> Bool {
-        if let field = Self.editingView(), field.window === window { return true }
-        return live.contains { $0.window === window && $0.role.isOpenPopout }
+        guard !Self.alertOnTop(of: window), let top = Self.topView(of: window) else { return false }
+        if let field = Self.editingView(), field.isDescendant(of: top) { return true }
+        return live.contains { $0.window === window && $0.role.isOpenPopout && $0.isDescendant(of: top) }
     }
 
     /// What a tap at `point` (window coordinates) would put away.
     func decide(at point: CGPoint, in window: UIWindow) -> OutsideTapRule.Decision {
-        let here = live.filter { $0.window === window && !$0.isHidden && $0.alpha > 0 }
+        guard !Self.alertOnTop(of: window), let top = Self.topView(of: window) else { return .init() }
+        let here = live.filter { $0.window === window && !$0.isHidden && $0.alpha > 0 && $0.isDescendant(of: top) }
         func frame(_ view: UIView) -> CGRect { view.convert(view.bounds, to: window) }
         var popouts: [String: [CGRect]] = [:]
         var order: [String] = []
@@ -82,7 +99,7 @@ final class OutsideTap {
             if case .anchor(let id) = marker.role, popouts[id] != nil { popouts[id]?.append(frame(marker)) }
         }
         let field = Self.editingView().flatMap { view -> CGRect? in
-            guard view.window === window else { return nil }
+            guard view.isDescendant(of: top) else { return nil }
             // A search bar's Cancel and clear buttons belong to its field.
             var bar: UIView? = view
             while let current = bar, !(current is UISearchBar) { bar = current.superview }
@@ -149,8 +166,9 @@ extension UIResponder {
 
 /// Watches every touch in its window. A tap that would put something away is used up: it
 /// recognizes, which cancels the touch for the views under it, and the taps waiting on it fail.
-/// A drag (more than 10 pt) or a hold (0.35 s, before the chat's 0.42 s hold menu) fails it, so
-/// scrolling and hold menus work as ever, the keyboard and pop-outs staying.
+/// A drag (more than 10 pt) or a hold (0.5 s) fails it, so scrolling works as ever, and hold menus
+/// never wait on it. A touch outside the screen on top (a sheet's dimmed surround, a menu, an
+/// alert) is the system's own: it closes that sheet or menu in one tap.
 private final class OutsideTapRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private var decision: OutsideTapRule.Decision?
     private var start: CGPoint = .zero
@@ -174,6 +192,14 @@ private final class OutsideTapRecognizer: UIGestureRecognizer, UIGestureRecogniz
         }
         start = touch.location(in: window)
         began = touch.timestamp
+        let mine = MainActor.assumeIsolated { () -> Bool in
+            guard let top = OutsideTap.topView(of: window), let hit = touch.view else { return false }
+            return hit.isDescendant(of: top)
+        }
+        guard mine else {
+            state = .failed
+            return
+        }
         let decision = MainActor.assumeIsolated { OutsideTap.shared.decide(at: start, in: window) }
         guard decision.closesAnything else {
             state = .failed
@@ -204,10 +230,16 @@ private final class OutsideTapRecognizer: UIGestureRecognizer, UIGestureRecogniz
             state = .failed
             return
         }
-        MainActor.assumeIsolated { OutsideTap.shared.apply(decision, in: window) }
-        // Used up: recognizing cancels the touch for what is under it. Passing: failing lets the
-        // press that waited on this go ahead.
-        state = decision.usedUp ? .ended : .failed
+        if decision.usedUp {
+            // Recognizing cancels the touch for what is under it.
+            MainActor.assumeIsolated { OutsideTap.shared.apply(decision, in: window) }
+            state = .ended
+        } else {
+            // Failing lets the press that waited on this land first, where it was pressed; then
+            // the keyboard goes (a sheet riding the keyboard moves only after the press).
+            state = .failed
+            DispatchQueue.main.async { OutsideTap.shared.apply(decision, in: window) }
+        }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -221,12 +253,13 @@ private final class OutsideTapRecognizer: UIGestureRecognizer, UIGestureRecogniz
         hold = nil
     }
 
-    /// While something would close, taps and holds elsewhere wait for this one to fail, so the
-    /// tap that closes presses nothing. Scrolling, pinching and watchers that only observe touches
-    /// (they cancel nothing) never wait.
+    /// While something would close, taps elsewhere wait for this one to fail, so the tap that
+    /// closes presses nothing. Scrolling, pinching, hold menus and watchers that only observe
+    /// touches (they cancel nothing) never wait; a hold that begins ends this one.
     override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
         guard let window, other.view?.window === window, other.cancelsTouchesInView,
               !(other is UIPanGestureRecognizer), !(other is UIPinchGestureRecognizer) else { return false }
+        if let hold = other as? UILongPressGestureRecognizer, hold.minimumPressDuration >= 0.3 { return false }
         return MainActor.assumeIsolated { OutsideTap.shared.armed(in: window) }
     }
 

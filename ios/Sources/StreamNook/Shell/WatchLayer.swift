@@ -100,6 +100,9 @@ struct WatchLayer: View {
                     .frame(width: band.width, height: band.height)
                     .contentShape(Rectangle())
                     .onTapGesture { mini ? expand() : toggleControls() }
+                    // The mini player opens on the tap that puts a keyboard away; the full video
+                    // only puts it away.
+                    .background { if mini { Color.clear.tapsThroughKeyboard() } }
                     .gesture(mini ? nil : (landscape ? nil : shrinkGesture(screen: screen)))
                     .simultaneousGesture(landscape && full ? dialGesture(band: band) : nil)
                     .overlay {
@@ -161,6 +164,7 @@ struct WatchLayer: View {
                                         stripTouch += 1
                                     })
                         .outsideTapAnchor("chat-strip")
+                        .tapsThroughKeyboard()
                         .offset(x: edge - 14, y: screen.height / 2 - 40)
                     if !chat.beside, stripOpen {
                         ChatBackgroundStrip(opacity: chat.opacity, onChange: { liveOpacity = $0 },
