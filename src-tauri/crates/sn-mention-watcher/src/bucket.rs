@@ -7,46 +7,47 @@ use std::time::{Duration, Instant};
 pub const CAPACITY: u32 = 15;
 pub const WINDOW: Duration = Duration::from_secs(10);
 
-/// A token bucket refilled evenly: `CAPACITY` tokens per `WINDOW`.
+/// A token bucket refilled evenly: `CAPACITY` tokens per `WINDOW`, kept in
+/// whole nanoseconds (the generic cell rate algorithm): `tat` is when the
+/// bucket would be full again. With no floating point, a refusal always names
+/// a wait of at least a nanosecond, so a caller that sleeps it always gets a
+/// token next time instead of spinning on a wait rounded down to zero.
 #[derive(Debug)]
 pub struct Bucket {
-    capacity: f64,
-    per_sec: f64,
-    tokens: f64,
-    last: Instant,
+    /// The time one token takes to come back.
+    interval: Duration,
+    /// How far ahead of now `tat` may run: a full bucket's worth, less one token.
+    slack: Duration,
+    tat: Instant,
 }
 
 impl Bucket {
     pub fn new(capacity: u32, window: Duration, now: Instant) -> Self {
+        let capacity = capacity.max(1);
+        let interval = window / capacity;
         Bucket {
-            capacity: capacity as f64,
-            per_sec: capacity as f64 / window.as_secs_f64(),
-            tokens: capacity as f64,
-            last: now,
+            interval,
+            slack: interval * (capacity - 1),
+            tat: now,
         }
     }
 
-    fn refill(&mut self, now: Instant) {
-        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * self.per_sec).min(self.capacity);
-        self.last = now;
-    }
-
-    /// Take a token now, or say how long until one is ready.
+    /// Take a token now, or say how long until one is ready (never zero).
     pub fn take(&mut self, now: Instant) -> Result<(), Duration> {
-        self.refill(now);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
+        let tat = self.tat.max(now);
+        let ahead = tat - now;
+        if ahead <= self.slack {
+            self.tat = tat + self.interval;
             Ok(())
         } else {
-            Err(Duration::from_secs_f64((1.0 - self.tokens) / self.per_sec))
+            Err(ahead - self.slack)
         }
     }
 
-    /// Empty the bucket, for when Twitch pushed back on a join.
+    /// Empty the bucket, for when Twitch pushed back on a join: the next
+    /// token comes one interval from now.
     pub fn drain(&mut self, now: Instant) {
-        self.refill(now);
-        self.tokens = 0.0;
+        self.tat = now + self.slack + self.interval;
     }
 }
 
@@ -113,6 +114,22 @@ mod tests {
         b.drain(t0);
         assert!(b.take(t0).is_err());
         assert!(b.take(t0 + Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn a_refusal_never_names_a_zero_wait() {
+        let t0 = Instant::now();
+        let mut b = Bucket::new(CAPACITY, WINDOW, t0);
+        let mut now = t0;
+        for _ in 0..1_000 {
+            match b.take(now) {
+                Ok(()) => {}
+                Err(wait) => {
+                    assert!(wait > Duration::ZERO);
+                    now += wait;
+                }
+            }
+        }
     }
 
     #[test]
