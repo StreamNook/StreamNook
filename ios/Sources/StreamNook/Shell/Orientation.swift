@@ -7,10 +7,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientations: UIInterfaceOrientationMask = .portrait
 
     /// The notification delegate goes in before launch ends, so a tapped mention or go-live that
-    /// opened the app reaches it. Installing it asks for nothing.
+    /// opened the app reaches it. Installing it asks for nothing. The background live check's
+    /// handler must be registered before launch ends too.
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         NotificationRouter.install()
+        LiveCheck.register()
         return true
     }
 

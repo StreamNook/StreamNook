@@ -1,4 +1,5 @@
 #if DEBUG
+import BackgroundTasks
 import Foundation
 import MediaPlayer
 import SNKit
@@ -72,6 +73,10 @@ import SwiftUI
 ///   `predbet:yes:250`, `predconfirm`, `liveVotesLog`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
 /// - the Mentions steps in `MentionsDrive` (`mentions`, `mentions:fake`, `mentionnotify`, `mentioncard`, ...)
+/// - `livecheck` runs the background go-live check now, as a refresh would (the core's live
+///   check, the go-lives on screen handed over, what it finds posted), and logs the refresh iOS
+///   has pending; `livecheck:schedule` asks for the next refresh first, as going to the
+///   background does
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
@@ -109,6 +114,12 @@ enum Drive {
                 model.showSetup()
                 if let page = SetupWizard.Page.named(value) { model.nav.setupPage = page }
             case "setupalert": model.nav.setupAlert = value
+            case "livecheck":
+                if value == "schedule" { await LiveCheck.backgrounded(model) }
+                let active = await LiveCheck.run()
+                let pending = await BGTaskScheduler.shared.pendingTaskRequests()
+                    .map { "\($0.identifier)@\(Int($0.earliestBeginDate?.timeIntervalSinceNow ?? 0))s" }
+                log.notice("drive livecheck active \(active.map(String.init(describing:)) ?? "failed", privacy: .public) pending \(pending.joined(separator: ","), privacy: .public)")
             case "tab": if let tab = MobileTab(rawValue: value) { model.nav.tab = tab }
             case "browse":
                 switch value {
