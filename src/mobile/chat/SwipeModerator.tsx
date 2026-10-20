@@ -21,9 +21,10 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
+import { readInsets } from '../nativeInsets';
 import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
 import { isThemeDark } from '../../themes';
-import { stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
+import { inGrabZone, slideStart, stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
 
 export type { SwipeTarget, TouchSlider } from './swipeSteps';
 
@@ -73,6 +74,8 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       messageId: string;
       target: SwipeTarget;
       slider: TouchSlider | null;
+      /** The press landed in the grab zone. */
+      grab: boolean;
     } | null = null;
     let engaged = false;
     let step: number | null = null;
@@ -167,7 +170,11 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       // Hold the list now: the row under the thumb is the row a swipe acts on.
       holdChatRow(row, true);
       const r = row.getBoundingClientRect();
-      const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null };
+      // The system's left strip (the back gesture, or the cutout and bars) never reaches the page,
+      // so the grab zone starts where it ends.
+      const insets = readInsets();
+      const grab = inGrabZone(e.clientX, Math.max(insets.gestureLeft, insets.left));
+      const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null, grab };
       press = current;
       trace(`down on ${messageId} at x ${Math.round(e.clientX - r.left)} of ${Math.round(r.width)}; slider requested`);
       void live.current.sliderFor(r.width, e.clientX - r.left, target).then((s) => {
@@ -182,15 +189,17 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       const dx = e.clientX - press.x;
       const dy = e.clientY - press.y;
       if (!engaged) {
-        const engage = s?.engage ?? 10;
+        // In the grab zone a thumb reaching in from the edge starts a slide sooner and on a
+        // steeper angle; everywhere else a slide needs a mostly sideways move.
+        const move = slideStart(dx, dy, s?.engage ?? 10, press.grab);
         // A vertical move is the list's scroll, and the fan owns a hold that armed.
-        if (live.current.fanArmed() || (Math.abs(dy) > engage && Math.abs(dy) >= Math.abs(dx))) {
+        if (live.current.fanArmed() || move === 'scroll') {
           trace(live.current.fanArmed() ? 'gave way to the hold menu' : 'gave way to a scroll');
           end(false);
           return;
         }
         // Sideways and rightward claims the finger, once the core has laid the slider out.
-        if (!s?.enabled || dx < engage || dx < Math.abs(dy)) return;
+        if (!s?.enabled || move !== 'slide') return;
         engaged = true;
         trace('slider drawn');
         // The pull may leave the list; its release still comes here.

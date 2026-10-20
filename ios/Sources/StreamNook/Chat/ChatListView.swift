@@ -697,10 +697,45 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             return false
         }
         let t = swipePan.translation(in: scroll)
-        // Only a mainly vertical move (the list's scroll) or a leftward one is refused.
-        let begin = t.x > 0 && abs(t.x) >= abs(t.y)
-        chatLog.notice("[swipe] pan \(begin ? "begins" : "refused (vertical or leftward)", privacy: .public) at \(Int(t.x)),\(Int(t.y)); slider \(held.prepared == nil ? "pending" : "ready", privacy: .public)")
+        // Only a mainly vertical move (the list's scroll) or a leftward one is refused. In the
+        // grab zone a thumb reaching in from the edge may arc: half as much sideways as up or
+        // down still starts the slide.
+        let grab = inGrabZone(held)
+        let ratio: CGFloat = grab ? Self.grabRatio : 1
+        let begin = t.x > 0 && t.x >= ratio * abs(t.y)
+        chatLog.notice("[swipe] pan \(begin ? "begins" : "refused (vertical or leftward)", privacy: .public) at \(Int(t.x)),\(Int(t.y))\(grab ? " in the grab zone" : "", privacy: .public); slider \(held.prepared == nil ? "pending" : "ready", privacy: .public)")
         return begin
+    }
+
+    /// The grab zone: this far in from where the screen's left edge stops being the system's, a
+    /// slide starts on a looser angle (Android keeps the same numbers, `swipeSteps.ts`). About a
+    /// thumb's width, past the 44 point minimum touch target.
+    private static let grabZone: CGFloat = 56
+    private static let grabRatio: CGFloat = 0.5
+    /// The system's back swipe on a pushed screen claims this much of the left edge.
+    private static let backSwipeEdge: CGFloat = 20
+
+    /// Whether the press landed in the grab zone: past the left safe area and, when this list sits
+    /// on a screen the back swipe can pop, past the strip that swipe claims.
+    private func inGrabZone(_ held: (row: Row, cell: ChatRowCell, startX: CGFloat, prepared: PreparedSwipe?)) -> Bool {
+        guard let window else { return false }
+        let x = held.cell.convert(CGPoint(x: held.startX, y: 0), to: window).x
+        var edge = window.safeAreaInsets.left
+        if let nav = owningNavigationController(), nav.viewControllers.count > 1,
+           nav.interactivePopGestureRecognizer?.isEnabled == true {
+            edge += Self.backSwipeEdge
+        }
+        return x >= edge && x < edge + Self.grabZone
+    }
+
+    /// The navigation controller of the screen this list is on, if any.
+    private func owningNavigationController() -> UINavigationController? {
+        var responder: UIResponder? = self
+        while let next = responder?.next {
+            if let controller = next as? UIViewController { return controller.navigationController }
+            responder = next
+        }
+        return nil
     }
 
     /// How far right of where the thumb went down the finger is now.

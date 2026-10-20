@@ -99,3 +99,31 @@ export function stepAction(step: TouchStep, messageId: string): ModAction {
   if (step.action === 'ban') return { kind: 'ban' };
   return { kind: 'timeout', seconds: step.seconds ?? 600 };
 }
+
+/** The grab zone: this far in from where the screen's left edge stops being the system's (the
+ *  back-gesture strip), a slide starts on a looser rule. About a thumb's width, past the 44 pt
+ *  minimum touch target and about twice the back strip, so a thumb reaching in from the edge
+ *  lands in it. The iPhone keeps the same numbers (ChatListView). */
+export const GRAB_ZONE = 56;
+/** In the grab zone a slide starts once the finger has moved this far right... */
+export const GRAB_ENGAGE = 6;
+/** ...and at least this much sideways for each unit up or down (elsewhere 1: mostly
+ *  sideways), so a thumb's arc from the edge still counts while a plain scroll does not. */
+export const GRAB_RATIO = 0.5;
+
+/** Whether a press at `clientX` (screen points) is in the grab zone, given where the system's
+ *  left edge strip ends. */
+export function inGrabZone(clientX: number, systemEdge: number): boolean {
+  return clientX >= systemEdge && clientX < systemEdge + GRAB_ZONE;
+}
+
+/** What a finger `dx`, `dy` from its press does before a slide has started: starts the slide,
+ *  is the list's scroll, or is not decided yet. `engage` is the core's distance (10 by default);
+ *  a press in the grab zone starts sooner and on a steeper angle. */
+export function slideStart(dx: number, dy: number, engage: number, grab: boolean): 'slide' | 'scroll' | 'wait' {
+  const reach = grab ? Math.min(GRAB_ENGAGE, engage) : engage;
+  const ratio = grab ? GRAB_RATIO : 1;
+  if (Math.abs(dy) > reach && Math.abs(dx) <= ratio * Math.abs(dy)) return 'scroll';
+  if (dx >= reach && dx >= ratio * Math.abs(dy)) return 'slide';
+  return 'wait';
+}

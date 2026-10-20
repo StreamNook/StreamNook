@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messageReach, stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
+import { GRAB_ZONE, inGrabZone, messageReach, slideStart, stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
 
 // Rust's own test ruler (touch_mod_slider.rs): Delete, 1m, 10m, 1h, a gap, Ban on a 390 px row.
 const slider: TouchSlider = {
@@ -68,5 +68,36 @@ describe('what a message allows (Twitch rules)', () => {
     expect(messageReach('broadcaster', '1', '8', ['moderator/1'])).toBe('no_delete');
     expect(messageReach('moderator', '7', '9', ['subscriber/12'])).toBe('all');
     expect(messageReach(null, '7', '9', [])).toBe('nothing');
+  });
+});
+
+describe('where a slide can start', () => {
+  it('has a grab zone a thumb wide, just past the system edge strip', () => {
+    // A 24 pt back strip: the zone runs from 24 to 80.
+    expect(inGrabZone(23, 24)).toBe(false);
+    expect(inGrabZone(24, 24)).toBe(true);
+    expect(inGrabZone(24 + GRAB_ZONE - 1, 24)).toBe(true);
+    expect(inGrabZone(24 + GRAB_ZONE, 24)).toBe(false);
+    // No strip (three-button navigation): it starts at the screen edge.
+    expect(inGrabZone(0, 0)).toBe(true);
+  });
+
+  it('keeps the strict rule outside the zone, so scrolling stays the same', () => {
+    expect(slideStart(12, 3, 10, false)).toBe('slide');
+    expect(slideStart(8, 2, 10, false)).toBe('wait');
+    expect(slideStart(12, 12, 10, false)).toBe('scroll');
+    expect(slideStart(9, 16, 10, false)).toBe('scroll');
+  });
+
+  it('starts a thumb arc from the edge in the grab zone', () => {
+    // 7 right and 2 down: too short outside, a slide in the zone.
+    expect(slideStart(7, 2, 10, true)).toBe('slide');
+    // A 60 degree arc: a scroll outside, a slide in the zone.
+    expect(slideStart(9, 16, 10, false)).toBe('scroll');
+    expect(slideStart(9, 16, 10, true)).toBe('slide');
+    // Mostly vertical is still the list's scroll there too.
+    expect(slideStart(4, 20, 10, true)).toBe('scroll');
+    // Leftward never slides.
+    expect(slideStart(-8, 1, 10, true)).toBe('wait');
   });
 });
