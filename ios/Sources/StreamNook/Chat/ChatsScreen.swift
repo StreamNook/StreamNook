@@ -107,7 +107,7 @@ struct ChatsScreen: View {
             if model.signedIn, !rooms.tabs.isEmpty {
                 // 40 pt capsules with 7 pt of air above and below, clear of the separator.
                 ChatTabStrip(rooms: rooms, trailing: AnyView(controls), height: 54, leading: groupChip,
-                             edge: AnyView(ChatsMinimizeButton { model.nav.exitChats() }.padding(.leading, -6)))
+                             edge: AnyView(ChatsMinimizeButton { model.nav.exitChats() }))
             }
         }
         .contentShape(Rectangle())
@@ -253,10 +253,15 @@ struct ChatsMinimizeButton: View {
     let action: () -> Void
 
     var body: some View {
+        // The strip's own 40 pt glass circle, as + and play beside the rooms.
         Button(action: action) {
             Image(systemName: "chevron.left")
-                .font(.system(size: 22, weight: .medium))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SN.textSecondary)
+                // A chevron's weight sits on its point side; nudged so it reads centered.
+                .offset(x: -1)
+                .frame(width: 40, height: 40)
+                .snGlass(Circle())
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }

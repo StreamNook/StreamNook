@@ -5,20 +5,21 @@
 import React from 'react';
 import { CaretLeft } from 'phosphor-react';
 
-// The player bar's icon size.
-const ICON = 20;
-
 export const ChatsMinimizeButton: React.FC<{ onMinimize: () => void; className?: string }> = ({
   onMinimize,
   className = '',
 }) => (
   <button
     onClick={onMinimize}
-    className={`shrink-0 w-11 h-11 flex items-center justify-center text-textSecondary active:opacity-70 ${className}`}
+    className={`shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70 ${className}`}
     aria-label="Back"
     // Pressed while typing it still leaves Chats on that tap; the keyboard goes with it.
     data-taps-through-keyboard=""
   >
-    <CaretLeft size={ICON} />
+    {/* The strip's own 40 px glass circle, as + and play beside the rooms. A
+        chevron's weight sits on its point side; nudged so it reads centered. */}
+    <span className="w-10 h-10 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+      <CaretLeft size={15} weight="bold" className="-translate-x-[0.5px]" />
+    </span>
   </button>
 );

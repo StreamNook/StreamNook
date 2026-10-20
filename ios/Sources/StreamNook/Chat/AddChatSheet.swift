@@ -65,10 +65,10 @@ struct ChatPicker: View {
                 // Chats' way out, the header's minimize arrow, left of the search on the
                 // field's center line.
                 if let onClose {
-                    ChatsMinimizeButton(action: onClose).offset(x: -54)
+                    ChatsMinimizeButton(action: onClose).offset(x: -52)
                 }
             }
-            .padding(.leading, onClose == nil ? 0 : 42)
+            .padding(.leading, onClose == nil ? 0 : 50)
             .padding(.horizontal, 16)
             .padding(.bottom, 19)
 

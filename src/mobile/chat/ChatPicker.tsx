@@ -238,7 +238,7 @@ export const ChatPicker: React.FC<{
     <div className={`flex flex-col min-h-0 ${scrolls ? 'flex-1' : ''}`}>
       <div className="flex items-center gap-1.5 mx-1 mb-1 shrink-0">
         {/* Chats' way out, the header's minimize arrow, left of the search on its center line. */}
-        {onClose && <ChatsMinimizeButton onMinimize={onClose} className="-ml-2.5" />}
+        {onClose && <ChatsMinimizeButton onMinimize={onClose} className="-ml-0.5" />}
       <div className="flex-1 min-w-0 flex items-center gap-2 glass-input px-3">
         <MagnifyingGlass size={16} className="text-textMuted shrink-0" />
         <input

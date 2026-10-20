@@ -358,7 +358,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
             always
             trailing={trailing}
             leading={leading}
-            edge={<ChatsMinimizeButton onMinimize={exitChats} className="-ml-1.5" />}
+            edge={<ChatsMinimizeButton onMinimize={exitChats} />}
             height={CHATS_STRIP_H}
           />
         )}
