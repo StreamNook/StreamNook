@@ -10,11 +10,10 @@ const KEY = 'sn-last-kb';
 export const DEFAULT_KEYBOARD_PX = 300;
 /** Below this a reading is a toolbar or a closing frame, not a keyboard. */
 const MIN_KEYBOARD_PX = 120;
-/** The emote panel never opens shorter than this: the iPhone's panel under a
- *  common keyboard (336 less the home-indicator strip and the gap above it).
- *  Below it the search, tabs, section title and Emotes/GIFs bar leave the
- *  grid one cut-off row; at it, three full rows show. */
-export const EMOTE_PANEL_MIN_PX = 320;
+/** The emote panel never opens shorter than this. Under the search, the tabs,
+ *  a section title and the Emotes/GIFs bar it leaves three full rows of
+ *  emotes above the bottom fade (a 250px keyboard left one cut-off row). */
+export const EMOTE_PANEL_MIN_PX = 340;
 
 /** The emote panel's height: the keyboard's, so the two trade places, but
  *  never less than a panel you can browse. */

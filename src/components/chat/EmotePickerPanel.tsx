@@ -970,7 +970,7 @@ export function EmotePickerPanel({
   // selected, so the row stays one short line above the grid.
   const tabClass = (active: boolean) =>
     IS_MOBILE
-      ? `flex-1 min-w-0 py-1.5 flex flex-col items-center justify-center gap-0.5 ${active ? 'bg-white/[0.08] text-white' : 'text-textMuted'}`
+      ? `flex-1 min-w-0 py-1.5 flex flex-col items-center justify-center gap-0.5 ${active ? 'bg-white/[0.08] text-white [&_.sn-emote-tab-count]:text-white' : 'text-textMuted'}`
       : `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
   /** A tab's number. On the phone it sits under the mark, white when selected. */
   const countClass = IS_MOBILE ? 'sn-emote-tab-count text-[10px] leading-3 tabular-nums' : 'sn-emote-tab-count text-[10px] opacity-70';
@@ -1260,13 +1260,19 @@ export function EmotePickerPanel({
             <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={{ borderRadius: '8px' }}>
               {/* On the phone the star is yellow only while selected, as the
                   provider marks take their color. */}
-              <span className={`leading-4 ${IS_MOBILE && activeTab !== 'favorites' ? '' : 'text-yellow-400'}`}>★</span>
+              {/* A pointed glyph needs a size more to look as big as the logos. */}
+              <span className={`leading-4 ${IS_MOBILE ? 'text-[15px]' : ''} ${IS_MOBILE && activeTab !== 'favorites' ? '' : 'text-yellow-400'}`}>★</span>
               <span className={countClass}>{fitAmount(tabCount('favorites'))}</span>
             </button>
           </Tooltip>
           <Tooltip content="Emoji" side="top">
-            <button onClick={() => pickTab('emoji')} className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
-              <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
+            <button onClick={() => pickTab('emoji')} aria-label="Emoji" className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
+              {IS_MOBILE ? (
+                // The phone's marks stay quiet until selected, as the iPhone's.
+                <Smile size={16} strokeWidth={2} className={activeTab === 'emoji' ? 'text-accent' : ''} aria-hidden />
+              ) : (
+                <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
+              )}
               {searching ? (
                 <span className={countClass}>{fitAmount(tabCount('emoji'))}</span>
               ) : (
