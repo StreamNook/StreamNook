@@ -50,6 +50,12 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     private let hint = UILabel()
     private let hintBox = UIVisualEffectView(effect: UIGlassEffect())
     private let overlayStack = UIStackView()
+    /// A quiet line in the middle while there are no rows ("No recent messages" once the join's
+    /// history answered with none). Gone with the first row.
+    private let emptyLabel = UILabel()
+    var emptyNote: String? {
+        didSet { if emptyNote != oldValue { updateEmptyNote() } }
+    }
 
     let pacing = FramePacing()
     private var ticks = 0
@@ -108,6 +114,20 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         }
         resumeButton.configuration = config
         resumeButton.addAction(UIAction { [weak self] _ in self?.resume(force: true, glide: true) }, for: .touchUpInside)
+
+        emptyLabel.font = Typeface.uiFont(13, 400)
+        emptyLabel.textColor = ChatTheme.textMuted
+        emptyLabel.textAlignment = .center
+        emptyLabel.numberOfLines = 0
+        emptyLabel.isHidden = true
+        emptyLabel.isUserInteractionEnabled = false
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(emptyLabel)
+        NSLayoutConstraint.activate([
+            emptyLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
+        ])
 
         hint.text = "Tap a message to reply"
         hint.font = .systemFont(ofSize: 10.5)
@@ -191,6 +211,7 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     }
 
     private func apply(_ batches: [ChatPipeline.Batch]) {
+        defer { updateEmptyNote() }
         var newLive: [String] = []
         var animate = true
         var mentioned = false
@@ -437,6 +458,12 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     private func updateOverlay() {
         overlayStack.isHidden = !paused
         hintBox.isHidden = readOnly
+    }
+
+    private func updateEmptyNote() {
+        emptyLabel.text = emptyNote
+        emptyLabel.textColor = ChatTheme.textMuted
+        emptyLabel.isHidden = emptyNote == nil || !rows.isEmpty
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

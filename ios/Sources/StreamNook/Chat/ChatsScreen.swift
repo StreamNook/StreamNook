@@ -35,7 +35,7 @@ struct ChatsScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rooms.tabs.isEmpty {
                 // No chat open: the tab is the picker itself.
-                ChatPicker(rooms: rooms)
+                ChatPicker(rooms: rooms, onClose: { model.nav.exitChats() })
                     .onAppear { model.nav.chatsFloor = nil }
             } else if let session = rooms.activeSession {
                 ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) },
@@ -184,13 +184,31 @@ struct ChatsScreen: View {
                     }
                     .foregroundStyle(SN.textSecondary)
                     .padding(.horizontal, 12)
-                    .frame(height: 40)
+                    // At least the circles' width, so the row keeps its spacing between a live
+                    // room and an offline one; a viewer count still widens it.
+                    .frame(minWidth: 40, minHeight: 40, maxHeight: 40)
                     .snGlass(Capsule())
-                    .frame(height: 44)
+                    .frame(minWidth: 44, minHeight: 44, maxHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Watch \(tab.label)")
+            } else if let tab = rooms.active, tab.live != true, tab.provider == "twitch", !tab.pinnedToStream {
+                // An offline room's way in: its channel page (latest broadcast, clips, schedule),
+                // the same room a search opens.
+                Button {
+                    model.startWatching(Self.stream(tab))
+                } label: {
+                    Image(systemName: "play.rectangle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SN.textSecondary)
+                        .frame(width: 40, height: 40)
+                        .snGlass(Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(tab.label)'s channel")
             }
             Button {
                 rooms.addOpen = true
@@ -205,14 +223,40 @@ struct ChatsScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Add a chat")
+            // The way out, always on show in the corner; the grabber and a slide down still work.
+            ChatsCloseButton { model.nav.exitChats() }
         }
     }
 
     /// The room on screen as the player's start reads it; the core fills what a tab does not know.
+    /// A room not known live opens as the offline room (the core starts the stream if it is live
+    /// after all).
     static func stream(_ tab: ChatTabInfo) -> TwitchStream {
         TwitchStream(id: tab.channel, userLogin: tab.login, userName: tab.label, title: "",
                      viewerCount: tab.viewerCount ?? 0, gameName: "", userID: tab.channelID,
-                     profileImageURL: tab.avatar, isLive: true, provider: tab.provider, key: tab.channel)
+                     profileImageURL: tab.avatar, isLive: tab.live == true, provider: tab.provider, key: tab.channel)
+    }
+}
+
+/// Chats' close: the strip's own 40 pt glass circle (as + beside it) with the X the offline
+/// room's corner uses, so every way out of a chat reads the same. Leaving Chats keeps its chats.
+struct ChatsCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: Symbol.close)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SN.textSecondary)
+                .frame(width: 40, height: 40)
+                .snGlass(Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // Pressed while typing it still closes Chats on that tap; the keyboard goes with it.
+        .tapsThroughKeyboard()
+        .accessibilityLabel("Close chats")
     }
 }
 
