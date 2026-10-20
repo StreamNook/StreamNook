@@ -246,6 +246,9 @@ struct WatchLayer: View {
         }
         .ignoresSafeArea()
         .onAppear { cutout.start() }
+        // A turn changes the size before the scene's geometry notice lands, so the side is read
+        // again on the same pass: the first landscape layout never uses the portrait guess.
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in cutout.refresh() }
         .task(id: controlsTouch) {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))
@@ -591,7 +594,7 @@ private final class CutoutEdge {
         }
     }
 
-    private func refresh() {
+    func refresh() {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
         else { return }
         let now = Self.isLeading(scene)
