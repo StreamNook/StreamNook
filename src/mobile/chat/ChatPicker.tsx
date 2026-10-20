@@ -248,7 +248,7 @@ export const ChatPicker: React.FC<{
         />
       </div>
       <div
-        className={`flex flex-col ${scrolls ? 'flex-1 min-h-0 overflow-y-auto [scrollbar-width:none]' : ''}`}
+        className={`flex flex-col ${scrolls ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}
         // Rows scrolling up fade out under the field; at rest the first label
         // sits below the fade (its own 12 px of top padding), fully drawn.
         style={{ paddingBottom: bottomClearance, ...(scrolls ? LIST_FADE : null) }}
