@@ -966,8 +966,16 @@ export function EmotePickerPanel({
     bttv: '#d50014',
     ffz: '#ffffff',
   };
+  // The phone's tabs are the iPhone's: the mark over its count, no chip until
+  // selected, so the row stays one short line above the grid.
   const tabClass = (active: boolean) =>
-    `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
+    IS_MOBILE
+      ? `flex-1 min-w-0 py-1.5 flex flex-col items-center justify-center gap-0.5 ${active ? 'bg-white/[0.08] text-white [&_.sn-emote-tab-count]:text-white' : 'text-textMuted'}`
+      : `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
+  /** A tab's number. On the phone it sits under the mark, white when selected. */
+  const countClass = IS_MOBILE ? 'sn-emote-tab-count text-[10px] leading-3 tabular-nums' : 'sn-emote-tab-count text-[10px] opacity-70';
+  /** Sections stack closer on the phone and start at the top, as the iPhone's. */
+  const listClass = IS_MOBILE ? 'flex flex-col gap-2' : 'flex flex-col gap-4 pt-2';
   /** Inline color for an active tab; undefined leaves the class-driven default. */
   const tabStyle = (active: boolean, key?: string): React.CSSProperties => ({
     borderRadius: '8px',
@@ -1090,7 +1098,7 @@ export function EmotePickerPanel({
       );
     }
     return (
-      <div className="flex flex-col gap-4 pt-2">
+      <div className={listClass}>
         {showEmotes && searchEmotes.length > 0 && (
           <div className="flex flex-col">
             {chunkArray(searchEmotes, TWITCH_COLS * WIDTH_BLOCK_ROWS).map((block, bi) => (
@@ -1190,15 +1198,17 @@ export function EmotePickerPanel({
         className="flex min-h-0 flex-1 flex-col"
         style={section === 'commands' ? { display: 'none' } : undefined}
       >
-      <div className="p-2 border-b border-borderSubtle">
+      <div className={IS_MOBILE ? 'px-2 pt-2 pb-1.5' : 'p-2 border-b border-borderSubtle'}>
         <div className="flex items-center gap-1.5">
           {IS_MOBILE ? (
-            // The phone's one search field (magnifier, clear button, 44px).
+            // The phone's search field at the iPhone panel's 32px, so the
+            // grid keeps the panel's height.
             <SearchField
               value={searchQuery}
               onChange={onSearchChange}
               placeholder={selectedProvider === 'gifs' ? 'Search GIFs…' : 'Search emotes…'}
               className="flex-1 min-w-0"
+              compact
             />
           ) : (
             <input
@@ -1237,32 +1247,46 @@ export function EmotePickerPanel({
           )}
         </div>
         {section === 'emotes' && (
-        <div ref={setTabRowEl} className="sn-emote-tabs flex gap-1 mt-2">
+        <div ref={setTabRowEl} className={`sn-emote-tabs flex gap-1 ${IS_MOBILE ? 'mt-1.5' : 'mt-2'}`}>
           {searching && (
             <Tooltip content={`Everything (${tabCount('all')})`} side="top">
               <button onClick={() => setSearchScope('all')} className={tabClass(activeTab === 'all')} style={{ borderRadius: '8px' }}>
                 <span className="text-[11px] font-semibold leading-4">All</span>
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('all'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('all'))}</span>
               </button>
             </Tooltip>
           )}
           <Tooltip content={`Favorites (${tabCount('favorites')})`} side="top">
             <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={{ borderRadius: '8px' }}>
-              <span className="text-yellow-400">★</span>
-              <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('favorites'))}</span>
+              {/* On the phone the star is yellow only while selected, as the
+                  provider marks take their color. */}
+              {/* A pointed glyph needs a size more to look as big as the logos. */}
+              <span className={`leading-4 ${IS_MOBILE ? 'text-[15px]' : ''} ${IS_MOBILE && activeTab !== 'favorites' ? '' : 'text-yellow-400'}`}>★</span>
+              <span className={countClass}>{fitAmount(tabCount('favorites'))}</span>
             </button>
           </Tooltip>
           <Tooltip content="Emoji" side="top">
-            <button onClick={() => pickTab('emoji')} className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
-              <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
-              {searching && <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('emoji'))}</span>}
+            <button onClick={() => pickTab('emoji')} aria-label="Emoji" className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
+              {IS_MOBILE ? (
+                // The phone's marks stay quiet until selected, as the iPhone's.
+                <Smile size={16} strokeWidth={2} className={activeTab === 'emoji' ? 'text-accent' : ''} aria-hidden />
+              ) : (
+                <img src={getAppleEmojiUrl('😀')} alt="😀" className="w-4 h-4" />
+              )}
+              {searching ? (
+                <span className={countClass}>{fitAmount(tabCount('emoji'))}</span>
+              ) : (
+                // Emoji has no count; the phone keeps the line so its mark
+                // sits level with the others.
+                IS_MOBILE && <span className={countClass}>{'\u00a0'}</span>
+              )}
             </button>
           </Tooltip>
           {isTwitch && (
             <Tooltip content={`Twitch (${tabCount('twitch')})`} side="top">
               <button onClick={() => pickTab('twitch')} className={tabClass(activeTab === 'twitch')} style={tabStyle(activeTab === 'twitch', 'twitch')}>
                 <EmoteProviderLogo provider="twitch" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('twitch'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('twitch'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1270,7 +1294,7 @@ export function EmotePickerPanel({
             <Tooltip content={`BetterTTV (${tabCount('bttv')})`} side="top">
               <button onClick={() => pickTab('bttv')} className={tabClass(activeTab === 'bttv')} style={tabStyle(activeTab === 'bttv', 'bttv')}>
                 <EmoteProviderLogo provider="bttv" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('bttv'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('bttv'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1278,7 +1302,7 @@ export function EmotePickerPanel({
             <Tooltip content={`Kick (${tabCount('kick')})`} side="top">
               <button onClick={() => pickTab('kick')} className={tabClass(activeTab === 'kick')} style={tabStyle(activeTab === 'kick', 'kick')}>
                 <EmoteProviderLogo provider="kick" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('kick'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('kick'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1293,7 +1317,7 @@ export function EmotePickerPanel({
             >
               <button onClick={() => pickTab('youtube')} className={tabClass(activeTab === 'youtube')} style={tabStyle(activeTab === 'youtube', 'youtube')}>
                 <EmoteProviderLogo provider="youtube" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('youtube'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('youtube'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1304,7 +1328,7 @@ export function EmotePickerPanel({
             <Tooltip content={`7TV (${tabCount('7tv')})`} side="top">
               <button onClick={() => pickTab('7tv')} className={tabClass(activeTab === '7tv')} style={tabStyle(activeTab === '7tv', '7tv')}>
                 <EmoteProviderLogo provider="7tv" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('7tv'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('7tv'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1312,7 +1336,7 @@ export function EmotePickerPanel({
             <Tooltip content={`FrankerFaceZ (${tabCount('ffz')})`} side="top">
               <button onClick={() => pickTab('ffz')} className={tabClass(activeTab === 'ffz')} style={tabStyle(activeTab === 'ffz', 'ffz')}>
                 <EmoteProviderLogo provider="ffz" className="w-4 h-4" />
-                <span className="sn-emote-tab-count text-[10px] opacity-70">{fitAmount(tabCount('ffz'))}</span>
+                <span className={countClass}>{fitAmount(tabCount('ffz'))}</span>
               </button>
             </Tooltip>
           )}
@@ -1338,7 +1362,7 @@ export function EmotePickerPanel({
               </p>
             </div>
           ) : (
-            <div className="flex flex-col pt-2">
+            <div className={IS_MOBILE ? 'flex flex-col' : 'flex flex-col pt-2'}>
               {gifNotice && (
                 <p className="text-[11px] text-warning px-1 pb-2 leading-relaxed">{gifNotice}</p>
               )}
@@ -1396,7 +1420,7 @@ export function EmotePickerPanel({
           ) : emojiSections.length === 0 ? (
             <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">No emojis found</p></div>
           ) : (
-            <div className="flex flex-col gap-4 pt-2">
+            <div className={listClass}>
               {emojiSections.map(([category, filteredCategoryEmojis]) => {
                 return (
                   <div key={category} className="flex flex-col">
@@ -1438,12 +1462,12 @@ export function EmotePickerPanel({
             </p>
           </div>
         ) : namedCells ? (
-          <div className="flex flex-col gap-4 pt-2">
+          <div className={listClass}>
             {groups.map((group) => ({ groupKey: group.key, group: { name: group.title, emotes: group.emotes } })).map(({ groupKey, group }) => (
               <div key={groupKey} className="flex flex-col">
                 <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                   {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={groupKey} />}
-                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
+                  <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
                 </h3>
                 {chunkArray(group.emotes, TWITCH_COLS * TWITCH_BLOCK_ROWS).map((block, bi) => {
                   const rows = Math.ceil(block.length / TWITCH_COLS);
@@ -1542,14 +1566,14 @@ export function EmotePickerPanel({
             ))}
           </div>
         ) : (
-          <div className="flex flex-col gap-4 pt-2">
+          <div className={listClass}>
             {groups
               .map((g) => ({ label: g.title, key: g.key, emotes: g.emotes, cols: g.columns, gridCols: GRID_COLS[g.columns] ?? 'grid-cols-7' }))
               .map((group) => (
                 <div key={group.key} className="flex flex-col">
                   <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                     {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={group.key} />}
-                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">{IS_MOBILE ? group.emotes.length : `(${group.emotes.length})`}</span>
+                    <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
                   </h3>
                   {chunkArray(group.emotes, group.cols * WIDTH_BLOCK_ROWS).map((block, bi) => {
                     const rows = Math.ceil(block.length / group.cols);
