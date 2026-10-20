@@ -4065,31 +4065,28 @@ impl TwitchService {
         Ok(resp.pointer("/data/game/id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()).map(String::from))
     }
 
-    /// Shared Viewership for a batch of Twitch channel ids, one aliased
-    /// request: each `cN` alias answers with the stream's own and combined
-    /// counts and the channel's collaboration group (null when it is not in
-    /// one). Anonymous on the Android client id. The raw `data` object comes
-    /// back for `services::collaboration` to read per alias.
-    pub async fn get_collaborations(ids: &[String]) -> Result<serde_json::Value> {
-        let mut vars = serde_json::Map::new();
-        let mut params = Vec::with_capacity(ids.len());
-        let mut fields = String::new();
-        for (i, id) in ids.iter().enumerate() {
-            params.push(format!("$i{i}: ID!"));
-            vars.insert(format!("i{i}"), serde_json::Value::String(id.clone()));
-            fields.push_str(&format!(
-                "c{i}: user(id: $i{i}) {{ id stream {{ viewersCount collaborationViewersCount }} \
-                 channel {{ collaboration {{ collaborators {{ role status user {{ id login displayName \
-                 profileImageURL(width: 70) stream {{ viewersCount }} }} }} }} }} }}\n"
-            ));
-        }
+    /// Shared Viewership (Stream Together) for many Twitch channel ids in one
+    /// anonymous request on the Android client id: the list field twitch.tv
+    /// itself reads for the channels on its screen. One row per channel, its
+    /// `session` null when it is not in a group; the host leads, and every
+    /// guest carries its own viewers and the group's combined count. One list
+    /// argument rather than an alias per channel, so Twitch's cap on aliases
+    /// per request never applies. The rows come back for
+    /// `services::collaboration` to read.
+    pub async fn get_collaborations(ids: &[String]) -> Result<Vec<serde_json::Value>> {
         let body = serde_json::json!({
             "operationName": "StreamNookCollaborations",
-            "query": format!("query StreamNookCollaborations({}) {{\n{fields}}}", params.join(", ")),
-            "variables": vars,
+            "query": "query StreamNookCollaborations($ids: [ID!]!) { \
+                guestStarChannelCollaboration(options: { channelIDs: $ids }) { id \
+                session { host { id } guests { user { id login displayName profileImageURL(width: 70) \
+                stream { viewersCount collaborationViewersCount } } } } } }",
+            "variables": { "ids": ids },
         });
         let resp = Self::gql_public_read(body).await?;
-        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+        resp.pointer("/data/guestStarChannelCollaboration")
+            .and_then(|rows| rows.as_array())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no Stream Together rows in the answer"))
     }
 
     /// Live rows for Twitch channels from the public GQL, with no account: the

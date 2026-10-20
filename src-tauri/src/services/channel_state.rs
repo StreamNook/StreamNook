@@ -505,18 +505,54 @@ async fn refresh_viewers(inner: &Inner) {
     for row in went_live {
         crate::services::watch_session::on_channel_live(&inner.app, row);
     }
-    let live_logins: Vec<String> = by_login
-        .iter()
-        .filter(|(_, id)| live.contains_key(*id))
-        .map(|(login, _)| login.clone())
-        .collect();
+    let live_logins = live_logins(&*inner.state.read().await, &by_login);
     refresh_collab(inner, &by_login, &live_logins).await;
 }
 
+/// The watched channels that read live, one held through a single missed
+/// poll included: it still shows as live, so it keeps its group too.
+fn live_logins(state: &HashMap<String, ChannelState>, watched: &HashMap<String, String>) -> Vec<String> {
+    watched
+        .keys()
+        .filter(|login| state.get(*login).is_some_and(|s| s.viewer_count.is_some()))
+        .cloned()
+        .collect()
+}
+
+/// Something is back on screen after nothing was. Shared Viewership was not
+/// read meanwhile, so the groups of the watched channels the viewer poll has
+/// answered for are read now instead of on its next tick, up to a minute
+/// away. A channel still waiting for its first answer gets its group with it.
+pub fn note_ui_on_screen() {
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        let watched: HashMap<String, String> = inner
+            .watched
+            .read()
+            .await
+            .iter()
+            .map(|(login, w)| (login.clone(), w.channel_id.clone()))
+            .collect();
+        let (by_login, live) = {
+            let state = inner.state.read().await;
+            let by_login: HashMap<String, String> = watched
+                .into_iter()
+                .filter(|(login, _)| state.get(login).is_some_and(|s| s.answered))
+                .collect();
+            let live = live_logins(&state, &by_login);
+            (by_login, live)
+        };
+        if !by_login.is_empty() {
+            refresh_collab(&inner, &by_login, &live).await;
+        }
+    });
+}
+
 /// Shared Viewership for every watched live channel, in batched requests.
-/// Skipped while no window is on screen, since only the UI reads it; the first
-/// tick after a window returns catches up. A channel that went offline drops
-/// its group; a failed batch keeps what its channels last had.
+/// Skipped while no window is on screen, since only the UI reads it;
+/// `note_ui_on_screen` catches up when one returns. A channel that went
+/// offline drops its group; a failed batch keeps what its channels last had.
 async fn refresh_collab(inner: &Inner, watched: &HashMap<String, String>, live_logins: &[String]) {
     if crate::services::window_visibility::all_hidden() {
         return;
@@ -921,6 +957,26 @@ mod tests {
         assert_eq!(hold_live(true, true, 1), (false, 0), "back in the answer resets");
         assert_eq!(hold_live(false, false, 0), (false, 0), "an offline channel stays offline");
         assert_eq!(hold_live(false, true, 0), (false, 0), "going live shows at once");
+    }
+
+    #[test]
+    fn a_channel_held_through_one_miss_keeps_its_group() {
+        let watched: HashMap<String, String> = [("held", "1"), ("live", "2"), ("offline", "3"), ("unwatched", "4")]
+            .into_iter()
+            .map(|(login, id)| (login.to_string(), id.to_string()))
+            .collect();
+        let state: HashMap<String, ChannelState> = [
+            // Left out of this poll's answer, still shown as live.
+            ("held", ChannelState { viewer_count: Some(40), offline_misses: 1, answered: true, ..Default::default() }),
+            ("live", ChannelState { viewer_count: Some(10), answered: true, ..Default::default() }),
+            ("offline", ChannelState { answered: true, ..Default::default() }),
+        ]
+        .into_iter()
+        .map(|(login, s)| (login.to_string(), s))
+        .collect();
+        let mut live = live_logins(&state, &watched);
+        live.sort();
+        assert_eq!(live, ["held", "live"]);
     }
 
     #[test]

@@ -23,8 +23,10 @@
 //!   fetched right behind every list's viewer counts (followed, recommended,
 //!   the next recommended page, a Home's category and search results) and
 //!   sent AHEAD of that list, so a card paints with its group instead of
-//!   gaining it a poll later. Skipped while no window is on screen; a Home
-//!   mount catches up. See `services::collaboration`.
+//!   gaining it a poll later (a slow answer follows the list instead).
+//!   Skipped while no window is on screen; coming back on screen
+//!   (`note_ui_on_screen`, which also covers a boot's hidden first paint) and a
+//!   Home mount catch up. See `services::collaboration`.
 //! - shared chats (Shared Chat outside a Stream Together group): started by
 //!   every collaborations pass, as a background pass of their own so the
 //!   per-channel Helix lookups never hold a list back; channels already in a
@@ -678,7 +680,7 @@ pub async fn load_more_recommended() -> Result<(), String> {
         s.recommended_at = Some(at);
         (s.recommended.clone(), next)
     };
-    collaborations_before_list(inner).await;
+    collaborations_before_list().await;
     emit(&inner.app, HomeUpdate::Recommended { streams: merged, cursor: next, at });
     // The next page ranks into the unified list too.
     rebuild_discover(inner).await;
@@ -727,6 +729,18 @@ pub fn note_main_window_focused() {
         refresh_other_categories(&inner).await;
         refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
     });
+}
+
+/// Something is back on screen after nothing was: the reveal after a boot's
+/// first paint, or a restore from the tray or a minimize. The collaborations
+/// pass behind each list skips its turn while nothing is, and a boot's first
+/// lists often land before the window shows, so the cards' groups are read now
+/// instead of with the next followed poll, up to a minute away. This runs off
+/// the visibility pass itself, not the window's focus, because focus can
+/// arrive before that pass has seen the window and the read would skip again.
+pub fn note_ui_on_screen() {
+    let Some(inner) = SERVICE.get().cloned() else { return };
+    tauri::async_runtime::spawn(async move { refresh_collaborations(&inner).await });
 }
 
 /// Something the Following lists read, or the Discover lists leave out,
@@ -1562,7 +1576,7 @@ async fn refresh_followed(inner: &Inner) {
                 s.followed_live_at = Some(at);
                 changed
             };
-            collaborations_before_list(inner).await;
+            collaborations_before_list().await;
             if changed {
                 emit(
                     &inner.app,
@@ -1715,7 +1729,7 @@ async fn refresh_recommended_with(
         s.recommended_at = Some(at);
         changed
     };
-    collaborations_before_list(inner).await;
+    collaborations_before_list().await;
     if changed {
         emit(&inner.app, HomeUpdate::Recommended { streams, cursor, at });
         rebuild_discover(inner).await;
@@ -1740,21 +1754,30 @@ async fn card_channel_ids(inner: &Inner) -> Vec<String> {
 /// Collaborations for the cards, right behind a list's viewer counts and ahead
 /// of the list itself, so the windows hold a card's group before they draw the
 /// card. Bounded by `COLLAB_WAIT`: a slow answer must never hold back the list
-/// (or the live notifications behind the followed one); it is dropped and the
-/// next pass fills in.
-async fn collaborations_before_list(inner: &Inner) {
-    if tokio::time::timeout(COLLAB_WAIT, refresh_collaborations(inner)).await.is_err() {
-        debug!("[HomeSnapshot] collaborations: no answer in {COLLAB_WAIT:?}, sending the list without");
+/// (or the live notifications behind the followed one), so the list goes out
+/// first and the groups follow when the answer lands. Dropping the request
+/// instead left the cards bare until the next list, a minute away.
+async fn collaborations_before_list() {
+    let Some(inner) = SERVICE.get().cloned() else { return };
+    let pass = tauri::async_runtime::spawn(async move { refresh_collaborations(&inner).await });
+    if tokio::time::timeout(COLLAB_WAIT, pass).await.is_err() {
+        debug!("[HomeSnapshot] collaborations: no answer in {COLLAB_WAIT:?}, sending the list first");
     }
 }
 
+/// One collaborations pass at a time. A pass the list stopped waiting for
+/// still lands, and a later one finishing first would then be overwritten by
+/// that older answer.
+static COLLAB_PASS: Mutex<()> = Mutex::const_new(());
+
 /// Shared Viewership for every card on screen. Skipped while no window is on
-/// screen; a Home mount catches up. A channel whose batch failed keeps the
-/// group it had.
+/// screen; `note_ui_on_screen` catches up when one returns, a Home mount when
+/// it mounts. A channel whose batch failed keeps the group it had.
 async fn refresh_collaborations(inner: &Inner) {
     if !crate::services::window_visibility::ui_exists(&inner.app) || crate::services::window_visibility::all_hidden() {
         return;
     }
+    let _pass = COLLAB_PASS.lock().await;
     spawn_shared_chats();
     let ids = card_channel_ids(inner).await;
     let found = collaboration::fetch(&ids).await;
