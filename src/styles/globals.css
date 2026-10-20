@@ -2170,13 +2170,21 @@ html[data-platform="mac"] * {
    at a time, so they are cost with no use.
 
    html/body/#root are `overflow: hidden` (see the layout reset below), so this
-   never paints a document scrollbar. */
-::-webkit-scrollbar {
+   never paints a document scrollbar.
+
+   Not on the phones: there a list shows the platform's thin overlay bar, which
+   fades in while it moves and takes no width, as on the iPhone. The phone's
+   WebView drew this 8px bar even with `scrollbar-width` set, so the scope keeps
+   it off the phone rather than out-ranking it. `:where()` adds no specificity,
+   so every desktop and Mac rule ranks against these exactly as before. */
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-::-webkit-scrollbar-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
@@ -2191,41 +2199,49 @@ html[data-platform="mac"] * {
    unrecognised selector invalidates the WHOLE list it appears in, so grouping
    them would mean one unsupported spelling silently taking the supported ones
    down with it. */
-::-webkit-scrollbar-button:single-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:single-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:single-button {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:double-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:double-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:double-button {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:start:decrement {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:start:decrement,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:start:decrement {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:end:increment {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:end:increment,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:end:increment {
   display: none;
   width: 0;
   height: 0;
 }
 
-::-webkit-scrollbar-corner {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-corner,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-track {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-track,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-track {
   background: var(--color-scrollbar-track);
 }
 
-::-webkit-scrollbar-thumb {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-thumb,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar-thumb);
   border-radius: 4px;
 }
 
-::-webkit-scrollbar-thumb:hover {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-thumb:hover,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-thumb:hover {
   background: var(--color-accent-muted);
 }
 
