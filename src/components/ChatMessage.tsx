@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, memo, useSyncExternalStore, type J
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
-import { parseMessage, type MessageSegment } from '../services/twitchChat';
+import { parseMessage, type LinkCardShape, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
@@ -37,6 +37,7 @@ import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
 import { EmoteCreditLine } from './chat/EmoteCreditLine';
 import { canCredit } from '../services/emoteCredit';
 import { openEmoteCard, useEmoteCardStore } from '../stores/emoteCardStore';
+import { chatBodyWeight } from '../utils/chatBodyWeight';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
 import { getAtmosphere } from '../services/atmospheres';
@@ -372,12 +373,45 @@ const parseTextWithEmoteSets = (text: string, emotes?: EmoteSet | null): EmoteSe
   return coalesced;
 };
 
-// Global cache for channel names and profile images to prevent re-fetching and flashing
-const channelNameCache = new Map<string, string>();
-const channelProfileImageCache = new Map<string, string>();
+/** The partner channel a Shared Chat row came from, as the core serves it
+ *  (`get_shared_chat_source`): its login, face and its own color, floored for
+ *  the theme. */
+interface SharedSource {
+  id: string;
+  login: string;
+  display_name: string;
+  avatar_url?: string;
+  color: string;
+}
+
+// One answer per source room and theme darkness, shared by every row, so a
+// burst of partner rows asks once and none flashes in later than the first.
+const sharedSourceCache = new Map<string, SharedSource | null>();
+const sharedSourceAsks = new Map<string, Promise<SharedSource | null>>();
+const sharedSourceKey = (roomId: string, dark: boolean) => `${roomId}:${dark ? 'd' : 'l'}`;
+const askSharedSource = (roomId: string, dark: boolean): Promise<SharedSource | null> => {
+  const key = sharedSourceKey(roomId, dark);
+  const asked = sharedSourceAsks.get(key);
+  if (asked) return asked;
+  const ask = loadInvoke()
+    .then((invoke) => invoke<SharedSource | null>('get_shared_chat_source', { roomId, dark }))
+    .catch((err) => {
+      Logger.warn('[ChatMessage] Shared chat source unavailable:', err);
+      return null;
+    })
+    .then((found) => {
+      // A miss is not cached, so the next row asks again (the core rate-limits).
+      if (found) sharedSourceCache.set(key, found);
+      sharedSourceAsks.delete(key);
+      return found;
+    });
+  sharedSourceAsks.set(key, ask);
+  return ask;
+};
 
 import { BackendChatMessage } from '../services/twitchChat';
 import { SevenTvAvatar } from './SevenTvAvatar';
+import { isThemeDark } from '../themes';
 
 import { Logger } from '../utils/logger';
 import { moderateWithToast, type ModRequest } from '../services/moderation';
@@ -1016,6 +1050,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     () => linkPreviewItems.filter((i) => i.trusted).map((i) => i.url),
     [linkPreviewItems],
   );
+  // The card each link's shape gets, as Rust stamped it on the link segment, so
+  // a loading card holds the right room from its first frame (null: maybe none).
+  const linkCards = useMemo(() => {
+    const cards = new Map<string, LinkCardShape | null>();
+    for (const s of parsed.segments ?? []) if (s.type === 'link') cards.set(s.url, s.card ?? null);
+    return cards;
+  }, [parsed.segments]);
 
   // Per-user nickname/color overrides. The original display name + username
   // stay in the click payload (so the profile card still opens to the real
@@ -2243,59 +2284,28 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const currentRoomId = parsed.tags.get('room-id');
   const isFromSharedChat = sourceRoomId && currentRoomId && sourceRoomId !== currentRoomId;
 
-  // State to store the fetched channel name - initialize from cache if available
-  // These hooks must be declared before any conditional returns
-  const [fetchedChannelName, setFetchedChannelName] = useState<string | null>(() => {
-    if (sourceRoomId && channelNameCache.has(sourceRoomId)) {
-      return channelNameCache.get(sourceRoomId) || null;
-    }
-    return null;
-  });
-
-  // State to store the channel profile image
-  const [channelProfileImage, setChannelProfileImage] = useState<string | null>(() => {
-    if (sourceRoomId && channelProfileImageCache.has(sourceRoomId)) {
-      return channelProfileImageCache.get(sourceRoomId) || null;
-    }
-    return null;
-  });
-
-  // Fetch source channel name and profile image if this is a shared chat message (only once per sourceRoomId)
+  // The partner channel this row came from, read once per room from the core
+  // (hooks before any conditional return). Read from the shared cache during
+  // render, so a row that mounts after the first never flashes in unmarked;
+  // only a room not known yet asks, and its answer lands here.
+  const sourceDark = isThemeDark();
+  const sourceKey = isFromSharedChat && sourceRoomId ? sharedSourceKey(sourceRoomId, sourceDark) : null;
+  const [askedSource, setAskedSource] = useState<{ key: string; source: SharedSource } | null>(null);
+  const sharedSource = sourceKey
+    ? (sharedSourceCache.get(sourceKey) ?? (askedSource?.key === sourceKey ? askedSource.source : null))
+    : null;
   useEffect(() => {
-    if (!isFromSharedChat || !sourceRoomId) return;
-
-    // Both caches were read by the state initializers (sourceRoomId is fixed
-    // for a row), so a cache hit means there is nothing to fetch.
-    if (channelProfileImageCache.has(sourceRoomId)) return;
-
-    let isMounted = true;
-
-    // Fetch the channel name and profile image
-    loadInvoke().then((invoke) => {
-      invoke<any>('get_user_by_id', { userId: sourceRoomId })
-        .then((user) => {
-          if (!isMounted) return;
-          if (user && user.login) {
-            // Store name in cache
-            channelNameCache.set(sourceRoomId, user.login);
-            setFetchedChannelName(user.login);
-
-            // Store profile image in cache
-            if (user.profile_image_url) {
-              channelProfileImageCache.set(sourceRoomId, user.profile_image_url);
-              setChannelProfileImage(user.profile_image_url);
-            }
-          }
-        })
-        .catch((err) => {
-          Logger.warn('[ChatMessage] Failed to fetch source channel info:', err);
-        });
+    if (!sourceKey || !sourceRoomId || sharedSourceCache.has(sourceKey)) return;
+    let live = true;
+    void askSharedSource(sourceRoomId, sourceDark).then((found) => {
+      if (live && found) setAskedSource({ key: sourceKey, source: found });
     });
-
     return () => {
-      isMounted = false;
+      live = false;
     };
-  }, [isFromSharedChat, sourceRoomId, fetchedChannelName, channelProfileImage]);
+  }, [sourceKey, sourceRoomId, sourceDark]);
+  const fetchedChannelName = sharedSource?.login ?? null;
+  const channelProfileImage = sharedSource?.avatar_url ?? null;
 
   // Handle bits cheers
   if (isBitsCheer) {
@@ -3269,10 +3279,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     <div
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
-        } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
+        } ${isFromSharedChat && !(isMentioned || isReplyToMe) ? 'sn-shared-row' : ''
         } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''}`}
       style={{
         ...messageStyle,
+        // A partner row's channel color (sn-shared-row's edge and wash).
+        ...(isFromSharedChat && sharedSource ? ({ '--sn-src': sharedSource.color } as React.CSSProperties) : {}),
         ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
         ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)
@@ -3498,15 +3510,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               // font size, as every event layout's badge row already does.
               style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
             >
-              {/* Shared chat channel profile image badge */}
+              {/* The partner channel's face leads the row: round, ringed in
+                  its own color (sn-shared-face), never one more badge square. */}
               {isFromSharedChat && channelProfileImage && (
-                <Tooltip content={`Chatting from ${fetchedChannelName || 'shared channel'}`} side="top">
+                <Tooltip content={`From ${sharedSource?.display_name || fetchedChannelName || 'a shared chat'}`} side="top">
                   <SevenTvAvatar
                     cosmeticsId={sourceRoomId}
                     px={Math.round((chatDesign?.font_size ?? 14) * 1.3)}
                     src={channelProfileImage}
-                    alt={`${fetchedChannelName || 'Channel'} profile`}
-                    className="sn-chat-badge block cursor-pointer hover:scale-110 transition-transform object-cover"
+                    alt={`From ${sharedSource?.display_name || fetchedChannelName || 'a shared chat'}`}
+                    className="sn-chat-badge sn-shared-face block cursor-pointer hover:scale-110 transition-transform object-cover"
                     onClick={async () => {
                       if (fetchedChannelName) {
                         try {
@@ -3544,7 +3557,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             {isAction ? (
               // ACTION messages: entire content in username color
-              <span style={{ ...usernameStyle, fontWeight: 300 }} className="break-words italic">
+              <span style={{ ...usernameStyle, fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="break-words italic">
                 <Tooltip content="Right-click to reply" side="top">
                   <span
                     style={{ fontWeight: 700 }}
@@ -3636,7 +3649,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   }
                   tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
                 />
-                <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
+                <span style={{ fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="text-textPrimary break-words">
                   {/* data-mod-body: the text the slider's Preview style strikes through. */}
                   <span data-mod-body style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
                     {' '}{isRewardEventRow && <span className="text-textSecondary">redeemed </span>}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
@@ -3693,6 +3706,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               url={it.url}
               trusted={it.trusted}
               showChip={it.trusted && !keepInlineLink}
+              expectedCard={linkCards.has(it.url) ? linkCards.get(it.url) : undefined}
             />
           ))}
         </div>

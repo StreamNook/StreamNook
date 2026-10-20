@@ -113,6 +113,53 @@ impl Order {
     }
 }
 
+/// The emote fill menu's row cap.
+pub const FILL_LIMIT: usize = 150;
+
+/// What one `match_emote_tokens` call asks, resolved from what the caller sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub profile: Profile,
+    pub order: Order,
+    pub limit: usize,
+    pub typing: bool,
+    /// The room's recent chatters follow the emotes (`chatter_rows`).
+    pub chatters: bool,
+}
+
+impl Request {
+    /// `profile` "fill" is the emote fill menu, asked the same way by the
+    /// desktop's colon list and both phones' suggestion strip, so one word gets
+    /// one list everywhere: ranked by closeness (`Profile::Search`), Twitch
+    /// first, as the viewer types, with the room's chatters after the emotes for
+    /// a plain word (a `:` word names none). "cycle" and "search" keep the
+    /// caller's own order and typing.
+    pub fn resolve(profile: Option<&str>, order: Option<&str>, limit: Option<usize>, typing: Option<bool>) -> Self {
+        if profile == Some("fill") {
+            return Request {
+                profile: Profile::Search,
+                order: Order::TwitchFirst,
+                limit: limit.unwrap_or(FILL_LIMIT),
+                typing: true,
+                chatters: true,
+            };
+        }
+        let profile = match profile {
+            Some("search") => Profile::Search,
+            _ => Profile::Cycle,
+        };
+        let order = match order {
+            Some("twitch_first") => Order::TwitchFirst,
+            _ => Order::Default,
+        };
+        let limit = limit.unwrap_or(match profile {
+            Profile::Cycle => 50,
+            Profile::Search => 60,
+        });
+        Request { profile, order, limit, typing: typing.unwrap_or(false), chatters: profile == Profile::Cycle }
+    }
+}
+
 // "Contains" instead of "starts with", from chat_input.emote_tab_complete_match_mode.
 static CONTAINS_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -166,6 +213,23 @@ pub fn refresh_settings(settings: &Settings) {
 pub const MAX_CHATTERS: usize = 5;
 /// The Tab cycle's and the phone strip's row cap, chatters included.
 pub const CYCLE_CAP: usize = 50;
+
+/// While the viewer types, the fewest characters (a leading colon aside) that
+/// get the full ranked list; a shorter word offers only an emote of exactly
+/// that name. One letter is enough: the ranking already puts exact names and
+/// prefixes first, ahead of names that only contain the letter.
+pub const MIN_PREFIX_CHARS: usize = 1;
+
+/// Whether `word` is under `MIN_PREFIX_CHARS` once a colon trigger is set
+/// aside. An `@` word names a chatter and is not short in this sense.
+pub fn is_short_word(word: &str) -> bool {
+    if word.starts_with('@') {
+        return false;
+    }
+    let rest = word.strip_prefix(':').unwrap_or(word);
+    let rest = rest.strip_suffix(':').unwrap_or(rest);
+    rest.chars().count() < MIN_PREFIX_CHARS
+}
 
 /// What a chatter row inserts: the display name when it differs from the
 /// login only by case, else the login (a localized display name mentions
@@ -380,8 +444,12 @@ pub struct Row {
 }
 
 /// How many emotes matched per provider, counted before the row cap, so the
-/// emote menu's tabs can say how many each one holds.
+/// emote menu's tabs can say how many each one holds. `favorites` counts the
+/// matches that are favorites, whatever their provider.
 pub type ProviderCounts = std::collections::BTreeMap<&'static str, usize>;
+
+/// The `ProviderCounts` key for matches that are favorites.
+pub const FAVORITES_COUNT: &str = "favorites";
 
 pub struct Collector<'a> {
     ctx: Context<'a>,
@@ -398,6 +466,9 @@ pub struct Collector<'a> {
     inert: bool,
     /// Offer FFZ subscriber effects the viewer cannot use, marked locked.
     include_locked: bool,
+    /// A word under `MIN_PREFIX_CHARS` typed while suggestions follow the
+    /// typing: only an emote of exactly that name matches.
+    exact_only: bool,
     hits: [Vec<Hit>; Slot::COUNT],
 }
 
@@ -434,8 +505,18 @@ impl<'a> Collector<'a> {
             browse,
             inert,
             include_locked: false,
+            exact_only: false,
             hits: Default::default(),
         }
+    }
+
+    /// The caller asks as the viewer types (the phones' suggestion strip, the
+    /// desktop's colon list), not on Tab or in the emote menu: a word under
+    /// `MIN_PREFIX_CHARS` (one letter) then matches only an emote of exactly
+    /// that name.
+    pub fn typing(mut self, on: bool) -> Self {
+        self.exact_only = on && !self.browse && !self.needle.is_empty() && is_short_word(&self.needle);
+        self
     }
 
     /// The emote menu shows FFZ subscriber effects greyed out rather than
@@ -449,6 +530,10 @@ impl<'a> Collector<'a> {
     fn kind_of(&self, name: &str) -> Option<(Kind, Option<usize>, bool)> {
         if self.browse {
             return Some((Kind::Prefix, None, false));
+        }
+        if self.exact_only {
+            // Exact name, exact case: a typed "d" is a word, not the emote "D".
+            return (name == self.needle).then_some((Kind::ExactCase, Some(0), true));
         }
         let q = self.needle_lower.as_str();
         if name.is_ascii() && q.is_ascii() && self.needle.len() == q.len() {
@@ -639,6 +724,10 @@ impl<'a> Collector<'a> {
         let mut counts = ProviderCounts::new();
         for r in &merged {
             *counts.entry(r.hit.slot.wire()).or_default() += 1;
+            // The emote menu's Favorites tab counts its hits before the cap too.
+            if r.hit.favorite {
+                *counts.entry(FAVORITES_COUNT).or_default() += 1;
+            }
         }
         let cmp = |a: &Ranked, b: &Ranked| compare(profile, browse, a, b);
         if browse {
@@ -969,6 +1058,44 @@ mod tests {
         rows.iter().map(|r| r.name.as_str()).collect()
     }
 
+    /// The emote fill menu gives a phone's word and the desktop's colon form of
+    /// it the same rows, for every word in the fixture the TypeScript and Swift
+    /// tests read too.
+    #[test]
+    fn fill_menu_is_one_answer_for_every_app() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/utils/emoteFill.fixture.json")).expect("fixture");
+        let req = Request::resolve(Some("fill"), None, None, None);
+        assert_eq!((req.profile, req.order, req.limit, req.typing), (Profile::Search, Order::TwitchFirst, FILL_LIMIT, true));
+        // What the caller sends besides the profile does not change the question.
+        assert_eq!(Request::resolve(Some("fill"), Some("default"), None, Some(false)), req);
+        let f = Fixture::new();
+        let run = |query: &str| -> Vec<String> {
+            let mut c = Collector::new(
+                Spec { query, profile: req.profile, order: req.order, contains: false, limit: req.limit },
+                Context {
+                    channel_id: Some("42"),
+                    favorites: &f.favorites,
+                    seventv_globals: &f.globals,
+                    ffz_subwoofer: false,
+                },
+            )
+            .typing(req.typing);
+            c.offer_set(&set());
+            c.finish().0.into_iter().map(|r| r.name).collect()
+        };
+        let words = fixture["words"].as_array().expect("words");
+        assert!(!words.is_empty());
+        for word in words {
+            let word = word.as_str().expect("word");
+            assert_eq!(run(word), run(&format!(":{word}")), "{word}");
+        }
+        assert!(!run("lo").is_empty());
+        // One letter gets the full list, not only an emote named exactly that.
+        let one = fixture["oneLetter"].as_str().expect("oneLetter");
+        assert!(run(one).len() > 1, "{one}");
+    }
+
     #[test]
     fn cycle_keeps_provider_tier_then_name() {
         let f = Fixture::new();
@@ -1260,6 +1387,7 @@ mod tests {
         assert_eq!(counts.get("7tv"), Some(&2));
         assert_eq!(counts.get("bttv"), Some(&1));
         assert_eq!(counts.get("ffz"), Some(&1));
+        assert_eq!(counts.get(FAVORITES_COUNT), Some(&1), "favorites among the matches, before the cap");
         let pogu = rows.iter().find(|r| r.name == "PogU").unwrap();
         assert!(pogu.favorite);
         assert_eq!(pogu.owner_name.as_deref(), Some("Alpha"));
@@ -1418,6 +1546,54 @@ mod tests {
         assert_eq!(rows[2].insert_text.as_deref(), Some("lunar"));
         assert_eq!(rows[0].insert_text.as_deref(), Some("Lulu"));
         assert_eq!(rows[2].login.as_deref(), Some("lunar"));
+    }
+
+    /// A channel with single-character emote names on every provider.
+    fn short_names() -> EmoteSet {
+        let mut s = EmoteSet::new();
+        s.seven_tv = vec![
+            emote(EmoteProvider::SevenTV, "s0", "0", None, None),
+            emote(EmoteProvider::SevenTV, "s00", "00", None, None),
+            emote(EmoteProvider::SevenTV, "s0h", "0head", None, None),
+            emote(EmoteProvider::SevenTV, "sD", "D", None, None),
+        ];
+        s.bttv = vec![emote(EmoteProvider::BTTV, "bB", "B", None, None)];
+        s.ffz = vec![emote(EmoteProvider::FFZ, "fF", "F", None, None)];
+        s.twitch = vec![emote(EmoteProvider::Twitch, "tT", "T", Some("subscriptions"), Some("42"))];
+        s
+    }
+
+    fn short_run(query: &str, profile: Profile, typing: bool) -> Vec<String> {
+        let (favorites, globals) = (HashSet::new(), HashSet::new());
+        let mut c = Collector::new(
+            Spec { query, profile, order: Order::Default, contains: false, limit: 50 },
+            Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        )
+        .typing(typing);
+        c.offer_set(&short_names());
+        c.finish().0.into_iter().map(|r| r.name).collect()
+    }
+
+    #[test]
+    fn one_typed_character_gets_the_full_list() {
+        // One letter typed in passing answers as Tab asked on purpose does.
+        for q in ["0", ":0", "D", "d", "B", "F", "T"] {
+            assert_eq!(short_run(q, Profile::Cycle, true), short_run(q, Profile::Cycle, false), "{q}");
+        }
+        assert_eq!(short_run("0", Profile::Cycle, true), vec!["0", "00", "0head"]);
+        // The fill ranking still leads with the exact name, then the prefixes.
+        assert_eq!(short_run("0", Profile::Search, true)[..3], ["0", "00", "0head"]);
+    }
+
+    #[test]
+    fn short_words_are_counted_without_their_colon() {
+        assert!(!is_short_word("0"));
+        assert!(!is_short_word(":0"));
+        assert!(!is_short_word(":0:"));
+        assert!(is_short_word(":"));
+        assert!(is_short_word(""));
+        // A mention is a chatter lookup, not an emote word.
+        assert!(!is_short_word("@"));
     }
 
     #[test]

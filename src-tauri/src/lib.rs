@@ -39,18 +39,21 @@ use commands::moderation_tools::{
     get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
     update_channel_info, upload_image,
 };
+use commands::stream_manager::{
+    check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
+};
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
     badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
-    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
+    emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, shared_chat::*, fonts::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -84,9 +87,18 @@ struct PendingWatchLink(Mutex<Option<String>>);
 
 /// Read a `streamnook://` (or streamnook.app) share link into the stream key the
 /// frontend's `startStream` takes: a bare login for Twitch, `provider:channel`
-/// otherwise. Building and parsing both live in `services::share_link`.
+/// otherwise. Building and parsing both live in `services::share_link`, which
+/// also refuses a platform this build cannot watch.
 fn parse_watch_link(url: &tauri::Url) -> Option<String> {
-    services::share_link::parse(url).map(|link| link.stream_key())
+    services::share_link::openable(url).map(|link| link.stream_key())
+}
+
+/// The stream key a `streamnook://` or streamnook.app link names, read as the
+/// deep-link handler reads it (`parse_watch_link`); None when it names nothing
+/// this build can watch. The iPhone hands the links it is opened with here.
+#[tauri::command]
+fn watch_link_key(url: String) -> Option<String> {
+    tauri::Url::parse(&url).ok().as_ref().and_then(parse_watch_link)
 }
 
 /// The link a share button copies for a stream. `channel` is the row's
@@ -393,6 +405,8 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.adopt_first_run_look_once();
     settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
+    settings.map_legacy_event_keys();
+    settings.retire_oled_v2();
     Ok(settings)
 }
 
@@ -639,6 +653,7 @@ pub(crate) fn flush_debounced_stores() {
     let _ = services::universal_cache_service::flush_manifest_now();
     let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
     let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::mention_inbox::flush_now();
     let _ = services::vod_progress_service::flush_now();
     #[cfg(desktop)]
     let _ = commands::popout_window::flush_now();
@@ -867,8 +882,10 @@ pub fn run() {
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
-    #[cfg(desktop)]
-    services::mention_notify::refresh(&settings);
+    services::mention_inbox::refresh(&settings);
+    // Mentions while you're away: told once at launch when on, then pulled.
+    services::mention_watch::client::seed(&settings);
+    services::whisper_inbox::refresh_settings(&settings);
     services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
@@ -986,6 +1003,9 @@ pub fn run() {
     // services::cast_session.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(cast_plugin::init());
+    // Android mention notifications, posted from Rust while the page sleeps.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_notify::mention_plugin());
     // Linux: tells every page, before its first paint, who draws the window
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
@@ -1054,6 +1074,11 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(dir) = app.path().app_data_dir() {
                 services::app_paths::set_base(dir);
+                // Before anything else writes there: what this launch found
+                // tells an update from a restore (services::install_marker).
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    services::install_marker::observe(&data);
+                }
             }
             // iOS backs up Application Support, so every cache goes under the
             // shell's Library/Caches instead; caches an older build left in
@@ -1093,10 +1118,21 @@ pub fn run() {
             // settings.json now that the path resolves and push the values into
             // the stores that were constructed from the defaults.
             #[cfg(mobile)]
-            if let Ok(loaded) = load_settings_from_file() {
+            if let Ok(mut loaded) = load_settings_from_file() {
+                // Settings restored from another install (a backup, a phone
+                // transfer) run the setup again rather than skip it.
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    if services::install_marker::reconcile(&data, &mut loaded) {
+                        if let Err(e) = commands::settings::write_settings_to_disk_sync(&loaded) {
+                            log::warn!("[Setup] could not save the install's setup state: {e}");
+                        }
+                    }
+                }
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
+                // What the go-live push registration compares each save against.
+                services::push_alerts::server::seed(&loaded);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1468,9 +1504,9 @@ pub fn run() {
             // cards. Replaces three JS timers per mounted chat and a 2.5 s poll
             // per open card. See services::channel_state.
             services::channel_state::start(app_handle.clone());
-            // Live line for the chat dock's Kick / YouTube / TikTok chats;
-            // Twitch ones ride channel_state. See services::chat_dock_live.
-            #[cfg(desktop)]
+            // Live line for the chat dock's (desktop) and the phone chats'
+            // Kick / YouTube / TikTok rooms; Twitch ones ride channel_state.
+            // See services::chat_dock_live.
             services::chat_dock_live::start(app_handle.clone());
             // Minimized-window signal: the page cannot see it (native occlusion
             // detection is off), Rust can. See services::window_visibility.
@@ -1654,6 +1690,7 @@ pub fn run() {
             fetch_exchange_rates,
             get_window_size,
             take_pending_watch_link,
+            watch_link_key,
             share_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
@@ -1667,16 +1704,26 @@ pub fn run() {
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "android")]
+            share_settings_file,
+            #[cfg(target_os = "android")]
+            import_settings_text,
             #[cfg(target_os = "ios")]
             services::ios_sheet::open_drops_sheet,
             #[cfg(target_os = "ios")]
             services::ios_sheet::sheet_redirected,
             #[cfg(target_os = "ios")]
             services::ios_sheet::sheet_closed,
-            #[cfg(target_os = "android")]
-            android_notify::push_register,
-            #[cfg(target_os = "android")]
-            android_notify::push_unregister,
+            #[cfg(mobile)]
+            services::push_alerts::server::push_register,
+            #[cfg(mobile)]
+            services::push_alerts::server::push_unregister,
+            #[cfg(target_os = "ios")]
+            services::push_alerts::server::push_set_apns_device,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_check,
+            #[cfg(target_os = "ios")]
+            services::live_poll::poll::live_poll_seen,
             #[cfg(target_os = "android")]
             cast_plugin::cast_get_state,
             #[cfg(target_os = "android")]
@@ -1706,6 +1753,10 @@ pub fn run() {
             commands::notification_mirror::open_mirrored_notification,
             #[cfg(desktop)]
             commands::notification_mirror::test_system_notification,
+            #[cfg(desktop)]
+            commands::notification_mirror::system_notification_permission,
+            #[cfg(desktop)]
+            commands::notification_mirror::open_system_notification_settings,
             #[cfg(desktop)]
             services::points_notify::test_points_notification,
             #[cfg(desktop)]
@@ -1764,6 +1815,13 @@ pub fn run() {
             create_clip,
             get_live_broadcast,
             create_vod_clip,
+            clip_create,
+            channel_media,
+            vod_replay_begin,
+            vod_replay_tick,
+            vod_replay_stop,
+            my_clips_list,
+            my_clips_forget,
             begin_clip_edit,
             finalize_clip,
             get_clip_render_status,
@@ -1824,6 +1882,8 @@ pub fn run() {
             get_category_info,
             get_user_by_id,
             get_user_by_login,
+            get_shared_chat_source,
+            get_custom_font,
             get_channel_moderators,
             get_channel_vips,
             follow_channel,
@@ -1849,7 +1909,6 @@ pub fn run() {
             get_games_by_ids,
             get_videos_by_game,
             get_user_videos,
-            get_vod_comments,
             send_whisper,
             start_whisper_listener,
             get_whisper_history,
@@ -2064,6 +2123,12 @@ pub fn run() {
             create_stream_marker,
             warn_chat_user,
             update_shield_mode,
+            // Stream manager
+            get_stream_manager,
+            check_stream_info,
+            stream_manager_act,
+            get_reward_queue,
+            search_raid_targets,
             // Discord commands (desktop-only — Discord Rich Presence)
             #[cfg(desktop)]
             connect_discord,
@@ -2100,6 +2165,8 @@ pub fn run() {
             lift_custom_theme,
             search_settings,
             get_changed_settings,
+            get_alert_types,
+            services::client_capabilities::get_client_capabilities,
             list_settings_backups,
             restore_settings_backup,
             get_settings_dir,
@@ -2156,6 +2223,7 @@ pub fn run() {
             fetch_badge_metadata,
             // Link preview commands
             fetch_link_preview,
+            link_preview_expected,
             // Cache commands
             save_emote_by_id,
             load_emote_by_id,
@@ -2247,6 +2315,12 @@ pub fn run() {
             // Channel Points Rewards commands
             get_channel_rewards,
             get_cached_channel_rewards,
+            get_channel_prediction,
+            prediction_bet,
+            predict,
+            watch_channel_poll_view,
+            chat_top_stack,
+            lift_theme_palette,
             redeem_channel_reward,
             redeem_reward,
             send_highlighted_message,
@@ -2295,6 +2369,18 @@ pub fn run() {
             whisper_send,
             whisper_import,
             whisper_refresh,
+            whisper_list,
+            whisper_thread,
+            // Mentions inbox
+            get_mention_inbox,
+            get_inbox_view,
+            mark_mentions_read,
+            remove_mention,
+            clear_mention_inbox,
+            open_mention,
+            set_visible_mention_rooms,
+            mention_watch_pull,
+            mention_push_arrived,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
@@ -2334,6 +2420,9 @@ pub fn run() {
             // Main-window watch session
             watch_start,
             watch_stop,
+            sleep_timer_start,
+            sleep_timer_cancel,
+            sleep_timer_state,
             watch_open_room,
             watch_session_start,
             watch_session_stop,
@@ -2467,9 +2556,19 @@ pub fn run() {
             #[cfg(mobile)]
             commands::chat_tabs::chat_tabs_set_active,
             #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_connect,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_park,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_keep,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_visible,
+            #[cfg(mobile)]
             commands::chat_tabs::chat_room_from_link,
             #[cfg(mobile)]
             commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_picker,
             #[cfg(mobile)]
             commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
@@ -2478,6 +2577,7 @@ pub fn run() {
             watch_channel_state,
             unwatch_channel_state,
             get_channel_state,
+            wallet_split_layout,
             submit_media_frame,
             sample_media_glow,
             get_window_flags,
@@ -2548,6 +2648,13 @@ pub fn run() {
             services::chat_send_limiter::chat_send_acquire,
             services::chat_send_limiter::chat_send_budget,
             services::chat_send_limiter::chat_send_paced,
+            services::chat_warning::acknowledge_chat_warning,
+            services::mod_history::get_chatter_mod_history,
+            services::chatter_card::get_chatter_card_tools,
+            services::chatter_card::set_card_timeout_length,
+            services::touch_mod_slider::get_touch_mod_slider,
+            services::touch_mod_slider::edit_mod_slider_timeouts,
+            services::room_mod_log::get_room_mod_log,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

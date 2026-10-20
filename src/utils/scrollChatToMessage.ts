@@ -21,6 +21,34 @@ export interface ScrollToMessageOptions {
   align?: 'start' | 'center' | 'end';
   /** Smooth glide vs instant jump. Default true. */
   smooth?: boolean;
+  /** Flash the row once it lands (~2 s), so it is findable by eye. */
+  flash?: boolean;
+}
+
+/** How long a jumped-to row flashes. Matches the CSS animation. */
+export const JUMP_FLASH_MS = 2000;
+
+/**
+ * Flash a row by its message id.
+ *
+ * An attribute rather than a class or a prop: the row's own highlight classes
+ * belong to ChatMessage (a mention already wears its mention color, which a
+ * jump target usually is), and React never touches an attribute it does not
+ * render, so a re-render mid-flash cannot cut it short. The flash itself is a
+ * pseudo-element animating opacity only (mobile.css), so it never repaints the
+ * row's text.
+ */
+export function flashChatMessage(messageId: string): void {
+  const sel = `[data-message-id="${CSS.escape(messageId)}"]`;
+  const el = document.querySelector<HTMLElement>(sel);
+  if (!el) return;
+  el.removeAttribute('data-sn-flash');
+  // Restart the animation when the same row is flashed twice in a row.
+  void el.offsetWidth;
+  el.setAttribute('data-sn-flash', '');
+  window.setTimeout(() => {
+    document.querySelector<HTMLElement>(sel)?.removeAttribute('data-sn-flash');
+  }, JUMP_FLASH_MS + 100);
 }
 
 function targetFor(
@@ -59,7 +87,7 @@ export function scrollChatToMessage(
   messageId: string,
   options?: ScrollToMessageOptions,
 ): boolean {
-  const { align = 'center', smooth = true } = options ?? {};
+  const { align = 'center', smooth = true, flash = false } = options ?? {};
 
   const el = document.querySelector<HTMLElement>(
     `[data-message-id="${CSS.escape(messageId)}"]`,
@@ -71,6 +99,7 @@ export function scrollChatToMessage(
 
   const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto';
   container.scrollTo({ top: targetFor(container, el, align), behavior });
+  if (flash) flashChatMessage(messageId);
 
   // One correction pass, and it is not optional on mobile.
   //

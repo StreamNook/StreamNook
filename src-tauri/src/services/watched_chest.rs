@@ -21,7 +21,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 
-use log::{debug, warn};
+use log::{info, warn};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -100,7 +100,7 @@ pub fn offer(app: &AppHandle, channel_id: String, claim_id: String) {
         }
         let name = login.unwrap_or_default();
         match claim(&app, &channel_id, &name, &claim_id).await {
-            Ok(r) => debug!("[WatchedChest] collected {} on {channel_id}", r.points_earned),
+            Ok(r) => info!("[WatchedChest] collected {} on {channel_id}", r.points_earned),
             Err(e) => warn!("[WatchedChest] claim on {channel_id} failed: {e}"),
         }
     });
@@ -129,6 +129,10 @@ pub async fn claim(
     };
     IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).remove(claim_id);
     let result = result?;
+    crate::services::member_stats::count(
+        crate::services::member_stats::Stat::ChannelPointsCollected,
+        i64::from(result.points_earned),
+    );
     crate::services::channel_state::points_gained(
         channel_id,
         i64::from(result.points_earned),

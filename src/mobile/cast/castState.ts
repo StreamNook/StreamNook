@@ -18,6 +18,8 @@ export interface CastTarget {
 }
 
 export interface CastState {
+  /** Whether this build offers Cast and mirroring at all (Rust `cast_session::OFFERED`). */
+  offered: boolean;
   available: boolean;
   phase: 'idle' | 'connecting' | 'casting';
   device: string | null;
@@ -28,6 +30,7 @@ export interface CastState {
 }
 
 const IDLE: CastState = {
+  offered: false,
   available: false,
   phase: 'idle',
   device: null,

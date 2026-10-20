@@ -1,819 +1,419 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { Trophy, Users, Hourglass, PartyPopper, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { Trophy, Users, CheckCircle2 } from 'lucide-react';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
-import { OverlayBanner } from './chat/OverlayBanner';
+import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat/OverlayBanner';
+import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useAppStore } from '../stores/AppStore';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { buildEmoteNameMap, EmoteText } from '../utils/emoteText';
-
+import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
-interface PredictionOutcome {
-  id: string;
-  title: string;
-  color: string;
-  total_points: number;
-  total_users: number;
-}
+import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
+import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultView } from '../types';
 
-interface PredictionData {
-  channel_id: string;
-  prediction_id: string;
-  title: string;
-  outcomes: PredictionOutcome[];
-  prediction_window_seconds: number;
-  created_at: string;
-  status: string;
-  winning_outcome_id?: string;
-}
+/**
+ * The prediction card. Rust (services/predictions.rs) decides everything on
+ * it: phase, percents, ratios, the viewer's stake, the result and every line
+ * of copy. This view only draws the latest `PredictionView` and keeps the UI
+ * state that is the viewer's alone: folded or open, the side being looked
+ * at, the amount being typed, and whether the confirm is showing.
+ */
 
 interface PredictionOverlayProps {
   channelId?: string;
   channelLogin?: string;
+  /** Its slot in the top-of-chat stack, when it sits in one. */
+  stack?: StackCardControl;
 }
 
-const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) => {
-  const [activePrediction, setActivePrediction] = useState<PredictionData | null>(null);
-  const [selectedOutcome, setSelectedOutcome] = useState<string | null>(null);
-  const [betAmount, setBetAmount] = useState<number>(10);
-  const [betAmountInput, setBetAmountInput] = useState<string>('10');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [timeRemaining, setTimeRemaining] = useState<number>(0);
-  const [isLocked, setIsLocked] = useState(false);
-  const [channelPoints, setChannelPoints] = useState<number | null>(null);
-  const [isExpanded, setIsExpanded] = useState(true);
-  // The viewer's own stake in the active prediction, or null when they have
-  // none THAT WE KNOW OF. Twitch does not replay a stake placed before this
-  // app was listening, so null means "unknown or none", never "definitely
-  // zero", and the UI must not claim otherwise.
-  const [selfStake, setSelfStake] = useState<{ outcomeId: string; points: number } | null>(null);
-  const [resolutionState, setResolutionState] = useState<'none' | 'pending' | 'win' | 'loss' | 'refund' | 'announced'>('none');
-  const [winningOutcomeId, setWinningOutcomeId] = useState<string | null>(null);
-  // Custom channel points icon URL (e.g., custom lips icon for Hamlinz's "Kisses")
-  const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
+/** How long to wait after the last side or amount change before asking Rust. */
+const BET_ASK_DEBOUNCE_MS = 150;
 
-  // Refs to track latest values for use in event listeners (avoids stale closures)
-  const selfStakeRef = useRef(selfStake);
-  const selectedOutcomeRef = useRef(selectedOutcome);
+// Each side keeps its color in its pick ring and its share bar. The words sit
+// on the card itself, never on the color, so they read on every theme.
+const SIDE_STYLES: Record<string, { ring: string; dot: string; bar: string }> = {
+  blue: { ring: 'border-highlight-blue', dot: 'bg-highlight-blue', bar: 'bg-highlight-blue' },
+  pink: { ring: 'border-highlight-pink', dot: 'bg-highlight-pink', bar: 'bg-highlight-pink' },
+};
+const OTHER_SIDE_STYLE = { ring: 'border-highlight-purple', dot: 'bg-highlight-purple', bar: 'bg-highlight-purple' };
 
-  // Keep refs in sync with state
-  useEffect(() => {
-    selfStakeRef.current = selfStake;
-  }, [selfStake]);
+const RESULT_STYLES: Record<ResultView['tone'], string> = {
+  won: 'bg-success/20 border-success/50 text-success',
+  lost: 'bg-error/20 border-error/50 text-error',
+  refunded: 'bg-info/20 border-info/50 text-info',
+  ended: 'bg-transparent border-accent-on-surface/60 text-accent-on-surface',
+};
 
-  useEffect(() => {
-    selectedOutcomeRef.current = selectedOutcome;
-  }, [selectedOutcome]);
-
+const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlayProps) => {
   const { addToast, currentStream } = useAppStore();
-
-  // Get current channel ID from props or from currentStream
   const currentChannelId = channelId || currentStream?.user_id;
   const currentChannelLogin = channelLogin || currentStream?.user_login;
 
-  // Outcome titles are plain GQL/PubSub text with no emote ranges, so match
-  // emote names against the channel's set the same way pinned messages do.
+  // Rust's card, tagged with the channel it belongs to so a channel switch
+  // shows nothing until the new channel's card arrives.
+  const [card, setCard] = useState<{ channelId: string; view: PredictionView | null } | null>(null);
+  const view = card && card.channelId === currentChannelId ? card.view : null;
+  const [expandedHere, setExpandedHere] = useState(true);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [amountInput, setAmountInput] = useState('10');
+  // Rust's answer about a bet, tagged with the prediction and side it was for,
+  // so switching sides never shows the other side's button or confirm.
+  const [betAnswer, setBetAnswer] = useState<{ key: string; bet: BetView | null } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  // Why the last placement was refused, for the bet it was asked about: it
+  // shows as one line in the card and goes once the side or amount changes.
+  const [failure, setFailure] = useState<{ key: string; line: string } | null>(null);
+
+  // Outcome titles are plain text with no emote ranges, so match emote names
+  // against the channel's set the same way pinned messages do.
   const channelEmotes = useChannelEmotes(currentChannelLogin, currentChannelId, 'twitch');
   const emoteMap = useMemo(() => buildEmoteNameMap(channelEmotes), [channelEmotes]);
 
-  // Debug log on mount and when channel changes
+  // Follow Rust's card for this channel: the getter covers a prediction
+  // already running, the push every change after. A push that lands while the
+  // getter is still out is newer, so the getter's answer must not replace it.
   useEffect(() => {
-    Logger.debug('[Prediction] PredictionOverlay mounted/updated');
-    Logger.debug('[Prediction] Watching for channel:', {
-      channelId: currentChannelId || 'NOT SET',
-      channelLogin: currentChannelLogin || 'NOT SET',
-      fromProps: { channelId, channelLogin },
-      fromStore: { user_id: currentStream?.user_id, user_login: currentStream?.user_login }
+    if (!currentChannelId) return;
+    let live = true;
+    let pushed = false;
+    const unlisten = listen<PredictionPush>('prediction-state', (event) => {
+      if (event.payload.channel_id !== currentChannelId) return;
+      pushed = true;
+      setCard({ channelId: currentChannelId, view: event.payload.view });
     });
-  }, [currentChannelId, currentChannelLogin, channelId, channelLogin, currentStream]);
-
-  // Fetch active prediction on mount/channel change (for late-joiners)
-  useEffect(() => {
-    const fetchActivePrediction = async () => {
-      if (!currentChannelLogin) return;
-      
-      Logger.debug('[Prediction] Checking for active prediction on channel:', currentChannelLogin);
-      
-      try {
-        const result = await invoke<PredictionData | null>('get_active_prediction', {
-          channelLogin: currentChannelLogin
-        });
-        
-        if (result) {
-          Logger.debug('[Prediction] Found active prediction on mount:', result);
-          
-          // Only set if we don't already have this prediction active
-          if (!activePrediction || activePrediction.prediction_id !== result.prediction_id) {
-            setActivePrediction(result);
-            
-            const isFinished = result.status === 'LOCKED' || result.status === 'RESOLVED' || result.status === 'RESOLVE_PENDING';
-            setIsLocked(isFinished);
-            setIsExpanded(true);
-            
-            // Handle specific closed states immediately on mount
-            if (result.status === 'RESOLVED') {
-                setResolutionState('announced'); // User late-joined, we don't know their bet, just announce it
-                setWinningOutcomeId(result.winning_outcome_id || null);
-                
-                // Keep the resolution banner visible briefly then dismiss it (similar to pubsub behavior)
-                setTimeout(() => {
-                    setActivePrediction(null);
-                    setSelectedOutcome(null);
-                    setSelfStake(null);
-                    setResolutionState('none');
-                    setWinningOutcomeId(null);
-                }, 5000);
-            } else if (result.status === 'RESOLVE_PENDING') {
-                setResolutionState('pending');
-            } else {
-                setResolutionState('none');
-            }
-
-            // Auto-select first outcome if prediction is still active (not locked)
-            setSelectedOutcome(result.status === 'ACTIVE' && result.outcomes?.length > 0 ? result.outcomes[0].id : null);
-            setSelfStake(null);
-            
-            // Calculate remaining time if prediction is still ACTIVE
-            if (result.status === 'ACTIVE' && result.created_at) {
-              const createdAt = new Date(result.created_at).getTime();
-              const elapsed = Math.floor((Date.now() - createdAt) / 1000);
-              const remaining = Math.max(0, result.prediction_window_seconds - elapsed);
-              setTimeRemaining(remaining);
-              
-              if (remaining <= 0) {
-                setIsLocked(true);
-              }
-            } else {
-              setTimeRemaining(0);
-            }
-          }
-        } else {
-          Logger.debug('[Prediction] No active prediction found on channel');
+    invoke<PredictionPush>('get_channel_prediction', {
+      channelId: currentChannelId,
+      channelLogin: currentChannelLogin,
+    })
+      .then((push) => {
+        if (live && !pushed && push.channel_id === currentChannelId) {
+          setCard({ channelId: currentChannelId, view: push.view });
         }
-      } catch (err) {
-        Logger.warn('[Prediction] Failed to fetch active prediction:', err);
-      }
-    };
-    
-    // Reset state when channel changes
-    setActivePrediction(null);
-    setSelectedOutcome(null);
-    setSelfStake(null);
-    setResolutionState('none');
-    setWinningOutcomeId(null);
-    setChannelPoints(null);
-    setCustomPointsIconUrl(null);
-    
-    // Fetch active prediction for the new channel
-    fetchActivePrediction();
-  }, [currentChannelLogin]);
-
-  // Fetch channel points when prediction becomes active
-  const fetchChannelPoints = useCallback(async () => {
-    Logger.debug('[Prediction] fetchChannelPoints called with:', { currentChannelLogin, currentChannelId });
-    
-    // First try by channel login if available
-    if (currentChannelLogin) {
-      Logger.debug('[Prediction] Fetching channel points by login:', currentChannelLogin);
-      
-      try {
-        const result = await invoke<any>('get_channel_points_for_channel', {
-          channelLogin: currentChannelLogin
-        });
-        
-        Logger.debug('[Prediction] Channel points result:', JSON.stringify(result, null, 2));
-        
-        // Use the correct path: data.user.channel.self.communityPoints.balance
-        const balance = result?.data?.user?.channel?.self?.communityPoints?.balance;
-        
-        // Extract custom points icon URL
-        const customIconUrl = result?.data?.user?.channel?.communityPointsSettings?.image?.url;
-        if (customIconUrl) {
-          Logger.debug('[Prediction] Got custom points icon:', customIconUrl);
-          setCustomPointsIconUrl(customIconUrl);
-        } else {
-          setCustomPointsIconUrl(null);
-        }
-        
-        if (typeof balance === 'number') {
-          Logger.debug('[Prediction] Setting channel points to:', balance);
-          setChannelPoints(balance);
-          return; // Success!
-        }
-      } catch (err) {
-        Logger.error('[Prediction] Failed to fetch by login:', err);
-      }
-    }
-    
-    // Fallback: try by channel ID
-    if (currentChannelId) {
-      Logger.debug('[Prediction] Trying fallback: get_channel_points_balance with ID:', currentChannelId);
-      
-      try {
-        const result = await invoke<any>('get_channel_points_balance', {
-          channelId: currentChannelId
-        });
-        
-        Logger.debug('[Prediction] get_channel_points_balance result:', result);
-        
-        const balance = result?.balance || result?.points;
-        if (typeof balance === 'number') {
-          Logger.debug('[Prediction] Setting channel points from fallback:', balance);
-          setChannelPoints(balance);
-          return;
-        }
-      } catch (err) {
-        Logger.error('[Prediction] Fallback also failed:', err);
-      }
-    }
-    
-    Logger.debug('[Prediction] Could not fetch channel points with any method');
-  }, [currentChannelLogin, currentChannelId]);
-
-  // Listen for channel points updates from backend events
-  useEffect(() => {
-    // Listen for points spent (includes new balance)
-    const unlistenSpent = listen<{ channel_id: string; points: number; balance: number }>('channel-points-spent', (event) => {
-      if (currentChannelId && event.payload.channel_id === currentChannelId) {
-        Logger.debug('[Prediction] Points spent event - new balance:', event.payload.balance);
-        setChannelPoints(event.payload.balance);
-      }
-    });
-
-    // Listen for points earned (includes new balance)
-    const unlistenEarned = listen<{ channel_id: string; points: number; balance: number }>('channel-points-earned', (event) => {
-      if (currentChannelId && event.payload.channel_id === currentChannelId) {
-        Logger.debug('[Prediction] Points earned event - new balance:', event.payload.balance);
-        setChannelPoints(event.payload.balance);
-      }
-    });
-
+      })
+      .catch((err) => Logger.debug('[Prediction] First read failed:', err));
     return () => {
-      // Tauri's unlisten throws synchronously if the registry entry is already
-      // gone (e.g. teardown after the webview reset), surfacing as an uncaught
-      // rejection. Swallow it: the listener is already removed.
-      unlistenSpent.then(fn => fn()).catch(() => {});
-      unlistenEarned.then(fn => fn()).catch(() => {});
+      live = false;
+      // Tauri's unlisten throws if the registry entry is already gone (a
+      // teardown after a webview reset); the listener is gone either way.
+      unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [currentChannelId]);
+  }, [currentChannelId, currentChannelLogin]);
 
-  // Listen for prediction events
+  // A new prediction opens the card and starts on a fresh pick. Updates to
+  // the same one leave the viewer's fold and side alone. Adjusted during
+  // render, not in an effect, so the new prediction's first frame is fresh.
+  const predictionId = view?.prediction_id ?? null;
+  const [seenPredictionId, setSeenPredictionId] = useState<string | null>(null);
+  if (view && predictionId !== seenPredictionId) {
+    setSeenPredictionId(predictionId);
+    setExpandedHere(true);
+    setSelected(view.picked ?? view.outcomes[0]?.id ?? null);
+    setAmountInput('10');
+    setConfirming(false);
+  }
+
+  // Once the viewer has staked, only that side is theirs to add to.
+  const side = view?.picked ?? selected;
+  const canPredict = view?.can_predict ?? false;
+  const betKey = predictionId && side ? `${predictionId}:${side}` : null;
+  const bet = canPredict && betAnswer && betAnswer.key === betKey ? betAnswer.bet : null;
+  // The confirm only makes sense while predicting is still offered.
+  const showConfirm = confirming && canPredict && bet !== null;
+  const failureKey = `${betKey ?? ''}|${amountInput}`;
+  const failureLine = failure && failure.key === failureKey ? failure.line : null;
+  // The amount the field holds, for marking a preset chip as the one chosen.
+  const typedAmount = Number(amountInput.replace(/\D/g, '')) || null;
+
+  // Ask Rust what this bet would say whenever the side, the amount or the card
+  // changes (the pool moves the "win up to" line). Asking spends nothing.
+  const askSeqRef = useRef(0);
   useEffect(() => {
-    Logger.debug('[Prediction] Setting up event listeners...');
-    
-    const unlistenCreated = listen<PredictionData>('prediction-created', (event) => {
-      const prediction = event.payload;
-      Logger.debug('[Prediction] Received prediction-created event:', {
-        eventChannelId: prediction.channel_id,
-        currentChannelId: currentChannelId,
-        match: prediction.channel_id === currentChannelId,
-        title: prediction.title
-      });
-      
-      // Only show if this prediction is for the current channel we're watching
-      if (currentChannelId && prediction.channel_id === currentChannelId) {
-        Logger.debug('[Prediction] Prediction MATCHES current channel! Showing overlay.');
-        setActivePrediction(prediction);
-        setTimeRemaining(prediction.prediction_window_seconds);
-        setIsLocked(false);
-        // Auto-select first outcome for immediate betting
-        setSelectedOutcome(prediction.outcomes?.length > 0 ? prediction.outcomes[0].id : null);
-        setSelfStake(null);
-        setIsExpanded(true);
-        fetchChannelPoints();
-      }
-    });
+    if (!currentChannelId || !view || !canPredict || !side || !betKey) return;
+    const seq = ++askSeqRef.current;
+    const timer = setTimeout(() => {
+      invoke<BetView | null>('prediction_bet', {
+        channelId: currentChannelId,
+        outcomeId: side,
+        amount: amountInput,
+      })
+        .then((answer) => {
+          if (seq === askSeqRef.current) setBetAnswer({ key: betKey, bet: answer });
+        })
+        .catch((err) => Logger.debug('[Prediction] Bet read failed:', err));
+    }, BET_ASK_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [currentChannelId, view, canPredict, side, betKey, amountInput]);
 
-    const unlistenUpdated = listen<PredictionData & { winning_outcome_id?: string }>('prediction-updated', (event) => {
-      const prediction = event.payload;
-      Logger.debug('[Prediction] Received prediction-updated event:', {
-        eventChannelId: prediction.channel_id,
-        currentChannelId: currentChannelId,
-        match: prediction.channel_id === currentChannelId,
-        status: prediction.status,
-        hasActivePrediction: !!activePrediction
-      });
-      
-      // If we don't have an active prediction but this is for our channel and ACTIVE, initialize it
-      // This handles the case where user starts watching after prediction was created
-      if (currentChannelId && prediction.channel_id === currentChannelId) {
-        if (!activePrediction && (prediction.status === 'ACTIVE' || prediction.status === 'LOCKED')) {
-          Logger.debug('[Prediction] Late-joining prediction! Initializing overlay from update event.');
-          setActivePrediction(prediction);
-          setTimeRemaining(prediction.prediction_window_seconds || 60);
-          setIsLocked(prediction.status === 'LOCKED');
-          // Auto-select first outcome if not locked
-          setSelectedOutcome(prediction.status === 'ACTIVE' && prediction.outcomes?.length > 0 ? prediction.outcomes[0].id : null);
-          setSelfStake(null);
-          setIsExpanded(true);
-          setResolutionState('none');
-          fetchChannelPoints();
-        } else if (activePrediction?.prediction_id === prediction.prediction_id) {
-          Logger.debug('[Prediction] Prediction updated:', prediction);
-          setActivePrediction(prev => prev ? { ...prev, ...prediction } : null);
-          
-          if (prediction.status === 'LOCKED') {
-            setIsLocked(true);
-          }
-          
-          // Handle resolution states
-          if (prediction.status === 'RESOLVE_PENDING') {
-            Logger.debug('[Prediction] Prediction is being resolved...');
-            setResolutionState('pending');
-          } else if (prediction.status === 'RESOLVED') {
-            Logger.debug('[Prediction] Prediction RESOLVED! winning_outcome_id:', prediction.winning_outcome_id);
-            
-            // Use the winning_outcome_id from the event payload
-            const winningId = prediction.winning_outcome_id;
-            
-            if (winningId) {
-              const winningOutcome = prediction.outcomes?.find(o => o.id === winningId);
-              setWinningOutcomeId(winningId);
-              
-              // Use refs to get latest values (avoids stale closure issue)
-              const userBet = selfStakeRef.current !== null;
-              const userSelectedOutcome = selectedOutcomeRef.current;
-              
-              Logger.debug('[Prediction] Resolution check:', {
-                winningId,
-                userBet,
-                userSelectedOutcome,
-                didWin: userSelectedOutcome === winningId
-              });
-              
-              // Did user win or lose?
-              if (userBet && userSelectedOutcome) {
-                if (userSelectedOutcome === winningId) {
-                  setResolutionState('win');
-                  addToast(`You WON! "${winningOutcome?.title || 'Unknown'}" was correct!`, 'success');
-                } else {
-                  setResolutionState('loss');
-                  addToast(`You lost. "${winningOutcome?.title || 'Unknown'}" was the winner.`, 'error');
-                }
-              } else {
-                // User didn't bet, just show neutral result announcement
-                setResolutionState('announced');
-                addToast(`Prediction ended! Winner: ${winningOutcome?.title || 'Unknown'}`, 'success');
-              }
-            } else {
-              // No winner ID: the prediction was canceled or refunded
-              Logger.debug('[Prediction] No winning_outcome_id - prediction was refunded');
-              setResolutionState('refund');
-              addToast(`Prediction refunded`, 'info');
-            }
-            
-            // Clear overlay after showing result
-            setTimeout(() => {
-              setActivePrediction(null);
-              setSelectedOutcome(null);
-              setSelfStake(null);
-              setResolutionState('none');
-              setWinningOutcomeId(null);
-            }, 4000);
-          } else if (prediction.status === 'CANCELED') {
-            Logger.debug('[Prediction] Prediction CANCELED');
-            setResolutionState('refund');
-            addToast(`Prediction canceled, points refunded`, 'info');
-            
-            setTimeout(() => {
-              setActivePrediction(null);
-              setSelectedOutcome(null);
-              setSelfStake(null);
-              setResolutionState('none');
-            }, 3000);
-          }
-        }
-      }
-    });
+  const countdown = useDeadlineClock(view?.deadline_ms);
 
-    const unlistenLocked = listen<{ channel_id: string; prediction_id: string }>('prediction-locked', (event) => {
-      if (currentChannelId && event.payload.channel_id === currentChannelId && activePrediction?.prediction_id === event.payload.prediction_id) {
-        Logger.debug('[Prediction] Prediction locked');
-        setIsLocked(true);
-      }
-    });
+  // In a stack Rust decides which card is open, and this one reports itself so
+  // it gets a slot; on its own it keeps its own fold.
+  const released = useStackPresence(stack, predictionId);
+  const isExpanded = stack ? stack.open : expandedHere;
+  const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
 
-    const unlistenEnded = listen<{ channel_id: string; prediction_id: string; winning_outcome_id?: string }>('prediction-ended', (event) => {
-      if (currentChannelId && event.payload.channel_id === currentChannelId && activePrediction?.prediction_id === event.payload.prediction_id) {
-        Logger.debug('[Prediction] Prediction ended, winner:', event.payload.winning_outcome_id);
-        
-        // Show result briefly before closing
-        if (event.payload.winning_outcome_id) {
-          const winner = activePrediction?.outcomes.find(o => o.id === event.payload.winning_outcome_id);
-          if (winner) {
-            addToast(`Prediction ended! Winner: ${winner.title}`, 'success');
-          }
-        }
-        
-        // Close the overlay after a short delay
-        setTimeout(() => {
-          setActivePrediction(null);
-          setSelectedOutcome(null);
-          setSelfStake(null);
-        }, 2000);
-      }
-    });
+  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
 
-    // The viewer's own stake, straight from Rust. `points` is the running total
-    // rather than a delta, so this replaces the optimistic value rather than
-    // adding to it, which also corrects a failed or partial local write.
-    const unlistenSelf = listen<{
-      kind: string;
-      channel_id: string;
-      event_id: string;
-      outcome_id: string;
-      points: number;
-      result_type: string | null;
-    }>('prediction-self-updated', (event) => {
-      const p = event.payload;
-      if (!currentChannelId || p.channel_id !== currentChannelId) return;
-      if (p.result_type) return; // resolution is handled by prediction-ended
-      Logger.debug(`[Prediction] self stake ${p.points} on ${p.outcome_id}`);
-      setSelfStake({ outcomeId: p.outcome_id, points: p.points });
-      setSelectedOutcome(p.outcome_id);
-      fetchChannelPoints();
-    });
-
-    return () => {
-      // See note above: a teardown unlisten can throw if the registry entry is
-      // already gone; swallow it so it doesn't surface as an uncaught rejection.
-      unlistenCreated.then(fn => fn()).catch(() => {});
-      unlistenUpdated.then(fn => fn()).catch(() => {});
-      unlistenLocked.then(fn => fn()).catch(() => {});
-      unlistenEnded.then(fn => fn()).catch(() => {});
-      unlistenSelf.then(fn => fn()).catch(() => {});
-    };
-  }, [currentChannelId, activePrediction?.prediction_id, addToast, fetchChannelPoints]);
-
-  // Countdown timer
-  useEffect(() => {
-    if (!activePrediction || isLocked || timeRemaining <= 0) return;
-
-    const timer = setInterval(() => {
-      setTimeRemaining(prev => {
-        if (prev <= 1) {
-          setIsLocked(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [activePrediction, isLocked, timeRemaining]);
-
-  // Handle placing a prediction
-  // Twitch keeps ONE prediction per user per event and adds to it, so placing
-  // again on the same outcome tops the stake up. A different outcome is not a
-  // second bet, it is rejected, so the UI locks the choice once a stake exists.
-  const handlePlacePrediction = async () => {
-    if (!activePrediction || !selectedOutcome || isSubmitting || isLocked) return;
-    if (selfStake && selfStake.outcomeId !== selectedOutcome) return;
-
-    setIsSubmitting(true);
-
+  const handlePredict = async () => {
+    if (!currentChannelId || !side || !bet || submitting) return;
+    setSubmitting(true);
     try {
-      const result = await invoke<{ data?: { makePrediction?: { prediction?: { points?: number } } } }>('place_prediction', {
-        eventId: activePrediction.prediction_id,
-        outcomeId: selectedOutcome,
-        points: betAmount,
-        channelId: currentChannelId
+      const outcome = await invoke<PredictOutcome>('predict', {
+        channelId: currentChannelId,
+        outcomeId: side,
+        amount: bet.amount,
       });
-
-      const selectedOutcomeTitle = activePrediction.outcomes.find(o => o.id === selectedOutcome)?.title;
-      const topUp = selfStake !== null;
-      addToast(
-        topUp
-          ? `Added ${betAmount} points to "${selectedOutcomeTitle}"`
-          : `Prediction placed! ${betAmount} points on "${selectedOutcomeTitle}"`,
-        'success'
-      );
-      // The mutation answers with Twitch's running total. Set it rather than
-      // adding betAmount: the predictions-user-v1 event often lands before this
-      // response, and adding on top of it counted the bet twice.
-      const total = result?.data?.makePrediction?.prediction?.points;
-      setSelfStake((prev) => ({
-        outcomeId: selectedOutcome,
-        points: typeof total === 'number' ? total : Math.max(prev?.points ?? 0, betAmount),
-      }));
-      
-      // Refresh channel points
-      fetchChannelPoints();
-    } catch (err: any) {
-      Logger.error('[Prediction] Failed to place prediction:', err);
-      addToast(`Failed to place prediction: ${err}`, 'error');
+      // A placed bet says so in the card (Rust's status line) and once as a
+      // toast; a refusal is one line in the card, beside the button.
+      if (outcome.success) {
+        addToast(outcome.message, 'success');
+        setFailure(null);
+      } else {
+        setFailure({ key: failureKey, line: outcome.message });
+      }
+      if (outcome.view && outcome.view.channel_id === currentChannelId) {
+        setCard({ channelId: currentChannelId, view: outcome.view });
+      }
+    } catch (err) {
+      Logger.error('[Prediction] predict failed:', err);
+      setFailure({ key: failureKey, line: String(err) });
     } finally {
-      setIsSubmitting(false);
+      // Back to the bet row either way: a refusal's reason shows there.
+      setConfirming(false);
+      setSubmitting(false);
     }
   };
 
-  // Format time remaining
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  const pointsIcon = (className: string) =>
+    view.points_icon ? (
+      <img src={view.points_icon} alt={view.points_name} className="w-3 h-3" />
+    ) : (
+      <ChannelPointsIcon size={12} className={className} />
+    );
 
-  // Get color class for outcome
-  const getOutcomeColor = (color: string, isSelected: boolean) => {
-    const baseColors: Record<string, string> = {
-      'BLUE': isSelected ? 'bg-highlight-blue border-white/25' : 'bg-highlight-blue/20 border-highlight-blue/50 hover:bg-highlight-blue/30',
-      'PINK': isSelected ? 'bg-highlight-pink border-white/25' : 'bg-highlight-pink/20 border-highlight-pink/50 hover:bg-highlight-pink/30',
-    };
-    return baseColors[color] || (isSelected ? 'bg-highlight-purple border-white/25' : 'bg-highlight-purple/20 border-highlight-purple/50 hover:bg-highlight-purple/30');
-  };
-
-  // Calculate percentage for outcome
-  const getOutcomePercentage = (outcome: PredictionOutcome) => {
-    const totalPoints = activePrediction?.outcomes.reduce((sum, o) => sum + o.total_points, 0) || 0;
-    if (totalPoints === 0) return 50; // Default to 50% if no bets yet
-    return Math.round((outcome.total_points / totalPoints) * 100);
-  };
-
-  // Don't render if no active prediction
-  if (!activePrediction) return null;
+  const status = countdown ? (
+    <BannerStatus>{countdown}</BannerStatus>
+  ) : view.badge ? (
+    <BannerStatus mono={false}>{view.badge}</BannerStatus>
+  ) : null;
 
   return (
+    <StackCardPresence onLeft={released}>
     <OverlayBanner
-      icon={<Trophy className="w-4 h-4 text-accent" />}
-      title={activePrediction.title}
+      key="prediction"
+      icon={<Trophy className="w-4 h-4 text-accent-on-surface" />}
+      kind="Prediction"
+      title={view.title}
       isExpanded={isExpanded}
-      onToggleExpanded={() => setIsExpanded(!isExpanded)}
-      badges={
-        <>
-          {channelPoints !== null && (
-            <div className="flex items-center gap-1 px-1.5 py-1 bg-accent/20 border border-accent/40 rounded-md">
-              {customPointsIconUrl ? (
-                <img src={customPointsIconUrl} alt="points" className="w-3 h-3" />
-              ) : (
-                <ChannelPointsIcon className="text-accent" size={12} />
-              )}
-              <span className="text-xs font-bold text-accent">
-                {channelPoints.toLocaleString()}
-              </span>
-            </div>
-          )}
-          {!isLocked ? (
-            <span className="text-xs font-mono font-bold text-warning bg-warning/20 border border-warning/40 px-1.5 py-1 rounded-md">
-              {formatTime(timeRemaining)}
-            </span>
-          ) : (
-            <span className="text-xs font-medium text-error bg-error/20 border border-error/40 px-1.5 py-1 rounded-md">
-              Locked
-            </span>
-          )}
-        </>
-      }
+      onToggleExpanded={toggle}
+      badges={status}
+      order={stack?.order}
     >
       {/* Outcomes */}
-      <div className="p-3 space-y-2">
-        {activePrediction.outcomes.map((outcome) => {
-          const percentage = getOutcomePercentage(outcome);
-          const isSelected = selectedOutcome === outcome.id;
-          
+      <div className="px-1.5 pb-1.5 space-y-0.5">
+        {view.outcomes.map((outcome) => {
+          const style = SIDE_STYLES[outcome.color] ?? OTHER_SIDE_STYLE;
+          const isChosen = canPredict && side === outcome.id;
+          const closedToViewer = !canPredict || (view.picked !== null && view.picked !== outcome.id);
           return (
             <button
               key={outcome.id}
-              onClick={() => !isLocked && !selfStake && setSelectedOutcome(outcome.id)}
-              disabled={isLocked || !!selfStake}
-              className={`w-full relative p-2.5 rounded-lg border transition-all ${
-                getOutcomeColor(outcome.color, isSelected)
-              } ${(isLocked || !!selfStake) ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
+              onClick={() => {
+                if (closedToViewer) return;
+                setSelected(outcome.id);
+                setConfirming(false);
+              }}
+              disabled={closedToViewer}
+              aria-pressed={isChosen}
+              className={`w-full block text-left px-1.5 py-1.5 rounded-md transition-colors ${
+                isChosen ? 'bg-textPrimary/[0.06]' : ''
+              } ${closedToViewer ? 'cursor-default' : 'cursor-pointer hover:bg-textPrimary/[0.05]'} ${
+                closedToViewer && !outcome.winner && !outcome.mine ? 'opacity-70' : ''
+              }`}
             >
-              {/* Background progress bar */}
-              <div 
-                className={`absolute inset-0 rounded-md opacity-30 ${
-                  outcome.color === 'BLUE' ? 'bg-highlight-blue' : outcome.color === 'PINK' ? 'bg-highlight-pink' : 'bg-highlight-purple'
-                }`}
-                style={{ width: `${percentage}%` }}
+              <ShareRow
+                title={<EmoteText text={outcome.title} emoteMap={emoteMap} keyPrefix={`pred-${outcome.id}`} />}
+                strong={isChosen || outcome.winner || outcome.mine}
+                percent={outcome.percent}
+                barClass={style.bar}
+                mark={
+                  outcome.winner ? (
+                    <Trophy className="w-3.5 h-3.5 text-success" />
+                  ) : outcome.mine ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-textPrimary" />
+                  ) : canPredict ? (
+                    <span className={`w-3.5 h-3.5 rounded-full border-2 ${style.ring} flex items-center justify-center`}>
+                      {isChosen && <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />}
+                    </span>
+                  ) : undefined
+                }
+                trailing={
+                  <>
+                    <span className="font-mono text-textSecondary">{outcome.ratio}</span>
+                    <span className="flex items-center gap-1 text-textMuted">
+                      <Users className="w-3 h-3" />
+                      {outcome.people_label}
+                    </span>
+                    <span className="flex items-center gap-1 text-textMuted">
+                      {pointsIcon('text-textMuted')}
+                      {outcome.points_label}
+                    </span>
+                    <span className="w-9 text-right font-semibold text-textPrimary">{outcome.percent}%</span>
+                  </>
+                }
               />
-              
-              <div className="relative flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {isSelected && (!isLocked || !!selfStake) && (
-                    <div className="w-4 h-4 rounded-full bg-white/30 flex items-center justify-center">
-                      <div className="w-2.5 h-2.5 rounded-full bg-white" />
-                    </div>
-                  )}
-                  <span className="font-semibold text-white text-sm">
-                    <EmoteText text={outcome.title} emoteMap={emoteMap} keyPrefix={`pred-${outcome.id}`} />
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-white/90">
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    {outcome.total_users}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    {customPointsIconUrl ? (
-                      <img src={customPointsIconUrl} alt="points" className="w-3 h-3" />
-                    ) : (
-                      <ChannelPointsIcon size={12} className="text-white/90" />
-                    )}
-                    {outcome.total_points.toLocaleString()}
-                  </span>
-                  <span className="font-bold text-sm">{percentage}%</span>
-                </div>
-              </div>
             </button>
           );
         })}
       </div>
 
-      {/* Bet amount and action. Stays available while the window is open so a
-          stake can be topped up; the outcome is fixed once one exists. */}
-      {!isLocked && (
-        <div className="px-3 pb-3">
-          {/* Bet Input Row */}
-          <div className="flex items-center gap-2 p-2 bg-backgroundSecondary rounded-lg border border-border">
-            {/* Number Input */}
-            <input
-              type="text"
-              inputMode="numeric"
-              value={betAmountInput}
-              onChange={(e) => {
-                // Allow only numbers
-                const value = e.target.value.replace(/[^0-9]/g, '');
-                setBetAmountInput(value);
-                // Update betAmount if valid
-                const num = parseInt(value) || 0;
-                if (num > 0) {
-                  setBetAmount(num);
-                }
-              }}
-              onBlur={() => {
-                // Validate on blur - ensure minimum of 1 and max of channel points
-                const num = parseInt(betAmountInput) || 1;
-                const maxPoints = channelPoints || 250000;
-                const clamped = Math.min(Math.max(1, num), maxPoints);
-                setBetAmount(clamped);
-                setBetAmountInput(clamped.toString());
-              }}
-              className="w-24 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
-              placeholder="Amount"
-            />
-            
-            {/* Quick Amount Buttons - fewer presets */}
-            <div className="flex gap-1">
-              {[10, 100, 1000].map(amount => (
-                <button
-                  key={amount}
-                  onClick={() => {
-                    setBetAmount(amount);
-                    setBetAmountInput(amount.toString());
-                  }}
-                  className={`px-2 py-1.5 text-xs font-medium rounded transition-colors border ${
-                    betAmount === amount 
-                      ? 'bg-accent/30 border-accent/60 text-accent'
-                      : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
-                  }`}
-                >
-                  {amount >= 1000 ? `${amount / 1000}k` : amount}
-                </button>
-              ))}
-              {channelPoints ? (
-                <button
-                  onClick={() => {
-                    setBetAmount(channelPoints);
-                    setBetAmountInput(channelPoints.toString());
-                  }}
-                  className="px-2 py-1.5 text-xs font-bold bg-accent/30 hover:bg-accent/40 border border-accent/60 rounded transition-colors text-accent"
-                >
-                  ALL
-                </button>
-              ) : null}
-            </div>
-            
-            {/* Bet Button - compact */}
-            <button
-              onClick={handlePlacePrediction}
-              disabled={!selectedOutcome || isSubmitting}
-              className={`px-3 py-1.5 rounded text-xs font-bold transition-all whitespace-nowrap ${
-                selectedOutcome && !isSubmitting
-                  ? 'bg-accent hover:bg-accent-hover text-white'
-                  : 'bg-background border border-border text-textSecondary cursor-not-allowed'
-              }`}
-            >
-              {isSubmitting ? '...' : selfStake ? 'Add' : 'Bet'}
-            </button>
+      {/* What the viewer staked, and how it stands: above the pinned bet, so a
+          placed prediction says so in view however tight the card is. */}
+      {view.status_line && !(canPredict && side) && (
+        <div className="px-3 pb-2">
+          <div className="py-2 px-3 bg-backgroundSecondary border border-border rounded-lg flex items-center justify-center gap-2">
+            {pointsIcon('text-textSecondary')}
+            <span className="text-textPrimary text-sm font-medium">{view.status_line}</span>
           </div>
         </div>
       )}
 
-      {/* Status indicators */}
-      {selfStake && !isLocked && resolutionState === 'none' && (
-        <div className="px-3 pb-3">
-          <div className="py-2 px-3 bg-success/20 border border-success/50 rounded-lg flex items-center justify-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-success" />
-            <span className="text-success text-sm font-semibold">
-              {selfStake.points.toLocaleString()} on &ldquo;
-              {activePrediction.outcomes.find(o => o.id === selfStake.outcomeId)?.title ?? 'your pick'}
-              &rdquo;
-            </span>
-          </div>
-        </div>
+      {/* What this bet would win, above the pinned bet so it scrolls with the
+          outcomes it is about. */}
+      {canPredict && side && bet?.ok && !showConfirm && (
+        <p className="px-3 pb-1.5 text-center text-xs text-textSecondary">{bet.win_line}</p>
       )}
-      
-      {/* Resolution States - Win/Loss/Refund/Pending */}
-      {resolutionState === 'pending' && (
-        <div className="px-3 pb-3">
-          <div className="py-3 px-4 bg-accent/20 border border-accent/50 rounded-lg flex items-center justify-center gap-2 animate-pulse">
-            <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-            <span className="text-accent text-sm font-semibold">
-              Resolving Prediction...
-            </span>
-          </div>
-        </div>
-      )}
-      
-      {resolutionState === 'win' && (
-        <div className="px-3 pb-3">
-          <div className="py-4 px-4 bg-gradient-to-r from-success/30 to-highlight-green/30 border border-success rounded-lg text-center animate-pulse">
-            <div className="flex justify-center mb-2">
-              <PartyPopper className="w-8 h-8 text-success" />
+
+      {/* The bet, then a confirm before any points are spent. It stays pinned
+          to the card's bottom edge while the outcomes scroll above it: under
+          the phones' capped stack the button and the balance used to sit below
+          the fold, with only a faint fade to hint that the card scrolled. Kept
+          to two rows so the outcomes keep their room above it. */}
+      {canPredict && side && (
+        <div
+          className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-2.5 border-t border-borderSubtle/60"
+          // Phones: a chip or Predict pressed while typing an amount acts,
+          // and the keyboard goes.
+          data-taps-through-keyboard=""
+        >
+          {showConfirm && bet ? (
+            <div className="p-3 bg-backgroundSecondary rounded-lg border border-border text-center">
+              <p className="text-sm font-semibold text-textPrimary">{bet.confirm_title}</p>
+              <p className="mt-1 text-xs text-textSecondary">{bet.confirm_line}</p>
+              {bet.confirm_note && <p className="mt-1 text-xs text-textSecondary/80">{bet.confirm_note}</p>}
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => setConfirming(false)}
+                  disabled={submitting}
+                  className="flex-1 px-3 py-1.5 rounded text-xs font-semibold bg-background border border-border text-textPrimary hover:bg-backgroundSecondary transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePredict}
+                  disabled={submitting || !bet.ok}
+                  className={`${ACCENT_BUTTON} flex-1 h-8 px-3 !text-xs`}
+                  style={ACCENT_FILL}
+                >
+                  {submitting ? '...' : 'Predict'}
+                </button>
+              </div>
             </div>
-            <span className="text-success text-lg font-bold">YOU WON!</span>
-            {winningOutcomeId && (
-              <p className="text-success/80 text-sm mt-1">
-                <EmoteText text={activePrediction.outcomes.find(o => o.id === winningOutcomeId)?.title ?? ''} emoteMap={emoteMap} keyPrefix="pred-win" />
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-      
-      {resolutionState === 'loss' && (
-        <div className="px-3 pb-3">
-          <div className="py-4 px-4 bg-gradient-to-r from-error/30 to-highlight-red/30 border border-error rounded-lg text-center">
-            <div className="flex justify-center mb-2">
-              <XCircle className="w-8 h-8 text-error" />
-            </div>
-            <span className="text-error text-lg font-bold">Better Luck Next Time</span>
-            {winningOutcomeId && (
-              <p className="text-error/80 text-sm mt-1">
-                Winner: <EmoteText text={activePrediction.outcomes.find(o => o.id === winningOutcomeId)?.title ?? ''} emoteMap={emoteMap} keyPrefix="pred-loss" />
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-      
-      {resolutionState === 'refund' && (
-        <div className="px-3 pb-3">
-          <div className="py-4 px-4 bg-gradient-to-r from-info/30 to-highlight-cyan/30 border border-info rounded-lg text-center">
-            <div className="flex justify-center mb-2">
-              <RefreshCw className="w-8 h-8 text-info" />
-            </div>
-            <span className="text-info text-lg font-bold">Points Refunded</span>
-            <p className="text-info/80 text-sm mt-1">Prediction was canceled</p>
-          </div>
-        </div>
-      )}
-      
-      {resolutionState === 'announced' && (
-        <div className="px-3 pb-3">
-          <div className="py-4 px-4 bg-gradient-to-r from-accent/30 to-highlight-purple/30 border border-accent rounded-lg text-center">
-            <div className="flex justify-center mb-2">
-              <Trophy className="w-8 h-8 text-accent" />
-            </div>
-            <span className="text-accent text-lg font-bold">Prediction Ended</span>
-            {winningOutcomeId && (
-              <p className="text-accent/80 text-sm mt-1">
-                Winner: <EmoteText text={activePrediction.outcomes.find(o => o.id === winningOutcomeId)?.title ?? ''} emoteMap={emoteMap} keyPrefix="pred-announced" />
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-      
-      {/* Normal Locked State (waiting for results) */}
-      {isLocked && resolutionState === 'none' && (
-        <div className="px-3 pb-3">
-          <div className="py-2 px-3 bg-warning/20 border border-warning/50 rounded-lg flex items-center justify-center gap-2">
-            <Hourglass className="w-4 h-4 text-warning animate-pulse" />
-            <span className="text-warning text-sm font-semibold">
-              Awaiting Results{selfStake && ` • ${selfStake.points.toLocaleString()} in`}
-            </span>
-          </div>
-          {/* Total stats when locked */}
-          <div className="mt-2 flex items-center justify-center gap-4 text-xs text-textSecondary">
-            <span className="flex items-center gap-1">
-              <Users className="w-3 h-3" />
-              {activePrediction.outcomes.reduce((sum, o) => sum + o.total_users, 0).toLocaleString()} voters
-            </span>
-            <span className="flex items-center gap-1">
-              {customPointsIconUrl ? (
-                <img src={customPointsIconUrl} alt="points" className="w-3 h-3" />
-              ) : (
-                <ChannelPointsIcon size={12} className="text-textSecondary" />
+          ) : (
+            <>
+              {/* Placed: what the viewer staked, kept in view in the pinned
+                  bet while they can still add to it. */}
+              {view.status_line && (
+                <p className="mb-1.5 flex items-center justify-center gap-1.5 truncate text-xs font-medium text-textPrimary">
+                  {pointsIcon('text-textSecondary')}
+                  {view.status_line}
+                </p>
               )}
-              {activePrediction.outcomes.reduce((sum, o) => sum + o.total_points, 0).toLocaleString()} points
-            </span>
+              <div className="flex items-center gap-1.5 p-1.5 min-w-0 bg-backgroundSecondary rounded-lg border border-border">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={amountInput}
+                  onChange={(e) => setAmountInput(e.target.value)}
+                  // Show the amount Rust will actually use once typing stops.
+                  onBlur={() => {
+                    if (bet) setAmountInput(String(bet.amount));
+                  }}
+                  className="w-16 px-2 py-1.5 glass-input text-textPrimary text-sm font-medium focus:outline-none"
+                  placeholder="Amount"
+                  aria-label="Amount"
+                />
+                <div className="flex gap-1">
+                  {(bet?.presets ?? []).map((preset) => (
+                    <button
+                      key={preset.label}
+                      onClick={() => setAmountInput(String(preset.amount))}
+                      className={`px-1.5 py-1.5 text-xs font-medium rounded transition-colors border ${
+                        // Chosen only while the field holds exactly this
+                        // amount: a typed 500 marks no chip, even before
+                        // Rust's answer for it lands.
+                        bet?.amount === preset.amount && typedAmount === preset.amount
+                          ? 'bg-transparent border-accent-on-surface text-accent-on-surface'
+                          : 'bg-background border-border text-textSecondary hover:bg-backgroundSecondary'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                {/* What there is to spend, at the end of the amount row. */}
+                {bet?.balance_line && (
+                  <span
+                    className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
+                    title={`Your points: ${bet.balance_line}`}
+                    aria-label={`Your points: ${bet.balance_line}`}
+                  >
+                    {pointsIcon('text-textSecondary')}
+                    {bet.balance_line.split(' ')[0]}
+                  </span>
+                )}
+              </div>
+              {failureLine && (
+                <p role="alert" className="mt-1.5 truncate text-center text-xs font-medium text-error">
+                  {failureLine}
+                </p>
+              )}
+              <div className="mt-1.5">
+                {bet?.problem ? (
+                  <p className="py-1.5 text-center text-xs font-medium text-textSecondary">{bet.problem}</p>
+                ) : (
+                  <button
+                    onClick={() => setConfirming(true)}
+                    disabled={!bet || !bet.ok}
+                    className={`${ACCENT_BUTTON} w-full h-8 px-3 !text-xs`}
+                    style={ACCENT_FILL}
+                  >
+                    {bet?.button ?? '...'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {view.result && (
+        <div className="px-3 pb-3">
+          <div className={`py-2.5 px-3 border rounded-lg text-center text-sm font-semibold ${RESULT_STYLES[view.result.tone] ?? RESULT_STYLES.ended}`}>
+            {view.result.line}
           </div>
         </div>
       )}
+
+      <p className="px-3 pb-3 flex items-center justify-center gap-1 text-xs text-textSecondary">
+        <Users className="w-3 h-3" />
+        {view.totals_line}
+      </p>
     </OverlayBanner>
+    </StackCardPresence>
   );
 };
 

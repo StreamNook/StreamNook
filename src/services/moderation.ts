@@ -17,6 +17,8 @@ export type ModAction =
   | { kind: 'timeout'; seconds: number }
   | { kind: 'ban' }
   | { kind: 'unban'; timeout?: boolean }
+  /** Twitch only; the request's `reason` is what they see, so one is required. */
+  | { kind: 'warn' }
   | { kind: 'delete'; messageId: string };
 
 export interface ModRequest {
@@ -33,6 +35,9 @@ export interface ModRequest {
   reason?: string | null;
   /** With no reason given, use the first saved ban reason. */
   useSavedReason?: boolean;
+  /** The words after the name in a typed `/timeout`; Rust reads the length
+   *  and reason from them. */
+  typed?: string | null;
 }
 
 export interface ModOutcome {

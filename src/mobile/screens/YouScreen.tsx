@@ -3,7 +3,10 @@
 // every picture, name and cosmetic), the accounts you are signed in with (each
 // with its own sign in / sign out), then settings sections inline.
 import React, { useEffect, useState } from 'react';
-import { ArrowCircleDown } from 'phosphor-react';
+import { ArrowCircleDown, At, ChatCircle } from 'phosphor-react';
+import { useMentionsStore } from '../mentions/mentionInbox';
+import { useWhispersStore } from '../whispers/whisperInbox';
+import { WHISPER_WORDS } from '../whispers/whisperModel';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from '../navStore';
@@ -17,13 +20,19 @@ import { AccountsCard } from '../profile/AccountsCard';
 const START_TABS: Segment<MobileTab>[] = [
   { value: 'following', label: 'Following' },
   { value: 'browse', label: 'Browse' },
+  { value: 'chats', label: 'Chats' },
   { value: 'rewards', label: 'Rewards' },
   { value: 'you', label: 'You' },
 ];
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
+  const isAuthenticated = useAppStore((s) => s.isAuthenticated);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
+  const setMentionsOpen = useMobileNavStore((s) => s.setMentionsOpen);
+  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
+  const openWhispers = useMobileNavStore((s) => s.openWhispers);
+  const whispersUnread = useWhispersStore((s) => s.unreadTotal);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
   const addToast = useAppStore((s) => s.addToast);
@@ -55,7 +64,7 @@ export const YouScreen: React.FC = () => {
             onEdit={() => setCosmeticsOpen(true)}
           />
         ) : (
-          <SignedOutIdentityCard />
+          <SignedOutIdentityCard waiting={isAuthenticated} />
         )}
       </div>
 
@@ -88,6 +97,49 @@ export const YouScreen: React.FC = () => {
         </div>
       )}
 
+      {/* Your mentions, first among the things that are about you, then your
+          whispers (Twitch's, so only with a Twitch sign-in; here until the chat
+          inbox opens them). The dot is the only mark unread gets here. */}
+      <div className="px-4 mb-4">
+        <div className="glass-panel w-full overflow-hidden">
+          <button
+            onClick={() => setMentionsOpen(true)}
+            className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:bg-surface-active"
+          >
+            <At size={20} className="text-textSecondary shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-[15px] font-medium text-textPrimary">Mentions</span>
+              <span className="block text-[12.5px] text-textMuted truncate">
+                Who mentioned or replied to you in chat
+              </span>
+            </span>
+            {mentionsUnread > 0 && (
+              <span className="w-2 h-2 rounded-full bg-accent shrink-0" aria-label="Unread mentions" />
+            )}
+            <ChevronRight size={16} className="text-textMuted shrink-0" />
+          </button>
+          {currentUser?.user_id && (
+            <>
+              <div className="ml-[46px] border-t border-borderSubtle" />
+              <button
+                onClick={openWhispers}
+                className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:bg-surface-active"
+              >
+                <ChatCircle size={20} className="text-textSecondary shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[15px] font-medium text-textPrimary">{WHISPER_WORDS.title}</span>
+                  <span className="block text-[12.5px] text-textMuted truncate">{WHISPER_WORDS.entryDetail}</span>
+                </span>
+                {whispersUnread > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-accent shrink-0" aria-label="Unread whispers" />
+                )}
+                <ChevronRight size={16} className="text-textMuted shrink-0" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Sign-in and sign-out live on each account's own row, so the action
           reads as acting on the account beside it, and nothing about signing
           out is hidden behind the floating tab bar. */}
@@ -105,13 +157,15 @@ export const YouScreen: React.FC = () => {
         Open the app on
       </div>
       {/* The segments share the row's width, so the track ends where the
-          cards above and below it end. */}
-      <div className="px-4 mb-4 [&_[role=radio]]:flex-1">
+          cards above and below it end; each is sized to its label, so all five
+          fit on one line. */}
+      <div className="px-4 mb-4">
         <SegmentedControl<MobileTab>
           label="Open the app on"
           value={startTab}
           onChange={setStartTab}
           segments={START_TABS}
+          fill
         />
       </div>
 

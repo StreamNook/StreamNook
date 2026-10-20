@@ -125,6 +125,8 @@ export const NOTIFY_CHANNEL = {
   drops: 'drops',
   badges: 'badges',
   points: 'channel-points',
+  mentions: 'mentions',
+  whispers: 'whispers',
 } as const;
 
 export type NotifyChannelId = (typeof NOTIFY_CHANNEL)[keyof typeof NOTIFY_CHANNEL];
@@ -156,6 +158,23 @@ const CHANNELS: { id: string; name: string; description: string; importance: num
     // Quiet on purpose: this can fire every quarter hour while watching, so it
     // belongs in the shade rather than on top of whatever you are doing.
     importance: 2,
+  },
+  {
+    // Posted from Rust (android_notify.rs, NotifyChannels.kt), never from here:
+    // the page is paused whenever the app is off screen. Named and ranked the
+    // same in NotifyChannels.kt, whichever side creates it first.
+    id: NOTIFY_CHANNEL.mentions,
+    name: 'Mentions and replies',
+    description: 'Someone mentioned or replied to you in a chat',
+    importance: 4,
+  },
+  {
+    // Posted from Rust too (android_notify.rs, WhisperNotify.kt), with a reply
+    // box. Same name and rank as NotifyChannels.kt.
+    id: NOTIFY_CHANNEL.whispers,
+    name: 'Whispers',
+    description: 'Someone whispered you on Twitch',
+    importance: 4,
   },
 ];
 
@@ -237,6 +256,18 @@ export function syncBackgroundChecks(prefs: Partial<LiveNotificationSettings> | 
     scheduleBackgroundChecks(prefs?.background_interval_minutes ?? 15);
   } else {
     cancelBackgroundChecks();
+  }
+}
+
+/** What follows a change to the notification switches: the background checks,
+ *  and the push registration, held while the master and push toggles are both
+ *  on and dropped from the server otherwise. */
+export function applyDelivery(next: Partial<LiveNotificationSettings>): void {
+  syncBackgroundChecks(next);
+  if (next.enabled !== false && next.push_notifications !== false) {
+    void invoke('push_register').catch(() => {});
+  } else {
+    void invoke('push_unregister').catch(() => {});
   }
 }
 

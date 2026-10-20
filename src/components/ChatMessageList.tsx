@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, memo } from 'react';
 import ChatMessage from './ChatMessage';
+import HeldMessageRow from './chat/HeldMessageRow';
 import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
@@ -111,6 +112,8 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
     if (prev.message.id !== next.message.id) return false;
     // Same row re-stamped by Rust with new segments (see chatMessageAreEqual).
     if (prev.message.segments !== next.message.segments) return false;
+    // A held AutoMod row folds in place once decided.
+    if (prev.message.automodHeld !== next.message.automodHeld) return false;
   }
   if (prev.isHighlighted !== next.isHighlighted) return false;
   if (prev.moderationContext?.type !== next.moderationContext?.type ||
@@ -177,6 +180,9 @@ const MessageRow = memo(function MessageRow({
       }`}
       style={style}
     >
+      {typeof message !== 'string' && message.automodHeld ? (
+        <HeldMessageRow row={message.automodHeld} />
+      ) : (
       <ChatMessage
         message={message}
         onUsernameClick={onUsernameClick}
@@ -194,12 +200,16 @@ const MessageRow = memo(function MessageRow({
         sourceMark={sourceProvider}
         modLine={modLine}
       />
+      )}
     </div>
   );
 }, messageRowAreEqual);
 
 interface ChatMessageListProps {
   messages: (string | BackendChatMessage)[];
+  /** A quiet line in the middle while there are no rows ("No recent messages"
+   *  once the join's history answered with none). Gone with the first row. */
+  emptyNote?: string | null;
   /**
    * Bump this whenever the feed changed. It is not read in the body — it exists
    * purely so this component's `memo` has a reliable change signal.
@@ -275,6 +285,7 @@ interface ChatMessageListProps {
  */
 const ChatMessageList = memo(function ChatMessageList({
   messages: liveMessages,
+  emptyNote,
   isPaused,
   onScroll,
   onPauseIntent,
@@ -893,7 +904,9 @@ const ChatMessageList = memo(function ChatMessageList({
     <div className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
       <div
         ref={containerRef}
-        className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin"
+        // On the phone the bar shows only while the list is paused (sn-chat-live
+        // in styles/mobile.css): pinned to the newest line it moves every message.
+        className={`h-full overflow-y-auto overflow-x-hidden scrollbar-thin${isPaused ? '' : ' sn-chat-live'}`}
         data-line-show={lineActive ? lineShow : undefined}
         onScroll={handleScroll}
         onWheel={handleWheel}
@@ -1034,6 +1047,11 @@ const ChatMessageList = memo(function ChatMessageList({
       </div>
       {marksOn && (
         <ScrollbarMarks scrollerRef={containerRef} contentRef={contentRef} marks={marks} overlay={IS_MAC} />
+      )}
+      {emptyNote && liveMessages.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
+          <p className="text-center text-[13px] text-textMuted">{emptyNote}</p>
+        </div>
       )}
     </div>
   );

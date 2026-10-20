@@ -13,8 +13,8 @@
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
-  /* 64: the tabs carry labels under their icons. */
-  --sn-tabbar-h: 64px;
+  /* 56: icons only (five tabs left no room for labels), a 44 px pill inside. */
+  --sn-tabbar-h: 56px;
   --sn-safe-t: var(--sn-inset-t, env(safe-area-inset-top, 0px));
   --sn-safe-r: var(--sn-inset-r, env(safe-area-inset-right, 0px));
   --sn-safe-b: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));
@@ -34,16 +34,6 @@
 }
 @media (min-resolution: 4dppx) {
   .sn-mobile { --sn-hairline: 0.25px; }
-}
-
-/* Touch surfaces scroll with overlay scrolling; the 8px hover-styled desktop
-   scrollbar is noise on a phone. Sheets and menus portal into <body>, outside
-   .sn-mobile, so the rule reaches them through `body:has(.sn-mobile)`: a sheet
-   showed a scrollbar the screens behind it did not. */
-.sn-mobile ::-webkit-scrollbar,
-body:has(.sn-mobile) ::-webkit-scrollbar {
-  width: 0;
-  height: 0;
 }
 
 /* Fields on the phone (search, the composer, the command box): the theme's
@@ -109,6 +99,15 @@ body:has(.sn-mobile) .glass-input:focus {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
 }
 
+/* A sheet's content once it has scrolled under the handle (MobileSheet adds
+   it), and a list that scrolls up under a header or the status bar (the Chats
+   tab): the top 24px fade out, so nothing meets the edge with a hard line.
+   The iPhone's fitted sheets fade the same way. */
+.sn-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+
 /* An identity's Atmosphere glow (`AtmosphereGlow` in profile/IdentityParts):
    the chat wash at 70%, faded in from both sides and down from just under the
    top to nothing well before the bottom, so no edge of the art ever shows.
@@ -156,6 +155,50 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-touch {
   min-height: 44px;
   min-width: 44px;
+}
+
+/* A player bar button: 44px when the bar has room, giving way to 34px each
+   when it is full, so a narrow phone keeps every button on one row. */
+.sn-bar-btn {
+  min-height: 44px;
+  width: 44px;
+  min-width: 34px;
+  flex-shrink: 1;
+}
+
+/* The stream manager's forms are the desktop builders' own; on the phone
+   their fields and buttons get finger-sized targets and text. */
+.sn-manage-touch .glass-input,
+.sn-manage-touch .glass-button,
+.sn-manage-touch .glass-button-secondary {
+  min-height: 44px;
+  font-size: 15px;
+}
+.sn-manage-touch .sm-btn {
+  min-height: 40px;
+  padding-left: 14px;
+  padding-right: 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+/* A reward's Pause and Complete all serve its heading: a step quieter than the
+   row actions. */
+.sn-manage-touch .sm-btn.sm-head {
+  min-height: 34px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+/* A redemption's actions go on their own line under its text, so the text
+   keeps the row's width. */
+.sn-manage-touch .sm-row {
+  flex-wrap: wrap;
+}
+.sn-manage-touch .sm-acts {
+  flex-basis: 100%;
+  gap: 8px;
+  padding-left: 34px;
 }
 
 /* Bottom clearance for scroll content that runs behind the floating pill tab
@@ -236,14 +279,17 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* A popover that sits OVER SCROLLING CHAT (the drop bar, the pinned banner).
-   The house popover blurs 64px of whatever is behind it, and behind these two
-   is a chat that repaints on every message, so the blur was recomputed on
-   every frame for the whole watch. A firmer tint carries the legibility the
-   blur was providing: at 90% the chat's words still showed through the card,
-   so it is 97%, and solid at Glassiness 0. */
+/* A popover with no blur behind it (the drop bar, the pinned banner, the You
+   card's picture note). The house popover blurs 64px of whatever is behind
+   it, and behind the first two is a chat that repaints on every message, so
+   the blur was recomputed every frame. With no blur the tint is all there is,
+   and any tint short of solid leaves the text behind crisp (at 97% a white
+   line still showed as a ghost on the phone), so a static popover is fully
+   opaque: the glass contract's "never crisp". The page background it mixes
+   is opaque on a phone (phoneFloors), and the theme's popover light still
+   rides the image layers on top. */
 .sn-mobile .sn-popover--static {
-  --sn-popover-tint: calc(97% + (1 - var(--glass-strength)) * 3%);
+  --sn-popover-tint: 100%;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -291,6 +337,38 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-menu-row:active,
 .sn-menu-row:focus-visible {
   background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* The grouped card (mobile/ui/GroupedList): the settings pages' sections and
+   any other list of rows on a page. Solid at every Glassiness, the way a
+   static popover is: the theme's raised surface over its background, the pair
+   the segment track uses, so the text floors hold and nothing behind the card
+   reads through. The corner is the phone menu's 14px. Not scoped under
+   .sn-mobile, so a card inside a sheet (portaled into <body>) gets it too. */
+.sn-group-card {
+  border-radius: 14px;
+  background: linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background);
+  overflow: hidden;
+}
+/* Each row draws the hairline above itself, starting after the icon column
+   (16px inset, 24px icon, 12px gap) and running to the card's trailing edge.
+   The body is lifted a pixel under the card's clipped top, so the first row's
+   line never shows whatever wrappers the rows sit in. */
+.sn-group-body {
+  margin-top: -1px;
+}
+.sn-group-row {
+  position: relative;
+}
+.sn-group-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 52px;
+  right: 0;
+  height: 1px;
+  background: var(--color-border-subtle);
+  pointer-events: none;
 }
 
 /* Chat floating over landscape video on a phone. The desktop overlay's
@@ -353,6 +431,11 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-mobile .chrome-glaze--dock .glaze-selected {
   background-color: rgb(0 0 0 / 0.5);
 }
+/* On a light theme a dark pill sinks the theme's dark text into it, so the
+   chosen item is a tint of that text instead. */
+:root[data-theme-tone='light'] .sn-mobile .glaze-selected {
+  background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
 
 /* The floor under the floating tab bar: the page's own background rising from
    clear on an eased curve (smoothstep, to 92%), so content scrolling down fades
@@ -378,4 +461,92 @@ body:has(.sn-mobile) .glass-input:focus {
     color-mix(in srgb, var(--color-background) 89.4%, transparent) 90%,
     color-mix(in srgb, var(--color-background) 92%, transparent) 100%
   );
+}
+
+/* A chat row a jump landed on (a reply's parent, a mention opened from the
+   inbox or a notification): a soft accent wash with the accent bar, which
+   rises quickly, holds while the eye finds it, and fades out. A pseudo-element
+   so only its opacity animates; the row's own colors (a mention already wears
+   one) stay as they are underneath. Set by flashChatMessage. */
+.sn-mobile .chat-message-row[data-sn-flash] {
+  position: relative;
+}
+.sn-mobile .chat-message-row[data-sn-flash]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--color-accent);
+  opacity: 0;
+  animation: sn-jump-flash 2s ease-out forwards;
+}
+@keyframes sn-jump-flash {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* A settings slider on the phone runs the width of its row, as the iPhone
+   draws them; the desktop holds its sliders to 15rem (globals.css). */
+.sn-mobile .settings-row input[type="range"] {
+  max-width: none;
+}
+
+/* The inbox's card and tray (mentions/InboxArrival, InboxTray; the sheet is
+   MobileSheet's). Over chat the glaze takes a fuller frost than chrome over
+   chrome, so the words behind never compete with the card; its shadow falls
+   up, onto the chat, never onto the message bar. */
+.sn-inbox-arrival {
+  --glaze-frost: 78%;
+}
+.sn-inbox-arrival {
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.3);
+}
+/* The tray's count: the accent inked with the page, ringed with the bar so it
+   sits cleanly on the glass rim. */
+.sn-inbox-badge {
+  background: var(--color-accent);
+  color: var(--color-background);
+  color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
+  box-shadow: 0 0 0 2px var(--color-background);
+}
+.sn-inbox-badge--plain {
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+}
+/* The kind's mark on a face's corner. */
+.sn-inbox-kind {
+  background: var(--color-background-tertiary);
+  color: var(--color-accent-on-surface, var(--color-accent));
+  box-shadow: 0 0 0 1.5px var(--color-background-secondary);
+}
+/* A one-line snippet fades at its end instead of an ellipsis. */
+.sn-inbox-fade-end {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* The list runs under a soft fade at its foot. */
+.sn-inbox-list {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+/* Chat under an inbox overlay fades out above it rather than showing slivers
+   and half-cut lines; --sn-inbox-clear is how far the overlay reaches. */
+.sn-inbox-clear {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
+  mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
+}
+/* Send's mark on the accent fill: black on a light accent, white on a dark
+   one, the same rule as the inbox count. */
+.sn-send-ink {
+  color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
 }

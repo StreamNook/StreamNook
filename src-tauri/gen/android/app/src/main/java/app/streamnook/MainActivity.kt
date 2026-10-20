@@ -87,6 +87,14 @@ class MainActivity : TauriActivity() {
   // no WebView to hand it to for some time afterwards.
   @Volatile private var pendingChannel: String? = null
 
+  // Message id from a tapped mention notification (MentionNotifier), waiting
+  // for the shell the same way, for the same cold-start reason.
+  @Volatile private var pendingMention: String? = null
+
+  // Conversation key from a tapped whisper notification (WhisperNotifier),
+  // waiting for the shell the same way.
+  @Volatile private var pendingWhisper: String? = null
+
   // Fired by the PiP window's mute action. Private to the app; the receiver is
   // registered in code and explicitly NOT exported.
   private val muteReceiver = object : BroadcastReceiver() {
@@ -310,6 +318,19 @@ class MainActivity : TauriActivity() {
     }
 
     /** Hide/show the system bars (immersive playback, e.g. landscape watch). */
+    /** The player's rotate button: hold landscape (either side) or portrait whatever the
+     *  rotation lock says, or release back to the sensor when the player is left. */
+    @JavascriptInterface
+    fun setPlayerOrientation(mode: String) {
+      runOnUiThread {
+        requestedOrientation = when (mode) {
+          "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+          "portrait" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+          else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+      }
+    }
+
     @JavascriptInterface
     fun setImmersive(immersive: Boolean) {
       runOnUiThread {
@@ -644,6 +665,24 @@ class MainActivity : TauriActivity() {
       pendingChannel = null
       return channel ?: ""
     }
+
+    /** Message id from a tapped mention notification, or "". Reading clears
+     *  it, like consumePendingChannel. */
+    @JavascriptInterface
+    fun consumePendingMention(): String {
+      val id = pendingMention
+      pendingMention = null
+      return id ?: ""
+    }
+
+    /** Conversation key from a tapped whisper notification, or "". Reading
+     *  clears it, like consumePendingChannel. */
+    @JavascriptInterface
+    fun consumePendingWhisper(): String {
+      val key = pendingWhisper
+      pendingWhisper = null
+      return key ?: ""
+    }
   }
 
   /**
@@ -656,6 +695,30 @@ class MainActivity : TauriActivity() {
    */
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    // A mention opens that mention (its chat and the message), not a stream.
+    val mention = intent.getStringExtra(MentionNotifier.EXTRA_MENTION)
+    if (!mention.isNullOrEmpty()) {
+      pendingMention = mention
+      runOnUiThread {
+        webView?.evaluateJavascript(
+          "window.__SN_OPEN_MENTION__ && window.__SN_OPEN_MENTION__(${JSONObject.quote(mention)})",
+          null,
+        )
+      }
+      return
+    }
+    // A whisper opens its conversation.
+    val whisper = intent.getStringExtra(WhisperNotifier.EXTRA_WHISPER)
+    if (!whisper.isNullOrEmpty()) {
+      pendingWhisper = whisper
+      runOnUiThread {
+        webView?.evaluateJavascript(
+          "window.__SN_OPEN_WHISPER__ && window.__SN_OPEN_WHISPER__(${JSONObject.quote(whisper)})",
+          null,
+        )
+      }
+      return
+    }
     val channel = intent.getStringExtra(NotifyWorker.EXTRA_CHANNEL) ?: return
     if (channel.isEmpty()) return
     pendingChannel = channel
@@ -700,6 +763,12 @@ class MainActivity : TauriActivity() {
     // it mounts; there is no WebView to talk to at this point.
     intent?.getStringExtra(NotifyWorker.EXTRA_CHANNEL)?.takeIf { it.isNotEmpty() }?.let {
       pendingChannel = it
+    }
+    intent?.getStringExtra(MentionNotifier.EXTRA_MENTION)?.takeIf { it.isNotEmpty() }?.let {
+      pendingMention = it
+    }
+    intent?.getStringExtra(WhisperNotifier.EXTRA_WHISPER)?.takeIf { it.isNotEmpty() }?.let {
+      pendingWhisper = it
     }
 
     // Push token, fetched once per launch so `push_register` always has the
@@ -799,12 +868,13 @@ class MainActivity : TauriActivity() {
     //   expand  -> the activity comes to the foreground (STARTED / RESUMED)
     //   close X -> the window is dismissed and the activity is on its way to
     //              stopped, so the lifecycle is still at CREATED here.
-    // Dismissing the window is the viewer saying they are done with the stream.
-    // Closing PiP does NOT finish the activity on this device (verified: the
-    // process and the ActivityRecord both survive), so without this the stream
-    // stays loaded and playing and reappears the next time the app is opened.
+    // Dismissing the window ends the stream, unless Background play is on, in
+    // which case the web shell keeps its audio going (it decides; see
+    // keepsAudioAfterPip). Closing PiP does NOT finish the activity on this
+    // device (verified: the process and the ActivityRecord both survive), so
+    // without this the stream stays loaded and reappears on the next open.
     if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
-      // Belt: stop it now, so audio does not carry on in the background.
+      // Belt: tell the shell now, so it can stop or carry on at once.
       webView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('sn:pip-closed'))",
         null,

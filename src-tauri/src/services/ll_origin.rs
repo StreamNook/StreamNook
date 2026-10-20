@@ -396,9 +396,16 @@ static DISABLED: AtomicBool = AtomicBool::new(true);
 /// The viewer's chosen distance behind live (`video_player.ll_target_latency`), in
 /// milliseconds; 0 is Auto.
 static TARGET_GAP_MS: AtomicU64 = AtomicU64::new(0);
-/// How far behind live AVPlayer sits past the playlist's hold-back on this origin
-/// (measured: a 0.936 s hold-back plays 1.44 to 1.71 s behind).
-const APPLE_BEHIND_OVER_HOLD: f64 = 0.6;
+/// How far behind the relay's edge AVPlayer sits past the playlist's hold-back
+/// (measured: a 0.936 s hold-back plays 1.44 to 1.71 s behind the edge, a 0.624 s
+/// one 1.13 to 1.20 s).
+const APPLE_BEHIND_OVER_HOLD: f64 = 0.55;
+/// Seconds the parts origin's edge trails the broadcaster, by ear (the desktop's
+/// `LL_EDGE_DELAY` in src/utils/latency.ts).
+pub(crate) const LL_EDGE_DELAY_SECS: f64 = 0.3;
+/// The automatic distance behind live on the parts path: the desktop's and
+/// Android's `AUTO_GAP.ll` (src/utils/latency.ts), so every app rides the same.
+const AUTO_LL_GAP_SECS: f64 = 1.5;
 
 /// The origin's client, built once. `start` used to build a new one per stream
 /// start, which rebuilt the TLS configuration (and on Linux re-parsed the CA
@@ -937,22 +944,27 @@ pub fn set_disabled(disabled: bool) {
 
 /// The viewer's target latency (None or a non-positive value is Auto). AVPlayer
 /// reads it as the hold-back of the next playlist it loads.
+/// The viewer's target latency in seconds, or None at Auto.
+pub(crate) fn target_gap_secs() -> Option<f64> {
+    let ms = TARGET_GAP_MS.load(Ordering::Relaxed);
+    (ms > 0).then(|| ms as f64 / 1000.0)
+}
+
 pub fn set_target_gap(gap: Option<f32>) {
     let ms = gap.filter(|g| *g > 0.0).map(|g| (g as f64 * 1000.0).round() as u64).unwrap_or(0);
     TARGET_GAP_MS.store(ms, Ordering::Relaxed);
 }
 
 /// Seconds to add to (or take off) the default hold-back so AVPlayer rides the
-/// viewer's target gap: never under the spec's two part targets.
+/// viewer's target gap, or at Auto the same gap as the desktop and Android: never
+/// under the spec's two part targets.
 fn apple_gap_adjust(target: f64, hold_parts: u64) -> f64 {
     gap_adjust(TARGET_GAP_MS.load(Ordering::Relaxed), target, hold_parts)
 }
 
 fn gap_adjust(ms: u64, target: f64, hold_parts: u64) -> f64 {
-    if ms == 0 {
-        return 0.0;
-    }
-    let wanted = (ms as f64 / 1000.0 - APPLE_BEHIND_OVER_HOLD).max(target * 2.0);
+    let gap = if ms == 0 { AUTO_LL_GAP_SECS } else { ms as f64 / 1000.0 };
+    let wanted = (gap - LL_EDGE_DELAY_SECS - APPLE_BEHIND_OVER_HOLD).max(target * 2.0);
     wanted - target * hold_parts as f64
 }
 
@@ -3833,8 +3845,9 @@ http://127.0.0.1:9/seg/50.ts\n\
 
     #[test]
     fn the_target_gap_moves_the_apple_hold_back() {
-        assert_eq!(gap_adjust(0, 0.312, 3), 0.0);
-        assert!((gap_adjust(3000, 0.312, 3) - (2.4 - 0.936)).abs() < 1e-9);
+        // Auto rides the desktop's 1.5 s behind live: a 0.65 s hold-back.
+        assert!((gap_adjust(0, 0.312, 3) - (0.65 - 0.936)).abs() < 1e-9);
+        assert!((gap_adjust(3000, 0.312, 3) - (2.15 - 0.936)).abs() < 1e-9);
         // Never under two part targets, however low the gap.
         assert!((gap_adjust(500, 0.312, 3) + 0.312).abs() < 1e-9);
     }

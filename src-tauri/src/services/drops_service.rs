@@ -14,6 +14,22 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use uuid::Uuid;
 
+/// Channels per `campaign_eligible_channels` request: one alias each.
+pub(crate) const ELIGIBILITY_BATCH: usize = crate::services::twitch_limits::GQL_MAX_ALIASES;
+/// Eligibility requests in flight at once.
+const ELIGIBILITY_PARALLEL: usize = 4;
+
+/// One eligibility request: each `cN` alias reads the campaigns channel N
+/// offers. Ids are numeric (checked by the caller), so they go in as text.
+pub(crate) fn eligibility_query(ids: &[String]) -> String {
+    let fields: String = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| format!("c{i}: channel(id: \"{id}\") {{ id viewerDropCampaigns {{ id }} }} "))
+        .collect();
+    format!("query {{ {fields}}}")
+}
+
 // Use Twitch ANDROID APP client ID for GQL operations (required for drops API access)
 // This is what the Twitch web client uses - it works with NO SCOPES
 const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
@@ -1390,7 +1406,8 @@ impl DropsService {
     /// (participants live in another game are offered nothing).
     ///
     /// One aliased document covers a whole chunk of channels, so a roster costs
-    /// a request per 50 live channels rather than one per channel.
+    /// a request per `ELIGIBILITY_BATCH` live channels rather than one per
+    /// channel; up to `ELIGIBILITY_PARALLEL` chunks are asked at once.
     pub async fn campaign_eligible_channels(
         &self,
         campaign_id: &str,
@@ -1406,32 +1423,40 @@ impl DropsService {
             return Ok(Vec::new());
         }
 
+        use futures::stream::{self, StreamExt, TryStreamExt};
+
         let mut eligible = Vec::new();
 
-        for chunk in ids.chunks(50) {
-            let fields: String = chunk
-                .iter()
-                .enumerate()
-                .map(|(i, id)| format!("c{i}: channel(id: \"{id}\") {{ id viewerDropCampaigns {{ id }} }} "))
-                .collect();
-            let query = format!("query {{ {fields}}}");
+        // Owned chunks: a borrowed one makes the future not `Send` for the
+        // spawned tasks that await it.
+        let chunks: Vec<Vec<String>> = ids
+            .chunks(ELIGIBILITY_BATCH)
+            .map(|c| c.iter().map(|id| (*id).clone()).collect())
+            .collect();
+        let bodies: Vec<serde_json::Value> = stream::iter(chunks.clone())
+            .map(|chunk| async move {
+                let response = self
+                    .client
+                    .post("https://gql.twitch.tv/gql")
+                    .header(
+                        "Client-ID",
+                        crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID,
+                    )
+                    .json(&serde_json::json!({ "query": eligibility_query(&chunk) }))
+                    .send()
+                    .await?;
 
-            let response = self
-                .client
-                .post("https://gql.twitch.tv/gql")
-                .header(
-                    "Client-ID",
-                    crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID,
-                )
-                .json(&serde_json::json!({ "query": query }))
-                .send()
-                .await?;
+                let body: serde_json::Value = response.json().await?;
+                if let Some(errors) = body.get("errors") {
+                    return Err(anyhow::anyhow!("GraphQL errors: {:?}", errors));
+                }
+                Ok::<_, anyhow::Error>(body)
+            })
+            .buffered(ELIGIBILITY_PARALLEL)
+            .try_collect()
+            .await?;
 
-            let body: serde_json::Value = response.json().await?;
-            if let Some(errors) = body.get("errors") {
-                return Err(anyhow::anyhow!("GraphQL errors: {:?}", errors));
-            }
-
+        for (chunk, body) in chunks.iter().zip(&bodies) {
             for (i, id) in chunk.iter().enumerate() {
                 let campaigns = &body["data"][format!("c{i}")]["viewerDropCampaigns"];
                 let offered = campaigns
@@ -1439,7 +1464,7 @@ impl DropsService {
                     .map(|list| list.iter().any(|c| c["id"].as_str() == Some(campaign_id)))
                     .unwrap_or(false);
                 if offered {
-                    eligible.push((*id).clone());
+                    eligible.push(id.clone());
                 }
             }
         }

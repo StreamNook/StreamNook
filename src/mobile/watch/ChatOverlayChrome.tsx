@@ -2,8 +2,8 @@
 // has to leave the video to find them.
 //
 // One handle on the edge that faces the picture: drag it to resize the column,
-// tap it for the strip. The strip carries the see-through slider and a way to
-// hide chat, and puts itself away after a few seconds of being ignored. Both
+// tap it for the strip. The strip carries the inbox (there is no message bar
+// here to hold its tray), the see-through slider and a way to hide chat, and puts itself away after a few seconds of being ignored. Both
 // changes apply live and are saved on release, so a swipe reads as one motion
 // rather than a stutter of settings writes.
 //
@@ -11,9 +11,12 @@
 // behind it there is nothing to see through, so it passes no opacity and gets
 // no strip.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Drop, X } from 'phosphor-react';
 import { hapticTick } from '../ui/haptics';
+import { InboxTray } from '../mentions/InboxTray';
+import { useMentionsStore } from '../mentions/mentionInbox';
 
 interface Props {
   /** Which screen edge the overlay sits on; the handle lives on the other. */
@@ -54,6 +57,10 @@ export const ChatOverlayChrome: React.FC<Props> = ({
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commit = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drag = useRef<{ id: number; startX: number; startW: number; lastW: number; moved: boolean } | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
+  // A tap outside the strip puts it away; its handle toggles it on its own.
+  const markStripInside = useOutsidePress(hasStrip && stripOpen, [stripRef, handleRef], () => setStripOpen(false));
 
   // The strip closes on its own once it has been left alone. Every touch on
   // it pushes the deadline back.
@@ -61,10 +68,13 @@ export const ChatOverlayChrome: React.FC<Props> = ({
     if (idle.current) clearTimeout(idle.current);
     idle.current = setTimeout(() => setStripOpen(false), STRIP_IDLE_MS);
   }, []);
+  // The inbox sheet rises from the strip's tray, so the strip stays while
+  // the sheet is open and starts its idle wait again once it closes.
+  const inboxOpen = useMentionsStore((s) => s.sheetIn === 'watch');
   useEffect(() => {
-    if (stripOpen) armIdle();
+    if (stripOpen && !inboxOpen) armIdle();
     else if (idle.current) clearTimeout(idle.current);
-  }, [stripOpen, armIdle]);
+  }, [stripOpen, inboxOpen, armIdle]);
   useEffect(
     () => () => {
       if (idle.current) clearTimeout(idle.current);
@@ -133,6 +143,7 @@ export const ChatOverlayChrome: React.FC<Props> = ({
           reads as the column's edge rather than a button inside it, with a
           hit area wider than the pill it draws. */}
       <div
+        ref={handleRef}
         className={`absolute top-1/2 -translate-y-1/2 z-40 w-7 h-20 flex items-center justify-center ${
           side === 'right' ? 'left-0 -translate-x-1/2' : 'right-0 translate-x-1/2'
         }`}
@@ -161,9 +172,13 @@ export const ChatOverlayChrome: React.FC<Props> = ({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.16 }}
+            ref={stripRef}
+            onPointerDownCapture={markStripInside}
             onPointerDown={armIdle}
           >
-            <div className="chrome-glaze chrome-glaze--flat h-11 px-3 flex items-center gap-2.5 text-white">
+            <div className="chrome-glaze chrome-glaze--flat h-11 pl-1 pr-3 flex items-center gap-2.5 text-textPrimary">
+              <InboxTray surface="watch" plain />
+              <span className="w-px h-5 bg-textPrimary/15 shrink-0" aria-hidden />
               <Drop size={17} weight="fill" className="shrink-0 opacity-80" />
               <input
                 type="range"
@@ -180,7 +195,7 @@ export const ChatOverlayChrome: React.FC<Props> = ({
               <button
                 onClick={strip.onHide}
                 aria-label="Hide chat"
-                className="sn-touch -mr-2 flex items-center justify-center w-9 h-9 rounded-full active:bg-white/10"
+                className="sn-touch -mr-2 flex items-center justify-center w-9 h-9 rounded-full active:bg-textPrimary/10"
               >
                 <X size={17} weight="bold" />
               </button>

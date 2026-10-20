@@ -194,7 +194,97 @@ async fn me_goes_to_chat_as_typed() {
     assert!(!run(&fake, "/nosuchcommand x").await.handled);
 }
 
-// ─────────────────────────────── dispatch ───────────────────────────────
+#[tokio::test]
+async fn uptime_says_offline_only_when_twitch_says_so() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "get_stream" { Err("Not logged in".into()) } else { Ok(Value::Null) });
+    let failed = run(&fake, "/uptime").await;
+    assert!(failed.notices.is_empty());
+    assert_eq!(toast(&failed, ToastKind::Error), ["Couldn't check whether this channel is live: Not logged in"]);
+    fake.answer(|_, _| Ok(Value::Null));
+    assert_eq!(run(&fake, "/uptime").await.notices, ["This channel is offline."]);
+    fake.answer(|cmd, _| {
+        if cmd == "get_stream" {
+            Ok(json!({ "user_name": "Chan", "started_at": "2001-09-09T01:46:40Z" }))
+        } else {
+            Ok(Value::Null)
+        }
+    });
+    assert!(run(&fake, "/uptime").await.notices[0].starts_with("Chan has been live for"));
+}
+
+#[tokio::test]
+async fn chatters_emoteinfo_and_openurl_show_the_real_failure() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "get_channel_chatters" | "emote_counts" | "open_url" => Err("Twitch answered HTTP 500".into()),
+        _ => Ok(Value::Null),
+    });
+    assert_eq!(toast(&run(&fake, "/chatters").await, ToastKind::Error), ["Couldn't count the chatters: Twitch answered HTTP 500"]);
+    assert_eq!(toast(&run(&fake, "/emoteinfo").await, ToastKind::Error), ["Couldn't read this channel's emotes: Twitch answered HTTP 500"]);
+    assert_eq!(toast(&run(&fake, "/openurl example.com").await, ToastKind::Error), ["Couldn't open example.com: Twitch answered HTTP 500"]);
+}
+
+#[tokio::test]
+async fn a_failed_disconnect_is_shown() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "stop_chat" { Err("socket busy".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/disconnect").await, ToastKind::Error), ["Couldn't disconnect from chat: socket busy"]);
+}
+
+#[tokio::test]
+async fn a_failed_lookup_is_never_called_not_found() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "get_user_by_login" { Err("User 'ghost' not found".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/usercard ghost").await, ToastKind::Error), ["User ghost not found"]);
+    fake.answer(|cmd, _| if cmd == "get_user_by_login" { Err("error sending request".into()) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/usercard bob").await, ToastKind::Error), ["Couldn't look up bob: error sending request"]);
+}
+
+#[tokio::test]
+async fn ending_a_poll_says_why_it_could_not() {
+    let fake = Fake::new();
+    // A moderator: Twitch takes this only from the owner, so it is refused up front.
+    let mod_try = run(&fake, "/endpoll").await;
+    assert_eq!(toast(&mod_try, ToastKind::Error), ["/endpoll: only the broadcaster can end a poll on Twitch"]);
+    assert!(fake.calls("get_active_poll").is_empty());
+
+    *fake.role.lock().unwrap() = Role::Broadcaster;
+    // A lookup Twitch refused is an error, never "no poll".
+    fake.answer(|cmd, _| if cmd == "get_active_poll" { Err("you are not a moderator in this channel".into()) } else { Ok(Value::Null) });
+    let refused = run(&fake, "/cancelpoll").await;
+    assert_eq!(toast(&refused, ToastKind::Error), ["Couldn't read the running poll: you are not a moderator in this channel"]);
+    // No poll really running.
+    fake.answer(|_, _| Ok(Value::Null));
+    let none = run(&fake, "/endpoll").await;
+    assert_eq!(toast(&none, ToastKind::Error), ["No poll is running right now"]);
+}
+
+#[tokio::test]
+async fn mods_and_vips_run_here_and_never_reach_chat() {
+    let fake = Fake::new();
+    fake.answer(|cmd, a| match cmd {
+        "slash_role_list" => Ok(json!([format!("{} of this channel", a["role"].as_str().unwrap_or_default())])),
+        _ => Ok(Value::Null),
+    });
+    for line in ["/mods", "/vips"] {
+        let o = run(&fake, line).await;
+        assert!(o.handled && o.send.is_none(), "{line} must run here");
+        assert_eq!(o.notices.len(), 1);
+    }
+    assert!(fake.calls("send_chat_message").is_empty() && fake.calls("chat_send_paced").is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_mods_list_is_an_error_never_sent() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| if cmd == "slash_role_list" { Err("GQL request failed".into()) } else { Ok(Value::Null) });
+    let o = run(&fake, "/mods").await;
+    assert!(o.handled && o.send.is_none());
+    assert!(o.notices.is_empty(), "no \"There are no moderators\" line");
+    assert_eq!(toast(&o, ToastKind::Error), ["Command failed: GQL request failed"]);
+    assert!(fake.calls("send_chat_message").is_empty());
+}
 
 #[tokio::test]
 async fn aliases_make_the_same_call_as_the_full_name() {
@@ -259,6 +349,8 @@ async fn slow_and_followers_read_their_lengths() {
 #[tokio::test]
 async fn deletepoll_archives_the_running_poll() {
     let fake = Fake::new();
+    // Polls are the channel owner's to end.
+    *fake.role.lock().unwrap() = Role::Broadcaster;
     let o = run(&fake, "/deletepoll").await;
     assert_eq!(fake.calls("end_poll"), vec![json!({ "broadcasterId": "42", "pollId": "poll-9", "status": "ARCHIVED" })]);
     assert_eq!(toast(&o, ToastKind::Success), vec!["Poll canceled"]);
@@ -825,6 +917,21 @@ async fn pin_pins_a_message_or_sends_one_to_pin() {
 
 fn sweep_entry(id: &str, user: &str, text: &str, ts: i64) -> SweepEntry {
     SweepEntry { id: id.into(), user_id: user.into(), login: user.into(), display: user.to_uppercase(), content: text.into(), ts_ms: ts }
+}
+
+#[tokio::test]
+async fn a_nuke_with_failed_bans_says_so() {
+    let fake = Fake::new();
+    *fake.history.lock().unwrap() = vec![
+        sweep_entry("1", "a", "buy followers", 999_990_000),
+        sweep_entry("2", "b", "buy followers now", 999_995_000),
+    ];
+    fake.answer(|cmd, args| {
+        if cmd == "ban_user" && args["targetUserId"] == "b" { Err("they are already banned".into()) } else { Ok(Value::Null) }
+    });
+    let o = run_in(&fake, "nukefail", "/nuke buy followers ban 1m").await;
+    assert!(toast(&o, ToastKind::Success).is_empty(), "no clean-sweep toast");
+    assert_eq!(toast(&o, ToastKind::Error), ["/nuke: 1 of 2 user(s) failed: they are already banned"]);
 }
 
 #[tokio::test]

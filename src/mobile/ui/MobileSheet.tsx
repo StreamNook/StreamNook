@@ -23,6 +23,10 @@ export interface MobileSheetProps {
    *  for a sheet whose content arrives late (a chatter's card and badge
    *  wall), so it never grows under the finger; the content scrolls inside. */
   fill?: boolean;
+  /** The content lays out and scrolls itself edge to edge (a list with its own
+   *  header and paging): the body neither pads nor scrolls, and its child fills
+   *  it. Use with `fill`. */
+  flush?: boolean;
 }
 
 const DISMISS_DISTANCE = 96;
@@ -45,6 +49,7 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   children,
   maxHeightFraction = 0.72,
   fill = false,
+  flush = false,
 }) => {
   const [dragY, setDragY] = useState(0);
   const cap = `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`;
@@ -53,6 +58,13 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   // the ref in render would not re-render when the drag begins.
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef<number | null>(null);
+  // Content that has scrolled under the handle fades out (.sn-fade-top) rather
+  // than meeting it with a hard edge. At rest there is no fade. Only the flip
+  // re-renders, not every scroll frame.
+  const [scrolled, setScrolled] = useState(false);
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrolled(e.currentTarget.scrollTop > 1);
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragStart.current = e.clientY;
@@ -89,6 +101,8 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
     >
       <div
         className="absolute inset-0 bg-black/50"
+        // One tap closes the sheet, the keyboard going with it.
+        data-taps-through-keyboard=""
         // Rides the Glassiness slider like every other frosted surface; a
         // fixed blur kept ghosting content at Glassiness 0.
         style={{
@@ -133,7 +147,19 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
               section label rather than the sheet's name. */}
           {title && <div className="mt-2 text-[16px] font-semibold leading-5 text-textPrimary">{title}</div>}
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">{children}</div>
+        <div
+          className={
+            flush
+              ? 'flex-1 min-h-0 flex flex-col overflow-hidden'
+              : `flex-1 min-h-0 overflow-y-auto px-4 pb-4 ${scrolled ? 'sn-fade-top' : ''}`
+          }
+          onScroll={flush ? undefined : onScroll}
+          // A sheet is a form or a list: a button, switch or row pressed while
+          // typing acts, and the keyboard goes.
+          data-taps-through-keyboard=""
+        >
+          {children}
+        </div>
       </motion.div>
     </motion.div>
   );

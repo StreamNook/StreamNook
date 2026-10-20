@@ -696,6 +696,29 @@ fn get_bridge_bringup_lock() -> &'static Mutex<()> {
     BRIDGE_BRINGUP_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Moves on at every full stop. Aborting the bridge's server task stops it
+/// accepting, but each page socket already upgraded runs in a task of its own
+/// with its own handle on the old broadcaster, so it stayed open with nothing
+/// feeding it: the page saw a healthy socket, never reconnected, and its chat
+/// went silent until a watchdog noticed. Each socket watches this instead and
+/// closes when it moves past the value its server was built at.
+static BRIDGE_CLOSE: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
+
+fn bridge_close() -> &'static tokio::sync::watch::Sender<u64> {
+    BRIDGE_CLOSE.get_or_init(|| tokio::sync::watch::channel(0).0)
+}
+
+/// The value a bridge server built now is born at.
+fn bridge_generation() -> u64 {
+    *bridge_close().borrow()
+}
+
+/// Closes every page socket the bridge serves now (code 1012, "service
+/// restart"), so each page reconnects at once to whatever bridge comes next.
+fn close_page_sockets() {
+    bridge_close().send_modify(|g| *g = g.wrapping_add(1));
+}
+
 fn get_current_channels() -> &'static Mutex<HashSet<String>> {
     CURRENT_CHANNELS.get_or_init(|| Mutex::new(HashSet::new()))
 }
@@ -796,6 +819,12 @@ pub(crate) async fn reship_room_state(channel: &str) {
     let frame = serde_json::Value::Object(frame).to_string();
     get_room_state_cache().lock().await.insert(channel.to_string(), frame.clone());
     send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
+}
+
+/// Send one chat-stream frame to `channel`'s rooms (a held AutoMod message,
+/// say), held for the next attach when no room is listening.
+pub(crate) async fn ship_channel_frame(channel: &str, frame: String) {
+    send_to_bridge(BridgeFrame::channel(channel, frame), true).await;
 }
 
 /// Look up the account's own follow of a followers-only room (one Helix call),
@@ -1003,7 +1032,7 @@ pub(crate) struct EmoteLookup {
 }
 
 impl EmoteLookup {
-    fn build(set: &EmoteSet) -> Arc<Self> {
+    pub(crate) fn build(set: &EmoteSet) -> Arc<Self> {
         let mut by_name =
             HashMap::with_capacity(set.bttv.len() + set.ffz.len() + set.seven_tv.len());
         for e in set.bttv.iter().chain(&set.ffz).chain(&set.seven_tv) {
@@ -1014,8 +1043,13 @@ impl EmoteLookup {
 
     /// The third-party emote a word names. Only words Twitch did not tag reach
     /// this: a tagged span is always the Twitch emote.
-    fn get(&self, name: &str) -> Option<&Emote> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Emote> {
         self.by_name.get(name)
+    }
+
+    /// How many third-party names it knows.
+    pub(crate) fn len(&self) -> usize {
+        self.by_name.len()
     }
 }
 
@@ -1060,6 +1094,7 @@ fn drop_parse_lookup(key: &str) {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.remove(key);
     }
+    crate::services::shared_chat_emotes::release_home(key);
 }
 
 /// What a CLEARMSG line says: one message deleted by a moderator.
@@ -1233,6 +1268,16 @@ fn clear_parse_lookups() {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.clear();
     }
+    crate::services::shared_chat_emotes::release_all();
+}
+
+/// The message body of a `:prefix COMMAND #channel :text` line, or "". The
+/// colon is optional when the body is one word (Twitch and the history mirror
+/// both leave it out), which is how a one-emote message arrives.
+pub(crate) fn irc_trailing_text(raw: &str) -> &str {
+    let rest = if raw.starts_with('@') { raw.split_once(' ').map(|(_, r)| r).unwrap_or("") } else { raw };
+    let text = rest.splitn(4, ' ').nth(3).unwrap_or("");
+    text.strip_prefix(':').unwrap_or(text)
 }
 
 /// Owned Arc snapshots backing a ParseCtx. Gathered once per message; the
@@ -1932,6 +1977,7 @@ impl IrcService {
 
         *get_own_identity().lock().await = Some((user_info.login.clone(), user_info.id.clone()));
         ChatRules::set_own_identity(&user_info.login, &user_info.id);
+        ChatRules::set_own_display_name(&user_info.display_name);
 
         // Bring up (or reuse) the local WS bridge that fans parsed messages to
         // the frontend. Extracted into ensure_local_ws_bridge so non-Twitch
@@ -2638,18 +2684,10 @@ impl IrcService {
                 let rules = ChatRules::snapshot();
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
                 if !verdict.drop {
-                    crate::services::mention_ping::on_live_message(
-                        &chat_msg,
-                        verdict.mentioned,
-                        verdict.reply_to_me,
-                    );
+                    // Inbox, mention sound and notification, all from one call.
+                    crate::services::mention_inbox::on_verdict(&chat_msg, &verdict);
                     crate::services::chat_row_view::stamp(&mut chat_msg);
-                    #[cfg(desktop)]
-                    crate::services::mention_notify::on_live_message(
-                        &chat_msg,
-                        verdict.mentioned,
-                        verdict.reply_to_me,
-                    );
+                    crate::services::late_third_party::note_if_early(&chat_msg, &enhanced_message);
                 }
 
                 // Deliver to the frontend FIRST (wire order is the only order
@@ -2683,6 +2721,16 @@ impl IrcService {
             }
         } else if trimmed.contains("USERNOTICE") {
             // Subscription, resub, gift sub, etc.
+            // The viewer's own sub, or a gift to them, shows in every chat menu at once.
+            if let Some((room, subscriber)) = crate::services::channel_relationship::sub_notice(trimmed) {
+                let mine = crate::services::account_store::AccountStore::primary()
+                    .is_some_and(|me| me.login.eq_ignore_ascii_case(&subscriber));
+                if mine {
+                    tauri::async_runtime::spawn(async move {
+                        crate::services::channel_state::own_sub_seen(&room).await;
+                    });
+                }
+            }
             // Parse USERNOTICE messages - layout will be measured by frontend
             if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
                 // Skip USERNOTICE messages with no visible content
@@ -2721,6 +2769,7 @@ impl IrcService {
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
                 if !verdict.drop {
                     crate::services::chat_row_view::stamp(&mut chat_msg);
+                    crate::services::late_third_party::note_if_early(&chat_msg, trimmed);
                 }
 
                 // Frontend first, side effects on the ordered lane (no history:
@@ -2871,6 +2920,7 @@ impl IrcService {
                     ChatLoggerService::log_deleted_message(ch, &clear.login, clear.text.as_deref());
                     ChatHistory::mark_deleted(ch, &clear.target_msg_id);
                 }
+                crate::services::mention_inbox::on_message_deleted(&clear.target_msg_id);
                 // Send deletion event to frontend, tagged with channel for routing
                 send_to_bridge(BridgeFrame::maybe_channel(clear.channel.as_deref(), clear.frame().to_string()), false).await;
             }
@@ -2902,6 +2952,13 @@ impl IrcService {
             // A running /spam or /pyramid there hears refusals and bans.
             if let (Some(id), Some(ch)) = (msg_id.as_deref(), extract_channel_from_irc_line(trimmed)) {
                 crate::services::chat_burst::note_notice(&ch, id);
+                // A send refused because of a warning locks the box behind
+                // its Acknowledge button.
+                if crate::services::chat_warning::is_warned_refusal(Some(id), None) {
+                    tokio::spawn(async move {
+                        crate::services::chat_warning::on_refusal(&ch, Some("msg_warned"), None).await;
+                    });
+                }
             }
 
             // A suspended channel can never confirm its JOIN; forget it so the
@@ -3021,6 +3078,10 @@ impl IrcService {
                                                 SHARED_CHAT_ACTIVE.store(
                                                     true,
                                                     std::sync::atomic::Ordering::Relaxed,
+                                                );
+                                                // Who each partner is, ahead of their first row.
+                                                crate::services::shared_chat_source::warm(
+                                                    partner_ids.iter().filter(|id| id.as_str() != room_id).cloned().collect(),
                                                 );
                                             }
 
@@ -3187,9 +3248,17 @@ impl IrcService {
     async fn handle_local_ws(
         local_socket: warp::ws::WebSocket,
         tx: Arc<broadcast::Sender<BridgeFrame>>,
+        born: u64,
     ) {
         let (mut local_tx, mut local_rx) = local_socket.split();
         let mut rx = tx.subscribe();
+        // Resolves once a full stop has come after this socket's server was
+        // built, even one that landed before this task started.
+        let mut closing = bridge_close().subscribe();
+        let stopped = async move {
+            let _ = closing.wait_for(|g| *g != born).await;
+        };
+        tokio::pin!(stopped);
 
         debug!("[WS] New local WebSocket client connected");
 
@@ -3267,6 +3336,13 @@ impl IrcService {
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = &mut stopped => {
+                    let _ = local_tx
+                        .send(warp::ws::Message::close_with(1012u16, "chat service stopped"))
+                        .await;
+                    debug!("[WS] Closed a page socket: the chat service stopped");
+                    break;
+                }
                 frame = rx.recv() => match frame {
                     Ok(f) => {
                         if let Some(text) = route.on_frame(&f) {
@@ -4188,11 +4264,10 @@ impl IrcService {
     /// synchronously with no locks and no data clones - the block_in_place +
     /// block_on bridge this replaced was a runtime-wide scheduling event per
     /// chat message.
-    fn gather_parse_snapshots(channel: &str, sender_id: &str) -> ParseSnapshots {
-        let channel_lookup = channel_parse_lookup()
-            .read()
-            .ok()
-            .and_then(|g| g.get(channel).cloned());
+    /// `partner`: the table of the Shared Chat room the row was sent in, which
+    /// replaces the home channel's (see `shared_chat_emotes`).
+    fn gather_parse_snapshots(channel: &str, sender_id: &str, partner: Option<Arc<EmoteLookup>>) -> ParseSnapshots {
+        let channel_lookup = partner.or_else(|| channel_parse_lookup().read().ok().and_then(|g| g.get(channel).cloned()));
         let personal = if sender_id.is_empty()
             || !PERSONAL_EMOTES_PRESENT.load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -4212,57 +4287,6 @@ impl IrcService {
             personal,
             cheermotes,
         }
-    }
-
-    /// Byte index in `content` right after a leading "@<name>" mention plus its
-    /// following whitespace run, or 0 when no alternative matches. The boundary
-    /// is REQUIRED (whitespace or end of message): with multiple alternatives, a
-    /// short name that prefixes a longer one must never partially strip
-    /// ("@foobarbaz" with login "foobar"). Case-folded per char; alternatives
-    /// are tried in order (login before display name).
-    fn reply_mention_end(content: &str, alts: &[&str]) -> usize {
-        let Some(rest) = content.strip_prefix('@') else {
-            return 0;
-        };
-        for alt in alts {
-            if alt.is_empty() {
-                continue;
-            }
-            let mut rest_chars = rest.char_indices();
-            let mut alt_chars = alt.chars();
-            let matched_end = loop {
-                match alt_chars.next() {
-                    // Name fully matched: the end is the next char's byte index
-                    // (offset by the leading '@'), or end of message.
-                    None => {
-                        break Some(
-                            rest_chars
-                                .next()
-                                .map(|(i, _)| 1 + i)
-                                .unwrap_or(content.len()),
-                        )
-                    }
-                    Some(ac) => match rest_chars.next() {
-                        Some((_, rc)) if rc.to_lowercase().eq(ac.to_lowercase()) => {}
-                        _ => break None,
-                    },
-                }
-            };
-            let Some(end) = matched_end else {
-                continue;
-            };
-            let tail = &content[end..];
-            if tail.is_empty() {
-                return content.len();
-            }
-            if tail.starts_with(char::is_whitespace) {
-                // Consume the whole whitespace run (the old pattern's greedy \s+).
-                return end + (tail.len() - tail.trim_start().len());
-            }
-            // Boundary violated - the name only prefixes a longer word; try the
-            // next alternative.
-        }
-        0
     }
 
     fn parse_message_segments(
@@ -4416,9 +4440,12 @@ impl IrcService {
             // the link becomes its own text run, so "see test.fr." does not
             // put the full stop inside the href.
             if let Some((link, trailing)) = link_detect::split_link(word) {
+                let url = link_detect::link_url(link);
+                let card = crate::commands::link_preview::expected_card(&url).map(String::from);
                 segments.push(MessageSegment::Link {
                     content: link.to_string(),
-                    url: link_detect::link_url(link),
+                    url,
+                    card,
                 });
                 if !trailing.is_empty() {
                     segments.push(MessageSegment::Text {
@@ -4670,14 +4697,10 @@ impl IrcService {
                 }
             }
 
-            let mut msg = result_msg;
-            // Check for ACTION wrapper: \x01ACTION message\x01
-            // Minimum valid: "\x01ACTION X\x01" = 10 chars (8 for header + 1 content + 1 closing)
-            if msg.len() >= 10 && msg.starts_with("\x01ACTION ") && msg.ends_with('\x01') {
-                is_action = true;
-                msg = msg[8..msg.len() - 1].to_string();
-            }
-            msg
+            // A /me arrives wrapped as \x01ACTION message\x01.
+            let (msg, action) = sn_mention_rule::normalize::unwrap_action(&result_msg);
+            is_action = action;
+            msg.to_string()
         } else {
             "".to_string()
         };
@@ -4750,6 +4773,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Use EmotePos struct
         // emotes format: 25:0-4,12-16/1902:6-10 ...
@@ -4822,36 +4852,14 @@ impl IrcService {
         let reply_parent_display_name = tag_map
             .get("reply-parent-display-name")
             .map(|s| s.to_string());
-        let (content_for_segments, stripped_codepoints) = {
-            let mut alts: Vec<&str> = Vec::new();
-            if let Some(ref login) = reply_parent_user_login {
-                if !login.is_empty() {
-                    alts.push(login);
-                }
-            }
-            if let Some(ref disp) = reply_parent_display_name {
-                if !disp.is_empty() {
-                    alts.push(disp);
-                }
-            }
-            if alts.is_empty() {
-                (content.clone(), 0usize)
-            } else {
-                let mention_end = Self::reply_mention_end(&content, &alts);
-                let rest = &content[mention_end..];
-                // Trim parity with the old regex path: whitespace is trimmed
-                // whether or not a mention matched (replies only).
-                let rest_no_lead = rest.trim_start();
-                // Emote positions are CODEPOINT indices (see char_to_byte in
-                // parse_message_segments), so the offset must count codepoints
-                // consumed from the FRONT - the old byte-length delta mis-shifted
-                // emotes whenever a localized display name was stripped, and
-                // wrongly counted trailing trim too.
-                let front_bytes = content.len() - rest_no_lead.len();
-                let front_codepoints = content[..front_bytes].chars().count();
-                (rest_no_lead.trim_end().to_string(), front_codepoints)
-            }
-        };
+        // Emote positions are CODEPOINT indices (see char_to_byte in
+        // parse_message_segments), so the strip reports how many codepoints it
+        // took from the front.
+        let (content_for_segments, stripped_codepoints) = sn_mention_rule::normalize::strip_reply_parent(
+            &content,
+            reply_parent_user_login.as_deref(),
+            reply_parent_display_name.as_deref(),
+        );
 
         // Also update emote positions if we stripped the @mention
         let emotes_adjusted = if stripped_codepoints > 0 {
@@ -4879,7 +4887,13 @@ impl IrcService {
 
         // Parse message content into segments (using stripped content).
         // Snapshots gathered once; parsing is fully synchronous.
-        let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id);
+        // A row from a Shared Chat partner uses that room's emotes, not ours.
+        let partner = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        )
+        .and_then(|room| crate::services::shared_chat_emotes::lookup_for(&privmsg_channel, room, raw));
+        let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id, partner);
         // Cheermotes draw only in a message that carries bits, as on Twitch: a
         // "Cheer100" that spent nothing (typed as text, or the composer's own
         // copy before the echo) is plain text.
@@ -5080,6 +5094,13 @@ impl IrcService {
             .collect();
         crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
         crate::models::chat_layout::order_twitch_badges(&mut badges);
+        // A Shared Chat partner row's channel badges are its own room's.
+        if let Some(room) = crate::services::shared_chat_emotes::partner_room(
+            tag_map.get("source-room-id").copied(),
+            tag_map.get("room-id").copied(),
+        ) {
+            crate::services::shared_chat_emotes::wear_room_badges(room, &mut badges);
+        }
 
         // Parse emotes from user's message content (if any)
         let emotes_str = tag_map.get("emotes").unwrap_or(&"");
@@ -5121,7 +5142,12 @@ impl IrcService {
 
         // Parse message content into segments (if there's user content)
         let segments = if !content.is_empty() {
-            let snapshots = Self::gather_parse_snapshots(&usernotice_channel, &user_id);
+            let partner = crate::services::shared_chat_emotes::partner_room(
+                tag_map.get("source-room-id").copied(),
+                tag_map.get("room-id").copied(),
+            )
+            .and_then(|room| crate::services::shared_chat_emotes::lookup_for(&usernotice_channel, room, raw));
+            let snapshots = Self::gather_parse_snapshots(&usernotice_channel, &user_id, partner);
             Self::parse_message_segments(&content, &emotes, &snapshots.ctx())
         } else {
             Vec::new()
@@ -5277,9 +5303,13 @@ impl IrcService {
 
                 // Same rules as live rows: a hidden user's backfill is hidden
                 // too, and highlights are stamped so the row needs no matcher.
-                if ChatRules::evaluate(&mut chat_msg, &rules).drop {
+                let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
+                if verdict.drop {
                     continue;
                 }
+                // A mention from before you opened the chat still reaches the
+                // inbox (once: it dedupes by id), with no sound or notice.
+                crate::services::mention_inbox::on_backfill(&chat_msg, &verdict);
                 chat_msg.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut chat_msg);
                 results.push(chat_msg);
@@ -5296,6 +5326,60 @@ impl IrcService {
     /// changed go to every window showing the channel as one
     /// `HISTORY_SEGMENTS` frame, which patches them in place. The backlog
     /// itself never waits on the providers.
+    /// Rows from a Shared Chat partner parsed before its set landed, parsed
+    /// again with it; the ones whose emotes change are patched in place in each
+    /// home chat (`HISTORY_SEGMENTS`, segments and view), so nothing on screen
+    /// moves and nothing waited for the set.
+    pub(crate) async fn restamp_partner_rows(room_id: &str, partner: Option<&EmoteLookup>, rows: Vec<(String, String)>) {
+        let mut by_home: HashMap<String, Vec<Value>> = HashMap::new();
+        for (home, raw) in rows {
+            let home_lookup = channel_parse_lookup().read().ok().and_then(|g| g.get(&home).cloned());
+            let emotes_change = partner.is_some_and(|p| {
+                crate::services::shared_chat_emotes::words_change(irc_trailing_text(&raw), p, home_lookup.as_deref())
+            });
+            if !emotes_change && !crate::services::shared_chat_emotes::badges_change(&raw, room_id) {
+                continue;
+            }
+            let parsed = match irc_command(&raw) {
+                Some("PRIVMSG") => Self::parse_privmsg(&raw),
+                Some("USERNOTICE") => Self::parse_usernotice(&raw),
+                _ => None,
+            };
+            let Some(mut msg) = parsed else { continue };
+            crate::services::chat_row_view::stamp(&mut msg);
+            let mut row = json!({
+                "id": msg.id,
+                "segments": msg.segments,
+                "parent_segments": msg.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()),
+                "badges": msg.badges,
+            });
+            if let Some(view) = &msg.metadata.view {
+                row["view"] = json!(view);
+            }
+            by_home.entry(home).or_default().push(row);
+        }
+        for (home, rows) in by_home {
+            debug!("[SharedChat] {home}: {} partner rows now wear their room's emotes and badges", rows.len());
+            let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": home, "rows": rows });
+            send_to_bridge(BridgeFrame::channel(&home, frame.to_string()), false).await;
+        }
+    }
+
+    /// A live chat line (a message or a USERNOTICE) parsed as the read loop
+    /// parses it; None for any other command.
+    pub(crate) fn parse_live_line(raw: &str) -> Option<ChatMessage> {
+        match irc_command(raw) {
+            Some("PRIVMSG") => Self::parse_privmsg(raw),
+            Some("USERNOTICE") => Self::parse_usernotice(raw),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_parse_lookup_for_test(key: &str, set: &EmoteSet) {
+        rebuild_parse_lookup(key, set);
+    }
+
     pub fn spawn_history_restamp(channel: &str, raw: Vec<String>, first: &[ChatMessage]) {
         if raw.is_empty() || first.is_empty() {
             return;
@@ -5332,7 +5416,8 @@ impl IrcService {
         // Clear IRC writer
         *get_irc_writer().lock().await = None;
 
-        // Stop WS server
+        // Stop WS server. This stops it accepting; the page sockets it already
+        // serves are closed at the end, once everything below is cleared.
         if let Some(handle) = get_ws_server_handle().lock().await.take() {
             handle.abort();
         }
@@ -5368,7 +5453,9 @@ impl IrcService {
         // bring-up rather than thinking a stale port is still serving.
         *get_ws_port().lock().await = None;
 
-        debug!("[IRC Chat] Chat service stopped");
+        // Last, so a page that reconnects at once finds everything cleared.
+        close_page_sockets();
+        record_lifecycle("chat service stopped: IRC and the bridge are down, page sockets closed");
 
         Ok(())
     }
@@ -5455,9 +5542,10 @@ impl IrcService {
         let tx = Arc::new(tx);
 
         let tx_for_warp = tx.clone();
+        let born = bridge_generation();
         let local_ws = warp::ws().map(move |ws: warp::ws::Ws| {
             let tx_clone = tx_for_warp.clone();
-            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone))
+            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
         // Pick a free port via an ephemeral probe bind, then hand it to warp. (warp 0.4
         // exposes no ephemeral bind that returns the port, and a fixed random port in a
@@ -5510,9 +5598,10 @@ impl IrcService {
         }
         let previous = *get_ws_port().lock().await;
         let tx_for_warp = tx.clone();
+        let born = bridge_generation();
         let local_ws = warp::ws().map(move |ws: warp::ws::Ws| {
             let tx_clone = tx_for_warp.clone();
-            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone))
+            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
         let probe = match previous {
             Some(p) => match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
@@ -6030,7 +6119,7 @@ impl IrcService {
         };
         // The broadcaster wrote the title, so the redeemer's personal emotes
         // and cheermotes have no part in it.
-        let snapshots = Self::gather_parse_snapshots(&r.channel, "");
+        let snapshots = Self::gather_parse_snapshots(&r.channel, "", None);
         let ctx = ParseCtx {
             channel: snapshots.channel.as_deref(),
             no_cheermotes: true,
@@ -6612,17 +6701,17 @@ mod tests {
     #[test]
     fn reply_mention_strip_boundaries() {
         // Exact name + space: mention and the whole whitespace run consumed.
-        assert_eq!(IrcService::reply_mention_end("@foo  hi", &["foo"]), 6);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foo  hi", &["foo"]), 6);
         // Name at end of message: everything consumed.
-        assert_eq!(IrcService::reply_mention_end("@foo", &["foo"]), 4);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foo", &["foo"]), 4);
         // Boundary REQUIRED: a name prefixing a longer word must not strip.
-        assert_eq!(IrcService::reply_mention_end("@foobarbaz hi", &["foobar"]), 0);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@foobarbaz hi", &["foobar"]), 0);
         // Case-insensitive match.
-        assert_eq!(IrcService::reply_mention_end("@FoO hi", &["foo"]), 5);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@FoO hi", &["foo"]), 5);
         // Second alternative (display name) matches when login does not.
-        assert_eq!(IrcService::reply_mention_end("@ふー hi", &["foo", "ふー"]), 8);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("@ふー hi", &["foo", "ふー"]), 8);
         // No leading @: untouched.
-        assert_eq!(IrcService::reply_mention_end("foo hi", &["foo"]), 0);
+        assert_eq!(sn_mention_rule::normalize::reply_mention_end("foo hi", &["foo"]), 0);
     }
 
     #[test]
@@ -7293,10 +7382,29 @@ mod chat_fixture_tests {
     const INPUTS: &str = include_str!("../../../ios/Tests/Fixtures/chat-inputs.json");
 
     fn frames() -> (Value, Vec<String>) {
+        // The rule tests set their own account; hold the identity until done.
+        let _own = crate::services::chat_rules::ChatRules::own_identity_test_lock();
         let inputs: Value = serde_json::from_str(INPUTS).expect("chat inputs parse");
         let channel = inputs["channel"].as_str().unwrap().to_string();
         let set: EmoteSet = serde_json::from_value(inputs["emotes"].clone()).expect("emote set");
         rebuild_parse_lookup(&channel, &set);
+        // The invite's card as Discord's public invite read answers it.
+        crate::services::link_preview_cache::remember_for_test(
+            "https://discord.gg/discord-developers",
+            crate::commands::link_preview::LinkPreview {
+                url: "https://discord.gg/discord-developers".into(),
+                kind: "discord".into(),
+                title: Some("Discord Developers".into()),
+                image: Some(
+                    "https://cdn.discordapp.com/icons/613425648685547541/a_1d18823294be0ccfbcdec090c8ffcc0d.gif?size=128".into(),
+                ),
+                site_name: Some("Discord".into()),
+                author: Some("discord.gg/discord-developers".into()),
+                online_count: Some(70761),
+                member_count: Some(308559),
+                ..Default::default()
+            },
+        );
         crate::services::chat_row_view::note_twitch_badges(
             None,
             inputs["twitch_badges"].as_array().unwrap().iter().map(|b| {
@@ -7374,6 +7482,12 @@ mod chat_fixture_tests {
         // A mention of the viewer is stamped by the rule engine.
         assert_eq!(row(&parsed, "fx-0007")["metadata"]["is_mentioned"], json!(true));
 
+        // A Discord invite carries its server card, read before the row was sent.
+        let invite = &row(&parsed, "fx-discord")["metadata"]["view"]["previews"][0];
+        assert_eq!(invite["url"], json!("https://discord.gg/discord-developers"));
+        assert_eq!(invite["preview"]["kind"], json!("discord"));
+        assert_eq!(invite["preview"]["member_count"], json!(308559));
+
         // Paints, Twitch badge art and the 7TV badge for a chatter the cache knows.
         let owl = row(&parsed, "fx-0001");
         assert_eq!(owl["metadata"]["view"]["paint"]["kind"], json!("linear"));
@@ -7407,5 +7521,46 @@ mod chat_fixture_tests {
             });
             std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").expect("write fixtures");
         }
+    }
+}
+
+#[cfg(test)]
+mod bridge_close_tests {
+    use super::{bridge_generation, close_page_sockets, IrcService};
+    use futures_util::StreamExt;
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// The close code a page socket ends with, or `None` when it ended without one.
+    async fn close_code(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ) -> Option<u16> {
+        while let Some(frame) = socket.next().await {
+            match frame {
+                Ok(Message::Close(c)) => return c.map(|f| u16::from(f.code)),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    // Drives the same close `IrcService::stop` ends with, without the rest of
+    // its teardown: that clears process-wide caches other tests here read.
+    #[tokio::test]
+    async fn a_full_stop_closes_the_page_socket_it_left_open() {
+        let port = IrcService::ensure_local_ws_bridge().await.expect("bridge up");
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
+            .await
+            .expect("page socket connects");
+
+        let before = bridge_generation();
+        close_page_sockets();
+        assert_ne!(bridge_generation(), before);
+
+        let code = tokio::time::timeout(Duration::from_secs(5), close_code(&mut socket))
+            .await
+            .expect("the page socket closes within five seconds");
+        assert_eq!(code, Some(1012), "a service-restart close, so the page reconnects");
     }
 }

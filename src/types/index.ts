@@ -63,11 +63,14 @@ export interface VideoPlayerSettings {
   /** Relay bases to prefer, comma or newline separated. Empty = bundled pool. */
   ad_bypass_proxies?: string;
   /**
-   * What leaving the app does while a stream plays. Android only.
+   * What happens once a playing stream can no longer float. Phones only.
+   * Leaving the app always floats the video in picture-in-picture first, where
+   * the phone allows it.
    *
-   * 'pip'   - float the video in a system picture-in-picture window (default).
-   * 'audio' - no floating window; drop to the audio-only rendition and keep
-   *           playing behind a media notification that taps back into the app.
+   * 'pip'   - closing the window ends the stream (default).
+   * 'audio' - Background play: closing the window, or leaving when the video
+   *           cannot float, keeps playing on the audio-only rendition behind a
+   *           media notification that taps back into the app.
    */
   background_mode?: 'pip' | 'audio';
   /** Scroll over the player to adjust volume. Default true. */
@@ -380,6 +383,8 @@ export interface ChatDesignSettings {
   mod_slider_delete?: boolean;
   mod_slider_timeouts?: number[];
   mod_slider_ban?: boolean;
+  // The phones' press-and-hold menu offers Delete, Timeout and Ban (moderators).
+  mod_hold_buttons?: boolean;
   // How far the slider's steps sit apart: 18, 22 (default) or 28 px each, the
   // same at every chat width (a narrow chat squeezes them to fit).
   mod_slider_length?: 'short' | 'medium' | 'long';
@@ -634,6 +639,101 @@ export interface ChatBurstSettings {
   vary_repeats?: boolean;
 }
 
+// What counts as a mention of you, and which chats keep them quiet.
+// Mirrored in models/settings.rs (MentionSettings).
+export interface MentionSettings {
+  // Your login as a whole word, without the @. Default true.
+  match_bare_login?: boolean;
+  // Your display name, when it differs from your login. Default true.
+  match_display_name?: boolean;
+  // Highlight phrases count as mentions (inbox and notifications). Default true.
+  highlight_words?: boolean;
+  // Room keys (bare Twitch login, provider:slug otherwise) that never notify
+  // or reach the inbox.
+  muted_channels?: string[];
+  // Mentions while you're away: StreamNook's server watches chat in followed
+  // channels for your name and replies (services/mention_watch.rs). Default false.
+  away_alerts?: boolean;
+}
+
+// One entry in the mentions inbox (services/mention_inbox.rs `MentionEntry`).
+// Rust files, reads and removes them; the pages only draw them.
+export type MentionKind = 'mention' | 'reply' | 'word';
+
+export interface MentionEntry {
+  /** The platform's message id. */
+  id: string;
+  platform: string;
+  /** Chat key: bare Twitch login, `provider:slug` otherwise (lowercased). */
+  room: string;
+  /** What opens this chat (`startStream`): like `room` but keeping the
+   *  channel's own case (a YouTube id is case-sensitive). Older entries lack it. */
+  open_key?: string;
+  /** The channel's own page on its platform (live page or video), for a shell
+   *  that cannot show this platform's chat. Older entries lack it. */
+  watch_url?: string;
+  /** A Twitch login (lowercased), else the slug or id with its own case. */
+  channel_login: string;
+  channel_id?: string | null;
+  sender_id: string;
+  sender_login: string;
+  sender_name: string;
+  sender_color?: string | null;
+  text: string;
+  kind: MentionKind;
+  reply_parent_id?: string | null;
+  at_ms: number;
+  read: boolean;
+  /** A moderator deleted the message after it was filed. */
+  removed: boolean;
+  /** The message as the chat drew it, words and emotes in order. Absent on
+   *  older entries and on a message with no emote: show `text`. */
+  parts?: MentionPart[];
+}
+
+/** One piece of a filed message (mention_inbox.rs `MentionPart`). */
+export type MentionPart = { type: 'text'; text: string } | { type: 'emote'; name: string; url: string };
+
+/** The phones' inbox chips (mention_inbox.rs `InboxFilter`; `whispers` once
+ *  the whisper store joins the view). */
+export type InboxFilterId = 'all' | 'mentions' | 'highlights' | 'whispers';
+
+/** One row of `get_inbox_view`: the newest of a run of identical messages. */
+export interface InboxRowView {
+  entry: MentionEntry;
+  /** The older identical messages, newest first. */
+  folded: { id: string; at_ms: number; read: boolean }[];
+  /** Any message in the row is unread. */
+  unread: boolean;
+  /** The sender's picture, once Rust has it. */
+  avatar: string | null;
+}
+
+/** `get_inbox_view` (commands/mention_inbox.rs `InboxView`). */
+export interface InboxView {
+  rows: InboxRowView[];
+  has_more: boolean;
+  /** The `beforeMs` that asks for the next page. */
+  before_ms: number | null;
+  unread_total: number;
+  chips: { id: InboxFilterId; unread: number }[];
+}
+
+/** `mention-arrived`: a live entry just filed unread, for the card over the
+ *  message bar. */
+export interface MentionArrival {
+  entry: MentionEntry;
+  avatar: string | null;
+}
+
+/** `get_mention_inbox` (commands/mention_inbox.rs `MentionPage`). */
+export interface MentionPage {
+  /** Newest first. */
+  entries: MentionEntry[];
+  has_more: boolean;
+  unread_total: number;
+}
+
 // Render / perf controls. All optional with defaults preserving prior behavior.
 export interface ChatRenderSettings {
   // Animate the scroll when the user clicks the "Resume" button at the
@@ -704,6 +804,10 @@ export interface ChatInputSettings {
   // in the message box while they are on. Typed in Rust
   // (models/settings.rs ChatInputSettings), which owns the default: on.
   show_room_modes?: boolean;
+  // Which end of the phones' message bar the inbox button takes: left (the
+  // default, the chat menu on the right) or right (the pair mirrored). Typed
+  // in Rust (models/settings.rs ChatInputSettings), which owns the default.
+  inbox_button_side?: 'left' | 'right';
   // How the modes show: named in place of "Send a message" only while one
   // holds you back (the default), or one chip at the box's edge whenever a
   // mode is on. Typed in Rust beside show_room_modes.
@@ -853,7 +957,10 @@ export interface CustomThemePalette {
   accent: CustomThemeColor;
   accentHover: CustomThemeColor;
   accentMuted: CustomThemeColor;
-  
+  /** Written by Rust on load (theme_palette::lift_custom_themes): the accent
+   *  floored to 3:1 on the theme's raised surface. Absent on an older save. */
+  accentOnSurface?: CustomThemeColor;
+
   // Border colors
   border: CustomThemeColor;
   borderLight: CustomThemeColor;
@@ -1228,6 +1335,9 @@ export interface Settings {
   snippets?: SnippetSettings;
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
+  mentions?: MentionSettings;
+  /** The phones' Chats screen keeps the screen on while in front, until 30 min pass with no touch. Default on. */
+  chats_keep_screen_on?: boolean;
   live_notifications?: LiveNotificationSettings;
   last_seen_version?: string;
   auto_switch?: AutoSwitchSettings;
@@ -1440,8 +1550,20 @@ export interface ModerationSettings {
   // message's moderation controls. First entry is the prefilled default.
   saved_ban_reasons?: string[];
   // Timeout durations (seconds) offered on the hover dock and drag dial.
-  // Default [1, 600, 3600, 86400].
+  // Default [1, 600, 3600, 86400]. The phones' user card shows the first four.
   timeout_presets?: number[];
+  // The viewer's own buttons on a user card in channels they moderate
+  // (Rust services/chatter_card.rs reads them; at most six are shown).
+  card_actions?: ModCardAction[];
+}
+
+export interface ModCardAction {
+  label: string;
+  kind: 'timeout' | 'ban' | 'unban' | 'warn';
+  /** Timeout length in seconds (timeouts only). */
+  seconds?: number;
+  /** Sent with the action; a warning without one asks for it. */
+  reason?: string;
 }
 
 export interface ModLogEvent {
@@ -1604,6 +1726,19 @@ export interface SharedChat {
   label: string;
 }
 
+/** The signed-in viewer's relationship to a Twitch channel (Rust
+ *  `channel_relationship::Relationship`). */
+export interface ChannelRelationship {
+  /** null while unknown (no sign-in, or Twitch did not answer). */
+  following: boolean | null;
+  subscribed: boolean;
+  /** Subscribed before, not now: the control offers to resubscribe. */
+  has_sub_history: boolean;
+  cumulative_months: number;
+  /** The subscriber badge the viewer's months (or next month) wear. */
+  badge_url: string | null;
+}
+
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
 export interface ChannelState {
   login: string;
@@ -1622,7 +1757,14 @@ export interface ChannelState {
   pinned: unknown[];
   pinned_at: number | null;
   collab: Collaboration | null;
+  /** Outside a Stream Together group, the Twitch Shared Chat session the
+   *  channel's chat is in. Read with `collab` (same tick, `collab_at`). */
+  shared_chat: SharedChat | null;
   collab_at: number | null;
+  /** The viewer's follow and subscription here, read when the chat opens;
+   *  null until the first answer. */
+  relationship: ChannelRelationship | null;
+  relationship_at: number | null;
 }
 
 /** One changed section, the payload of the `channel-state` event. */
@@ -1639,7 +1781,8 @@ export type ChannelStateUpdate =
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
   | { section: 'bits'; login: string; bits: ChannelBitsFace | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
-  | { section: 'collab'; login: string; collab: Collaboration | null; at: number };
+  | { section: 'collab'; login: string; collab: Collaboration | null; shared_chat: SharedChat | null; at: number }
+  | { section: 'relationship'; login: string; relationship: ChannelRelationship | null; at: number };
 
 /** One channel's bulk hype-train status, as Rust reports it. */
 export interface HypeTrainBulkStatus {
@@ -2597,6 +2740,28 @@ export interface WhisperUpdate {
   message: Whisper | null;
 }
 
+/** One row of Rust's `whisper_list`: the conversation's meta, flattened, with
+ *  its newest line. */
+export interface WhisperListRow {
+  key: string;
+  user_id: string;
+  user_login: string;
+  user_name: string;
+  profile_image_url: string | null;
+  last_message_timestamp: number;
+  unread_count: number;
+  last_text: string;
+  last_is_sent: boolean;
+}
+
+/** Rust's `whisper_list`: the signed-in account's conversations, newest
+ *  first. `owner_id` is empty when nobody is signed in; the writes take it. */
+export interface WhisperList {
+  owner_id: string;
+  conversations: WhisperListRow[];
+  unread_total: number;
+}
+
 // Hype Train Types
 export interface HypeTrainContributor {
   user_id: string;
@@ -2652,4 +2817,117 @@ export interface SubStanding {
     art: string | null;
     text: string;
   } | null;
+}
+
+// ---- Poll and prediction cards (services/predictions.rs, services/poll_view.rs) ----
+// Rust decides every number and word on these cards; the shells only draw them.
+
+/** One side of a prediction, as Rust worded it. */
+export interface OutcomeView {
+  id: string;
+  title: string;
+  /** Twitch's color for the side, lowercase: `blue`, `pink`, others as sent. */
+  color: string;
+  /** Share of the points, 0 to 100. */
+  percent: number;
+  /** What one point returns if this side wins: "1:2.78". */
+  ratio: string;
+  points_label: string;
+  people_label: string;
+  winner: boolean;
+  mine: boolean;
+}
+
+/** How a prediction ended, for the viewer. */
+export interface ResultView {
+  tone: 'won' | 'lost' | 'refunded' | 'ended';
+  line: string;
+}
+
+/** One prediction card, decided in full by Rust. */
+export interface PredictionView {
+  channel_id: string;
+  prediction_id: string;
+  title: string;
+  phase: 'open' | 'locked' | 'resolving' | 'ended';
+  /** Unix ms the window closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Ended". */
+  badge: string | null;
+  outcomes: OutcomeView[];
+  can_predict: boolean;
+  /** The side the viewer already staked; the other sides cannot be chosen. */
+  picked: string | null;
+  status_line: string | null;
+  result: ResultView | null;
+  totals_line: string;
+  points_name: string;
+  points_icon: string | null;
+}
+
+/** `prediction-state` push, and `get_channel_prediction`'s answer. */
+export interface PredictionPush {
+  channel_id: string;
+  view: PredictionView | null;
+}
+
+export interface BetPreset {
+  label: string;
+  amount: number;
+}
+
+/** What a bet would do, in the card's and the confirm's words. Spends nothing. */
+export interface BetView {
+  amount: number;
+  max: number;
+  presets: BetPreset[];
+  ok: boolean;
+  problem: string | null;
+  button: string;
+  win_line: string;
+  confirm_title: string;
+  confirm_line: string;
+  confirm_note: string | null;
+  balance_line: string | null;
+}
+
+/** What `predict` answered; `message` is the toast either way. */
+export interface PredictOutcome {
+  success: boolean;
+  message: string;
+  view: PredictionView | null;
+}
+
+export interface ChoiceView {
+  id: string;
+  title: string;
+  /** Share of the votes, 0 to 100. */
+  percent: number;
+  votes_label: string;
+  mine: boolean;
+  winner: boolean;
+}
+
+/** One poll card, decided in full by Rust. */
+export interface PollView {
+  channel_id: string;
+  poll_id: string;
+  title: string;
+  phase: 'open' | 'closed' | 'ended';
+  /** Unix ms the poll closes, while open: the card ticks to it. */
+  deadline_ms: number | null;
+  /** The time slot's words when there is no countdown: "Closed", "Final". */
+  badge: string | null;
+  choices: ChoiceView[];
+  can_vote: boolean;
+  my_choice_id: string | null;
+  footer: string;
+  voters_line: string;
+  result_line: string | null;
+}
+
+/** `poll-state` push. */
+export interface PollPush {
+  channel_id: string;
+  view: PollView | null;
 }

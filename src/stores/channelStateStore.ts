@@ -1,8 +1,8 @@
 // Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs):
 // the live broadcast (viewer count, start, title, category), Shared Viewership (who the channel is streaming with and the
 // combined count), channel points (balance, custom name/icon, an available
-// bonus claim, the last gain), the wallet's bits face and pinned messages for
-// every Twitch channel some window has chat
+// bonus claim, the last gain), the wallet's bits face, pinned messages and the
+// viewer's follow and subscription for every Twitch channel some window has chat
 // open on. A window registers a watch per channel; Rust polls each section on
 // its own cadence (viewers as one Helix batch for every watched channel) and
 // emits `channel-state` only when the content changed. This store is the
@@ -53,7 +53,12 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
         break;
       case 'collab':
         next.collab = update.collab;
+        next.shared_chat = update.shared_chat ?? null;
         next.collab_at = update.at;
+        break;
+      case 'relationship':
+        next.relationship = update.relationship;
+        next.relationship_at = update.at;
         break;
     }
     const channels = new Map(get().channels);
@@ -91,7 +96,10 @@ function emptyState(login: string): ChannelState {
     pinned: [],
     pinned_at: null,
     collab: null,
+    shared_chat: null,
     collab_at: null,
+    relationship: null,
+    relationship_at: null,
   };
 }
 
@@ -121,7 +129,12 @@ export function newestSections(prev: ChannelState, incoming: ChannelState): Chan
   }
   if (isNewer(prev.collab_at, incoming.collab_at)) {
     out.collab = prev.collab;
+    out.shared_chat = prev.shared_chat;
     out.collab_at = prev.collab_at;
+  }
+  if (isNewer(prev.relationship_at, incoming.relationship_at)) {
+    out.relationship = prev.relationship;
+    out.relationship_at = prev.relationship_at;
   }
   return out;
 }
@@ -175,7 +188,10 @@ export async function unwatchChannel(login: string, liveOnly = false): Promise<v
 }
 
 /** Ask Rust to refresh one section now (after a pin, a claim, a spend). */
-export function refreshChannelState(login: string, section: 'viewers' | 'points' | 'bits' | 'pinned'): Promise<void> {
+export function refreshChannelState(
+  login: string,
+  section: 'viewers' | 'points' | 'bits' | 'pinned' | 'relationship',
+): Promise<void> {
   return invoke<void>('refresh_channel_state', { login: login.toLowerCase(), section }).catch((e: unknown) => {
     Logger.debug('[ChannelState] refresh failed:', e);
   });

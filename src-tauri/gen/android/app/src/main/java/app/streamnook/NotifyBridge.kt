@@ -54,4 +54,34 @@ object NotifyBridge {
     startedAt: String,
     login: String,
   ): Boolean
+
+  /**
+   * "May I show this mention?" for a push from the mention server: the same
+   * rules as the app's own mention notices (switches, muted chats, streamer
+   * mode, and not one the running app already caught). A running app also
+   * pulls it into Mentions.
+   *
+   * Fast (settings file IO, no network), but still not for the main thread.
+   */
+  external fun claimMention(
+    baseDir: String,
+    id: String,
+    room: String,
+  ): Boolean
+
+  /**
+   * Sends a reply typed into a whisper notification, through the same Rust
+   * send the Whispers screen uses. Returns "" when Twitch took it, else the
+   * reason it was not sent (the words every platform shows).
+   *
+   * Blocking (a network call): only from a receiver's worker thread.
+   */
+  external fun replyWhisper(
+    baseDir: String,
+    userId: String,
+    login: String,
+    name: String,
+    avatar: String,
+    text: String,
+  ): String
 }

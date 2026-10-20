@@ -1,0 +1,31 @@
+[package]
+name = "sn-mention-watcher"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reads followed live Twitch chats anonymously for opted-in StreamNook users and hands their mentions to the notify Worker"
+
+# A standalone service, never linked into the app. Built on its own:
+#   cargo build --release --manifest-path src-tauri/crates/sn-mention-watcher/Cargo.toml
+
+[[bin]]
+name = "sn-mention-watcher"
+path = "src/main.rs"
+
+[dependencies]
+sn-mention-rule = { path = "../sn-mention-rule" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "fs"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+hmac = "0.12"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "debuginfo"

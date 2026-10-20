@@ -65,6 +65,7 @@ async fn moderate(a: &Value, action: ModAction) -> Result<Value, String> {
         action,
         reason: os(a, "reason"),
         use_saved_reason: false,
+        typed: None,
     };
     to(crate::services::moderation::moderate(request).await.map_err(|e| e.to_string()))
 }

@@ -202,11 +202,13 @@ pub struct VideoPlayerSettings {
     pub ad_bypass_proxies: String,
     /// What leaving the app does while a stream is playing (Android only).
     ///
-    /// "pip"   - float the video in a system picture-in-picture window. Default,
-    ///           and the behaviour the phone app has always had.
-    /// "audio" - no floating window: the stream drops to its audio-only
-    ///           rendition and keeps playing behind a media notification, which
-    ///           taps back into the app.
+    /// Leaving the app always floats the video in a system picture-in-picture
+    /// window where the phone allows it; this decides what happens after that:
+    /// "pip"   - closing the window ends the stream. Default.
+    /// "audio" - "Background play": closing the window, or leaving when the
+    ///           video cannot float, keeps the stream going on its audio-only
+    ///           rendition behind a media notification, which taps back into
+    ///           the app.
     ///
     /// The audio path is not merely a preference. Backgrounding without PiP
     /// destroys the activity's window surface, and Chromium tears down a media
@@ -396,6 +398,10 @@ pub struct ChatDesignSettings {
     /// The slider ends in Ban.
     #[serde(default = "default_true")]
     pub mod_slider_ban: bool,
+    /// The phones' press-and-hold menu offers Delete, Timeout and Ban.
+    /// Moderators only; the user card's Moderate row keeps them either way.
+    #[serde(default = "default_true")]
+    pub mod_hold_buttons: bool,
     /// How far the slider's steps sit apart, the same at every chat width:
     /// "short" (18 px), "medium" (22 px), "long" (28 px); a narrow chat
     /// squeezes them to fit.
@@ -697,6 +703,7 @@ impl Default for ChatDesignSettings {
             mod_slider_delete: true,
             mod_slider_timeouts: default_mod_slider_timeouts(),
             mod_slider_ban: true,
+            mod_hold_buttons: true,
             mod_slider_length: default_mod_slider_length(),
             mod_slider_style: default_mod_slider_style(),
             mod_line_buttons: false,
@@ -1109,6 +1116,12 @@ pub struct Settings {
     pub glass_blur: bool,
     #[serde(default)]
     pub setup_complete: bool,
+    /// These settings were written on an install that keeps the install
+    /// marker (`services::install_marker`). Backed up with the settings, so a
+    /// restore that finds it without the marker knows it came from elsewhere.
+    /// Backend-owned: a frontend save never writes it.
+    #[serde(default)]
+    pub install_marked: bool,
     /// Set once this install has been moved onto the first-run chat look (see
     /// `adopt_first_run_look_once`). Backend-owned: a frontend save never
     /// writes it, so a later choice of the old look is never flipped again.
@@ -1183,6 +1196,14 @@ pub struct Settings {
     /// are varied. Typed because the Rust runner reads it.
     #[serde(default)]
     pub chat_burst: ChatBurstSettings,
+    /// What counts as a mention of you, and which chats keep them quiet.
+    /// Typed because the chat rules and the mentions inbox read it.
+    #[serde(default)]
+    pub mentions: MentionSettings,
+    /// The phones' Chats screen keeps the screen on while it is in front, until
+    /// `chat_tabs::KEEP_AWAKE_IDLE_SECS` pass with no touch.
+    #[serde(default = "default_true")]
+    pub chats_keep_screen_on: bool,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1292,6 +1313,10 @@ pub struct ChatInputSettings {
     /// with it set.
     #[serde(default)]
     pub room_modes_prompt_adopted: bool,
+    /// Which end of the phones' message bar the inbox button takes: `left`
+    /// (the default, the chat menu on the right) or `right` (the pair
+    /// mirrored, for a right thumb).
+    pub inbox_button_side: String,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1304,6 +1329,7 @@ impl Default for ChatInputSettings {
             show_room_modes: true,
             room_modes_style: "prompt".into(),
             room_modes_prompt_adopted: true,
+            inbox_button_side: "left".into(),
             extra: HashMap::new(),
         }
     }
@@ -1401,6 +1427,44 @@ impl Default for ChatBurstSettings {
         Self {
             delay_ms: crate::services::chat_burst::DEFAULT_DELAY_MS,
             vary_repeats: true,
+            extra: HashMap::new(),
+        }
+    }
+}
+
+/// What counts as someone mentioning you, and where mentions stay quiet.
+/// Read by the chat rules (services/mention_match.rs) and the mentions inbox.
+/// Mirrors the frontend `MentionSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct MentionSettings {
+    /// Your login as a whole word, without the `@`.
+    pub match_bare_login: bool,
+    /// Your display name, when it differs from your login.
+    pub match_display_name: bool,
+    /// Your highlight phrases count as mentions too: they file into the
+    /// inbox and notify.
+    pub highlight_words: bool,
+    /// Chats whose mentions still highlight but never notify or reach the
+    /// inbox, by room key (bare Twitch login, `provider:slug` otherwise).
+    pub muted_channels: Vec<String>,
+    /// Mentions while you're away: StreamNook's server watches chat in the
+    /// channels you follow for your name and replies (`services::mention_watch`).
+    /// Off until chosen.
+    pub away_alerts: bool,
+    /// Keys the frontend adds to this group before this struct names them.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for MentionSettings {
+    fn default() -> Self {
+        Self {
+            match_bare_login: true,
+            match_display_name: true,
+            highlight_words: true,
+            muted_channels: Vec::new(),
+            away_alerts: false,
             extra: HashMap::new(),
         }
     }
@@ -1561,6 +1625,8 @@ impl Default for Settings {
             cosmetics: CosmeticsSettings::default(),
             chat_input: ChatInputSettings::default(),
             chat_burst: ChatBurstSettings::default(),
+            mentions: MentionSettings::default(),
+            chats_keep_screen_on: true,
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,
@@ -1571,6 +1637,7 @@ impl Default for Settings {
             glass_transparency: None,
             glass_blur: default_glass_blur(),
             setup_complete: false, // New users need to complete setup
+            install_marked: false,
             first_run_look_adopted: true, // already starts with that look
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
@@ -1714,6 +1781,7 @@ impl Settings {
         self.drops = authoritative.drops.clone();
         self.channel_links = authoritative.channel_links.clone();
         self.first_run_look_adopted = authoritative.first_run_look_adopted;
+        self.install_marked = authoritative.install_marked;
     }
 
     /// One-time move of an existing install onto the first-run chat look,
@@ -1799,6 +1867,26 @@ impl Settings {
         }
     }
 
+    /// Moves the retired second OLED theme onto OLED. It was a fixed-orange
+    /// variant of the now-unified OLED theme, so a viewer with no accent of
+    /// their own keeps the orange and their look is unchanged. Runs on load, so
+    /// every shell gets it; returns whether anything changed.
+    pub fn retire_oled_v2(&mut self) -> bool {
+        if self.theme != "prince0fdubai-oled-v2" {
+            return false;
+        }
+        self.theme = crate::services::theme_palette::OLED_THEME_ID.to_string();
+        let has_accent = self
+            .extra
+            .get("oled_accent")
+            .and_then(|v| v.as_str())
+            .is_some_and(|a| !a.is_empty());
+        if !has_accent {
+            self.extra.insert("oled_accent".into(), serde_json::json!("#ff9933"));
+        }
+        true
+    }
+
     pub fn retire_legacy_live_edge_gap(&mut self) {
         if self.video_player.ll_target_latency == Some(LEGACY_LIVE_EDGE_GAP_DEFAULT) {
             self.video_player.ll_target_latency = None;
@@ -1814,11 +1902,98 @@ impl Settings {
             .get_mut("custom_themes")
             .is_some_and(crate::services::theme_palette::lift_custom_themes)
     }
+
+    /// Rewrites hidden chat event keys an older iPhone build saved in its own
+    /// spelling (`twitch:subscriptions`, `kick:follows`) into the keys every
+    /// shell matches rows by (`twitch:subscription`, `kick:follow`), so a kind
+    /// someone turned off stays off on every device. Runs on load, on every
+    /// save and on import; returns whether anything changed.
+    pub fn map_legacy_event_keys(&mut self) -> bool {
+        let Some(list) = self
+            .extra
+            .get_mut("chat_events")
+            .and_then(|e| e.get_mut("hidden_provider_events"))
+            .and_then(|l| l.as_array_mut())
+        else {
+            return false;
+        };
+        let mut changed = false;
+        let mut next: Vec<serde_json::Value> = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            let mapped = item.as_str().and_then(legacy_event_key).map(serde_json::Value::from);
+            changed |= mapped.is_some();
+            let value = mapped.unwrap_or_else(|| item.clone());
+            if next.contains(&value) {
+                changed = true;
+            } else {
+                next.push(value);
+            }
+        }
+        if changed {
+            *list = next;
+        }
+        changed
+    }
+}
+
+/// The settings key for a hidden chat event an older iPhone build wrote, or
+/// None when `key` is already current.
+fn legacy_event_key(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "twitch:subscriptions" => "twitch:subscription",
+        "twitch:gifts" => "twitch:gift",
+        "twitch:bits" => "twitch:cheer",
+        "twitch:raids" => "twitch:raid",
+        "twitch:milestones" => "twitch:milestone",
+        "twitch:channel_points" => "twitch:redemption",
+        "twitch:announcements" => "twitch:announcement",
+        "kick:subscriptions" => "kick:subscription",
+        "kick:gifts" => "kick:gift",
+        "kick:follows" => "kick:follow",
+        "kick:raids" => "kick:raid",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod backup_persistence_tests {
     use super::*;
+
+    #[test]
+    fn the_retired_oled_theme_becomes_oled_with_its_orange() {
+        let mut old = Settings::default();
+        old.theme = "prince0fdubai-oled-v2".into();
+        assert!(old.retire_oled_v2());
+        assert_eq!(old.theme, crate::services::theme_palette::OLED_THEME_ID);
+        assert_eq!(old.extra.get("oled_accent").and_then(|v| v.as_str()), Some("#ff9933"));
+        // An accent the viewer picked stays, and a second pass changes nothing.
+        let mut picked = Settings::default();
+        picked.theme = "prince0fdubai-oled-v2".into();
+        picked.extra.insert("oled_accent".into(), serde_json::json!("#00e0ff"));
+        assert!(picked.retire_oled_v2());
+        assert_eq!(picked.extra.get("oled_accent").and_then(|v| v.as_str()), Some("#00e0ff"));
+        assert!(!picked.retire_oled_v2());
+        assert!(!Settings::default().retire_oled_v2());
+    }
+
+    #[test]
+    fn legacy_iphone_event_keys_become_the_shared_ones() {
+        let mut s = Settings::default();
+        s.extra.insert(
+            "chat_events".into(),
+            serde_json::json!({ "hidden_provider_events": [
+                "twitch:subscriptions", "twitch:bits", "twitch:subscription", "kick:follows", "youtube:cheer", 7
+            ] }),
+        );
+        assert!(s.map_legacy_event_keys());
+        assert_eq!(
+            s.extra["chat_events"]["hidden_provider_events"],
+            serde_json::json!(["twitch:subscription", "twitch:cheer", "kick:follow", "youtube:cheer", 7])
+        );
+        // Current keys are left alone, and a second pass changes nothing.
+        assert!(!s.map_legacy_event_keys());
+        assert!(!Settings::default().map_legacy_event_keys());
+    }
 
     #[test]
     fn header_marks_reset_the_global_platform_switches_once() {

@@ -15,12 +15,15 @@ import { registerChatSearchController } from '../keybindings/chatSearchControlle
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
 
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
-import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
+import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor, ensureChannelHistory } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { onWalletRequest, takeWalletRequest } from '../utils/walletRequest';
+import { onMentionJump, requestMentionJump, takeMentionJump, type MentionJump } from '../stores/mentionJumpStore';
+import { useVisibleMentionRooms } from '../stores/mentionInboxStore';
+import { MentionContextCard } from './mentions/MentionContextCard';
 import { isHomeRow, rowProvider } from '../utils/chatAuthority';
 import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
 import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
@@ -31,7 +34,7 @@ import BlendBar, { type BlendView } from './chat/BlendBar';
 import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
-import { PROVIDERS, type ProviderId } from '../types/providers';
+import type { ProviderId } from '../types/providers';
 import { ChatCircle, Chats, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
 import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
@@ -48,7 +51,6 @@ import { useAppStore } from '../stores/AppStore';
 import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } from '../stores/channelStateStore';
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
-import { incrementStat } from '../services/supabaseService';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
 import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
@@ -62,7 +64,10 @@ import ErrorBoundary from './ErrorBoundary';
 import PredictionOverlay from './PredictionOverlay';
 import PollOverlay from './PollOverlay';
 import { ChatOverlayStack } from './chat/ChatOverlayStack';
+import { useChatTopStack } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
+import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
+import { useStreamManager } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
@@ -104,6 +109,7 @@ import {
   EmoteTabCandidate,
 } from '../utils/chatInputWord';
 import {
+  matchEmoteFill,
   matchEmotes,
   rowsToTabCandidates,
   createRequestSeq,
@@ -137,9 +143,9 @@ interface ParsedMessage {
 
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { usePinStore } from '../stores/pinStore';
-import { useVodReplayStore, useVodReplaySnapshot, nudgeVodReplay } from '../stores/vodReplayStore';
+import { useVodReplayStore, useVodReplaySnapshot, setVodReplayShowing } from '../stores/vodReplayStore';
 import { SegmentedSelect } from './settings/_primitives';
-import type { TwitchStream, HypeTrainData } from '../types';
+import type { TwitchStream, HypeTrainData, MentionEntry } from '../types';
 
 import { Logger } from '../utils/logger';
 
@@ -290,6 +296,9 @@ interface ChatMessagesPanelProps {
 /** How many consecutive untagged messages end the shared-chat indicator. */
 const SHARED_CHAT_END_STREAK = 10;
 
+/** How long a share banner says "shared" before it goes. */
+const SHARE_SHOWN_MS = 2500;
+
 const ChatMessagesPanel = ({
   channelKey,
   provider,
@@ -327,6 +336,9 @@ const ChatMessagesPanel = ({
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
+  // The join's history answered: an empty room has no recent messages (rather
+  // than still waiting for them).
+  const historyLoaded = useChannelChatMeta(override ? null : channelKey).historyLoaded;
   // A saved filter narrows this pane to rows the Rust rule engine stamped
   // with its id (metadata.filter_ids). Render-time only, so switching the
   // filter never drops history; O(buffer) per flush, and the buffer is capped.
@@ -578,8 +590,12 @@ const ChatMessagesPanel = ({
       onMouseLeave={() => { hoveringRef.current = false; }}
     >
       {src.messages.length === 0 ? (
-        <div className="h-full flex items-center justify-center">
-          <p className="text-textSecondary text-sm">Waiting for messages...</p>
+        <div className="h-full flex items-center justify-center px-6">
+          {historyLoaded ? (
+            <p className="text-center text-[13px] text-textMuted">No recent messages</p>
+          ) : (
+            <p className="text-textSecondary text-sm">Waiting for messages...</p>
+          )}
         </div>
       ) : (
         <ErrorBoundary componentName="ChatWidgetList" reportToLogService={true}>
@@ -752,7 +768,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Read before the replay seam below, which gates on it.
   const currentMediaType = useAppStore((s) => s.currentMediaType);
   const replayChat = useVodReplaySnapshot();
-  const replaySessionId = useVodReplayStore((s) => s.sessionId);
   const replayActive = useVodReplayStore((s) => s.active);
   // The toggle is available whenever a VOD replay session exists — started for a
   // VOD opened from the Videos list OR via the offline-channel button. Never in
@@ -763,21 +778,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     !channelOverride &&
     replayActive &&
     (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
-  const [chatMode, setChatMode] = useState<'replay' | 'live'>('replay');
+  // The VOD Chat / Live Chat switch lives in the replay store, shared with the
+  // phone's chat pane; a new VOD always starts on replay, and switching back to
+  // replay catches up to the playhead at once.
+  const chatMode = useVodReplayStore((s) => s.showing);
   const chat = isVodReplay && chatMode === 'replay' ? replayChat : isTwitch ? twitchChat : providerChat;
   const { connectChat, sendMessage, isConnected, setPaused: setBufferPaused, roomState, userBadges } = chat;
-
-  // A new VOD always starts in replay (beginVodReplay bumps sessionId).
-  useEffect(() => {
-    setChatMode('replay');
-  }, [replaySessionId]);
-
-  // Returning to replay from live: catch up to the current playhead instantly.
-  // The engine keeps running across the toggle, so this never resets position —
-  // it just avoids waiting up to one poll interval to resync.
-  useEffect(() => {
-    if (isVodReplay && chatMode === 'replay') nudgeVodReplay();
-  }, [isVodReplay, chatMode]);
 
   // Kick sending requires a connected Kick account (OAuth). Poll the state so the
   // composer enables right after the user connects.
@@ -804,6 +810,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const tiktokConnected = usePlatformAccountStore(
     (s) => provider === 'tiktok' && s.tiktok.connected,
   );
+  // The sign-in chips offer only what this build can sign in to (Rust's roster).
+  const youtubeCanSignIn = usePlatformAccountStore((s) => s.youtube.canSignIn);
+  const tiktokCanSignIn = usePlatformAccountStore((s) => s.tiktok.canSignIn);
   const connectPlatformAccount = usePlatformAccountStore((s) => s.connect);
   // YouTube exposes no "are you a mod" flag, so the backend probes a message's
   // context menu. This one is a REAL network probe, not a local read, so it stays
@@ -1436,6 +1445,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // at the same spot, so a live poll and a pin are both readable at once.
   const [overlayStackEl, setOverlayStackEl] = useState<HTMLDivElement | null>(null);
   const [overlayStackHeight, setOverlayStackHeight] = useState(0);
+  // The poll and prediction stack's layout, from Rust: order, the one open
+  // card, and a cap measured against this chat's height.
+  const topStack = useChatTopStack(chatContainerEl);
   useEffect(() => {
     if (!overlayStackEl) return;
     const sync = () => setOverlayStackHeight(Math.round(overlayStackEl.getBoundingClientRect().height));
@@ -1588,10 +1600,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           ? { ...prev, source, query, pending: true }
           : { source, anchor, query, rows: [], total: 0, ready: true, pending: true, selected: 0 },
       );
-      void matchEmotes(emoteMatchTarget, query, 'search', {
-        twitchFirst: source === 'colon',
-        limit: query ? 150 : 200,
-      }).then((res) => {
+      // The colon list is the emote fill menu the phones' strip shares.
+      const ask =
+        source === 'colon'
+          ? matchEmoteFill(emoteMatchTarget, `:${query}`)
+          : matchEmotes(emoteMatchTarget, query, 'search', { limit: query ? 150 : 200 });
+      void ask.then((res) => {
         if (!emoteListSeq.isCurrent(n)) return;
         setEmoteList((prev) =>
           prev && prev.anchor === anchor
@@ -1697,6 +1711,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [watchStreak, setWatchStreak] = useState<WatchStreakMilestone | null>(null);
   const [isWatchStreakMode, setIsWatchStreakMode] = useState(false);
   const [watchStreakDismissed, setWatchStreakDismissed] = useState(false);
+  // Twitch's answer to the last share, shown in its banner: a brief "shared"
+  // before the banner goes, or one line saying it did not go through.
+  const [streakFeedback, setStreakFeedback] = useState<'shared' | 'failed' | null>(null);
+  const [resubFeedback, setResubFeedback] = useState<'shared' | 'failed' | null>(null);
 
   // Drops automation state
   const [dropsCampaign, setDropsCampaign] = useState<{ id: string; name: string; game_name: string } | null>(null);
@@ -1788,6 +1806,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // reason. The mode still shows in the message box.
   const isInputDisabled =
     !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
+  // A chat nothing can be sent to (a VOD's recorded chat, a platform with no
+  // send path) shows no composer at all, as on both phones: nothing explains
+  // what it cannot do. A platform whose account is only not connected yet
+  // keeps the composer and asks for the sign-in.
+  const composerHidden =
+    isReplayReadOnly || (!canSendHere && provider !== 'kick' && provider !== 'youtube' && provider !== 'tiktok');
   // The room's chat modes, worded by Rust (services/room_modes.rs) and shipped
   // on the ROOMSTATE frame, for every platform that reports them. One place
   // shows them, the viewer's pick: a chip at the field's end that stays while
@@ -1799,38 +1823,32 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const roomModesAsPrompt = settings.chat_input?.room_modes_style !== 'chip';
   const roomModePrompt = roomModesAsPrompt ? (roomModes?.prompt ?? null) : null;
   const roomModePromptShort = roomModesAsPrompt ? (roomModes?.prompt_short ?? null) : null;
-  const chatPlaceholder = isReplayReadOnly
-    ? 'Viewing chat replay (read-only)'
-    : !canSendHere
+  const chatPlaceholder = !canSendHere
     ? provider === 'kick'
       ? 'Connect your Kick account to send'
       : provider === 'youtube'
       ? 'Connect your YouTube account to send'
-      : provider === 'tiktok'
-      ? 'Connect your TikTok account to send'
-      : "Read-only — sending isn't available yet"
+      : 'Connect your TikTok account to send'
     : twitchSignInOwed
     ? 'Sign in again to chat'
     : isWatchStreakMode
-    ? "Add a message (optional)..."
+    ? 'Add a message to your watch streak'
+    : isResubMode
+    ? 'Add a message to your resub'
     : roomModePrompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
   // placeholder. utils/composerNarrow.ts swaps between the two.
-  const chatPlaceholderNarrow = isReplayReadOnly
-    ? 'Read-only'
-    : !canSendHere
-    ? provider === 'kick' || provider === 'youtube' || provider === 'tiktok'
-      ? 'Sign in'
-      : 'Read-only'
+  const chatPlaceholderNarrow = !canSendHere
+    ? 'Sign in'
     : twitchSignInOwed
     ? 'Sign in'
-    : isWatchStreakMode
+    : isWatchStreakMode || isResubMode
     ? 'Message'
     : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
-  // saying something the user can act on (read-only, connect your account,
+  // saying something the user can act on (connect your account,
   // sub-only, a room mode), so hiding it only ever drops the idle "Send a
   // message" prompt.
   const chatInputPrefs = settings.chat_input;
@@ -2157,8 +2175,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // the wrong identity entirely.
     if (!isTwitch) return;
     if (!isConnected) return;
-    const selfId = currentUser?.user_id;
-    if (!selfId) return;
+    const me = currentUser;
+    const selfId = me?.user_id;
+    if (!me || !selfId) return;
 
     // Seed YOUR OWN user into the per-user chat store on connect. Twitch never
     // echoes your own PRIVMSG back over IRC, so the message-processing effect
@@ -2171,8 +2190,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // cosmetics onto it via the bridge.
     addUser({
       userId: selfId,
-      username: currentUser!.login || currentUser!.username || '',
-      displayName: currentUser!.display_name || currentUser!.username || selfId,
+      username: me.login || me.username || '',
+      displayName: me.display_name || me.username || selfId,
       color: '#9147FF',
     });
 
@@ -2245,8 +2264,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return s.offlineLastBroadcasts[offlineChannelId] ?? null;
   });
   // Shared Viewership: while the channel streams with others, the header shows
-  // a Together chip beside the channel's own count.
-  const collab = isTwitch ? (channelState?.collab ?? null) : null;
+  // a Together chip beside the channel's own count. Outside one, a Twitch
+  // Shared Chat session takes the same slot ("Shared chat" with the partners'
+  // faces; Rust reads it with the group), so people know whose chatters these
+  // are.
+  const sharedChatGroup = isTwitch ? (channelState?.shared_chat ?? null) : null;
+  const collab = isTwitch ? (channelState?.collab ?? sharedChatGroup) : null;
 
   // Auto-heal a set whose 7TV rows are not this channel's real dictionary. Rust
   // says so with `seven_tv_ok`: false when the channel document fetch failed and
@@ -2773,6 +2796,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     isVodReplay: !!isVodReplay,
     hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
   });
+  // The stream manager, read from Rust when a chat you manage opens (one read,
+  // then Rust's pushes), so the Tools menu opens with its rows already there.
+  const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
+  const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
+  if (managerChannel !== currentStream?.user_id) {
+    setManagerChannel(currentStream?.user_id);
+    setManagerPanel(null);
+  }
+  const streamManager = useStreamManager(
+    toolSections.polls ? currentStream?.user_id : null,
+    currentStream?.user_login ?? '',
+    true,
+  );
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
       ? {
@@ -2998,6 +3034,67 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       useAppStore.getState().addToast('Original message is no longer in chat history', 'info');
     }
   }, [scrollToMessage]);
+
+  // ---- Mentions --------------------------------------------------------------
+  // The rooms this chat shows (the slice keys the paused counter totals, which
+  // are Rust's room keys). The main chat reports them as on screen, and any
+  // chat showing a mention's room takes its jump: scroll to the message and
+  // flash it; if it is not loaded yet, wait for the join history, then ask for
+  // the history once more; if it is older than that, pin the entry on top.
+  const mentionRooms = activeView === 'chat' && !(isVodReplay && chatMode === 'replay') ? pausedCountKeys : '';
+  useVisibleMentionRooms(isMainSurface ? mentionRooms : '');
+  const [mentionCard, setMentionCard] = useState<{ rooms: string; entry: MentionEntry } | null>(null);
+  const mentionChannelId = isTwitch ? currentStream?.user_id : undefined;
+  const mentionScrollRef = useRef(scrollToMessage);
+  useEffect(() => { mentionScrollRef.current = scrollToMessage; }, [scrollToMessage]);
+  useEffect(() => {
+    if (!mentionRooms) return;
+    const rooms = mentionRooms.split('|');
+    let cancelled = false;
+    let inFlight: MentionJump | null = null;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const wait = (ms: number) => new Promise<void>((resolve) => { timers.push(setTimeout(resolve, ms)); });
+    const loaded = (id: string) => messagesRef.current.some((m) => getMessageId(m) === id);
+    const waitFor = async (id: string, ms: number) => {
+      const end = Date.now() + ms;
+      while (!cancelled && Date.now() < end) {
+        if (loaded(id)) return true;
+        await wait(250);
+      }
+      return loaded(id);
+    };
+    const run = async (jump: MentionJump) => {
+      inFlight = jump;
+      let hit = await waitFor(jump.id, 4000);
+      if (!hit && !cancelled && mentionChannelId && !jump.room.includes(':')) {
+        await ensureChannelHistory(jump.room, mentionChannelId);
+        hit = await waitFor(jump.id, 1500);
+      }
+      if (cancelled) return;
+      inFlight = null;
+      if (hit) {
+        setMentionCard(null);
+        mentionScrollRef.current(jump.id, { highlight: true, align: 'center' });
+      } else {
+        setMentionCard(jump.entry ? { rooms: mentionRooms, entry: jump.entry } : null);
+      }
+    };
+    const take = () => {
+      const jump = takeMentionJump(rooms);
+      if (jump) void run(jump);
+    };
+    take();
+    const off = onMentionJump(take);
+    return () => {
+      cancelled = true;
+      off();
+      timers.forEach(clearTimeout);
+      // The rooms changed mid-search (a companion attached): hand the jump
+      // back so the chat's next set of rooms takes it.
+      if (inFlight) requestMentionJump(inFlight);
+    };
+  }, [mentionRooms, mentionChannelId, getMessageId]);
+  const shownMentionCard = mentionCard && mentionCard.rooms === mentionRooms ? mentionCard.entry : null;
 
   // ---- Keyboard moderation controller --------------------------------------
   // Bridges the global keybinding engine to this chat. Only the primary chat
@@ -3236,6 +3333,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const runModeration = async (
       verb: 'ban' | 'timeout' | 'unban',
       seconds: number | null,
+      typed: string | null = null,
     ) => {
       if (!isModerator) {
         notice(`You don't have moderator permissions in this channel.`);
@@ -3263,7 +3361,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               : seconds === null
                 ? { kind: 'ban' }
                 : { kind: 'timeout', seconds },
-          reason: verb === 'unban' ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          reason: verb === 'unban' || typed !== null ? null : args.slice(verb === 'timeout' ? 2 : 1).join(' ') || null,
+          typed,
         });
         useAppStore.getState().addToast(outcome.message, 'success');
       } catch (err) {
@@ -3278,11 +3377,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       case 'ban':
         await runModeration('ban', null);
         return;
-      case 'timeout': {
-        const secs = Number(args[1]);
-        await runModeration('timeout', Number.isFinite(secs) && secs > 0 ? secs : 600);
+      case 'timeout':
+        // Rust reads the length and reason as every app does: a leading length,
+        // else Twitch's ten minutes with every word as the reason.
+        await runModeration('timeout', 600, args.slice(1).join(' '));
         return;
-      }
       // Clears their messages with the shortest timeout the platform has
       // (a minute on Kick).
       case 'purge':
@@ -3293,7 +3392,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         await runModeration('unban', null);
         return;
       default:
-        notice(`/${cmd} isn't available on ${PROVIDERS[provider].label}.`);
+        notice(`/${cmd} works in Twitch chats only.`);
     }
   };
 
@@ -3308,6 +3407,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // platform's own connection, so a Kick/YouTube user with no Twitch login
     // can still talk.
     const senderReady = isTwitch ? !!currentUser : canSendHere;
+    // Signed in, with the profile still on its way (a session kept through a
+    // network failure at launch): the draft stays and the toast says why,
+    // as the phone's composer does. Never a silent drop.
+    if (isTwitch && !currentUser && useAppStore.getState().isAuthenticated && messageInput.trim() && isConnected) {
+      useAppStore.getState().addToast('Not sent: your Twitch profile is still loading.', 'warning');
+      return;
+    }
     if ((messageInput.trim() || isWatchStreakMode || isResubMode) && isConnected && senderReady) {
       const inputSettings = useAppStore.getState().settings.chat_input;
       const keepInput = !!opts?.keepInput;
@@ -3367,15 +3473,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             tokenId: resubNotification.id,
           });
           if (success) {
-            setResubNotification(null); // Token consumed
-            setResubDismissed(true);
+            // Token consumed: said in the banner, which then goes.
+            setResubFeedback('shared');
+            setTimeout(() => {
+              setResubNotification(null);
+              setResubDismissed(true);
+              setResubFeedback(null);
+            }, SHARE_SHOWN_MS);
           } else {
-            useAppStore.getState().addToast('Failed to share resub notification', 'error');
+            setResubFeedback('failed');
             setMessageInput(messageToSend);
           }
         } catch (err) {
-          Logger.error('[ChatWidget] Failed to use resub token:', err);
-          useAppStore.getState().addToast('Failed to share resub notification', 'error');
+          Logger.warn('[ChatWidget] Resub share did not go through:', err);
+          setResubFeedback('failed');
           setMessageInput(messageToSend);
         }
         return;
@@ -3391,16 +3502,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             message: messageToSend || null,
           });
           if (success) {
-            setWatchStreak(null); // Milestone consumed
-            setWatchStreakDismissed(true);
-            useAppStore.getState().addToast('Watch streak shared!', 'success');
+            // Milestone consumed: said in the banner, which then goes.
+            setStreakFeedback('shared');
+            setTimeout(() => {
+              setWatchStreak(null);
+              setWatchStreakDismissed(true);
+              setStreakFeedback(null);
+            }, SHARE_SHOWN_MS);
           } else {
-            useAppStore.getState().addToast('Failed to share watch streak', 'error');
+            setStreakFeedback('failed');
             setMessageInput(messageToSend);
           }
         } catch (err) {
-          Logger.error('[ChatWidget] Failed to share watch streak:', err);
-          useAppStore.getState().addToast('Failed to share watch streak', 'error');
+          Logger.warn('[ChatWidget] Watch streak share did not go through:', err);
+          setStreakFeedback('failed');
           setMessageInput(messageToSend);
         }
         return;
@@ -3442,17 +3557,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
         // Intercept slash commands
         if (messageToSend.startsWith('/')) {
+          // The profile can still be on its way (a session kept through a
+          // network failure at launch): the line then goes without one.
+          const user = currentUser;
           const handled = await handleSlashCommand(
-            messageToSend, 
-            currentStream?.user_id || '', 
+            messageToSend,
+            currentStream?.user_id || '',
             currentStream?.user_login || '',
-            (msg) => sendMessage(msg, {
-              username: currentUser!.login || currentUser!.username,
-              displayName: currentUser!.display_name || currentUser!.username,
-              userId: currentUser!.user_id,
-              color: undefined,
-              badges: ''
-            })
+            (msg) =>
+              user
+                ? sendMessage(msg, {
+                    username: user.login || user.username,
+                    displayName: user.display_name || user.username,
+                    userId: user.user_id,
+                    color: undefined,
+                    badges: '',
+                  })
+                : sendMessage(msg)
           );
           
           if (handled) {
@@ -3522,11 +3643,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         // Stats and emote tallies are keyed by the Twitch user id, so they only
         // apply when a Twitch account is linked.
         if (currentUser) {
-          // Track message sent stat for analytics
-          incrementStat(currentUser.user_id, 'messages_sent', 1).catch(err => {
-            Logger.warn('[ChatWidget] Failed to track message sent stat:', err);
-          });
-
           // Tally emote usage from this message into the member's persisted
           // most-used-emotes counts (best effort, non-blocking).
           void trackEmoteUsage(messageToSend, currentStream?.user_id || null, currentUser.user_id);
@@ -4577,36 +4693,34 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
         {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
-            prediction at once, so they stack in one column rather than both
-            pinning themselves to the same box. Order is the user's choice. */}
-        <ChatOverlayStack top={overlayTop} stackRef={setOverlayStackEl} hidden={activeView !== 'chat'}>
-          {(settings.chat_overlay_order === 'poll-first'
-            ? (['poll', 'prediction'] as const)
-            : (['prediction', 'poll'] as const)
-          ).map((kind) => {
-            // Polls and predictions are Twitch products driven by EventSub. On a
-            // provider stream both overlays were still mounting and watching a
-            // Kick slug / YouTube UC id that can never produce an event.
-            if (!isTwitch) return null;
-            if (kind === 'poll') {
-              if (settings.show_polls === false) return null;
-              return (
-                <PollOverlay
-                  key="poll"
-                  channelId={currentStream?.user_id}
-                  channelLogin={currentStream?.user_login}
-                />
-              );
-            }
-            if (settings.show_predictions === false) return null;
-            return (
-              <PredictionOverlay
-                key="prediction"
-                channelId={currentStream?.user_id}
-                channelLogin={currentStream?.user_login}
-              />
-            );
-          })}
+            prediction at once, so they stack in one column, laid out by Rust:
+            the user's order, one card open, and no more than its share of
+            the chat's height (the open card scrolls inside it).
+            Polls and predictions are Twitch products driven by EventSub. On a
+            provider stream both overlays were still mounting and watching a
+            Kick slug / YouTube UC id that can never produce an event. */}
+        <ChatOverlayStack
+          top={overlayTop}
+          maxHeight={topStack.maxHeight}
+          stackRef={setOverlayStackEl}
+          hidden={activeView !== 'chat'}
+        >
+          {isTwitch && settings.show_predictions !== false && (
+            <PredictionOverlay
+              key="prediction"
+              channelId={currentStream?.user_id}
+              channelLogin={currentStream?.user_login}
+              stack={topStack.control.prediction}
+            />
+          )}
+          {isTwitch && settings.show_polls !== false && (
+            <PollOverlay
+              key="poll"
+              channelId={currentStream?.user_id}
+              channelLogin={currentStream?.user_login}
+              stack={topStack.control.poll}
+            />
+          )}
         </ChatOverlayStack>
 
         {/* Chat header - transforms when Hype Train active */}
@@ -4726,13 +4840,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                       data-fit-label
-                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat ? 'iridescent-title' : ''}`}
+                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat && !sharedChatGroup ? 'iridescent-title' : ''}`}
                     >
                       {!isConnected
                         ? 'Disconnected'
                         : channelOverride && !isMainSurface
                           ? channelOverride.user_name || channelOverride.user_login || 'Stream chat'
-                          : isSharedChat
+                          : isSharedChat && !sharedChatGroup
                             ? 'Shared stream chat'
                             : currentMediaType === 'offline_chat'
                               ? 'Offline chat'
@@ -5015,6 +5129,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {/* Pinned messages are now rendered in a floating modal outside the header */}
           </div>
         </div>
+
+        {/* A mention older than this chat's history, pinned above the
+            messages (over the pin, which it outranks while it is up). */}
+        {shownMentionCard && activeView === 'chat' && (
+          <div
+            className="absolute left-3 right-3 z-[16] pointer-events-none flex flex-col items-center"
+            style={{ top: pinnedTop }}
+          >
+            <MentionContextCard entry={shownMentionCard} onDismiss={() => setMentionCard(null)} />
+          </div>
+        )}
 
         {/* Free Floating Pinned Message Modal */}
         {pinnedMessages.length > 0 && (
@@ -5509,8 +5634,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {composerKind && currentStream?.user_id && (
                 <PollPredictionComposer
                   broadcasterId={currentStream.user_id}
+                  channelLogin={currentStream.user_login}
                   initialKind={composerKind}
                   onClose={() => setComposerKind(null)}
+                  onOutcome={streamManager.apply}
+                />
+              )}
+              {managerPanel && streamManager.view && (
+                <StreamManagerPanel
+                  kind={managerPanel}
+                  view={streamManager.view}
+                  queue={streamManager.queue}
+                  onQueue={streamManager.setQueue}
+                  onOutcome={streamManager.apply}
+                  onClose={() => setManagerPanel(null)}
                 />
               )}
               <AnimatePresence>
@@ -5534,8 +5671,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   resubNotification={resubNotification}
                   channelLogin={currentStream.user_login}
                   isResubMode={isResubMode}
+                  feedback={resubFeedback}
                   includeStreak={includeStreak}
                   onActivateShare={() => {
+                    setResubFeedback(null);
                     setIsResubMode(true);
                     setReplyingTo(null); // Clear reply mode if active
                     inputRef.current?.focus({ preventScroll: true });
@@ -5556,7 +5695,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 <WatchStreakBanner
                   milestone={watchStreak}
                   isStreakMode={isWatchStreakMode}
+                  feedback={streakFeedback}
                   onActivateShare={() => {
+                    setStreakFeedback(null);
                     setIsWatchStreakMode(true);
                     setIsResubMode(false); // Can't be in both modes
                     setReplyingTo(null);
@@ -5634,7 +5775,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   <SegmentedSelect
                     fullWidth
                     value={chatMode}
-                    onChange={(v) => setChatMode(v)}
+                    onChange={(v) => setVodReplayShowing(v)}
                     options={[
                       { value: 'replay', label: 'VOD Chat' },
                       { value: 'live', label: 'Live Chat' },
@@ -5645,6 +5786,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
               {/* In a narrow chat column the tools compress in place so the
                   field keeps a usable width (utils/composerNarrow.ts). */}
+              {!composerHidden && (
               <div ref={trackComposerWidth} className="sn-composer-row flex items-center gap-2 min-w-0">
                 {/* The channel wallet: points and bits, balances on the
                     button or on hover. While the watched channel has a bonus
@@ -5681,8 +5823,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     isBroadcaster={!!isBroadcaster}
                     canModerate={toolSections.moderate}
                     canRunPolls={toolSections.polls}
-                    onStartPoll={setComposerKind}
-                    pollBuilderOpen={!!composerKind}
+                    onStartPoll={(kind) => {
+                      setManagerPanel(null);
+                      setComposerKind(kind);
+                    }}
+                    pollBuilderOpen={!!composerKind || !!managerPanel}
+                    manager={streamManager.view}
+                    onOpenManager={(kind) => {
+                      setComposerKind(null);
+                      setManagerPanel(kind);
+                    }}
+                    onManagerOutcome={streamManager.apply}
                     drops={dropsTool}
                     roomState={roomState}
                   />
@@ -5744,7 +5895,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       onSelectedIndexChange={setMentionSelectedIndex}
                     />
                   )}
-                  {/* Emote list (":" plus two letters, or Tab) */}
+                  {/* Emote list (":" plus a letter or digit, or Tab) */}
                   <AnimatePresence>
                     {emoteList &&
                       // A colon list stays out of the way until something matches;
@@ -5961,6 +6112,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 </button>
                 </Tooltip>
               </div>
+              )}
             </div>
             {!isConnected && <p className="text-xs text-yellow-400 mt-2">Chat is not connected. Messages cannot be sent.</p>}
             {/* Why Twitch sends are off, beside the same sign-in Home runs.
@@ -5994,7 +6146,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 />
               </div>
             )}
-            {isMainSurface && provider === 'youtube' && !youtubeConnected && (
+            {isMainSurface && provider === 'youtube' && !youtubeConnected && youtubeCanSignIn && (
               <div className="mt-2 flex justify-end">
                 <PlatformAccountChip
                   provider="youtube"
@@ -6003,7 +6155,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 />
               </div>
             )}
-            {isMainSurface && provider === 'tiktok' && !tiktokConnected && (
+            {isMainSurface && provider === 'tiktok' && !tiktokConnected && tiktokCanSignIn && (
               <div className="mt-2 flex justify-end">
                 <PlatformAccountChip
                   provider="tiktok"

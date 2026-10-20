@@ -2,13 +2,30 @@ import { parseBadges } from './twitchBadges';
 import type { SongMatch } from '../utils/songId';
 import type { ProviderId } from '../types/providers';
 import { kickBadgeImage } from '../utils/kickBadges';
+import type { HeldRowData } from '../stores/automodStore';
+
+/** The card kind a link's shape all but always gets (Rust `expected_card`), so
+ *  its loading card holds exactly that card's room. */
+export type LinkCardShape =
+  | 'youtube'
+  | 'clip'
+  | 'vod'
+  | 'youtube_channel'
+  | 'tweet'
+  | 'discord'
+  | 'steam'
+  | 'spotify'
+  | 'instagram'
+  | 'generic';
 
 // Message segment types - matches Rust MessageSegment enum
 export type MessageSegment =
   | { type: 'text'; content: string }
   | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean }
   | { type: 'emoji'; content: string; emoji_url: string }
-  | { type: 'link'; content: string; url: string }
+  // `card`: the preview card kind this link's shape all but always gets; absent
+  // when it may have none.
+  | { type: 'link'; content: string; url: string; card?: LinkCardShape }
   // Cheermote segment for animated bits (e.g., Cheer500)
   | { type: 'cheermote'; content: string; prefix: string; bits: number; tier: string; color: string; cheermote_url: string }
   // Twitch chat GIF (GIPHY-backed). `content` is the bracketed description the
@@ -154,6 +171,8 @@ export interface BackendChatMessage {
   metadata?: MessageMetadata;
   // Local-only: the "/song" result card (album art + clickable service links).
   songCard?: SongMatch;
+  // Local-only: a message AutoMod held, drawn with Allow and Deny (phones).
+  automodHeld?: HeldRowData;
 }
 
 // Frontend-facing reply info (camelCase for consistency)
@@ -224,6 +243,24 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
       }
     } else {
       badgeData = parseBadges(badgeStr, effectiveChannelId);
+      // A Shared Chat partner row's channel badges arrive with that room's own
+      // art (Rust reads the partner's badge set); that art wins over the cache.
+      if (raw.metadata?.is_from_shared_chat) {
+        badgeData = badgeData.map((entry, i) => {
+          const carried = raw.badges[i];
+          if (!carried?.image_url_1x) return entry;
+          return {
+            ...entry,
+            info: {
+              ...(entry.info ?? {}),
+              image_url_1x: carried.image_url_1x,
+              image_url_2x: carried.image_url_2x ?? carried.image_url_1x,
+              image_url_4x: carried.image_url_4x ?? carried.image_url_1x,
+              title: carried.title ?? entry.info?.title,
+            },
+          };
+        });
+      }
     }
 
     // PHASE 3.1 - THE ENDGAME: Use pre-computed reply info from Rust

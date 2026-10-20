@@ -395,6 +395,12 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     )
     .await;
     log::info!("[WatchStart] {login}: drops, points and the watch session follow it");
+    // Can this broadcast be rewound, and where did the viewer leave its recording: the
+    // cached lookup also files the archive for the live bookmark. Every app shares it here;
+    // the desktop still reads the answer for its Rewind button (cached, so no second fetch).
+    if current(ticket) {
+        let _ = streaming::get_live_rewind_info(login.clone()).await;
+    }
 }
 
 /// An offline room opened: the room's facts, or the live row when the card that
@@ -527,10 +533,12 @@ pub async fn stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: 
     if let Err(e) = streaming::stop_stream().await {
         log::warn!("[WatchStart] stop_stream failed: {e}");
     }
-    watch_session::stop(app, preserve_backend).await;
+    watch_session::stop(app.clone(), preserve_backend).await;
     if preserve_backend {
         return;
     }
+    // A stop the viewer makes ends their sleep timer too (the timer's own stop finds it off).
+    crate::services::sleep_timer::cancel(&app);
     let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
     if let Some(id) = channel_id {
         let _ = streaming::unregister_active_channel(id, state.clone()).await;

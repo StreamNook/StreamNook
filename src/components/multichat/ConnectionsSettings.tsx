@@ -69,6 +69,15 @@ export default function ConnectionsSettings() {
   const kickFollowCount = follows.filter((f) => f.provider === 'kick').length;
   const youtubeFollowCount = follows.filter((f) => f.provider === 'youtube').length;
 
+  // Only what this build can do is listed: a platform whose sign-in it cannot
+  // run (and that is not connected), or one with no adapter yet, is left out.
+  const offered = (p: ProviderId): boolean => {
+    if (statusFor(p) === 'soon') return false;
+    if (p === 'youtube') return youtube.canSignIn || youtube.connected;
+    if (p === 'tiktok') return tiktok.canSignIn || tiktok.connected;
+    return true;
+  };
+
   const statusFor = (p: ProviderId): Status => {
     if (p === 'twitch') return 'native';
     if (p === 'kick') return kickConnected ? 'connected' : 'disconnected';
@@ -118,7 +127,7 @@ export default function ConnectionsSettings() {
       </p>
 
       <div className="hairline-y overflow-hidden rounded-lg border border-borderSubtle">
-        {PROVIDER_IDS.map((p) => {
+        {PROVIDER_IDS.filter((p) => offered(p)).map((p) => {
           const meta = PROVIDERS[p];
           const status = statusFor(p);
           return (
@@ -169,14 +178,18 @@ export default function ConnectionsSettings() {
               {p === 'youtube' &&
                 (youtubeConnected ? (
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => void resyncYoutube()}
-                      disabled={youtubeBusy}
-                      className="glass-button-secondary px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-textPrimary disabled:opacity-60"
-                    >
-                      Sync
-                    </button>
+                    {/* Reading the channels again runs the same session harvest
+                        the sign-in does, so it is offered where that can run. */}
+                    {youtube.canSignIn && (
+                      <button
+                        type="button"
+                        onClick={() => void resyncYoutube()}
+                        disabled={youtubeBusy}
+                        className="glass-button-secondary px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-textPrimary disabled:opacity-60"
+                      >
+                        Sync
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={disconnectYoutube}

@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -13,19 +13,25 @@ import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
 import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngine';
+import { useVodProgressReporter } from '../../hooks/useVodProgressReporter';
+import { listenSleepTimer, sleepTimerRunning, useSleepTimer } from './sleepTimer';
 import { makeKey } from '../../utils/providerKey';
 import { setLiveVideo } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
-import { collabLabel } from '../../utils/sharedViewers';
+import { collabLabel, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
 import { CastSheet } from '../cast/CastSheet';
-import { isCastable } from '../cast/castState';
+import { isCastable, useCastState } from '../cast/castState';
 import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { registerReplayClock } from '../../stores/vodReplayStore';
+import { VodSeekBar, VodTransport, useVodClock } from './VodControls';
+import { recordedLine, seekTarget } from '../watch/channelMedia';
+import { useChannelSheet } from '../watch/MobileChannelSheet';
 
 const CONTROLS_HIDE_MS = 3000;
 // Every bottom-bar glyph at one size, so no button out-pulls another.
@@ -73,6 +79,11 @@ const GIVE_WAY_SUBSCRIBE = 3;
 const GAP_SUB = 8;
 const GAP_METRICS = 8;
 
+/** The bottom bar's buttons, left to right: the most used at the right, under
+ *  the thumb, Minimize last. Clip joins after Share once the phone clips land
+ *  (the iPhone has it there already). */
+const BAR_ORDER = ['cast', 'share', 'mute', 'reload', 'settings', 'chat', 'rotate', 'minimize'] as const;
+
 export const MobilePlayer: React.FC<{
   /** Landscape immersive mode: overlay carries no bottom rounding, adds insets. */
   immersive?: boolean;
@@ -80,6 +91,10 @@ export const MobilePlayer: React.FC<{
   /** Shrink into the floating player. In-app that is the mini box; leaving the
    *  app hands the same thing to the OS as system picture-in-picture. */
   onMinimize?: () => void;
+  /** Turns the screen between portrait and landscape full screen. */
+  onRotate?: () => void;
+  /** The screen is on its side now (the rotate button's glyph and label). */
+  landscapeNow?: boolean;
   /** Mini/PiP presentation: video only, no overlay chrome. */
   compact?: boolean;
   /** Current big-screen arrangement, for the toggle's icon and label. */
@@ -97,6 +112,8 @@ export const MobilePlayer: React.FC<{
   immersive = false,
   onToggleFullscreen,
   onMinimize,
+  onRotate,
+  landscapeNow = false,
   compact = false,
   layoutMode,
   onToggleLayout,
@@ -106,10 +123,71 @@ export const MobilePlayer: React.FC<{
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
+  // The core's sleep timer: its fade and its stop reach the player from here,
+  // and a quiet moon in the header says one is running.
+  useEffect(() => listenSleepTimer(), []);
+  // A VOD's chat replay (Rust's, as on desktop and the iPhone) follows this
+  // player's clock.
+  useEffect(() => registerReplayClock(() => videoRef.current?.currentTime ?? null), []);
+  const sleepTimer = useSleepTimer((s) => s.state);
+  const sleepOn = sleepTimerRunning(sleepTimer);
+  // VOD position checkpoints to Rust, as the desktop player sends them: Rust
+  // decides from the start's play stamp what each report may write (only a VOD
+  // the viewer opened files a position). Live, clips and idle attach nothing.
+  const vodPlayback = useAppStore((s) => s.vodPlayback);
+  const vodStream = useAppStore((s) => s.currentStream);
+  useVodProgressReporter(
+    videoRef,
+    vodPlayback
+      ? {
+          videoId: vodPlayback.video_id,
+          playId: vodPlayback.play_id,
+          channelLogin: vodPlayback.channel_login ?? vodStream?.user_login,
+          channelName: vodStream?.user_name,
+          title: vodPlayback.title ?? vodStream?.title,
+          thumbnailUrl: vodPlayback.thumbnail_url ?? vodStream?.thumbnail_url,
+        }
+      : null,
+  );
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
   // A channel that is not streaming, opened as its offline room.
   const offline = useAppStore((s) => s.streamUrl === 'offline');
+  // A VOD plays (a channel's video, or an offline room's latest broadcast): its
+  // own header line and transport, and no mute or reload, as on the iPhone. A
+  // live rewind (media type live) keeps the live chrome.
+  const currentMediaType = useAppStore((s) => s.currentMediaType);
+  const vod = vodPlayback && currentMediaType !== 'live' && !offline ? vodPlayback : null;
+  const roomVod = !!vod && currentMediaType === 'offline_chat';
+  const leaveRoomVod = useAppStore((s) => s.leaveOfflineRoomVod);
+  const vodClock = useVodClock(videoRef, vod);
+  // The VOD's speed, back to 1x for the next one. Set on the element and as its
+  // default, so a reload of the same VOD keeps it.
+  const [vodRate, setVodRate] = useState(1);
+  const [rateFor, setRateFor] = useState<string | null>(null);
+  if ((vod?.video_id ?? null) !== rateFor) {
+    setRateFor(vod?.video_id ?? null);
+    setVodRate(1);
+  }
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !vod) return;
+    const apply = () => {
+      video.defaultPlaybackRate = vodRate;
+      video.playbackRate = vodRate;
+    };
+    apply();
+    video.addEventListener('loadedmetadata', apply);
+    return () => {
+      video.removeEventListener('loadedmetadata', apply);
+      video.defaultPlaybackRate = 1;
+      video.playbackRate = 1;
+    };
+  }, [vod, vodRate]);
+  const seekVod = (seconds: number) => {
+    const video = videoRef.current;
+    if (video) video.currentTime = seekTarget(seconds, vodClock.length);
+  };
   // A provider stream that ended or could not start keeps its chat, and the
   // band says which (AppStore's playbackNotice). Read only for the stream it
   // was written for.
@@ -150,8 +228,9 @@ export const MobilePlayer: React.FC<{
     };
   }, [channelStateLogin, currentStream?.user_id]);
   // Shared Viewership: a Together chip beside the channel's own count, tapped
-  // open into who else is on.
-  const collab = channelState?.collab ?? null;
+  // open into who else is on. Outside a group, the Twitch Shared Chat session
+  // takes the same chip ("Shared chat" and the partners' faces).
+  const collab = channelState?.collab ?? channelState?.shared_chat ?? null;
   const viewerCount = channelState?.viewer_count ?? currentStream?.viewer_count ?? 0;
 
   // Title, category and start time follow the same pushes, so a retitle or a
@@ -221,6 +300,7 @@ export const MobilePlayer: React.FC<{
   const [qualityOpen, setQualityOpen] = useState(false);
   const [togetherOpen, setTogetherOpen] = useState(false);
   const [castOpen, setCastOpen] = useState(false);
+  const castOffered = useCastState().offered;
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -435,7 +515,7 @@ export const MobilePlayer: React.FC<{
       if (el) observer.observe(el);
     }
     return () => observer.disconnect();
-  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount]);
+  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount, sleepOn]);
 
   const onSurfaceTap = () => {
     setControlsVisible((v) => {
@@ -558,7 +638,7 @@ export const MobilePlayer: React.FC<{
     const together = collab && (
       <>
         <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
-        {!compactGroup && 'Together'}
+        {!compactGroup && (isTogether(collab) ? 'Together' : 'Shared chat')}
       </>
     );
     return (
@@ -584,6 +664,9 @@ export const MobilePlayer: React.FC<{
           <span className="sr-only"> viewers</span>
         </span>
         {withUptime && uptimeText && <span>{uptimeText}</span>}
+        {sleepOn && (
+          <MoonStars size={11} weight="fill" aria-label={sleepTimer?.rowLabel ?? 'Sleep timer on'} />
+        )}
       </span>
     );
   };
@@ -630,6 +713,43 @@ export const MobilePlayer: React.FC<{
           when they go live. Not an error, so no Retry and no live chrome. The
           mini box shows it compact: the face and an Offline ring. */}
       {offline && !noticeLine && <MobileOfflineRoom mini={compact} cardBelow={offlineCardBelow} />}
+
+      {/* The room has no player controls, so its way out is always on show:
+          minimize (back to the page it was opened from, the room in the mini
+          box) and close, in the band's top corner. */}
+      {offline && !compact && (
+        <div
+          className="absolute right-1 z-20 flex"
+          style={{ top: immersive ? 'calc(var(--sn-safe-t, 0px) + 4px)' : 4 }}
+        >
+          {onMinimize && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMinimize();
+              }}
+              className="sn-touch flex items-center justify-center"
+              aria-label="Minimize"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
+                <CaretDown size={15} weight="bold" />
+              </span>
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void useAppStore.getState().exitStream();
+            }}
+            className="sn-touch flex items-center justify-center"
+            aria-label="Close"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
+              <X size={13} weight="bold" />
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Playback that cannot go on: what happened in plain words, and Retry.
           A provider stream that ended or never started says so here while its
@@ -691,21 +811,38 @@ export const MobilePlayer: React.FC<{
             style={immersive ? { paddingTop: 'calc(var(--sn-safe-t, 0px) + 8px)' } : undefined}
           >
             <div className="flex items-start gap-2.5">
-              {currentStream.profile_image_url ? (
-                <SevenTvAvatar
-                  cosmeticsId={sevenTvIdForStream(currentStream)}
-                  px={32}
-                  motion="animate"
-                  src={currentStream.profile_image_url}
-                  alt=""
-                  draggable={false}
-                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-2 ring-live/80"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ring-live/80">
-                  {currentStream.user_name?.charAt(0).toUpperCase()}
-                </div>
-              )}
+              {/* The face opens the channel's videos and clips (Twitch's), as on
+                  the iPhone. The live red ring is for live alone. */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (streamIsTwitch && currentStream.user_id) useChannelSheet.getState().open(currentStream);
+                }}
+                disabled={!streamIsTwitch || !currentStream.user_id}
+                aria-label={`${currentStream.user_name}'s videos and clips`}
+                className="shrink-0 rounded-full"
+              >
+                {currentStream.profile_image_url ? (
+                  <SevenTvAvatar
+                    cosmeticsId={sevenTvIdForStream(currentStream)}
+                    px={32}
+                    motion="animate"
+                    src={currentStream.profile_image_url}
+                    alt=""
+                    draggable={false}
+                    className={`w-8 h-8 rounded-full object-cover shrink-0 ring-2 ${vod ? 'ring-white/25' : 'ring-live/80'}`}
+                  />
+                ) : (
+                  <div
+                    className={`w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white ring-2 ${
+                      vod ? 'ring-white/25' : 'ring-live/80'
+                    }`}
+                  >
+                    {currentStream.user_name?.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </button>
               <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 {/* Identity row: the name, then Subscribe, then the live
                     numbers opposite. One line always; parts give way in order
@@ -715,9 +852,11 @@ export const MobilePlayer: React.FC<{
                   {canSubscribe && giveWay < GIVE_WAY_SUBSCRIBE && (
                     <span className="ml-2 shrink-0 flex">{subscribePill(true)}</span>
                   )}
-                  <span className="ml-auto pl-2 shrink-0 flex">
-                    {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
-                  </span>
+                  {!vod && (
+                    <span className="ml-auto pl-2 shrink-0 flex">
+                      {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
+                    </span>
+                  )}
                   {/* Full-size copies for the give-way measurement. Invisible,
                       out of the accessibility tree, and in a zero-size clip so
                       their width never adds overflow to the row; clipped boxes
@@ -747,11 +886,24 @@ export const MobilePlayer: React.FC<{
                     </div>
                   </div>
                 </div>
-                {liveTitle && (
-                  <div className="text-[13px] leading-[17px] text-white/85 truncate">{liveTitle}</div>
-                )}
-                {liveCategory && (
-                  <div className="text-[12px] leading-4 text-white/70 truncate">{liveCategory}</div>
+                {vod ? (
+                  <>
+                    {(vod.title || currentStream.title) && (
+                      <div className="text-[13px] leading-[17px] text-white/85 truncate">
+                        {vod.title || currentStream.title}
+                      </div>
+                    )}
+                    <div className="text-[12px] leading-4 text-white/70 truncate">{recordedLine(vod.recorded_at)}</div>
+                  </>
+                ) : (
+                  <>
+                    {liveTitle && (
+                      <div className="text-[13px] leading-[17px] text-white/85 truncate">{liveTitle}</div>
+                    )}
+                    {liveCategory && (
+                      <div className="text-[12px] leading-4 text-white/70 truncate">{liveCategory}</div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -776,146 +928,239 @@ export const MobilePlayer: React.FC<{
             the avatar ring's outer edge (pl-2.5: px-3 less the 2px ring), and
             the last icon's ink ends where the uptime text does. */}
         <div
-          className="absolute inset-x-0 bottom-0 flex items-center justify-between pl-2.5 pr-3 pb-2"
+          className="absolute inset-x-0 bottom-0 flex flex-col pl-2.5 pr-3 pb-2"
           style={immersive ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' } : undefined}
         >
-          {/* A status, not a control: a dot and the word, no filled badge.
-              Gone while playback has failed, which is not live. */}
-          <div
-            className={`flex items-center gap-[5px] min-w-0 ${state === 'error' ? 'opacity-0' : ''}`}
-            role="img"
-            aria-label="Live"
-            aria-hidden={state === 'error'}
-          >
-            <span
-              className="w-[7px] h-[7px] rounded-full bg-live shrink-0"
-              style={{ boxShadow: '0 0 3px color-mix(in srgb, var(--color-live) 60%, transparent)' }}
+          {vod && (
+            <VodSeekBar
+              vod={vod}
+              position={vodClock.position}
+              length={vodClock.length}
+              onSeek={seekVod}
+              onTouch={scheduleHide}
             />
-            <span className="text-[12px] font-bold tracking-[0.4px] text-white leading-none">LIVE</span>
-          </div>
+          )}
+          <div className="flex items-center justify-between">
+          {vod ? (
+            // Where LIVE sits on a live stream: the way back to the room when its
+            // latest broadcast plays, then back and forward ten seconds and the speed.
+            <div className="-ml-3 flex shrink-0 items-center">
+              {roomVod && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void leaveRoomVod();
+                  }}
+                  className="flex h-11 items-center gap-1 pl-3 pr-1.5 text-[12px] font-bold text-white"
+                  aria-label="Back to the room"
+                >
+                  <CaretLeft size={13} weight="bold" />
+                  Room
+                </button>
+              )}
+              <VodTransport
+                rate={vodRate}
+                onSkip={(by) => seekVod((videoRef.current?.currentTime ?? vodClock.position) + by)}
+                onRate={setVodRate}
+                onTouch={scheduleHide}
+                iconSize={BAR_ICON}
+              />
+            </div>
+          ) : (
+            /* A status, not a control: a dot and the word, no filled badge.
+               Gone while playback has failed, which is not live. */
+            <div
+              className={`flex shrink-0 items-center gap-[5px] ${state === 'error' ? 'opacity-0' : ''}`}
+              role="img"
+              aria-label="Live"
+              aria-hidden={state === 'error'}
+            >
+              <span
+                className="w-[7px] h-[7px] rounded-full bg-live shrink-0"
+                style={{ boxShadow: '0 0 3px color-mix(in srgb, var(--color-live) 60%, transparent)' }}
+              />
+              <span className="text-[12px] font-bold tracking-[0.4px] text-white leading-none">LIVE</span>
+            </div>
+          )}
           {/* One size and one weight for every bar icon, so no button
               out-pulls another. The last icon's ink, not its 44 px target,
               ends on the header's right edge: 12px of target padding plus the
               glyph's own inset sit past the row's padding. */}
-          <div className="flex items-center -mr-[13px]">
-            <button
-              onClick={toggleMute}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label={muted ? 'Unmute' : 'Mute'}
-            >
-              {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
-            </button>
-            {/* Cast and mirroring, together: the two ways onto a TV. */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setCastOpen(true);
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Watch on a TV"
-            >
-              <Screencast size={BAR_ICON} />
-            </button>
-            {currentStream && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // Our own share link on every platform, not a raw platform
-                  // URL: the landing page hands off to StreamNook when it is
-                  // installed and falls back to the platform's page when it is
-                  // not. Same Rust-built link the desktop share copies.
-                  const stream = currentStream;
-                  void shareLinkFor(stream)
-                    .catch(() => buildProviderUrl(streamProvider(stream), stream.user_login))
-                    .then((link) =>
-                      shareText(`${stream.user_name} is live: ${link}`, liveTitle || stream.title || stream.user_name),
-                    );
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label="Share stream"
-              >
-                <ShareNetwork size={BAR_ICON} />
-              </button>
-            )}
-            {onMinimize && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onMinimize();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label="Minimize player"
-              >
-                {/* A touch larger: its outline encloses empty space and reads
-                    lighter than the solid glyphs beside it at the same size. */}
-                <PictureInPicture size={BAR_ICON + 2} />
-              </button>
-            )}
-            {/* The unstick button. A frozen player looks exactly like a paused
-                one from the outside, so this reloads the whole pipeline via the
-                same restart the error screen's Retry uses; today's loading
-                crossfade makes the reload read as one smooth dip through the
-                logo instead of a teardown. */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setRestartPhase('kicked');
-                void restartStream();
-                scheduleHide();
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Restart stream"
-            >
-              <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setQualityOpen(true);
-              }}
-              className="sn-touch flex items-center justify-center text-white"
-              aria-label="Quality"
-            >
-              <Gear size={BAR_ICON} />
-            </button>
-            {/* Only on a screen where both arrangements genuinely work, so this
-                never appears as a control with one sensible setting. */}
-            {onToggleLayout && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleLayout();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label={
-                  layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
-                }
-              >
-                {layoutMode === 'columns' ? <Rows size={BAR_ICON} /> : <Columns size={BAR_ICON} />}
-              </button>
-            )}
-            {onToggleFullscreen && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleFullscreen();
-                }}
-                className="sn-touch flex items-center justify-center text-white"
-                aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
-              >
-                {/* One glyph, filled while chat is showing: this button is
-                    "chat" in both states, and a crossed-out icon read as a
-                    warning rather than as the way back. */}
-                <ChatTeardropText size={BAR_ICON} weight={chatOpen ? 'fill' : 'regular'} />
-              </button>
-            )}
+          {/* The bar's buttons, left to right: the most used at the right,
+              under the thumb, Minimize last. One list, so a change of order is
+              one line (iPhone keeps the same list in PlayerChrome). */}
+          <div className="flex min-w-0 items-center -mr-[13px]">
+            {BAR_ORDER.map((slot) => (
+              <React.Fragment key={slot}>
+                {slot === 'cast' && (
+                  <>
+                  {/* Cast and mirroring, together: the two ways onto a TV. Only on
+                      builds that offer them (Rust cast_session::OFFERED). */}
+                  {castOffered && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCastOpen(true);
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label="Watch on a TV"
+                    >
+                      <Screencast size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'share' && (
+                  <>
+                  {currentStream && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Our own share link on every platform, not a raw platform
+                        // URL: the landing page hands off to StreamNook when it is
+                        // installed and falls back to the platform's page when it is
+                        // not. Same Rust-built link the desktop share copies.
+                        const stream = currentStream;
+                        void shareLinkFor(stream)
+                          .catch(() => buildProviderUrl(streamProvider(stream), stream.user_login))
+                          .then((link) =>
+                            shareText(`${stream.user_name} is live: ${link}`, liveTitle || stream.title || stream.user_name),
+                          );
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label="Share stream"
+                    >
+                      <ShareNetwork size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'mute' && !vod && (
+                  <>
+                  <button
+                    onClick={toggleMute}
+                    className="sn-bar-btn flex items-center justify-center text-white"
+                    aria-label={muted ? 'Unmute' : 'Mute'}
+                  >
+                    {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
+                  </button>
+                  </>
+                )}
+                {slot === 'reload' && !vod && (
+                  <>
+                  {/* The unstick button. A frozen player looks exactly like a paused
+                      one from the outside, so this reloads the whole pipeline via the
+                      same restart the error screen's Retry uses; today's loading
+                      crossfade makes the reload read as one smooth dip through the
+                      logo instead of a teardown. */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRestartPhase('kicked');
+                      void restartStream();
+                      scheduleHide();
+                    }}
+                    className="sn-bar-btn flex items-center justify-center text-white"
+                    aria-label="Restart stream"
+                  >
+                    <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
+                  </button>
+                  </>
+                )}
+                {slot === 'settings' && (
+                  <>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQualityOpen(true);
+                    }}
+                    className="sn-bar-btn flex items-center justify-center text-white"
+                    aria-label="Quality"
+                  >
+                    <Gear size={BAR_ICON} />
+                  </button>
+                  {/* Only on a screen where both arrangements genuinely work, so this
+                      never appears as a control with one sensible setting. */}
+                  {onToggleLayout && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleLayout();
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label={
+                        layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
+                      }
+                    >
+                      {layoutMode === 'columns' ? <Rows size={BAR_ICON} /> : <Columns size={BAR_ICON} />}
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'chat' && (
+                  <>
+                  {onToggleFullscreen && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleFullscreen();
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
+                    >
+                      {/* One glyph, filled while chat is showing: this button is
+                          "chat" in both states, and a crossed-out icon read as a
+                          warning rather than as the way back. */}
+                      <ChatTeardropText size={BAR_ICON} weight={chatOpen ? 'fill' : 'regular'} />
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'rotate' && (
+                  <>
+                  {onRotate && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRotate();
+                        scheduleHide();
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label={landscapeNow ? 'Rotate to portrait' : 'Rotate to landscape'}
+                    >
+                      {landscapeNow ? <CornersIn size={BAR_ICON} /> : <CornersOut size={BAR_ICON} />}
+                    </button>
+                  )}
+                  </>
+                )}
+                {slot === 'minimize' && (
+                  <>
+                  {onMinimize && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onMinimize();
+                      }}
+                      className="sn-bar-btn flex items-center justify-center text-white"
+                      aria-label="Minimize player"
+                    >
+                      <CaretDown size={BAR_ICON} />
+                    </button>
+                  )}
+                  </>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
           </div>
         </div>
       </div>
 
       <QualitySheet open={qualityOpen} onClose={() => setQualityOpen(false)} />
       <TogetherSheet collab={collab} open={togetherOpen} onClose={() => setTogetherOpen(false)} />
-      <CastSheet open={castOpen} onClose={() => setCastOpen(false)} castable={isCastable(currentStream)} />
+      {castOffered && (
+        <CastSheet open={castOpen} onClose={() => setCastOpen(false)} castable={isCastable(currentStream)} />
+      )}
     </div>
   );
 };

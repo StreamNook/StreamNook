@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, type Transition } from 'framer-motion';
 import {
     Check,
@@ -14,8 +14,6 @@ import {
     Palette,
     Bell,
     PanelTop,
-    MessageSquare,
-    Layers,
     Columns,
     Eye,
     EyeOff,
@@ -37,12 +35,18 @@ import {
 } from '../themes';
 import { getSidebarSettings, saveSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
 import { TwitchGlyph } from './ui/TwitchGlyph';
+import { TwitchSignInButton } from './ui/TwitchSignInButton';
 import { WindowCaptionButtons } from './titlebar/WindowCaptionButtons';
 
 import { Logger } from '../utils/logger';
 import { ANNOUNCEMENTS_BASELINE_PENDING_KEY } from './AnnouncementsBanner';
 import PlatformAccountRows from './settings/PlatformAccountRows';
+import { ProviderLogo } from './ProviderLogo';
+import { PROVIDERS, type ProviderId } from '../types/providers';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
+import type { AlertType } from '../mobile/alertTypes';
+import { setSettingsFields } from '../utils/settingsFields';
+import SetupNotificationsStep from './SetupNotificationsStep';
 
 const STEP_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 const STEP_DURATION = 0.4;
@@ -57,9 +61,11 @@ const STEP_COUNT = 9;
 //      about a surface that never renders.
 //
 // NOT skipped: step 1 (components) is a no-op on both platforms now that the
-// client is self-contained and auto-advances, and step 7 (notifications)
-// branches on IS_MOBILE to request the real Android permission rather than
-// offering Dynamic Island vs toast.
+// client is self-contained and auto-advances. Step 7 (notifications) asks, on
+// every platform, which alert types to turn on, from the list Rust keeps
+// (`get_alert_types`, the ones marked for setup); a phone skips it only when
+// Rust offers none, and desktop also asks there where they show (Dynamic
+// Island, toasts or both).
 //
 // MODULE SCOPE ON PURPOSE. These were declared inside the component, below
 // handleDropsLogin, which meant a caller earlier in the body could not use them
@@ -67,21 +73,22 @@ const STEP_COUNT = 9;
 // `setCurrentStep(4)` instead, routing around the skip entirely and landing
 // Android on the whisper step. Any new step transition must go through these.
 const MOBILE_SKIPPED_STEPS = new Set([4, 6]);
-const stepAfter = (s: number): number => {
+const NOTIFICATION_STEP = 7;
+const stepAfter = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
     let n = s + 1;
-    if (IS_MOBILE) while (MOBILE_SKIPPED_STEPS.has(n)) n += 1;
+    if (IS_MOBILE) while (skipped.has(n)) n += 1;
     return n;
 };
-const stepBefore = (s: number): number => {
+const stepBefore = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
     let n = s - 1;
-    if (IS_MOBILE) while (MOBILE_SKIPPED_STEPS.has(n)) n -= 1;
+    if (IS_MOBILE) while (skipped.has(n)) n -= 1;
     return n;
 };
 
-// Notification delivery surfaces offered on the notification-style step. "Both"
-// is just the two booleans on together; the wizard maps each choice onto the
-// use_dynamic_island / use_toast pair the rest of the app already reads.
-type NotifMode = 'island' | 'toast' | 'both';
+// The phone's Notifications step, loaded only on a phone so the desktop bundle
+// never carries the mobile notification code. Desktop draws its own
+// (SetupNotificationsStep), with the same switches and words.
+const MobileNotificationsStep = lazy(() => import('../mobile/setup/NotificationsStep'));
 
 interface SetupWizardProps {
     isOpen: boolean;
@@ -241,11 +248,16 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         mainAuthenticated: false,
     });
     const [error, setError] = useState<string | null>(null);
-    // How many of the other platforms are connected, for the summary row. Field
-    // selector so an unrelated account field doesn't re-render the wizard.
-    const platformsConnected = usePlatformAccountStore(
-        (s) => (s.kick.connected ? 1 : 0) + (s.youtube.connected ? 1 : 0),
-    );
+    // Which of the platforms offered beside Twitch are connected, for the summary:
+    // each is named with its logo. Field selectors so an unrelated account field
+    // doesn't re-render the wizard.
+    const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
+    const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
+    const tiktokConnected = usePlatformAccountStore((s) => s.tiktok.connected);
+    // Only the sign-ins this build can run were offered (Rust's roster says which).
+    const kickOffered = usePlatformAccountStore((s) => s.kick.canSignIn);
+    const youtubeOffered = usePlatformAccountStore((s) => s.youtube.canSignIn);
+    const tiktokOffered = usePlatformAccountStore((s) => s.tiktok.canSignIn);
 
     const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState } = useAppStore();
     const unlistenRefs = useRef<Array<() => void>>([]);
@@ -496,8 +508,11 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             // value keeps forced-relogin walkthroughs (setup already complete) from
             // wiping announcements those users still need.
             const isFirstTimeSetup = !settings.setup_complete;
+            // The store's current copy, not this render's: the Notifications
+            // step writes its choices a moment before this, and a whole-object
+            // save from an older copy would put the defaults back.
             await updateSettings({
-                ...settings,
+                ...useAppStore.getState().settings,
                 setup_complete: true,
             });
             // Mobile-only backstop marker, read by the wizard gate in App.tsx.
@@ -557,68 +572,47 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         { id: 'disabled', icon: X, label: 'Off', desc: 'No sidebar at all.' },
     ];
 
-    // ── Native notification permission (mobile) ────────────────────────────
-    // Android 13+ requires an explicit runtime grant for POST_NOTIFICATIONS, so
-    // the wizard asks for it rather than silently failing to notify later.
-    const [notifPermission, setNotifPermission] = useState<'default' | 'granted' | 'denied'>('default');
-    // NOTE: we deliberately do NOT use @tauri-apps/plugin-notification's JS wrapper
-    // here. Its dist-js reads `window.Notification.permission` unconditionally, and
-    // Android System WebView does not implement the Web Notifications API, so
-    // `window.Notification` is undefined and the wrapper throws
-    // ("Cannot read properties of undefined") before it ever reaches Rust.
-    // Invoking the plugin command directly skips that broken web path.
+    // ── Notifications step ─────────────────────────────────────────────────
+    // The alert types Rust offers in setup on this build, each off until the
+    // person turns it on. Turning one on writes its setting and asks the OS
+    // permission where the OS asks (MobileNotificationsStep on a phone,
+    // SetupNotificationsStep on desktop, which asks only on a Mac); leaving the
+    // step forward writes the rest off, so the step means what it showed.
+    // null until read.
+    const [setupAlerts, setSetupAlerts] = useState<AlertType[] | null>(null);
+    const [alertChoices, setAlertChoices] = useState<Record<string, boolean>>({});
     useEffect(() => {
-        if (!IS_MOBILE) return;
         let cancelled = false;
-        (async () => {
-            try {
-                const granted = await invoke<boolean>('plugin:notification|is_permission_granted');
-                if (!cancelled && granted) setNotifPermission('granted');
-            } catch (e) {
-                Logger.error('[SetupWizard] notification permission probe failed:', e);
-            }
-        })();
+        // Fetched now so the step draws at once when it fades in.
+        if (IS_MOBILE) void import('../mobile/setup/NotificationsStep');
+        invoke<AlertType[]>('get_alert_types')
+            .then((list) => {
+                if (!cancelled) setSetupAlerts(list.filter((t) => t.setup));
+            })
+            .catch((e) => {
+                Logger.error('[SetupWizard] get_alert_types failed:', e);
+                if (!cancelled) setSetupAlerts([]);
+            });
         return () => { cancelled = true; };
     }, []);
-    const handleRequestNativeNotifications = useCallback(async () => {
-        try {
-            if (await invoke<boolean>('plugin:notification|is_permission_granted')) {
-                setNotifPermission('granted');
-                return;
-            }
-            const result = await invoke<string>('plugin:notification|request_permission');
-            setNotifPermission(result === 'granted' ? 'granted' : 'denied');
-        } catch (e) {
-            // Surface it: silently mapping every failure to "denied" makes a broken
-            // plugin registration indistinguishable from the user saying no.
-            Logger.error('[SetupWizard] notification permission request failed:', e);
-            setNotifPermission('denied');
-        }
-    }, []);
+    const anyAlertChosen = Object.values(alertChoices).some(Boolean);
+    // Steps this phone skips: the fixed ones, and Notifications when Rust offers no type.
+    const skippedSteps = IS_MOBILE && setupAlerts?.length === 0
+        ? new Set([...MOBILE_SKIPPED_STEPS, NOTIFICATION_STEP])
+        : MOBILE_SKIPPED_STEPS;
+    const nextStep = (s: number) => stepAfter(s, skippedSteps);
+    const prevStep = (s: number) => stepBefore(s, skippedSteps);
 
-    // ── Notification-style step (desktop) ──────────────────────────────────
-    const liveNotifications = settings.live_notifications;
-    const islandOn = liveNotifications?.use_dynamic_island ?? true;
-    const toastOn = liveNotifications?.use_toast ?? true;
-    const notifMode: NotifMode = islandOn && toastOn ? 'both' : islandOn ? 'island' : toastOn ? 'toast' : 'both';
-    const handleSelectNotif = useCallback((mode: NotifMode) => {
-        updateSettings({
-            ...settings,
-            live_notifications: {
-                enabled: true,
-                play_sound: true,
-                ...liveNotifications,
-                use_dynamic_island: mode !== 'toast',
-                use_toast: mode !== 'island',
-            },
-        });
-    }, [settings, liveNotifications, updateSettings]);
-
-    const notifOptions: { id: NotifMode; icon: typeof Bell; label: string; desc: string }[] = [
-        { id: 'island', icon: PanelTop, label: 'Dynamic Island', desc: 'A pill at the top that expands with the details.' },
-        { id: 'toast', icon: MessageSquare, label: 'Toast popups', desc: 'Cards that slide in at a screen corner you pick.' },
-        { id: 'both', icon: Layers, label: 'Both', desc: 'Every alert in the island and as a toast.' },
-    ];
+    // Leaving the Notifications step forward (button, swipe) writes each offered
+    // type as the step showed it: chosen on, the rest off.
+    const previousStepRef = useRef(currentStep);
+    useEffect(() => {
+        const was = previousStepRef.current;
+        previousStepRef.current = currentStep;
+        if (was !== NOTIFICATION_STEP || currentStep <= was || !setupAlerts?.length) return;
+        const changes = Object.fromEntries(setupAlerts.map((t) => [t.setting, alertChoices[t.id] === true]));
+        setSettingsFields(changes).catch((e) => Logger.error('[SetupWizard] saving alert choices failed:', e));
+    }, [currentStep, setupAlerts, alertChoices]);
 
     // Per-step primary CTA that lives bottom-right. null hides it entirely.
     const primaryAction: {
@@ -654,13 +648,18 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         variant: 'twitch',
                     };
                 }
-                return { label: 'Continue', onClick: () => setCurrentStep(stepAfter(currentStep)) };
+                return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
             case 3:
             case 4:
             case 5:
             case 6:
+                return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
             case 7:
-                return { label: 'Continue', onClick: () => setCurrentStep(stepAfter(currentStep)) };
+                // The step is a choice: nothing chosen reads as Skip.
+                return {
+                    label: setupAlerts?.length && !anyAlertChosen ? 'Skip' : 'Continue',
+                    onClick: () => setCurrentStep(nextStep(currentStep)),
+                };
             case 8:
                 return { label: 'Start watching', onClick: handleCompleteSetup };
             default:
@@ -679,13 +678,13 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     //
     // Deliberately NOT skipped: step 1 (components) is a no-op on both platforms
     // now that the client is self-contained - `check_components_installed`
-    // always returns true and the step auto-advances. Step 7 (notifications) is
-    // not skipped either; it branches on IS_MOBILE to ask for the real Android
-    // notification permission instead of offering Dynamic Island vs toast.
+    // always returns true and the step auto-advances. Step 7 (notifications)
+    // shows on a phone whenever Rust offers an alert type in setup, and always
+    // on desktop, which also picks where alerts show there.
     // Dots must reflect the steps this platform actually shows, otherwise mobile
     // renders an indicator for a page it can never land on.
     const visibleSteps = Array.from({ length: STEP_COUNT }, (_, i) => i).filter(
-        (i) => !(IS_MOBILE && MOBILE_SKIPPED_STEPS.has(i)),
+        (i) => !(IS_MOBILE && skippedSteps.has(i)),
     );
 
     const canGoBack = currentStep > 1 && currentStep < 8;
@@ -1081,80 +1080,51 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 );
 
             case 7:
-                // Mobile gets a real system-notification prompt instead of the
-                // desktop's in-app presentation picker. Dynamic Island vs toast is a
-                // question about surfaces that only exist inside a desktop window;
-                // on a phone the answer is simply the Android notification shade,
-                // which works when the app is backgrounded and the others do not.
-                if (IS_MOBILE) {
-                    return (
-                        <>
-                            <Bell size={56} strokeWidth={1.4} className="text-accent mb-8" />
-                            <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
-                                Stay in the loop
-                            </h1>
-                            <p className="text-textSecondary text-base max-w-md mb-8">
-                                Get a notification when a followed streamer goes live, a whisper
-                                lands, or a drop is claimed. You can fine-tune each type in
-                                Settings.
-                            </p>
-                            <button
-                                onClick={handleRequestNativeNotifications}
-                                disabled={notifPermission === 'granted'}
-                                className={`glass-button w-full max-w-md rounded-xl py-4 text-base font-medium text-textPrimary ${
-                                    notifPermission === 'granted' ? 'opacity-60' : ''
-                                }`}
-                            >
-                                {notifPermission === 'granted'
-                                    ? 'Notifications enabled'
-                                    : 'Enable notifications'}
-                            </button>
-                            {notifPermission === 'denied' && (
-                                <p className="mt-4 max-w-md text-sm text-textMuted">
-                                    Notifications are turned off for StreamNook. You can turn them
-                                    back on in Android Settings whenever you like.
-                                </p>
-                            )}
-                        </>
-                    );
-                }
+                // The same step on every platform: a switch per alert type Rust
+                // offers in setup, all off. The phone's own component asks
+                // Android or iOS; desktop's adds where alerts show (Dynamic
+                // Island, toasts or both), surfaces only a desktop window has.
+                // A short window (the 600 px minimum) tightens the heading by
+                // height alone, so the step and its macOS refusal line fit.
                 return (
                     <>
-                        <Bell size={56} strokeWidth={1.4} className="text-accent mb-8" />
-                        <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
-                            How should we reach you?
+                        <Bell size={56} strokeWidth={1.4} className={`text-accent mb-8 ${IS_MOBILE ? '' : '[@media(max-height:700px)]:mb-3 [@media(max-height:700px)]:h-9 [@media(max-height:700px)]:w-9'}`} />
+                        <h1 className={`text-4xl font-medium text-textPrimary tracking-tight mb-4 ${IS_MOBILE ? '' : '[@media(max-height:700px)]:mb-2 [@media(max-height:700px)]:text-3xl'}`}>
+                            Notifications
                         </h1>
-                        <p className="text-textSecondary text-base max-w-md mb-8">
-                            When a followed streamer goes live, a whisper lands, or a drop is claimed. You can fine-tune each type in Settings.
+                        <p className={`text-textSecondary text-base max-w-md mb-8 ${IS_MOBILE ? '' : '[@media(max-height:700px)]:mb-4 [@media(max-height:700px)]:text-sm'}`}>
+                            Choose what StreamNook alerts you about. You can change these any
+                            time in Settings.
                         </p>
-                        <div className="flex flex-col gap-3 w-full max-w-md">
-                            {notifOptions.map((opt) => {
-                                const Icon = opt.icon;
-                                const active = notifMode === opt.id;
-                                return (
-                                    <button
-                                        key={opt.id}
-                                        onClick={() => handleSelectNotif(opt.id)}
-                                        className={`flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all duration-200 ${active ? 'border-accent bg-accent/10' : 'border-borderSubtle hover:border-borderLight'}`}
-                                    >
-                                        <Icon size={22} className={active ? 'text-accent' : 'text-textSecondary'} />
-                                        <div className="flex-1 min-w-0">
-                                            <div className="text-sm font-semibold text-textPrimary">{opt.label}</div>
-                                            <div className="text-xs text-textSecondary">{opt.desc}</div>
-                                        </div>
-                                        {active && <Check size={18} className="text-accent flex-shrink-0" strokeWidth={3} />}
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        {IS_MOBILE ? (
+                            <Suspense fallback={null}>
+                                <MobileNotificationsStep
+                                    types={setupAlerts ?? []}
+                                    choices={alertChoices}
+                                    onChoose={(id, on) => setAlertChoices((c) => ({ ...c, [id]: on }))}
+                                />
+                            </Suspense>
+                        ) : (
+                            <SetupNotificationsStep
+                                types={setupAlerts ?? []}
+                                choices={alertChoices}
+                                onChoose={(id, on) => setAlertChoices((c) => ({ ...c, [id]: on }))}
+                            />
+                        )}
                     </>
                 );
 
             case 8: {
-                const rows: Array<{ ok: boolean; pending?: boolean; label: string }> = [
+                // Every sign-in the wizard offered, by name and logo: the accounts
+                // step offers, beside Twitch, the platforms this build can sign in to.
+                const platformRow = (provider: ProviderId, ok: boolean) =>
+                    ({ ok, label: PROVIDERS[provider].label, provider });
+                const rows: Array<{ ok: boolean; pending?: boolean; label: string; provider?: ProviderId }> = [
+                    platformRow('twitch', status.mainAuthenticated),
                     { ok: status.dropsAuthenticated, label: 'Drops sign-in' },
-                    { ok: status.mainAuthenticated, label: 'Twitch sign-in' },
-                    { ok: platformsConnected > 0, label: 'Other platforms' },
+                    ...(kickOffered || kickConnected ? [platformRow('kick', kickConnected)] : []),
+                    ...(youtubeOffered || youtubeConnected ? [platformRow('youtube', youtubeConnected)] : []),
+                    ...(tiktokOffered || tiktokConnected ? [platformRow('tiktok', tiktokConnected)] : []),
                     // Whisper import is a step mobile never shows, so reporting
                     // it as "skipped" on the summary named something the phone
                     // had not offered to do in the first place, which reads as a
@@ -1190,7 +1160,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                     key={row.label}
                                     className="flex items-center justify-between px-4 py-2.5 rounded-lg glass-panel"
                                 >
-                                    <span className="text-sm text-textSecondary">{row.label}</span>
+                                    <span className="flex items-center gap-2 text-sm text-textSecondary">
+                                        {row.provider && <ProviderLogo provider={row.provider} size={15} />}
+                                        {row.label}
+                                    </span>
                                     {row.ok ? (
                                         <Check size={15} className="text-success" />
                                     ) : row.pending ? (
@@ -1276,7 +1249,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     for the bottom row and the CTA keeps a clean full-width block. */}
                 {IS_MOBILE && canGoBack && (
                     <button
-                        onClick={() => setCurrentStep(Math.max(0, stepBefore(currentStep)))}
+                        onClick={() => setCurrentStep(Math.max(0, prevStep(currentStep)))}
                         aria-label="Back"
                         className="absolute left-2 z-20 flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-textSecondary"
                         style={{ top: 'calc(0.5rem + var(--sn-safe-top))' }}
@@ -1303,7 +1276,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     release distance rather than from the drag itself. */}
                 <motion.div
                     className={`flex-1 flex items-center justify-center min-h-0 ${
-                        IS_MOBILE ? 'px-5 py-6 overflow-y-auto' : 'px-8 py-16'
+                        IS_MOBILE ? 'px-5 py-6 overflow-y-auto' : 'px-8 py-16 [@media(max-height:700px)]:py-4'
                     }`}
                     style={IS_MOBILE ? { paddingTop: 'calc(1.5rem + var(--sn-safe-top))' } : undefined}
                     drag={IS_MOBILE ? 'x' : false}
@@ -1323,11 +1296,11 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         if (info.offset.x < -THRESHOLD && canSwipeForward) {
                             lastStepChangeRef.current = now;
                             setHasSwiped(true);
-                            setCurrentStep(stepAfter(currentStep));
+                            setCurrentStep(nextStep(currentStep));
                         } else if (info.offset.x > THRESHOLD && canGoBack) {
                             lastStepChangeRef.current = now;
                             setHasSwiped(true);
-                            setCurrentStep(stepBefore(currentStep));
+                            setCurrentStep(prevStep(currentStep));
                         }
                     }}
                 >
@@ -1404,21 +1377,27 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                             block. */}
                         {canGoBack && !IS_MOBILE && (
                             <button
-                                onClick={() => setCurrentStep(Math.max(0, stepBefore(currentStep)))}
+                                onClick={() => setCurrentStep(Math.max(0, prevStep(currentStep)))}
                                 className="flex items-center gap-1 px-3 py-2 text-sm text-textSecondary hover:text-textPrimary transition-colors rounded-lg"
                             >
                                 <ChevronLeft size={15} />
                                 Back
                             </button>
                         )}
-                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && (
+                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && primaryAction.variant === 'twitch' && (
+                            <TwitchSignInButton
+                                label={primaryAction.label}
+                                onClick={primaryAction.onClick}
+                                busy={primaryAction.disabled}
+                                className={IS_MOBILE ? 'w-full py-4 text-base' : 'px-5 py-2.5 text-sm'}
+                            />
+                        )}
+                        {primaryAction && (!IS_MOBILE || showPrimaryOnMobile) && primaryAction.variant !== 'twitch' && (
                             <button
                                 onClick={primaryAction.onClick}
                                 disabled={primaryAction.disabled}
                                 className={`flex items-center justify-center gap-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
-                                    primaryAction.variant === 'twitch'
-                                        ? 'bg-[#9146FF] text-white active:opacity-90'
-                                        // `no-live-blur`: this sits on the
+                                    // `no-live-blur`: this sits on the
                                         // wizard's flat panel, so the button's
                                         // backdrop filter has nothing varied to
                                         // sample -- it is a live compositing
@@ -1427,16 +1406,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                         // well inside the region an 8px backdrop
                                         // blur pulls from, so every frame of that
                                         // loop was dirtying this button's
-                                        // backdrop.
-                                        : 'glass-button no-live-blur text-textPrimary'
+                                    // backdrop.
+                                    'glass-button no-live-blur text-textPrimary'
                                 } ${IS_MOBILE ? 'w-full py-4 text-base' : 'px-5 py-2.5 text-sm'}`}
                             >
-                                {primaryAction.variant === 'twitch' &&
-                                    (primaryAction.disabled ? (
-                                        <Loader2 size={18} className="animate-spin" />
-                                    ) : (
-                                        <TwitchGlyph size={18} />
-                                    ))}
                                 {primaryAction.label}
                             </button>
                         )}

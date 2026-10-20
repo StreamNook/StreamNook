@@ -1,43 +1,129 @@
-//! The phone chat pane's tabs and its "Add a chat" sheet. The rules live in
-//! `services::chat_tabs`; every change is emitted as `chat-tabs` and answers
-//! which rooms the shell must join and leave.
+//! The phone chats (under the player and on the Chats screen) and the "Add a
+//! chat" sheet. The rules live in `services::chat_tabs`; every change is
+//! emitted as `chat-tabs` and answers which rooms the shell must join and leave.
 
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
 use crate::rt::AppHandle;
-use crate::services::chat_tabs::{self, ChatRoomInput, ChatTabsChange, ChatTabsView};
+use crate::services::chat_tabs::{self, ChatRoomInput, ChatTab, ChatTabsChange, ChatTabsView};
 use crate::services::providers::watch_urls::{classify, WatchTarget};
 use serde::Serialize;
+use std::sync::OnceLock;
 use tauri::{Emitter, State};
 
+static APP: OnceLock<AppHandle> = OnceLock::new();
+static MENTIONS_FEED: std::sync::Once = std::sync::Once::new();
+
+/// Every open tab's unread count, read from the mentions inbox. A room with
+/// none gets 0, so reading it there clears the tab.
+fn push_mention_counts() {
+    let counts = crate::services::mention_inbox::unread_by_room();
+    for tab in chat_tabs::view().tabs {
+        let channel = tab.tab.channel;
+        note_mentions(&channel, counts.get(&channel).copied().unwrap_or(0));
+    }
+}
+
+/// From the first tab change on: the tabs follow the mentions inbox's counts.
+fn ensure_mentions_feed() {
+    MENTIONS_FEED.call_once(|| {
+        let mut rx = crate::services::mention_inbox::watch_unread();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                rx.borrow_and_update();
+                push_mention_counts();
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    });
+}
+
 fn emit(app: &AppHandle, view: &ChatTabsView) {
+    let _ = APP.set(app.clone());
     if let Err(e) = app.emit(chat_tabs::EVENT, view) {
         log::debug!("[ChatTabs] emit failed: {e}");
     }
 }
 
-/// The open rooms and the one on screen.
+/// Sends a change's view, and keeps the live line of every Twitch room joined
+/// or left with it: the tabs' live dots and the Chats screen's play pill read
+/// it, and `channel_state` batches every watched room into one poll a minute.
+/// Other platforms ride the live poller, which reads the tabs itself.
+fn settle(app: &AppHandle, change: &ChatTabsChange) {
+    emit(app, &change.view);
+    ensure_mentions_feed();
+    // A room just opened shows the mentions it already has.
+    if !change.acquire.is_empty() {
+        let counts = crate::services::mention_inbox::unread_by_room();
+        for tab in &change.acquire {
+            note_mentions(&tab.channel, counts.get(&tab.channel).copied().unwrap_or(0));
+        }
+    }
+    let watch = |tab: &ChatTab| tab.provider == "twitch" && tab.channel_id.as_deref().is_some_and(|id| !id.is_empty());
+    let join: Vec<ChatTab> = change.acquire.iter().filter(|t| watch(t)).cloned().collect();
+    let leave: Vec<ChatTab> = change.release.iter().filter(|t| watch(t)).cloned().collect();
+    if !join.is_empty() || !leave.is_empty() {
+        tauri::async_runtime::spawn(async move {
+            for tab in leave {
+                crate::services::channel_state::unwatch(&tab.login, true).await;
+            }
+            for tab in join {
+                let id = tab.channel_id.clone().unwrap_or_default();
+                let state = crate::services::channel_state::watch(&tab.login, &id, true).await;
+                if let Some(live) = crate::services::channel_state::is_live(&tab.login).await {
+                    note_live(&tab.channel, live, state.viewer_count);
+                }
+            }
+        });
+    }
+    crate::services::chat_dock_live::wake();
+}
+
+/// A room's live line moved (`channel_state` for Twitch, the live poller for
+/// other platforms); a tab showing it is redrawn.
+pub fn note_live(channel: &str, live: bool, viewer_count: Option<u64>) {
+    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.note_live(channel, live, viewer_count)));
+    if let (true, Some(app)) = (changed, APP.get()) {
+        emit(app, &change.view);
+    }
+}
+
+/// Unread mentions in a room, from the mentions hub; feeds the tab's count and
+/// the Chats tab's badge.
+pub fn note_mentions(channel: &str, unread: u32) {
+    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.note_mentions(channel, unread)));
+    if let (true, Some(app)) = (changed, APP.get()) {
+        emit(app, &change.view);
+    }
+}
+
+/// The open rooms and the one on screen (the saved chats, restored, at launch).
 #[tauri::command]
-pub fn chat_tabs_get() -> ChatTabsView {
+pub fn chat_tabs_get(app: AppHandle) -> ChatTabsView {
+    let _ = APP.set(app);
+    ensure_mentions_feed();
+    push_mention_counts();
     chat_tabs::view()
 }
 
 /// Points the stream tab at the watched stream, or drops it with `None` when
-/// the player closed.
+/// the player closed (a kept one stays as one of your chats).
 #[tauri::command]
 pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>) -> ChatTabsChange {
     let (change, ()) = chat_tabs::apply(|t| (t.sync_stream(room.as_ref()), ()));
-    emit(&app, &change.view);
+    settle(&app, &change);
     change
 }
 
-/// Opens a room beside the stream and puts it on screen. A non-Twitch room
+/// Opens a room as one of your chats and puts it on screen. A non-Twitch room
 /// that knows only its slug gets its real name and picture from the platform
 /// a moment later, as another `chat-tabs` event.
 #[tauri::command]
 pub fn chat_tabs_add(app: AppHandle, room: ChatRoomInput) -> ChatTabsChange {
     let (change, needs_meta) = chat_tabs::apply(|t| t.add(&room));
-    emit(&app, &change.view);
+    settle(&app, &change);
     if needs_meta {
         if let Some(tab) = chat_tabs::ChatTabs::tab_for(&room, false) {
             tauri::async_runtime::spawn(async move {
@@ -61,11 +147,11 @@ pub fn chat_tabs_add(app: AppHandle, room: ChatRoomInput) -> ChatTabsChange {
     change
 }
 
-/// Closes a room opened beside the stream (the stream tab stays).
+/// Closes one of your chats (on the stream tab: stops keeping it).
 #[tauri::command]
 pub fn chat_tabs_remove(app: AppHandle, channel: String) -> ChatTabsChange {
     let (change, ()) = chat_tabs::apply(|t| (t.remove(&channel), ()));
-    emit(&app, &change.view);
+    settle(&app, &change);
     change
 }
 
@@ -73,6 +159,43 @@ pub fn chat_tabs_remove(app: AppHandle, channel: String) -> ChatTabsChange {
 #[tauri::command]
 pub fn chat_tabs_set_active(app: AppHandle, channel: String) -> ChatTabsView {
     let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.set_active(&channel)));
+    if changed {
+        emit(&app, &change.view);
+    }
+    change.view
+}
+
+/// Joins every chat not joined yet: the Chats screen's first look, or the
+/// return from a park.
+#[tauri::command]
+pub fn chat_tabs_connect(app: AppHandle) -> ChatTabsChange {
+    let (change, ()) = chat_tabs::apply(|t| (t.connect(), ()));
+    settle(&app, &change);
+    change
+}
+
+/// Leaves every chat after a while in the background with no player (Android).
+#[tauri::command]
+pub fn chat_tabs_park(app: AppHandle) -> ChatTabsChange {
+    let (change, ()) = chat_tabs::apply(|t| (t.park(), ()));
+    settle(&app, &change);
+    change
+}
+
+/// The rooms on screen right now (the Chats tab and the chat under the player),
+/// empty when none is. Mentions arriving in a room you are looking at are read
+/// already; the mentions hub takes this set as it is.
+#[tauri::command]
+pub fn chat_tabs_visible(rooms: Vec<String>) {
+    let rooms: Vec<String> = rooms.into_iter().map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
+    log::debug!("[ChatTabs] on screen: {rooms:?}");
+    crate::services::mention_inbox::set_visible_rooms(rooms);
+}
+
+/// Keeps the stream's chat after the player closes, or lets it close with it.
+#[tauri::command]
+pub fn chat_tabs_keep(app: AppHandle, channel: String, keep: bool) -> ChatTabsView {
+    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.keep(&channel, keep)));
     if changed {
         emit(&app, &change.view);
     }
@@ -100,6 +223,23 @@ pub async fn rebuild_chat(
         }
         r.port
     }))
+}
+
+/// The phones' "add a chat" picker: your live follows, then your offline
+/// follows, from the Following snapshot (no request). `platforms` keeps the
+/// ones the shell can chat on; `open` names the chats open now, read from the
+/// tabs when left out.
+#[tauri::command]
+pub async fn chat_picker(
+    platforms: Option<Vec<String>>,
+    open: Option<Vec<String>>,
+) -> crate::services::chat_picker::ChatPicker {
+    let snap = crate::services::home_snapshot::snapshot().await;
+    let open: std::collections::HashSet<String> = match open {
+        Some(keys) => keys.into_iter().map(|k| k.trim().to_lowercase()).collect(),
+        None => chat_tabs::view().tabs.into_iter().map(|t| t.tab.channel).collect(),
+    };
+    crate::services::chat_picker::build(&snap.following, &snap.last_broadcasts, platforms.as_deref(), &open)
 }
 
 /// One channel the "Add a chat" sheet lists.

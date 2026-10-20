@@ -8,6 +8,7 @@ import { SettingsSection, SettingsRow } from './_primitives';
 import { useSettingReset } from './settingReset';
 import { InlineSlider } from '../plugins/settingsPageKit';
 import { Toggle } from '../ui/Toggle';
+import { IS_MOBILE } from '../../utils/platform';
 
 const DEFAULT_DELAY_MS = 1000;
 
@@ -35,17 +36,34 @@ const ChatBurstSettings = () => {
         description={`One line every ${formatDelay(delay)}. Add --delay <ms> to a command to change it for one run.`}
         help="1 second is the pace Twitch allows a regular viewer in one channel. Moderators, VIPs and the broadcaster may go faster. Going faster than your role allows gets lines dropped and can silence you for an hour, and moderators may time you out for spam. A run stops by itself if Twitch drops three lines in a row or says you're timed out."
         control={
-          <InlineSlider
-            value={delay}
+          IS_MOBILE ? undefined : (
+            <InlineSlider
+              value={delay}
+              min={10}
+              max={5000}
+              step={10}
+              label="Milliseconds between lines"
+              format={formatDelay}
+              onChange={(delay_ms) => set({ delay_ms })}
+            />
+          )
+        }
+      >
+        {/* The phone runs the slider full width under the row, as the iPhone
+            does; the description already says the pause it sets. */}
+        {IS_MOBILE && (
+          <input
+            type="range"
             min={10}
             max={5000}
             step={10}
-            label="Milliseconds between lines"
-            format={formatDelay}
-            onChange={(delay_ms) => set({ delay_ms })}
+            value={delay}
+            aria-label="Milliseconds between lines"
+            onChange={(e) => set({ delay_ms: Number(e.target.value) })}
+            className="w-full accent-accent cursor-pointer"
           />
-        }
-      />
+        )}
+      </SettingsRow>
       <SettingsRow
         title="Vary repeats"
         onReset={resetFor(['chat_burst.vary_repeats', true])}

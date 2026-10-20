@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and up. Cloud backup and phone-to-phone transfer carry the
+     settings and their dated copies, nothing else: an include list, so a file
+     added to the data dir later stays out unless it is named here. Never add
+     a sign-in file or .token_vault_key: a restored sign-in reads as one from
+     before on a fresh install. Keep in step with backup_rules.xml. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="root" path="StreamNook/settings.json" />
+        <include domain="root" path="StreamNook/settings-backups" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="root" path="StreamNook/settings.json" />
+        <include domain="root" path="StreamNook/settings-backups" />
+    </device-transfer>
+</data-extraction-rules>

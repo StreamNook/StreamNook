@@ -7,7 +7,8 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { Gift, RotateCcw } from 'lucide-react';
+import { Gift, Inbox, RotateCcw } from 'lucide-react';
+import { DotsThreeVertical } from 'phosphor-react';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import { deletedBodyStyle, deletedRowDimmed, type DeletedMessageStyle } from '../chat/deletedMessage';
@@ -19,6 +20,7 @@ import { mentionHoldBackground } from '../chat/mentionHold';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
+import { chatBodyWeight } from '../../utils/chatBodyWeight';
 import { mentionBoxClass, mentionBoxStyle, mentionTextStyle, type MentionLook } from '../chat/mentionStyle';
 import { ScrollbarMarks } from '../chat/ScrollbarMarks';
 import { collectMarks } from '../chat/scrollbarMarkLayout';
@@ -187,7 +189,7 @@ const PreviewLine = ({
           accentColor={design.username_accent_source === 'theme' ? 'var(--color-accent)' : color}
         />
         <span
-          style={action ? { color, fontWeight: 300 } : { fontWeight: 'var(--chat-body-weight, 300)' }}
+          style={action ? { color, fontWeight: chatBodyWeight(design.font_weight) } : { fontWeight: chatBodyWeight(design.font_weight) }}
           className={action ? 'italic break-words' : 'text-textPrimary break-words'}
         >
           <span data-mod-body style={moderation && deletedStyle ? deletedBodyStyle(deletedStyle) : undefined}>
@@ -705,6 +707,35 @@ export const RoomModesPreview = ({ style }: { style: 'chip' | 'prompt' }) => (
     </div>
   </SettingPreview>
 );
+
+/** The phones' message bar with the inbox tray at the chosen end and the chat
+ *  menu at the other, drawn as the composer draws them; nothing in it acts. */
+export const InboxButtonPreview = ({ side }: { side: 'left' | 'right' }) => {
+  const tray = (
+    <span className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center w-10 h-10 text-textSecondary">
+      <Inbox size={19} strokeWidth={2} />
+      <span className={`sn-inbox-badge absolute -top-1 ${side === 'right' ? '-left-1' : '-right-1'} min-w-[17px] h-[17px] px-[5px] rounded-full text-[10.5px] font-bold leading-[17px] text-center tabular-nums`}>
+        2
+      </span>
+    </span>
+  );
+  const menu = (
+    <span className="chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center w-10 h-10 text-textSecondary">
+      <DotsThreeVertical size={22} weight="bold" />
+    </span>
+  );
+  return (
+    <SettingPreview caption={side === 'right' ? 'the inbox under a right thumb' : 'the inbox on the left, the chat menu on the right'}>
+      <div className="flex items-center gap-1.5" aria-hidden>
+        {side === 'left' ? tray : menu}
+        <span className="glass-input flex-1 min-w-0 h-10 flex items-center px-3 text-[15px] text-textMuted">
+          <span className="truncate">Send a message</span>
+        </span>
+        {side === 'left' ? menu : tray}
+      </div>
+    </SettingPreview>
+  );
+};
 
 /** A mention and a reply to you as they sit in chat after landing: the color
  *  edge, and with Keep tinted the held wash chat rows draw (chat/mentionHold). */

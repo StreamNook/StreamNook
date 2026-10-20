@@ -15,7 +15,7 @@ export interface ProfileBadge {
 }
 
 export interface ProfileBadgeGroup {
-  /** "Relics", "Twitch", "7TV", "Chat clients" or "StreamNook". */
+  /** "Twitch", "7TV", "Chat clients" or "StreamNook". */
   title: string;
   badges: ProfileBadge[];
 }
@@ -47,9 +47,12 @@ export interface TopEmoteView {
   count: number;
 }
 
-/** A member's overview (ending on their profile views), earned accolades and
- *  top emotes, with what they hide already left out. */
+/** A member's relics, overview (ending on their profile views), earned
+ *  accolades and top emotes, with what they hide already left out. */
 export interface MemberProfileView {
+  /** Their relics, the featured one first; the sheet's StreamNook block leads
+   *  with them. */
+  relics: ProfileBadge[];
   stats: MemberStatView[];
   accolades: AccoladeMedalView[];
   top_emotes: TopEmoteView[];
@@ -111,8 +114,8 @@ export interface ProfileSheetView {
   member?: MemberRank;
   /** The Atmosphere they wear on their profile, after the wear gate. */
   atmosphere?: AtmosphereView;
-  /** A member's overview, accolades and top emotes; their StreamNook badges
-   *  and relics ride `groups`. */
+  /** A member's relics, overview, accolades and top emotes; their StreamNook
+   *  badges ride `groups`. */
   member_profile?: MemberProfileView;
 }
 
@@ -122,11 +125,13 @@ export interface OwnIdentityView {
   display_name: string;
   shown_login?: string;
   paint_def?: PaintV4;
+  /** Your Twitch name color, readable as chat shows it; absent when Twitch did not say. */
+  name_color?: string;
   /** Your 7TV picture, when you set one and you show 7TV pictures. */
   picture?: AvatarPick;
   /** Your Twitch profile banner; absent when the account has none. */
   banner_url?: string;
-  /** Worn, in order, images only, at most eight. */
+  /** Worn, in surface order (your StreamNook badge last), images only, capped. */
   badges: ProfileBadge[];
   streamnook?: SnMemberBadge;
   atmosphere?: AtmosphereView;
@@ -161,6 +166,8 @@ export interface ExternalPickerView {
   drops_signed_in: boolean;
   twitch_selectable: ChatIdentityBadge[];
   twitch_earned: ProfileBadge[];
+  /** The chat-client badges you wear (FFZ, BetterTTV, Chatterino and the rest), for the preview row. */
+  chat_clients?: ProfileBadge[];
   /** Your Twitch name color (`#rrggbb`), when Twitch says. */
   chat_color?: string;
   /** Twitch's named colors, which every account may pick, in Twitch's order. */

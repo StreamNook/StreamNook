@@ -10,7 +10,7 @@ import { getPlayerControls } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
 import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
-import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
+import { updatePresence } from '../services/supabaseService';
 import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
@@ -25,6 +25,7 @@ import { settleFirstSettings } from '../utils/settingsOnceLoaded';
 import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
+import { authFailureOutcome, HELD_SESSION_RECHECK_MS, isNetworkAuthError, readProfile } from '../utils/authErrors';
 
 /** `watch_open_room`: the room, or the live row for a stale card. */
 type RoomOpenResult = {
@@ -136,6 +137,9 @@ export interface MediaInfo {
    *  when the clip came from a grid; the resolver supplies it for a clip opened from a
    *  link. Absent when the parent VOD has expired. */
   clip_source?: ClipSource;
+  /** Videos only: where to begin, in seconds (a clip's moment in its broadcast).
+   *  Wins over the saved position Rust answers with. */
+  start_at?: number;
 }
 
 /** Pull the chat-replay coordinates off a clip. Returns undefined when the clip has no
@@ -707,6 +711,9 @@ const upsertModLog = (logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] =>
 // Shown once per app session, desktop only (the phone keeps boot quiet).
 let hasShownWelcomeBackToast = false;
 
+/** The next profile read while a held session's profile is out of reach. */
+let heldSessionRecheck: ReturnType<typeof setTimeout> | null = null;
+
 // The boot veil's fade-out (App.tsx), so a greeting waits for it to finish.
 const BOOT_VEIL_FADE_MS = 450;
 
@@ -883,7 +890,7 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     const { type, status, error } = event.payload;
     Logger.error(`[EventSub] Subscription failed: ${type} (HTTP ${status}): ${error}`);
     if (type === 'channel.moderate') {
-      get().addToast(`Mod logs unavailable: ${error || 'subscription failed'} (HTTP ${status})`, 'warning');
+      get().addToast(`Couldn't start mod logs: ${error || 'subscription failed'} (HTTP ${status})`, 'warning');
     }
   });
 }
@@ -1187,10 +1194,10 @@ async function startProviderStream(
     const shown = get().currentStream as TwitchStream;
     const name = shown.user_name || shown.user_login || channel;
     const offline = seed?.is_live === false;
-    if (!offline && !signInOffered) get().addToast('Playback unavailable - showing chat only', 'error');
+    if (!offline && !signInOffered) get().addToast("Couldn't play this stream, showing chat only", 'error');
     await keepProviderChat(
       shown,
-      offline ? `${name} is offline. Chat keeps running.` : 'Playback unavailable. Chat keeps running.',
+      offline ? `${name} is offline. Chat keeps running.` : "Couldn't play this stream. Chat keeps running.",
       set,
     );
     if (superseded()) return true;
@@ -1899,13 +1906,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     ) {
       set({ activePlatform: savedPlatform });
     }
-    // Migrate the retired second OLED theme: it was a fixed-orange variant of the
-    // now-unified OLED theme. Move those users onto OLED with the orange accent
-    // preserved, so their look is unchanged.
-    if (settings.theme === 'prince0fdubai-oled-v2') {
-      settings.theme = 'prince0fdubai-oled';
-      if (!settings.oled_accent) settings.oled_accent = '#ff9933';
-    }
+    // The retired second OLED theme moves to OLED in Rust when settings load
+    // (Settings::retire_oled_v2), so every shell gets it.
     const state = get();
     if (state.isTheaterMode) {
       set({ settings, originalChatPlacement: settings.chat_placement });
@@ -2199,7 +2201,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentStream: parsedInfo,
         currentMediaType: type,
         originalMediaUrl: url,
-        vodPlayback: type === 'video' ? (result.vod ?? null) : null,
+        vodPlayback:
+          type === 'video' && result.vod
+            ? info.start_at != null
+              ? { ...result.vod, start_position_secs: info.start_at }
+              : result.vod
+            : null,
         liveRewind: null,
         liveRewindAvailable: null,
         liveRewindAnchor: null,
@@ -2405,17 +2412,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       if (!preserveBackend) {
-        await invoke('stop_chat');
+        // Rust answers whether the connection went down. It stays up while
+        // the viewer keeps a chat open beside the stream (a phone's Chats
+        // room, a docked chat, another window), and those rooms are still on
+        // screen.
+        const stopped = await invoke<boolean>('stop_chat');
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
         // exit left every user from the last channel resident. Releasing it here
-        // means a full exit actually frees that reference.
-        try {
-          const { useChatUserStore } = await import('./chatUserStore');
-          useChatUserStore.getState().clearUsers();
-        } catch (e) {
-          Logger.warn('Could not clear chat user store on stop:', e);
+        // means a full exit actually frees that reference. Only then: the store
+        // is shared by every chat this page shows, so clearing it under a chat
+        // that stays open strips its rows' paints and badges.
+        if (stopped) {
+          try {
+            const { useChatUserStore } = await import('./chatUserStore');
+            useChatUserStore.getState().clearUsers();
+          } catch (e) {
+            Logger.warn('Could not clear chat user store on stop:', e);
+          }
         }
       }
 
@@ -2687,10 +2702,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       try {
         const { currentMediaType, originalMediaUrl } = get();
-        const targetUrl =
-          currentMediaType !== 'live' && originalMediaUrl
-            ? originalMediaUrl
-            : `https://twitch.tv/${currentStream.user_login}`;
+        // A Kick or YouTube stream re-resolves through its own adapter, as
+        // changeStreamQuality does: a twitch.tv URL sent the slug to the Twitch
+        // resolver, which could start the wrong stream on a screen lock.
+        const provider = streamProvider(currentStream);
+        const liveUrl =
+          provider === 'twitch'
+            ? `https://twitch.tv/${currentStream.user_login}`
+            : buildProviderUrl(provider, currentStream.user_login);
+        const targetUrl = currentMediaType !== 'live' && originalMediaUrl ? originalMediaUrl : liveUrl;
         const result = await invoke<StreamStartResult>('change_stream_quality', {
           url: targetUrl,
           quality,
@@ -2777,7 +2797,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().addToast(`Quality changed to ${result.quality}`, 'success');
       } else {
         Logger.info(`[Stream] Quality fallback: ${quality} -> ${result.quality}`);
-        get().addToast(`Quality "${quality}" unavailable, switched to "${result.quality}"`, 'info');
+        get().addToast(`Switched to "${result.quality}": this stream has no "${quality}"`, 'info');
       }
       Logger.debug('[Quality] Stream URL updated:', result.url);
       Logger.debug('[Quality] Settings updated with new quality preference:', quality);
@@ -2910,7 +2930,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         live = true;
       }
       // Offline needs no toast: the room's own screen says so.
-      if (live) get().addToast('Playback unavailable - showing chat only', 'error');
+      if (live) get().addToast("Couldn't play this stream, showing chat only", 'error');
       try {
         await get().startOfflineChat(channel, providedStreamInfo, { chatOnly: live });
       } catch (fallbackErr) {
@@ -3461,10 +3481,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkAuthStatus: async () => {
     let hasCredentials = false;
     let authErrorMsg = '';
-    
+    // A check now answers for any read that was waiting on the network.
+    if (heldSessionRecheck) {
+      clearTimeout(heldSessionRecheck);
+      heldSessionRecheck = null;
+    }
+
     try {
-      // Check if we have stored credentials first (only on initial check, not periodic checks)
-      const wasAuthenticated = get().isAuthenticated;
+      // Signed in with a profile already. A session held through a network
+      // failure has no profile yet, so its first profile is still a sign-in
+      // for the once-a-session work below.
+      const wasAuthenticated = get().isAuthenticated && get().currentUser !== null;
+      // The core holding a token is what "signed in" means (the iPhone reads
+      // the same answer from get_boot_state); the profile below only dresses it.
       hasCredentials = await invoke('has_stored_credentials') as boolean;
 
       if (!hasCredentials) {
@@ -3488,8 +3517,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         })
         .catch(() => {});
 
-      // Try to get user info - if it works, we're authenticated
-      const userInfo = await invoke('get_user_info') as UserInfo;
+      // The profile, three tries a second apart, as the iPhone reads it: right
+      // after a launch (Rust may be refreshing an expired token) or a sign-in,
+      // Twitch can take a moment to answer.
+      const userInfo = await readProfile(() => invoke<UserInfo>('get_user_info'));
       const user: TwitchUser = {
         access_token: '', // We don't need to expose this
         username: userInfo.login,
@@ -3507,59 +3538,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         .then((s) => set({ ffzIsSubwoofer: !!s?.is_subwoofer }))
         .catch(() => set({ ffzIsSubwoofer: false }));
 
-      // Track user in Supabase for analytics (only on initial login, not periodic checks)
+      // The member row, today's accolades, owned atmospheres and the login
+      // and tenure rewards are Rust's (services/member_signin.rs), run once a
+      // session when get_user_info above confirms the member, on every client.
+      // Presence is still this page's: rejoin it under the signed-in member.
       if (!wasAuthenticated) {
-        try {
-          // getAppVersion(), which reads the merged Tauri config through
-          // `get_client_identity`. NOT get_current_app_version / get_app_version:
-          // both return env!("CARGO_PKG_VERSION"), the DESKTOP number even inside
-          // an Android build, because the tauri.android.conf.json override feeds
-          // Gradle and never reaches Cargo. Android had been reporting 8.3.9.
-          // This used to import getVersion() directly, which was correct but was
-          // a SECOND source: the presence payload read the Cargo one, so the same
-          // user could publish two different versions at once and whichever
-          // landed last won. One source now, and tests/version_parity.rs keeps
-          // Cargo.toml and tauri.conf.json from drifting apart on desktop.
-          const appVersion = await getAppVersion();
-          upsertUser(user, appVersion).catch((e) => {
-            Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
-          });
-        } catch (vErr) {
-          Logger.warn('[Auth] Failed to get app version for stats:', vErr);
-          upsertUser(user).catch((e) => {
-            Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
-          });
-        }
-
-        // Collect today's season/holiday + cake-day accolades server-side (the
-        // RPC enforces the window against the server clock and reads the verified
-        // creation date; idempotent). Fire and forget.
-        claimLoginAccolades(user.user_id).catch((e) => {
-          Logger.warn('[Auth] Failed to claim login accolades:', e);
-        });
-
-        // Claim login-window event rewards (server enforces the window). Lazy
-        // import: watchRewards reads this store, a static import would cycle.
-        import('../services/watchRewards')
-          .then((m) => m.maybeClaimLoginRewards(user.user_id))
-          .catch((e) => {
-            Logger.warn('[Auth] Failed to claim login rewards:', e);
-          });
-
-        // Claim subscriber-tenure milestone badges (server gates on the real
-        // total_months; below-threshold members simply aren't granted). Lazy
-        // import for the same store-cycle reason as above.
-        import('../services/watchRewards')
-          .then((m) => m.maybeClaimMilestoneRewards(user.user_id))
-          .catch((e) => {
-            Logger.warn('[Auth] Failed to claim milestone rewards:', e);
-          });
-
-        // Keep an active subscriber's owned atmospheres current (server gates on
-        // active status, so a lapsed member accrues nothing new). Idempotent.
-        grantAtmosphereOwnership(user.user_id).catch((e) => {
-          Logger.warn('[Auth] Failed to sync atmosphere ownership:', e);
-        });
+        getAppVersion()
+          .catch(() => undefined)
+          .then((appVersion) => updatePresence(user.user_id, user.display_name || user.username, appVersion))
+          .catch((e) => Logger.warn('[Auth] Failed to update presence:', e));
       }
 
       // A restored session gets one greeting per app session on desktop. The
@@ -3587,32 +3574,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       const previousUser = get().currentUser;
       authErrorMsg = e instanceof Error ? e.message : String(e);
 
-      // If it fails, we're not authenticated
-      set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
-
       // Rust signed the user out itself and says why on the roster; that prompt
       // stays until they sign in, so no other toast should talk over it.
       const isMissingScopes =
         authErrorMsg.includes('Missing scopes') ||
         authErrorMsg.includes('Sign-in required') ||
         twitchSignInReason(useAccountRosterStore.getState().roster) !== null;
-      const isNetworkError = authErrorMsg.toLowerCase().includes('error sending request') || 
-                             authErrorMsg.toLowerCase().includes('timeout') || 
-                             authErrorMsg.toLowerCase().includes('network') ||
-                             authErrorMsg.toLowerCase().includes('dns error') ||
-                             authErrorMsg.toLowerCase().includes('proxy') ||
-                             authErrorMsg.toLowerCase().includes('failed to fetch') ||
-                             authErrorMsg.includes('500') ||
-                             authErrorMsg.includes('502') ||
-                             authErrorMsg.includes('503') ||
-                             authErrorMsg.includes('504');
+      const isNetworkError = isNetworkAuthError(authErrorMsg);
+
+      // The core still holds the sign-in and only the network kept us from
+      // confirming it: stay signed in, with the profile filled in once Twitch
+      // answers (the iPhone's rule). The sign-in screen is never shown over a
+      // live session, and a refused token still signs out on a later read.
+      if (authFailureOutcome({ hasCredentials, message: authErrorMsg, missingScopes: isMissingScopes }) === 'keep-session') {
+        Logger.warn('[Auth] Network error during auth check; keeping the session and reading again soon:', authErrorMsg);
+        set({ isAuthenticated: true });
+        heldSessionRecheck = setTimeout(() => {
+          heldSessionRecheck = null;
+          void get().checkAuthStatus();
+        }, HELD_SESSION_RECHECK_MS);
+        return;
+      }
+
+      // If it fails, we're not authenticated
+      set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
 
       // Proactively notify the user if they lost their session. A scope upgrade
       // is useTwitchSignInPrompt's to announce, from the reason Rust holds.
       if (isMissingScopes) {
         Logger.info('[Auth] Twitch needs a new sign-in; the sign-in prompt covers it');
       } else if (isNetworkError) {
-        // Don't mistakenly tell them their session expired if their internet is just out
+        // No stored sign-in to keep, and the network failed too: nothing to tell them.
         Logger.warn('[Auth] Network error during auth check, failing gracefully:', authErrorMsg);
       } else if (wasAuthenticated && previousUser) {
         // They were actively using the app and the session functionally died (like 401 Unauthorized)
@@ -3624,8 +3616,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             onClick: () => get().loginToTwitch()
           }
         );
-      } else if (hasCredentials && !wasAuthenticated && authErrorMsg !== 'No stored credentials') {
-        // They booted up the app with a token on disk, but it was definitively invalid/expired
+      } else if (hasCredentials && authErrorMsg !== 'No stored credentials') {
+        // They booted up the app with a token on disk (or held it through a
+        // network failure without a profile yet), but it was definitively
+        // invalid/expired
         get().addToast(
           'Your login session expired while away. Please log in again.',
           'warning',

@@ -88,6 +88,10 @@ pub enum NoticeAction {
     Rewards { channel: String },
     /// Open Settings on this tab.
     Settings { tab: String },
+    /// Open the chat this mentions-inbox entry is in, at its message.
+    /// `channel` is the entry's `open_key` (a `startStream` key) for when the
+    /// entry is gone by the time the notification is clicked.
+    Mention { id: String, channel: String },
 }
 
 /// Who a reply typed into the notification goes to.
@@ -353,6 +357,22 @@ pub async fn test_system_notification(app: AppHandle) {
         reply: None,
     };
     crate::services::system_notify::show(app, notice).await;
+}
+
+/// Whether the system lets StreamNook show its notifications: `granted`,
+/// `denied`, or `default` while it has not asked. Only macOS asks, and with
+/// `ask` it shows its prompt then; Windows and Linux always answer `granted`.
+#[tauri::command]
+pub async fn system_notification_permission(ask: bool) -> String {
+    crate::services::system_notify::permission(ask).await.as_str().to_string()
+}
+
+/// Open the system's own notification settings, where a refusal is undone.
+#[tauri::command]
+pub fn open_system_notification_settings(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = crate::services::system_notify::settings_url().ok_or("No notification settings to open here")?;
+    app.opener().open_url(url, None::<String>).map_err(|e| format!("Could not open notification settings: {e}"))
 }
 
 /// Bring the main window forward and let it run notification `id`'s action.

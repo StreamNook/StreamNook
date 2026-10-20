@@ -1,5 +1,5 @@
 use crate::services::emote_credit::{self as credit, CreditProvider, EmoteCredit};
-use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
+use crate::services::emote_match::{self, Collector, Context, Seed, Slot, Spec};
 use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
@@ -109,8 +109,10 @@ pub struct EmoteMatchResult {
 }
 
 /// Emotes matching what the user is typing, ranked, for the Tab cycle
-/// (`profile` "cycle") or the emote list ("search"). Reads the sets already in
-/// memory and never fetches, so it is cheap enough to run on every keystroke.
+/// (`profile` "cycle"), the emote list ("search") or the emote fill menu
+/// ("fill": the desktop colon list and both phones' strip, see
+/// `emote_match::Request`). Reads the sets already in memory and never
+/// fetches, so it is cheap enough to run on every keystroke.
 ///
 /// `channel` and `channel_id` are what `ensureChannelEmotes` fetched the set
 /// with: a Twitch login and user id, a Kick slug, or a YouTube identifier.
@@ -127,20 +129,13 @@ pub async fn match_emote_tokens(
     tier: Option<String>,
     limit: Option<usize>,
     picker: Option<bool>,
+    typing: Option<bool>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteMatchResult, String> {
-    let profile = match profile.as_deref() {
-        Some("search") => Profile::Search,
-        _ => Profile::Cycle,
-    };
-    let order = match order.as_deref() {
-        Some("twitch_first") => Order::TwitchFirst,
-        _ => Order::Default,
-    };
-    let limit = limit.unwrap_or(match profile {
-        Profile::Cycle => 50,
-        Profile::Search => 60,
-    });
+    // `typing`: asked as the viewer types (the fill menu), not on Tab; a word
+    // under `MIN_PREFIX_CHARS` finds only an exact emote name.
+    let request = emote_match::Request::resolve(profile.as_deref(), order.as_deref(), limit, typing);
+    let (profile, order, limit, typing) = (request.profile, request.order, request.limit, request.typing);
     let tier = render_tier(tier.as_deref());
     let channel_id = channel_id.filter(|id| !id.is_empty());
 
@@ -165,7 +160,8 @@ pub async fn match_emote_tokens(
         },
     )
     // The emote menu shows FFZ subscriber effects locked instead of hiding them.
-    .include_locked(picker.unwrap_or(false));
+    .include_locked(picker.unwrap_or(false))
+    .typing(typing);
 
     let ready = match provider.as_deref().unwrap_or("twitch") {
         "twitch" => {
@@ -266,9 +262,10 @@ pub async fn match_emote_tokens(
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }
 
-    // The cycle and the phone strip offer the room's recent chatters after
-    // the emotes (provider `user`).
-    if profile == Profile::Cycle {
+    // The cycle and the fill menu offer the room's recent chatters after the
+    // emotes (provider `user`); a colon word names none (`chatter_rows`).
+    // A word too short for the emote list names no chatter either.
+    if request.chatters && !(typing && emote_match::is_short_word(&query)) {
         let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
         let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);
         rows.extend(chatters);

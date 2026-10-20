@@ -43,6 +43,13 @@ export interface PlatformAccountState {
   /** The @handle, where a platform has one apart from the display name (TikTok,
    *  whose nicknames can be stylized past recognition). */
   handle: string | null;
+  /** This build can sign in to it here (Rust's roster says). Until the roster
+   *  answers nothing is offered, so a phone never shows a sign-in that fails. */
+  canSignIn: boolean;
+  /** This build can watch its streams and chat (Rust's roster says). Until the
+   *  roster answers it is false, so nothing for a platform the build cannot
+   *  watch ever shows on a phone. */
+  canWatch: boolean;
   /** A connect/disconnect is in flight. Blocks a second one. */
   busy: boolean;
   /** What the connect flow is doing right now, shown instead of the subtitle. */
@@ -68,6 +75,8 @@ interface PlatformAccountStore {
 
 const IDLE: PlatformAccountState = {
   connected: false,
+  canSignIn: false,
+  canWatch: false,
   name: null,
   avatarUrl: null,
   id: null,
@@ -120,9 +129,11 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
   const applyRow = (provider: PlatformId, row: RosterAccount | undefined) => {
     if (!row) return;
     const connected = row.status === 'connected';
+    const canSignIn = row.can_sign_in === true;
+    const canWatch = row.can_watch === true;
     if (!connected) {
       const wasConnected = get()[provider].connected;
-      patch(provider, { connected, name: null, avatarUrl: null, id: null, handle: null });
+      patch(provider, { connected, canSignIn, canWatch, name: null, avatarUrl: null, id: null, handle: null });
       // Deliberately NOT clearProvider here. A session dying mid-run must not
       // blank the sidebar: Kick liveness never needed the login (the sweep
       // runs on an app token) and the follow list survives backend-side for
@@ -136,6 +147,8 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     }
     patch(provider, {
       connected,
+      canSignIn,
+      canWatch,
       name: row.name,
       avatarUrl: row.avatar_url,
       id: row.account_id,
@@ -174,7 +187,7 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     applyRoster,
 
     connect: async (provider) => {
-      if (get()[provider].busy) return;
+      if (get()[provider].busy || !get()[provider].canSignIn) return;
       patch(provider, { busy: true, step: 'Waiting for you to sign in…' });
       // Set when the flow already said why it did not finish, so the check
       // after the roster read never says it a second time.

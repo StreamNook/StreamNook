@@ -24,6 +24,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5.2", features = [] }
 
 [dependencies]
+# The mention rule, shared with the standalone mention watcher.
+sn-mention-rule = { path = "crates/sn-mention-rule" }
 # `tauri` itself is declared per target below: the runtime differs on Linux
 # (CEF) and the feature set that picks the runtime cannot be expressed in one
 # line. Every other dependency is runtime-agnostic and stays here. The
@@ -38,6 +40,8 @@ warp = { version = "0.4.2", features = ["server", "websocket"] }
 # Ref-counted response bodies for the media relays; already in the lock via warp/hyper.
 bytes = "1"
 futures = "0.3"
+# The device language, the default for Discover and browse; already in the lock.
+sys-locale = "0.3"
 futures-util = { version = "0.3.31", features = ["sink"] }
 rand = "0.10.2"
 url = "2.5.7"
@@ -333,12 +337,24 @@ tauri-plugin-updater = "2"
 # Login-keychain store for the token vault's key (the same items keyring 3 wrote).
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 block2 = "0.6"
+objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSObject",
     "NSString",
     "NSArray",
     "NSHTTPCookie",
+    "NSBundle",
+    "NSError",
+] }
+# The notification permission (services/system_notify.rs): macOS asks before
+# an app's first notification, and this is how the setup wizard asks only
+# once a type is turned on, and reads a refusal back.
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "UNUserNotificationCenter",
+    "UNNotificationSettings",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
     "std",

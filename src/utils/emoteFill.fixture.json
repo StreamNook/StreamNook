@@ -1,0 +1,5 @@
+{
+  "about": "Words typed into the emote fill menu (the desktop colon list and both phones' suggestion strip). Rust's emote_match test, the vitest emoteFill test and the SNKit test all read this file: each word must get the same list whichever app asks.",
+  "words": ["lo", "LO", "lol", "LoL", "Kap", "kappa", "lul", "glorp", "blob", "l", "L", "k", "0", "zz"],
+  "oneLetter": "l"
+}

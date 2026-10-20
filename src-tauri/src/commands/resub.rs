@@ -198,9 +198,9 @@ pub async fn get_resub_notification(
 
     match resub {
         Some(r) => {
-            debug!(
-                "[Resub] Found resub token! {} months cumulative, {} months streak",
-                r.cumulative_tenure_months, r.streak_tenure_months
+            log::info!(
+                "[Resub] offer: channel={} months={} streak_months={}",
+                channel_login, r.cumulative_tenure_months, r.streak_tenure_months
             );
             Ok(Some(ResubNotification {
                 id: r.id,
@@ -213,7 +213,7 @@ pub async fn get_resub_notification(
             }))
         }
         None => {
-            debug!("[Resub] No resub notification available for this channel");
+            log::info!("[Resub] offer: channel={} none", channel_login);
             Ok(None)
         }
     }
@@ -228,9 +228,11 @@ pub async fn use_resub_token(
     include_streak: bool,
     token_id: Option<String>,
 ) -> Result<bool, String> {
-    debug!(
-        "[Resub] Using resub token for channel: {}, message: {:?}, includeStreak: {}",
-        channel_login, message, include_streak
+    log::info!(
+        "[Resub] share start: channel={} with_message={} include_streak={}",
+        channel_login,
+        message.as_deref().is_some_and(|m| !m.is_empty()),
+        include_streak
     );
 
     // Get auth token
@@ -303,9 +305,9 @@ pub async fn use_resub_token(
         .unwrap_or(false);
 
     if is_success {
-        debug!("[Resub] Resub notification sent successfully!");
+        log::info!("[Resub] share sent: channel={}", channel_login);
     } else {
-        debug!("[Resub] Failed to send resub notification");
+        log::warn!("[Resub] share refused: channel={} answer={}", channel_login, response_text);
     }
 
     Ok(is_success)

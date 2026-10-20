@@ -6,6 +6,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { RESERVED_TRIGGERS, customCommandWins } from '../../utils/chatCommands';
 import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
+import { IS_MOBILE } from '../../utils/platform';
 import type { UserSlashCommand } from '../../types';
 
 /** One edit to the stored custom commands; Rust makes new entries and strips
@@ -70,19 +71,33 @@ const UserCommandsSettings = () => {
     return dups;
   }, [commands]);
 
+  const referenceToggle = (
+    <button
+      onClick={() => setShowDocs((v) => !v)}
+      className={`inline-flex items-center gap-1.5 px-2 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0 ${
+        IS_MOBILE ? 'min-h-8' : 'py-1'
+      }`}
+    >
+      <BookOpen size={12} />
+      <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
+    </button>
+  );
+
   return (
-    <SettingsSection label="Custom Commands" bare>
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-xs text-textSecondary flex-1">
-          Define your own commands. A trigger of <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">lurk</code> with expansion <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">I&apos;m lurking, BRB</code> means typing <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">/lurk</code> sends that message instead.
-        </p>
-        <button
-          onClick={() => setShowDocs((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0"
-        >
-          <BookOpen size={12} />
-          <span>{showDocs ? 'Hide reference' : 'Show reference'}</span>
-        </button>
+    // The phone puts Show reference on the heading's line, as the iPhone does.
+    <SettingsSection label="Custom Commands" bare accessory={IS_MOBILE ? referenceToggle : undefined}>
+      <div className={`flex items-start justify-between gap-3 ${IS_MOBILE ? 'px-4' : ''}`}>
+        {IS_MOBILE ? (
+          // The iPhone page's words.
+          <p className="text-xs text-textSecondary flex-1">
+            Define your own commands. A trigger of &quot;lurk&quot; with the text &quot;I&apos;m lurking, BRB&quot; means typing /lurk sends that text instead.
+          </p>
+        ) : (
+          <p className="text-xs text-textSecondary flex-1">
+            Define your own commands. A trigger of <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">lurk</code> with expansion <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">I&apos;m lurking, BRB</code> means typing <code className="px-1 py-0.5 bg-glass/40 rounded text-textPrimary">/lurk</code> sends that message instead.
+          </p>
+        )}
+        {!IS_MOBILE && referenceToggle}
       </div>
 
       {showDocs && (

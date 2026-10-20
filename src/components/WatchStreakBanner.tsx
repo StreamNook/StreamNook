@@ -1,6 +1,8 @@
 import React from 'react';
+import { CheckCircle2, X } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
-import { Flame, X, Reply } from 'lucide-react';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
+import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
 // Types
 export interface WatchStreakMilestone {
@@ -17,7 +19,33 @@ interface WatchStreakBannerProps {
   onActivateShare: () => void;
   onDismiss: () => void;
   onCancelShare: () => void;
+  /** Twitch's answer to the last share. */
+  feedback?: 'shared' | 'failed' | null;
 }
+
+// The phones' streak banner on the desktop: the chat header capsules' glaze
+// (solid at Glassiness 0), Twitch's streak flame in the theme's orange, what
+// it is in bold with the detail quieter beside it, then the one glazed accent
+// action and a quieter dismiss. Share arms the composer: the next message
+// sent carries the streak, and the banner says so until then or a cancel.
+const surface = `${GLAZE_BANNER} mb-2 flex items-center gap-2.5 pl-3 pr-1.5 py-1.5`;
+const quiet =
+  'flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-textMuted hover:text-textSecondary hover:bg-glass transition-colors';
+
+/** Twitch took the share: said once, then the banner goes. */
+const SharedRow = ({ title }: { title: string }) => (
+  <div className={surface} style={BANNER_STYLE} role="status">
+    <CheckCircle2 size={15} className="flex-shrink-0 text-success" />
+    <span className="min-w-0 flex-1 truncate py-1 text-[13px] font-semibold text-textPrimary">{title}</span>
+  </div>
+);
+
+/** Twitch did not take it: one line under the banner's own words. */
+const FailedLine = () => (
+  <span role="alert" className="truncate text-[11.5px] font-medium text-error">
+    Didn't go through. Try again.
+  </span>
+);
 
 const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   milestone,
@@ -25,81 +53,66 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   onActivateShare,
   onDismiss,
   onCancelShare,
+  feedback = null,
 }) => {
   const streakCount = milestone.streak_count;
+
+  if (feedback === 'shared') return <SharedRow title="Your watch streak is shared" />;
   const copoBonus = milestone.copo_bonus;
 
-  // Active mode: user is composing their streak share message
+  // Armed: the next message sent carries the streak.
   if (isStreakMode) {
     return (
-      /* glass-exempt: a tint banner on the chat column's own ground. */
-      <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-amber-500/5 backdrop-blur-md rounded-lg border border-amber-500/20">
-        <Reply size={14} className="text-amber-400 flex-shrink-0" />
-        <span className="text-xs text-textSecondary flex-1 flex items-center gap-1.5">
-          <span>Sharing</span>
-          <span className="text-amber-400 font-semibold flex items-center gap-0.5">
-            <Flame size={12} className="stroke-[2.5]" />
-            {streakCount}-Stream Streak
-          </span>
-          {copoBonus > 0 && (
-            <span className="text-textTertiary text-[10px] ml-0.5">(+{copoBonus.toLocaleString()} points)</span>
-          )}
+      <div className={surface} style={BANNER_STYLE} role="status">
+        <WatchStreakFlame size={15} className="flex-shrink-0 text-highlight-orange" />
+        <span className="min-w-0 flex-1 flex flex-col">
+          <span className="truncate text-[13px] font-semibold text-textPrimary">Sharing your watch streak</span>
+          <span className="truncate text-[11.5px] text-textMuted">It sends with your next message</span>
         </span>
-        
-        {/* Cancel button */}
         <Tooltip content="Cancel share" side="top">
-          <button 
-            onClick={onCancelShare} 
-            className="text-textSecondary hover:text-textPrimary transition-colors p-1 rounded-md hover:bg-glass" 
-          >
-            <X size={14} />
+          <button onClick={onCancelShare} className={quiet} aria-label="Cancel share">
+            <X size={13} />
           </button>
         </Tooltip>
       </div>
     );
   }
 
-  // Collapsed mode: notification banner
   return (
-    /* glass-exempt: a tint banner on the chat column's own ground. */
-    <div className="mb-2 flex items-center gap-3 px-3 py-2 bg-amber-500/5 backdrop-blur-md rounded-lg border border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors duration-200">
-      <div className="flex items-center justify-center w-6 h-6 rounded bg-amber-500/10 flex-shrink-0 shadow-[0_0_8px_color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
-        <Flame size={14} className="text-amber-400 stroke-[2.5]" />
-      </div>
-      
-      <div className="flex-1 min-w-0 flex flex-col justify-center">
-        <span className="text-[13px] text-textPrimary leading-tight">
-          Current Watch Streak
-        </span>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-xs text-amber-400 font-semibold">
-            {streakCount} Streams
-          </span>
-          {copoBonus > 0 && (
-            <span className="text-[10px] text-textTertiary">• +{copoBonus.toLocaleString()} points</span>
+    <div className={surface} style={BANNER_STYLE}>
+      <WatchStreakFlame size={15} className="flex-shrink-0 text-highlight-orange" />
+      <span className="min-w-0 flex-1 flex flex-col">
+        <span className="truncate text-[13px]">
+          <span className="font-semibold text-textPrimary">Watch streak</span>
+          {streakCount > 0 && (
+            <span className="text-textSecondary">
+              {' · '}
+              {streakCount} stream{streakCount === 1 ? '' : 's'}
+            </span>
           )}
-        </div>
-      </div>
-      
-      <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
-        {/* Share button */}
-        <button
-          onClick={onActivateShare}
-          className="px-3 py-1.5 text-xs font-semibold text-black bg-amber-500 hover:bg-amber-400 rounded-[4px] shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_20%,transparent)] transition-all active:scale-95"
-        >
-          Share
+        </span>
+        {feedback === 'failed' ? (
+          <FailedLine />
+        ) : (
+          copoBonus > 0 && (
+            <span className="truncate text-[11.5px] text-textMuted">
+              +{copoBonus.toLocaleString()} points for sharing
+            </span>
+          )
+        )}
+      </span>
+      <button
+        onClick={onActivateShare}
+        className={`${ACCENT_BUTTON} flex-shrink-0 h-7 px-3.5 !text-[12px]`}
+        style={ACCENT_FILL}
+      >
+        Share
+      </button>
+      <Tooltip content="Dismiss" side="top">
+        <button onClick={onDismiss} className={quiet} aria-label="Dismiss watch streak">
+          <X size={13} />
         </button>
-        
-        {/* Dismiss button */}
-        <Tooltip content="Dismiss" side="top">
-          <button 
-            onClick={onDismiss} 
-            className="p-1.5 text-textTertiary hover:text-textPrimary transition-colors rounded-md hover:bg-glass" 
-          >
-            <X size={14} strokeWidth={2.5} />
-          </button>
-        </Tooltip>
-      </div>
+      </Tooltip>
     </div>
   );
 };

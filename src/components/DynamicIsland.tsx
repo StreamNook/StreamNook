@@ -1,7 +1,7 @@
-import { Fragment, useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useCallback } from 'react';
+import { Fragment, useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Bell, BellOff, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle, AtSign, Reply, Highlighter } from 'lucide-react';
 import { X, SpeakerSlash, Trash, PuzzlePiece, Package, Gift, Sparkle } from 'phosphor-react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -10,6 +10,9 @@ import { useTitleBarLifted } from '../hooks/useTitleBarAutoHide';
 import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
 import { requestWallet } from '../utils/walletRequest';
+import { openMentionInMain } from '../stores/mentionJumpStore';
+import { MENTION_INBOX_CHANGED_EVENT, MENTION_NOTIFY_EVENT, toggleMentionChatMuted } from '../stores/mentionInboxStore';
+import { isProviderId } from '../types/providers';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
@@ -43,6 +46,9 @@ import type {
     GiftSubNotificationData,
     TwitchRewardNotificationData,
     MembershipGiftNotificationData,
+    MentionEntry,
+    MentionKind,
+    MentionPage,
     WhisperUpdate,
 } from '../types';
 
@@ -55,6 +61,89 @@ const CACHE_EXPIRY_DAYS = 7;
 const TEST_NOTIFICATION_TTL_MS = 8000;
 // Click actions kept for notifications shown in a MultiChat window.
 const MAX_MIRRORED_ACTIONS = 12;
+// Mentions come from Rust's inbox a page at a time; scrolling to the end of
+// the history asks for the next older page.
+const MENTION_PAGE = 20;
+/** `get_mention_inbox` caps a page here. */
+const MENTION_PAGE_MAX = 200;
+// The open panel with nothing in it: the header (42) and the empty state
+// (its ring, line and padding).
+const EMPTY_PANEL_HEIGHT = 42 + 190;
+
+/** A mention or reply from Rust's inbox, drawn in the history beside the
+ *  island's own notifications. Never cached here: Rust owns the entry and its
+ *  read state, so these are re-read from it, not saved with the rest. */
+interface MentionItem {
+    id: string;
+    type: 'mention';
+    timestamp: number;
+    read: boolean;
+    data: MentionEntry;
+}
+type IslandItem = DynamicIslandNotification | MentionItem;
+
+const toMentionItem = (entry: MentionEntry): MentionItem => ({
+    id: `mention:${entry.id}`,
+    type: 'mention',
+    timestamp: entry.at_ms,
+    read: entry.read,
+    data: entry,
+});
+
+const MENTION_KIND_WORDS: Record<MentionKind, string> = {
+    mention: 'mentioned you',
+    reply: 'replied to you',
+    word: 'matched a highlight',
+};
+
+// The kind is the mark: an @ for a mention, the reply arrow for a reply, the
+// highlighter for one of your highlight words.
+const MentionGlyph = ({ kind, size }: { kind: MentionKind; size: number }) => {
+    const Icon = kind === 'reply' ? Reply : kind === 'word' ? Highlighter : AtSign;
+    // The reply arrow's ink is short and wide; a step up matches the @'s weight.
+    return <Icon size={kind === 'reply' ? Math.round(size * 1.2) : size} className="text-accent flex-shrink-0" />;
+};
+
+// A mention's row in the history: who, in which chat, and what they said.
+// The row around it (hover, read dimming, time and actions) is the island's.
+const MentionRowBody = ({ entry, showPlatform }: { entry: MentionEntry; showPlatform: boolean }) => {
+    const platform = showPlatform && isProviderId(entry.platform) ? entry.platform : null;
+    return (
+        <>
+            <div className="relative flex-shrink-0">
+                <div className="sn-notif-glyph">
+                    <MentionGlyph kind={entry.kind} size={20} />
+                </div>
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                    {/* Rust stores the color readable on the CHAT's background;
+                        the panel is always dark, so its lightness is lifted to
+                        read there (a browser without relative colors keeps
+                        plain white). */}
+                    <span
+                        className="text-sm font-semibold truncate min-w-0 max-w-[60%] text-white"
+                        style={{ color: entry.sender_color ? `oklch(from ${entry.sender_color} max(l, 0.75) c h)` : undefined }}
+                    >
+                        {entry.sender_name}
+                    </span>
+                    <span className="sr-only">{MENTION_KIND_WORDS[entry.kind]}</span>
+                    {/* Smaller type than the name, nudged onto its baseline. */}
+                    <span className="flex-shrink-0 translate-y-px text-[12.5px] text-white/40">in</span>
+                    <span className="flex min-w-0 items-center gap-1 text-[12.5px] text-white/70">
+                        {platform && <ProviderIcon provider={platform} size="12px" />}
+                        <span className="truncate translate-y-px">{entry.channel_login}</span>
+                    </span>
+                </div>
+                {entry.removed ? (
+                    <p className="text-white/40 text-sm italic mt-0.5">Message deleted by a moderator</p>
+                ) : (
+                    <p className="text-white/50 text-sm line-clamp-2 break-words mt-0.5">{entry.text}</p>
+                )}
+            </div>
+        </>
+    );
+};
 
 
 interface TwitchRewardFromBackend {
@@ -163,8 +252,15 @@ const saveCachedNotifications = (notifications: DynamicIslandNotification[]) => 
 
 // The one-line text shown in the collapsed preview pill. Centralized so the
 // width-measuring code sizes the pill to exactly what gets rendered.
-const getPreviewText = (n: DynamicIslandNotification): string => {
+const getPreviewText = (n: IslandItem): string => {
     switch (n.type) {
+        case 'mention': {
+            // Worded like the system notification Rust raises for the same entry.
+            const { sender_name: name, channel_login: channel, kind } = n.data;
+            if (kind === 'reply') return `${name} replied to you in ${channel}`;
+            if (kind === 'word') return `${name} in ${channel}`;
+            return `${name} mentioned you in ${channel}`;
+        }
         case 'live': {
             const d = n.data as LiveNotificationData;
             return d.game_name ? `${d.streamer_name} is live • ${d.game_name}` : `${d.streamer_name} is live`;
@@ -225,8 +321,11 @@ const PointsFace = ({ avatarUrl, iconUrl }: { avatarUrl: string; iconUrl?: strin
 // profile picture wherever there is one (a streamer, a whisper sender, you), the
 // source glyph for anything a plugin raised, and the type or level glyph
 // otherwise.
-const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
+const renderPreviewIcon = (n: IslandItem): React.ReactNode => {
     switch (n.type) {
+        case 'mention':
+            // Rust keeps no picture of the sender, so the kind's mark.
+            return <MentionGlyph kind={n.data.kind} size={11} />;
         case 'live': {
             const d = n.data as LiveNotificationData;
             return d.streamer_avatar
@@ -291,7 +390,7 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
 const DynamicIsland = () => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [notifications, setNotifications] = useState<DynamicIslandNotification[]>(() => loadCachedNotifications());
-    const [latestNotification, setLatestNotification] = useState<DynamicIslandNotification | null>(null);
+    const [latestNotification, setLatestNotification] = useState<IslandItem | null>(null);
     const [showPreview, setShowPreview] = useState(false);
     const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
     // Measured width of the current preview's content, so the pill grows to fit
@@ -449,7 +548,6 @@ const DynamicIsland = () => {
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
     const showLiveNotifications = settings.live_notifications?.show_live_notifications ?? true;
     const showFavoriteLiveNotifications = settings.live_notifications?.show_favorite_live_notifications ?? true;
-    const showWhisperNotifications = settings.live_notifications?.show_whisper_notifications ?? true;
     const showDropsNotifications = settings.live_notifications?.show_drops_notifications ?? true;
     const showFavoriteDropsNotifications = settings.live_notifications?.show_favorite_drops_notifications ?? true;
     const showChannelPointsNotifications = settings.live_notifications?.show_channel_points_notifications ?? true;
@@ -468,6 +566,101 @@ const DynamicIsland = () => {
     useEffect(() => {
         saveCachedNotifications(notifications);
     }, [notifications]);
+
+    // Mentions and replies: Rust's inbox for the signed-in account, newest
+    // first. Rust owns the entries, their read state and the unread total; the
+    // history draws the loaded pages and sends what the viewer does.
+    const [mentions, setMentions] = useState<MentionEntry[]>([]);
+    const [mentionsHaveMore, setMentionsHaveMore] = useState(false);
+    const [mentionUnread, setMentionUnread] = useState(0);
+    const mentionsLoaded = useRef(MENTION_PAGE);
+    const mentionsLoadingOlder = useRef(false);
+    useEffect(() => {
+        mentionsLoaded.current = Math.max(MENTION_PAGE, mentions.length);
+    }, [mentions.length]);
+    const mutedRooms = settings.mentions?.muted_channels;
+    const mutedRoomSet = useMemo(() => new Set((mutedRooms ?? []).map((r) => r.toLowerCase())), [mutedRooms]);
+
+    // The first pages again, as many as are loaded, after every change Rust
+    // reports (a new mention, a read, a removal, an account switch). Changes
+    // come in bursts in a busy chat, so they are gathered for a moment.
+    useEffect(() => {
+        if (IS_MOBILE) return;
+        let alive = true;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const reload = () => {
+            invoke<MentionPage>('get_mention_inbox', { limit: Math.min(mentionsLoaded.current, MENTION_PAGE_MAX) })
+                .then((page) => {
+                    if (!alive) return;
+                    setMentions(page.entries);
+                    setMentionsHaveMore(page.has_more);
+                    setMentionUnread(page.unread_total);
+                })
+                .catch((e) => Logger.debug('[DynamicIsland] get_mention_inbox failed:', e));
+        };
+        reload();
+        const unlisten = listen(MENTION_INBOX_CHANGED_EVENT, () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(reload, 120);
+        });
+        return () => {
+            alive = false;
+            if (timer) clearTimeout(timer);
+            unlisten.then((fn) => fn());
+        };
+    }, []);
+
+    const loadOlderMentions = useCallback(() => {
+        const last = mentions[mentions.length - 1];
+        if (!mentionsHaveMore || !last || mentionsLoadingOlder.current) return;
+        mentionsLoadingOlder.current = true;
+        invoke<MentionPage>('get_mention_inbox', { beforeMs: last.at_ms, limit: MENTION_PAGE })
+            .then((page) => {
+                setMentions((prev) => {
+                    const seen = new Set(prev.map((m) => m.id));
+                    return [...prev, ...page.entries.filter((m) => !seen.has(m.id))];
+                });
+                setMentionsHaveMore(page.has_more);
+            })
+            .catch((e) => Logger.debug('[DynamicIsland] older mentions failed:', e))
+            .finally(() => { mentionsLoadingOlder.current = false; });
+    }, [mentions, mentionsHaveMore]);
+
+    // Read here at once; Rust confirms through the change event.
+    const markMentionsReadHere = (ids: string[] | null) => {
+        const hit = (m: MentionEntry) => !m.read && (ids === null || ids.includes(m.id));
+        const newlyRead = mentions.filter(hit).length;
+        if (ids === null) setMentionUnread(0);
+        else if (newlyRead > 0) setMentionUnread((u) => Math.max(0, u - newlyRead));
+        setMentions((prev) => prev.map((m) => (hit(m) ? { ...m, read: true } : m)));
+    };
+
+    // Opening one: Rust marks it read, its chat opens and scrolls to it.
+    const openMention = (entry: MentionEntry) => {
+        markMentionsReadHere([entry.id]);
+        setIsExpanded(false);
+        void openMentionInMain(entry.id, entry.open_key || entry.room);
+    };
+
+    const markMentionRead = (entry: MentionEntry, e: React.MouseEvent) => {
+        e.stopPropagation();
+        markMentionsReadHere([entry.id]);
+        invoke('mark_mentions_read', { ids: [entry.id] })
+            .catch((err) => Logger.debug('[DynamicIsland] mark_mentions_read failed:', err));
+    };
+
+    const removeMention = (entry: MentionEntry, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!entry.read) setMentionUnread((u) => Math.max(0, u - 1));
+        setMentions((prev) => prev.filter((m) => m.id !== entry.id));
+        invoke('remove_mention', { id: entry.id })
+            .catch((err) => Logger.debug('[DynamicIsland] remove_mention failed:', err));
+    };
+
+    const toggleMentionMute = (entry: MentionEntry, e: React.MouseEvent) => {
+        e.stopPropagation();
+        void toggleMentionChatMuted(entry.room);
+    };
 
     // Size the preview pill to its content so long streamer/game names are shown
     // in full instead of being truncated. We measure the (non-wrapping) text's
@@ -635,6 +828,11 @@ const DynamicIsland = () => {
                         store.openSettings(action.tab as SettingsTab);
                     }
                     return;
+                case 'mention':
+                    // Marks it read, opens its chat (after boot when the click
+                    // started the app) and leaves the jump for that chat.
+                    void openMentionInMain(action.id, action.channel);
+                    return;
             }
         };
         const take = () => {
@@ -657,12 +855,9 @@ const DynamicIsland = () => {
         return () => { unlisten.then((fn) => fn()); };
     }, []);
 
-    // Add notification
-    const addNotification = useCallback((notification: DynamicIslandNotification) => {
-        setNotifications(prev => {
-            const newNotifications = [notification, ...prev].slice(0, MAX_NOTIFICATIONS);
-            return newNotifications;
-        });
+    // Show the live preview for one item. A mention's preview is ONLY this:
+    // its history row is the inbox entry Rust already filed.
+    const showPreviewOf = useCallback((notification: IslandItem) => {
         setLatestNotification(notification);
         setShowPreview(true);
 
@@ -677,6 +872,31 @@ const DynamicIsland = () => {
             setShowPreview(false);
         }, previewHoldMs);
     }, []);
+
+    // Add notification
+    const addNotification = useCallback((notification: DynamicIslandNotification) => {
+        setNotifications(prev => {
+            const newNotifications = [notification, ...prev].slice(0, MAX_NOTIFICATIONS);
+            return newNotifications;
+        });
+        showPreviewOf(notification);
+    }, [showPreviewOf]);
+
+    // A mention Rust decided to announce now. Its gate already checked the
+    // setting, streamer mode, the per-chat cooldown, the message's age and
+    // that the chat is not on screen; the island adds only its own switches.
+    // No sound here: a mention or reply already rang the mention ping, and a
+    // highlight phrase its own rule's sound.
+    useEffect(() => {
+        if (IS_MOBILE) return;
+        const unlisten = listen<MentionEntry>(MENTION_NOTIFY_EVENT, (event) => {
+            if (!notificationsEnabled || !useDynamicIsland) return;
+            const entry = event.payload;
+            if (!entry?.id) return;
+            showPreviewOf(toMentionItem(entry));
+        });
+        return () => { unlisten.then((fn) => fn()); };
+    }, [notificationsEnabled, useDynamicIsland, showPreviewOf]);
 
     // Mirror action-feedback toasts (fired from anywhere via AppStore.addToast)
     // into the notification center: these are notifications too, so they leave a
@@ -886,12 +1106,12 @@ const DynamicIsland = () => {
 
     // Listen for whisper notifications
     useEffect(() => {
-        // Rust records each incoming whisper before announcing it, and the
-        // announcement already carries the sender's picture.
-        const unlisten = listen<WhisperUpdate>('whisper-conversation-updated', (event) => {
-            // Check if notifications are enabled
-            if (!notificationsEnabled || !showWhisperNotifications) return;
-
+        // Rust records each incoming whisper, then decides whether it is worth
+        // a notification (services/whisper_inbox.rs: the master switch and the
+        // Whispers type, streamer mode, and not the conversation on screen),
+        // the same decision the phones post from. The announcement already
+        // carries the sender's picture.
+        const unlisten = listen<WhisperUpdate>('whisper-notify', (event) => {
             const whisper = event.payload.message;
             if (!whisper || whisper.is_sent) return;
             const data = {
@@ -984,7 +1204,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, notificationsEnabled, showWhisperNotifications, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
+    }, [addNotification, playNotificationSound, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
 
     // Rewards Twitch names for your account (a badge earned, a drop reward
     // waiting), off its own notification feed, polled and classified in Rust.
@@ -1671,9 +1891,17 @@ const DynamicIsland = () => {
         setNotifications(prev => prev.filter(n => n.id !== id));
     };
 
-    // Clear all notifications
+    // Clear all notifications, the mentions with them: the button clears what
+    // the panel shows.
     const clearAllNotifications = () => {
         setNotifications([]);
+        if (mentions.length > 0 || mentionUnread > 0) {
+            setMentions([]);
+            setMentionsHaveMore(false);
+            setMentionUnread(0);
+            invoke('clear_mention_inbox')
+                .catch((e) => Logger.debug('[DynamicIsland] clear_mention_inbox failed:', e));
+        }
     };
 
     // Mark single notification as read
@@ -1689,10 +1917,32 @@ const DynamicIsland = () => {
         setNotifications(prev =>
             prev.map(n => ({ ...n, read: true }))
         );
+        if (mentionUnread > 0) {
+            markMentionsReadHere(null);
+            invoke('mark_mentions_read', {})
+                .catch((e) => Logger.debug('[DynamicIsland] mark_mentions_read failed:', e));
+        }
     };
 
-    // Get unread count
-    const unreadCount = notifications.filter(n => !n.read).length;
+    // Get unread count: the island's own, plus every unread mention Rust
+    // holds (loaded or not).
+    const unreadCount = notifications.filter(n => !n.read).length + mentionUnread;
+
+    // One history, newest first. While older mentions are still unloaded the
+    // island's own entries stop at the oldest loaded mention, so loading the
+    // next page only ever adds below the end and never pushes rows down.
+    const items = useMemo<IslandItem[]>(() => {
+        const cutoff = mentionsHaveMore && mentions.length > 0
+            ? mentions[mentions.length - 1].at_ms
+            : -Infinity;
+        return [
+            ...notifications.filter((n) => n.timestamp >= cutoff),
+            ...mentions.map(toMentionItem),
+        ].sort((a, b) => b.timestamp - a.timestamp);
+    }, [notifications, mentions, mentionsHaveMore]);
+    // A platform mark beside the chat only where mentions from more than one
+    // platform share the list.
+    const mentionPlatformsMix = useMemo(() => new Set(mentions.map((m) => m.platform)).size > 1, [mentions]);
 
 
     // Format time ago - uses 'now' state (updated every 30s) to avoid impure function calls during render
@@ -1800,9 +2050,9 @@ const DynamicIsland = () => {
         viewportHeight: windowSize.height,
     });
 
-    const shown = notifications.slice(0, 3);
-    const hasSeveralDays = new Set(notifications.map((n) => groupLabel(n.timestamp))).size > 1;
-    const overflow = notifications.length - shown.length;
+    const shown = items.slice(0, 3);
+    const hasSeveralDays = new Set(items.map((n) => groupLabel(n.timestamp))).size > 1;
+    const overflow = items.length - shown.length;
 
     return (
         <>
@@ -1813,7 +2063,7 @@ const DynamicIsland = () => {
                     <button
                         ref={triggerRef}
                         type="button"
-                        aria-label="Notifications"
+                        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
                         aria-expanded={isExpanded}
                         data-tauri-drag-region="false"
                         onClick={() => setIsExpanded((v) => !v)}
@@ -1837,12 +2087,18 @@ const DynamicIsland = () => {
                                 {shown.map((n, i) => (
                                     <span
                                         key={n.id}
-                                        className="sn-notif-face"
+                                        // Dim the read, like the rows: an unread
+                                        // face at full strength is the island's
+                                        // "something new" at rest.
+                                        className={n.read ? 'sn-notif-face sn-notif-face--read' : 'sn-notif-face'}
                                         /* Overlapped rather than spaced: a stack reads as
                                            "several things" at a glance and stays narrow,
                                            where discrete slots got wide fast and needed
                                            dividers that fought the glaze's own rim. */
-                                        style={i ? { marginLeft: -7 } : undefined}
+                                        // The newest on top: it is the one the
+                                        // stack is announcing, and a mark (unlike
+                                        // a face) is unreadable half covered.
+                                        style={{ marginLeft: i ? -4 : undefined, zIndex: shown.length - i }}
                                     >
                                         {renderPreviewIcon(n)}
                                     </span>
@@ -1939,7 +2195,9 @@ const DynamicIsland = () => {
                         // h-[40px] (less a 1px bottom border); container at top-1.5 (6px)
                         // + a 28px pill leaves an even gap above and below.
                         height: isExpanded
-                            ? Math.min(maxHeight, surfaceMaxHeight ?? Infinity, 64 + notifications.length * itemHeight)
+                            // Empty, it still has to fit the empty state under
+                            // the header, or the panel opens as a bare header.
+                            ? Math.min(maxHeight, surfaceMaxHeight ?? Infinity, items.length > 0 ? 64 + items.length * itemHeight : EMPTY_PANEL_HEIGHT)
                             : (anchor?.height ?? 28),
                     }}
                     // One spring, both directions. The collapse was never the
@@ -1953,11 +2211,17 @@ const DynamicIsland = () => {
                     }}
                     onClick={() => {
                         if (!isExpanded) {
-                            setIsExpanded(true);
                             setShowPreview(false);
                             if (previewTimeoutRef.current) {
                                 clearTimeout(previewTimeoutRef.current);
                             }
+                            // A mention's preview goes straight to the message,
+                            // like its notification and its row.
+                            if (showPreview && latestNotification?.type === 'mention') {
+                                openMention(latestNotification.data);
+                                return;
+                            }
+                            setIsExpanded(true);
                         }
                     }}
                     className="dynamic-island chrome-glaze chrome-glaze--frosted overflow-hidden cursor-pointer"
@@ -2001,6 +2265,10 @@ const DynamicIsland = () => {
                                         {renderPreviewIcon(latestNotification)}
                                         <span ref={previewTextRef} className="text-white text-[11px] font-medium truncate min-w-0">
                                             {getPreviewText(latestNotification)}
+                                            {/* A mention also says what was said, quieter, after its line. */}
+                                            {latestNotification.type === 'mention' && !latestNotification.data.removed && !!latestNotification.data.text && (
+                                                <span className="ml-1.5 font-normal text-white/55">{latestNotification.data.text}</span>
+                                            )}
                                         </span>
                                     </motion.div>
                                 ) : null}
@@ -2074,7 +2342,7 @@ const DynamicIsland = () => {
                                             </button>
                                         </Tooltip>
                                     )}
-                                    {notifications.length > 0 && (
+                                    {items.length > 0 && (
                                         <Tooltip content="Clear all" side="bottom">
                                             <button
                                                 type="button"
@@ -2093,8 +2361,17 @@ const DynamicIsland = () => {
                                 </div>
 
                                 {/* Notifications List */}
-                                <div className="flex-1 overflow-y-auto scrollbar-thin">
-                                    {notifications.length === 0 ? (
+                                <div
+                                    // Rows running past the rim fade out rather
+                                    // than being cut; the list's bottom padding
+                                    // is what sits under the fade at the end.
+                                    className="flex-1 overflow-y-auto scrollbar-thin [mask-image:linear-gradient(to_bottom,#000_calc(100%-20px),transparent)]"
+                                    onScroll={(e) => {
+                                        const el = e.currentTarget;
+                                        if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) loadOlderMentions();
+                                    }}
+                                >
+                                    {items.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center gap-3 py-14">
                                             <span className="sn-notif-empty-ring">
                                                 <Bell size={20} className="text-textSecondary" />
@@ -2104,8 +2381,8 @@ const DynamicIsland = () => {
                                             </span>
                                         </div>
                                     ) : (
-                                        <div className="pb-1">
-                                            {notifications.map((notification, i) => {
+                                        <div className="pb-4">
+                                            {items.map((notification, i) => {
                                             // A single "Today" over a list that is
                                             // entirely today is a label telling you
                                             // nothing, so headers only appear once
@@ -2113,7 +2390,11 @@ const DynamicIsland = () => {
                                             // apart.
                                             const label = groupLabel(notification.timestamp);
                                             const showHeader = hasSeveralDays
-                                                && (i === 0 || groupLabel(notifications[i - 1].timestamp) !== label);
+                                                && (i === 0 || groupLabel(items[i - 1].timestamp) !== label);
+                                            const open = () => {
+                                                if (notification.type === 'mention') openMention(notification.data);
+                                                else void handleNotificationClick(notification);
+                                            };
                                             return (
                                             <Fragment key={notification.id}>
                                             {showHeader && <div className="sn-notif-group">{label}</div>}
@@ -2122,7 +2403,7 @@ const DynamicIsland = () => {
                                                     initial={{ opacity: 0, y: -10 }}
                                                     animate={{ opacity: 1, y: 0 }}
                                                     exit={{ opacity: 0, x: -100 }}
-                                                    onClick={() => handleNotificationClick(notification)}
+                                                    onClick={open}
                                                     // A row is a control: it opens what it
                                                     // announces. As a button it is reachable
                                                     // by keyboard, and a click on it leaves
@@ -2131,14 +2412,20 @@ const DynamicIsland = () => {
                                                     tabIndex={0}
                                                     onKeyDown={(e) => {
                                                         if (e.key !== 'Enter' && e.key !== ' ') return;
+                                                        if (e.target !== e.currentTarget) return;
                                                         e.preventDefault();
-                                                        void handleNotificationClick(notification);
+                                                        open();
                                                     }}
                                                     className={`sn-notif-row group ${
                                                         notification.read ? '' : 'sn-notif-row--unread'
                                                     }`}
                                                 >
-                                                    {notification.type === 'live' ? (
+                                                    {notification.type === 'mention' ? (
+                                                        <MentionRowBody
+                                                            entry={notification.data}
+                                                            showPlatform={mentionPlatformsMix}
+                                                        />
+                                                    ) : notification.type === 'live' ? (
                                                         <>
                                                             {/* Live notification */}
                                                             <div className="relative flex-shrink-0">
@@ -2512,29 +2799,62 @@ const DynamicIsland = () => {
                                                         </>
                                                     ) : null}
 
-                                                    <div className="flex flex-shrink-0 items-center gap-1.5 self-start pt-[3px]">
-                                                        <span className="text-[10.5px] text-white/30">
+                                                    {/* Time, swapped for the row's actions on hover. One
+                                                        fixed slot for every row, wide enough for the most
+                                                        actions a row has, so the times share one edge and
+                                                        text wraps at the same place whatever the row offers. */}
+                                                    <div className="relative flex w-[62px] flex-shrink-0 justify-end self-start pt-[3px]">
+                                                        <span className="text-[10.5px] text-white/30 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
                                                             {formatTimeAgo(notification.timestamp)}
                                                         </span>
+                                                        <div className="absolute right-0 top-0 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                                                         {/* Mark as read button - only show for unread notifications */}
                                                         {!notification.read && (
                                                             <Tooltip content="Mark as read" side="top">
                                                                 <button
-                                                                    onClick={(e) => markAsRead(notification.id, e)}
-                                                                    className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-green-400 transition-all p-0.5"
+                                                                    type="button"
+                                                                    aria-label="Mark as read"
+                                                                    onClick={(e) => notification.type === 'mention'
+                                                                        ? markMentionRead(notification.data, e)
+                                                                        : markAsRead(notification.id, e)}
+                                                                    className="text-white/30hover:text-green-400 transition-all p-0.5"
+                                                                    data-keeps-player-fullscreen
                                                                 >
                                                                     <Check size={14} />
                                                                 </button>
                                                             </Tooltip>
                                                         )}
-                                                        <Tooltip content="Remove notification" side="top">
+                                                        {notification.type === 'mention' && (() => {
+                                                            const muted = mutedRoomSet.has(notification.data.room.toLowerCase());
+                                                            const label = muted ? 'Unmute this chat' : 'Mute this chat';
+                                                            return (
+                                                                <Tooltip content={label} side="top">
+                                                                    <button
+                                                                        type="button"
+                                                                        aria-label={label}
+                                                                        onClick={(e) => toggleMentionMute(notification.data, e)}
+                                                                        className="text-white/30hover:text-white transition-all p-0.5"
+                                                                        data-keeps-player-fullscreen
+                                                                    >
+                                                                        {muted ? <Bell size={14} /> : <BellOff size={14} />}
+                                                                    </button>
+                                                                </Tooltip>
+                                                            );
+                                                        })()}
+                                                        <Tooltip content={notification.type === 'mention' ? 'Remove' : 'Remove notification'} side="top">
                                                             <button
-                                                                onClick={(e) => clearNotification(notification.id, e)}
-                                                                className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-white transition-all p-0.5"
+                                                                type="button"
+                                                                aria-label={notification.type === 'mention' ? 'Remove' : 'Remove notification'}
+                                                                onClick={(e) => notification.type === 'mention'
+                                                                    ? removeMention(notification.data, e)
+                                                                    : clearNotification(notification.id, e)}
+                                                                className="text-white/30hover:text-white transition-all p-0.5"
+                                                                data-keeps-player-fullscreen
                                                             >
                                                                 <X size={14} />
                                                             </button>
                                                         </Tooltip>
+                                                        </div>
                                                     </div>
                                                 </motion.div>
                                             </Fragment>

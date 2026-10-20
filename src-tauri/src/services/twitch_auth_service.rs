@@ -195,6 +195,7 @@ impl TwitchAuthService {
         self.inner.logged_out.store(false, Ordering::SeqCst);
         self.invalidate().await;
         forget_chat_sender();
+        crate::services::channel_state::account_changed();
     }
 
     /// A full logout happened: reads return not-logged-in (no fallback to the
@@ -203,6 +204,7 @@ impl TwitchAuthService {
         self.inner.logged_out.store(true, Ordering::SeqCst);
         self.invalidate().await;
         forget_chat_sender();
+        crate::services::channel_state::account_changed();
     }
 
     /// Cached session if fresh, otherwise a single harvest behind the gate.

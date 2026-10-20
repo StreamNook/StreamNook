@@ -324,6 +324,9 @@ impl ChannelPointsWebSocketService {
         // User predictions results
         topics.push(format!("predictions-user-v1.{}", user_id));
 
+        // A moderator's warning to the viewer, and its acknowledgement.
+        topics.push(format!("chatrooms-user-v1.{}", user_id));
+
         // Note: Removed raid topics to reduce count per channel
         // This allows 24 channels per connection: 24*2 + 2 global = 50 topics exactly
 
@@ -544,6 +547,12 @@ impl ChannelPointsWebSocketService {
                             }
                             "predictions-user-v1" => {
                                 Self::handle_self_prediction_event(message_data, app_handle).await;
+                            }
+                            "chatrooms-user-v1" => {
+                                // Every connection carries the user topics, so
+                                // a warning can arrive more than once; applying
+                                // it again changes nothing.
+                                crate::services::chat_warning::on_pubsub(message_data).await;
                             }
                             "predictions-channel-v1" => {
                                 Self::handle_prediction_event(
@@ -841,6 +850,15 @@ impl ChannelPointsWebSocketService {
                 .unwrap_or_default()
         );
 
+        crate::services::predictions::note_self(
+            &channel_id,
+            &event_id,
+            &outcome_id,
+            points,
+            result_type.as_deref(),
+            points_won,
+        );
+
         // A settled prediction gets its own notification (won, lost, refunded).
         #[cfg(desktop)]
         if let Some(result) = result_type.clone() {
@@ -889,6 +907,11 @@ impl ChannelPointsWebSocketService {
             Some(ref cid) => Self::resolve_channel_login(cid, channel_mappings).await,
             None => None,
         };
+
+        // Rust keeps the prediction and pushes the card every shell draws.
+        if let Some(ref cid) = channel_id {
+            crate::services::predictions::note_channel_event(cid, channel_name.as_deref(), &message_data);
+        }
 
         // Format display string: "channel_name (ID)" or just "ID"
         let channel_display = match (&channel_name, &channel_id) {
@@ -1250,6 +1273,7 @@ impl ChannelPointsWebSocketService {
         if let Some(ref cid) = channel_id {
             crate::services::slash_commands::note_poll(cid, &payload, emit_event);
         }
+        crate::services::poll_view::publish(&payload);
         let _ = app_handle.emit(emit_event, payload);
     }
 

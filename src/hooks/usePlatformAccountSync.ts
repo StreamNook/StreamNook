@@ -88,9 +88,10 @@ export function usePlatformAccountSync(): void {
       }
       // The reconnect runs from the toast itself: the same `connect` the
       // account rows in Settings use, so there is still one sign-in flow.
+      const accounts = usePlatformAccountStore.getState();
       const reconnect =
-        provider === 'kick' || provider === 'youtube' || provider === 'tiktok'
-          ? { label: 'Reconnect', onClick: () => void usePlatformAccountStore.getState().connect(provider) }
+        (provider === 'kick' || provider === 'youtube' || provider === 'tiktok') && accounts[provider].canSignIn
+          ? { label: 'Reconnect', onClick: () => void accounts.connect(provider) }
           : undefined;
       useAppStore
         .getState()

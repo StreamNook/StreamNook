@@ -5,6 +5,7 @@ import streamnookLogo from '../../assets/streamnook-logo.png';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
+import { GroupLabel } from '../../mobile/ui/GroupedList';
 import { useSettingReset } from './settingReset';
 
 import { Logger } from '../../utils/logger';
@@ -26,6 +27,9 @@ interface CommunityInvite {
     name: string | null;
     description: string | null;
     icon_url: string | null;
+    /** The server icon to try in order (the animated one, then the same icon
+     *  still); the card shows the first one that loads, else the StreamNook logo. */
+    icon_urls?: string[];
     /** The hosted banner first, then the server's own; the card shows the
      *  first one that loads. */
     banner_urls: string[];
@@ -48,6 +52,8 @@ const SupportSettings = () => {
     const [invite, setInvite] = useState<CommunityInvite | null>(null);
     // Banners that failed to load; the header falls through to the next one.
     const [failedBanners, setFailedBanners] = useState<string[]>([]);
+    // Icons that failed to load; the frame falls through to the next, then the logo.
+    const [failedIcons, setFailedIcons] = useState<string[]>([]);
 
     useEffect(() => {
         const read = () => {
@@ -74,7 +80,9 @@ const SupportSettings = () => {
     };
 
     const name = invite?.name ?? 'StreamNook';
-    const iconUrl = invite?.icon_url ?? null;
+    const iconUrl =
+        (invite?.icon_urls ?? (invite?.icon_url ? [invite.icon_url] : [])).find((url) => !failedIcons.includes(url)) ??
+        null;
     const bannerUrl = invite?.banner_urls.find((url) => !failedBanners.includes(url)) ?? null;
     const description = invite?.description ?? null;
     const presence = invite?.online;
@@ -86,11 +94,20 @@ const SupportSettings = () => {
     const cutoutBorder = { borderColor: 'var(--color-background-tertiary)' } as CSSProperties;
 
     return (
-        <div className="flex min-h-full flex-col items-center py-6">
+        // The phone reads as its other settings pages: sections down the page,
+        // one gap between them. The desktop centers the invite in its pane.
+        <div className={IS_MOBILE ? 'space-y-6' : 'flex min-h-full flex-col items-center py-6'}>
             {/* my-auto centers the card group vertically when there's room, and degrades
                 to top-aligned + scrollable when the card is taller than the pane — unlike
                 justify-center, which clips the top of an overflowing card out of reach. */}
-            <div className="my-auto flex w-full max-w-[400px] flex-col items-center">
+            <div className={`flex w-full flex-col items-center ${IS_MOBILE ? '' : 'my-auto max-w-[400px]'}`}>
+                {/* The phone names the card's section like every other one on
+                    its settings pages, as the iPhone page does. */}
+                {IS_MOBILE && (
+                    <GroupLabel as="h3" className="self-stretch px-4 pb-2" data-settings-section="Community">
+                        Community
+                    </GroupLabel>
+                )}
                 {/* Intro — anchors the tab so the page reads as a deliberate, centered
                     invite screen rather than one stray bar across a wide empty page. */}
                 <div className="mb-5 flex max-w-[340px] flex-col items-center text-center">
@@ -145,6 +162,7 @@ const SupportSettings = () => {
                                         src={iconUrl}
                                         alt={name}
                                         className="absolute inset-0 h-full w-full object-contain"
+                                        onError={() => setFailedIcons((failed) => [...failed, iconUrl])}
                                     />
                                 ) : (
                                     <div className="flex h-full w-full items-center justify-center bg-accent/10 p-3">
@@ -329,7 +347,7 @@ const DataRecordedSection = () => (
         />
         <SettingsRow
             title="Version and platform"
-            description="Records which build you are on, your operating system, and whether your updater is working."
+            description="Records which build you are on, your operating system, and whether update checks are getting through."
             help="This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current."
         />
         <SettingsRow
@@ -338,7 +356,12 @@ const DataRecordedSection = () => (
         />
         <SettingsRow
             title="VOD positions"
-            description="With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices."
+            description={
+                // The phones have no Continue Watching row.
+                IS_MOBILE
+                    ? 'With Device sync on, keeps where you left off in each VOD you open, so your place follows you to your other devices.'
+                    : 'With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices.'
+            }
             help="Only past broadcasts you open yourself, never live watching. Kept for 90 days. Turn off Device sync under Player > Resume VODs and nothing more is sent."
         />
     </SettingsSection>

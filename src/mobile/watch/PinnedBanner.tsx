@@ -10,9 +10,16 @@
 // TOP of chat is the wrong mental model. Content should come out of the thing
 // you tapped.
 import React from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CaretDown, PushPin } from 'phosphor-react';
+import { invoke } from '@tauri-apps/api/core';
+import { CaretDown, PushPin, PushPinSlash } from 'phosphor-react';
 import { PinnedChatter } from '../../components/chat/PinnedChatter';
+import { useChannelChatMeta } from '../../stores/chatConnectionStore';
+import { usePinStore } from '../../stores/pinStore';
+import { Logger } from '../../utils/logger';
+import { useChatTabsStore } from '../chat/chatTabsStore';
+import { isModeratorFrom } from '../chat/modActions';
 
 export interface PinnedItem {
   id: string;
@@ -32,18 +39,58 @@ interface Props {
   onToggle: () => void;
   /** Broadcaster id, so subscriber and bits badges resolve to this channel. */
   channelId?: string;
+  /** Chat > Pinned Messages > Style: `hidden` draws nothing while the pin is folded. */
+  collapsedStyle?: 'bar' | 'hidden';
 }
 
 // Lifts an unpainted name off the glass; a 7TV paint brings its own shadow.
 const NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
 
-export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId }) => {
+// Unpin, as the desktop's pinned card offers it: moderators and the
+// broadcaster only, read off your own badges in the room on screen.
+const UnpinButton: React.FC<{ broadcasterId: string; messageId: string }> = ({ broadcasterId, messageId }) => (
+  <button
+    type="button"
+    onClick={async () => {
+      try {
+        await invoke('unpin_chat_message', { broadcasterId, messageId });
+        usePinStore.getState().requestRefresh();
+      } catch (err) {
+        Logger.error('[PinnedBanner] Failed to unpin message:', err);
+      }
+    }}
+    className="shrink-0 -my-1 -mr-1 p-1.5 rounded-lg text-textSecondary/70 active:text-red-400 active:bg-red-500/15 transition-colors"
+    aria-label="Unpin message"
+    title="Unpin message"
+  >
+    <PushPinSlash size={14} weight="bold" />
+  </button>
+);
+
+export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId, collapsedStyle = 'bar' }) => {
+  const activeRoom = useChatTabsStore((s) => {
+    const t = s.tabs.find((tab) => tab.channel === s.activeChannel);
+    return t?.provider === 'twitch' ? t.channel : null;
+  });
+  const { userBadges } = useChannelChatMeta(activeRoom);
+  const canUnpin = !!activeRoom && !!channelId && isModeratorFrom(userBadges);
+  // Unrolled, it floats over the rows: a tap outside rolls it up.
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const markInside = useOutsidePress(expanded && pins.length > 0, [rootRef], onToggle);
   if (pins.length === 0) return null;
   const [first, ...rest] = pins;
 
+  // Hidden: nothing over chat while folded, as on the desktop. The composer
+  // menu's "Pinned message" opens it (the desktop's is the pin in its header).
+  if (!expanded && collapsedStyle === 'hidden') return null;
+
   return (
     // The single container. Everything below lives inside this one box.
-    <div className="sn-popover sn-popover--static pointer-events-auto w-full overflow-hidden">
+    <div
+      ref={rootRef}
+      onPointerDownCapture={markInside}
+      className="sn-popover sn-popover--static pointer-events-auto w-full overflow-hidden"
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -105,28 +152,34 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
           >
             <div className="px-2.5 pb-2 pt-0.5 flex flex-col gap-2">
               {/* First pin: text only. Its author is already the header. */}
-              <div className="text-[13px] leading-relaxed text-textPrimary">
-                {first.message_text}
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0 text-[13px] leading-relaxed text-textPrimary">
+                  {first.message_text}
+                </div>
+                {canUnpin && channelId && <UnpinButton broadcasterId={channelId} messageId={first.message_id} />}
               </div>
               {rest.length > 0 && <div className="h-px bg-borderSubtle" />}
               {rest.map((pin) => (
-                <div key={pin.id} className="text-[13px] leading-relaxed">
-                  <span className="inline-flex items-center gap-1 align-middle max-w-full">
-                    <PinnedChatter
-                      variant="line"
-                      provider="twitch"
-                      userId={pin.sender_id ?? ''}
-                      name={pin.sender_name}
-                      login={pin.sender_login}
-                      shownName={pin.sender_shown_name}
-                      color={pin.sender_color}
-                      badges={pin.sender_badges}
-                      channelId={channelId}
-                      nameClassName="font-bold shrink-0"
-                      plainNameStyle={NAME_SHADOW}
-                    />
-                  </span>
-                  <span className="text-textPrimary">: {pin.message_text}</span>
+                <div key={pin.id} className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0 text-[13px] leading-relaxed">
+                    <span className="inline-flex items-center gap-1 align-middle max-w-full">
+                      <PinnedChatter
+                        variant="line"
+                        provider="twitch"
+                        userId={pin.sender_id ?? ''}
+                        name={pin.sender_name}
+                        login={pin.sender_login}
+                        shownName={pin.sender_shown_name}
+                        color={pin.sender_color}
+                        badges={pin.sender_badges}
+                        channelId={channelId}
+                        nameClassName="font-bold shrink-0"
+                        plainNameStyle={NAME_SHADOW}
+                      />
+                    </span>
+                    <span className="text-textPrimary">: {pin.message_text}</span>
+                  </div>
+                  {canUnpin && channelId && <UnpinButton broadcasterId={channelId} messageId={pin.message_id} />}
                 </div>
               ))}
             </div>

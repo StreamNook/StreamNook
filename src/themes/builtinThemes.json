@@ -1,5 +1,121 @@
 {
   "oledSecondaryLighten": 51,
+  "glassBlurOffMaxStrength": 0.45,
+  "effects": {
+    "prism": {
+      "levelFloor": 0.6,
+      "colors": {
+        "cobalt": [40, 78, 220],
+        "blue": [70, 130, 255],
+        "cyan": [110, 215, 245],
+        "ice": [190, 240, 255],
+        "ivory": [246, 240, 225],
+        "yellow": [245, 216, 110],
+        "amber": [240, 170, 70],
+        "red": [225, 70, 50]
+      },
+      "gradients": {
+        "streak": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.16, "at": 45 },
+            { "color": "cyan", "alpha": 0.2, "at": 50 },
+            { "color": "ivory", "alpha": 0.2, "at": 55 },
+            { "color": "yellow", "alpha": 0.16, "at": 59 },
+            { "color": "amber", "alpha": 0.11, "at": 64 },
+            { "color": "red", "alpha": 0.05, "at": 69 },
+            { "at": 76 }
+          ]
+        },
+        "streakSoft": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.1, "at": 45 },
+            { "color": "cyan", "alpha": 0.13, "at": 50 },
+            { "color": "ivory", "alpha": 0.13, "at": 55 },
+            { "color": "yellow", "alpha": 0.1, "at": 59 },
+            { "color": "amber", "alpha": 0.07, "at": 64 },
+            { "color": "red", "alpha": 0.03, "at": 69 },
+            { "at": 76 }
+          ]
+        },
+        "streakFaint": {
+          "angle": 112,
+          "stops": [
+            { "at": 36 },
+            { "color": "cobalt", "alpha": 0.06, "at": 45 },
+            { "color": "cyan", "alpha": 0.08, "at": 50 },
+            { "color": "ivory", "alpha": 0.09, "at": 55 },
+            { "color": "yellow", "alpha": 0.07, "at": 59 },
+            { "color": "amber", "alpha": 0.04, "at": 64 },
+            { "at": 74 }
+          ]
+        },
+        "bloomCool": {
+          "size": [64, 48],
+          "center": [4, 0],
+          "stops": [
+            { "color": "cobalt", "alpha": 0.3, "at": 0 },
+            { "color": "blue", "alpha": 0.22, "at": 18 },
+            { "color": "cyan", "alpha": 0.16, "at": 34 },
+            { "color": "ivory", "alpha": 0.08, "at": 52 },
+            { "at": 74 }
+          ]
+        },
+        "bloomCoolSoft": {
+          "size": [58, 42],
+          "center": [0, 0],
+          "stops": [
+            { "color": "cobalt", "alpha": 0.18, "at": 0 },
+            { "color": "cyan", "alpha": 0.12, "at": 30 },
+            { "color": "ivory", "alpha": 0.06, "at": 50 },
+            { "at": 72 }
+          ]
+        },
+        "bloomWarm": {
+          "size": [48, 36],
+          "center": [98, 102],
+          "stops": [
+            { "color": "amber", "alpha": 0.16, "at": 0 },
+            { "color": "red", "alpha": 0.07, "at": 40 },
+            { "at": 72 }
+          ]
+        },
+        "bloomIce": {
+          "size": [60, 50],
+          "center": [100, 0],
+          "stops": [
+            { "color": "ice", "alpha": 0.18, "at": 0 },
+            { "color": "ivory", "alpha": 0.08, "at": 36 },
+            { "at": 70 }
+          ]
+        },
+        "catch": {
+          "angle": 104,
+          "stops": [
+            { "at": 54 },
+            { "color": "cyan", "alpha": 0.22, "at": 64 },
+            { "color": "ivory", "alpha": 0.34, "at": 70 },
+            { "color": "yellow", "alpha": 0.24, "at": 75 },
+            { "color": "amber", "alpha": 0.12, "at": 82 },
+            { "at": 91 }
+          ]
+        }
+      },
+      "surfaces": {
+        "shell": ["bloomCool", "streakSoft", "bloomWarm"],
+        "dialog": ["bloomCool", "streak", "bloomWarm"],
+        "modal": ["bloomCool", "streak"],
+        "panel": ["bloomCoolSoft", "streakSoft"],
+        "popover": ["bloomIce", "streakSoft"],
+        "card": ["streakFaint"],
+        "press": ["catch"]
+      },
+      "selection": { "color": "ice", "alpha": 0.34 }
+    }
+  },
   "categories": [
     {
       "id": "signature",
@@ -46,6 +162,7 @@
         "accent": "#97b1b9",
         "accentHover": "#adc4cc",
         "accentMuted": "rgba(151, 177, 185, 0.5)",
+        "accentOnSurface": "#97b1b9",
         "border": "rgba(151, 177, 185, 0.3)",
         "borderLight": "rgba(151, 177, 185, 0.2)",
         "borderSubtle": "rgba(151, 177, 185, 0.1)",
@@ -88,6 +205,7 @@
         "accent": "#8b9068",
         "accentHover": "#9ca378",
         "accentMuted": "rgba(139, 144, 104, 0.55)",
+        "accentOnSurface": "#8b9068",
         "border": "rgba(139, 144, 104, 0.40)",
         "borderLight": "rgba(139, 144, 104, 0.28)",
         "borderSubtle": "rgba(139, 144, 104, 0.16)",
@@ -130,6 +248,7 @@
         "accent": "#a064ff",
         "accentHover": "#b88aff",
         "accentMuted": "rgba(160, 100, 255, 0.5)",
+        "accentOnSurface": "#a064ff",
         "border": "rgba(255, 255, 255, 0.15)",
         "borderLight": "rgba(255, 255, 255, 0.10)",
         "borderSubtle": "rgba(255, 255, 255, 0.05)",
@@ -173,6 +292,7 @@
         "accent": "#e7dfcc",
         "accentHover": "#fbf5e6",
         "accentMuted": "rgba(231, 223, 204, 0.5)",
+        "accentOnSurface": "#e7dfcc",
         "border": "rgba(239, 233, 220, 0.28)",
         "borderLight": "rgba(239, 233, 220, 0.18)",
         "borderSubtle": "rgba(239, 233, 220, 0.09)",
@@ -215,6 +335,7 @@
         "accent": "#bd93f9",
         "accentHover": "#caa8fc",
         "accentMuted": "rgba(189, 147, 249, 0.5)",
+        "accentOnSurface": "#bd93f9",
         "border": "rgba(189, 147, 249, 0.3)",
         "borderLight": "rgba(189, 147, 249, 0.2)",
         "borderSubtle": "rgba(189, 147, 249, 0.1)",
@@ -257,6 +378,7 @@
         "accent": "#88c0d0",
         "accentHover": "#8fbcbb",
         "accentMuted": "rgba(136, 192, 208, 0.5)",
+        "accentOnSurface": "#88c0d0",
         "border": "rgba(136, 192, 208, 0.25)",
         "borderLight": "rgba(136, 192, 208, 0.15)",
         "borderSubtle": "rgba(136, 192, 208, 0.08)",
@@ -299,6 +421,7 @@
         "accent": "#fabd2f",
         "accentHover": "#fcc44e",
         "accentMuted": "rgba(251, 189, 46, 0.5)",
+        "accentOnSurface": "#fabd2f",
         "border": "rgba(251, 189, 46, 0.3)",
         "borderLight": "rgba(251, 189, 46, 0.2)",
         "borderSubtle": "rgba(251, 189, 46, 0.1)",
@@ -341,6 +464,7 @@
         "accent": "#80cbc4",
         "accentHover": "#99d5cf",
         "accentMuted": "rgba(128, 203, 196, 0.5)",
+        "accentOnSurface": "#80cbc4",
         "border": "rgba(128, 203, 196, 0.3)",
         "borderLight": "rgba(128, 203, 196, 0.2)",
         "borderSubtle": "rgba(128, 203, 196, 0.1)",
@@ -383,6 +507,7 @@
         "accent": "#f49657",
         "accentHover": "#f6ab6c",
         "accentMuted": "rgba(255, 143, 64, 0.5)",
+        "accentOnSurface": "#f49657",
         "border": "rgba(255, 143, 64, 0.25)",
         "borderLight": "rgba(255, 143, 64, 0.15)",
         "borderSubtle": "rgba(255, 143, 64, 0.08)",
@@ -425,6 +550,7 @@
         "accent": "#7fdbca",
         "accentHover": "#9ce7d7",
         "accentMuted": "rgba(127, 219, 202, 0.5)",
+        "accentOnSurface": "#7fdbca",
         "border": "rgba(127, 219, 202, 0.25)",
         "borderLight": "rgba(127, 219, 202, 0.15)",
         "borderSubtle": "rgba(127, 219, 202, 0.08)",
@@ -467,6 +593,7 @@
         "accent": "#f588d5",
         "accentHover": "#f7a3e0",
         "accentMuted": "rgba(255, 126, 219, 0.5)",
+        "accentOnSurface": "#f588d5",
         "border": "rgba(255, 126, 219, 0.3)",
         "borderLight": "rgba(255, 126, 219, 0.2)",
         "borderSubtle": "rgba(255, 126, 219, 0.1)",
@@ -509,6 +636,7 @@
         "accent": "#ebbcba",
         "accentHover": "#f0ccc9",
         "accentMuted": "rgba(235, 188, 186, 0.5)",
+        "accentOnSurface": "#ebbcba",
         "border": "rgba(235, 188, 186, 0.25)",
         "borderLight": "rgba(235, 188, 186, 0.15)",
         "borderSubtle": "rgba(235, 188, 186, 0.08)",
@@ -551,6 +679,7 @@
         "accent": "#7aa2f7",
         "accentHover": "#89b4fa",
         "accentMuted": "rgba(122, 162, 247, 0.5)",
+        "accentOnSurface": "#7aa2f7",
         "border": "rgba(122, 162, 247, 0.25)",
         "borderLight": "rgba(122, 162, 247, 0.15)",
         "borderSubtle": "rgba(122, 162, 247, 0.08)",
@@ -593,6 +722,7 @@
         "accent": "#7e9cd8",
         "accentHover": "#8faee0",
         "accentMuted": "rgba(126, 156, 216, 0.5)",
+        "accentOnSurface": "#7e9cd8",
         "border": "rgba(114, 144, 177, 0.25)",
         "borderLight": "rgba(114, 144, 177, 0.15)",
         "borderSubtle": "rgba(114, 144, 177, 0.08)",
@@ -635,6 +765,7 @@
         "accent": "#58a6ff",
         "accentHover": "#79b8ff",
         "accentMuted": "rgba(88, 166, 255, 0.5)",
+        "accentOnSurface": "#58a6ff",
         "border": "rgba(48, 54, 61, 0.6)",
         "borderLight": "rgba(48, 54, 61, 0.4)",
         "borderSubtle": "rgba(48, 54, 61, 0.2)",
@@ -677,6 +808,7 @@
         "accent": "#3193db",
         "accentHover": "#2a9bea",
         "accentMuted": "rgba(38, 139, 210, 0.5)",
+        "accentOnSurface": "#3193db",
         "border": "rgba(38, 139, 210, 0.3)",
         "borderLight": "rgba(38, 139, 210, 0.2)",
         "borderSubtle": "rgba(38, 139, 210, 0.1)",
@@ -719,6 +851,7 @@
         "accent": "#f1567f",
         "accentHover": "#ff6b8f",
         "accentMuted": "rgba(249, 38, 114, 0.5)",
+        "accentOnSurface": "#f1567f",
         "border": "rgba(249, 38, 114, 0.25)",
         "borderLight": "rgba(249, 38, 114, 0.15)",
         "borderSubtle": "rgba(249, 38, 114, 0.08)",
@@ -761,6 +894,7 @@
         "accent": "#61afef",
         "accentHover": "#74baf2",
         "accentMuted": "rgba(97, 175, 239, 0.5)",
+        "accentOnSurface": "#61afef",
         "border": "rgba(97, 175, 239, 0.25)",
         "borderLight": "rgba(97, 175, 239, 0.15)",
         "borderSubtle": "rgba(97, 175, 239, 0.08)",
@@ -803,6 +937,7 @@
         "accent": "#9c8364",
         "accentHover": "#8b7457",
         "accentMuted": "rgba(156, 131, 100, 0.6)",
+        "accentOnSurface": "#77644c",
         "border": "rgba(110, 93, 68, 0.26)",
         "borderLight": "rgba(110, 93, 68, 0.16)",
         "borderSubtle": "rgba(110, 93, 68, 0.09)",
@@ -845,6 +980,7 @@
         "accent": "#cba6f7",
         "accentHover": "#d4b5f9",
         "accentMuted": "rgba(203, 166, 247, 0.5)",
+        "accentOnSurface": "#cba6f7",
         "border": "rgba(203, 166, 247, 0.25)",
         "borderLight": "rgba(203, 166, 247, 0.15)",
         "borderSubtle": "rgba(203, 166, 247, 0.08)",
@@ -887,6 +1023,7 @@
         "accent": "#8839ef",
         "accentHover": "#9752f2",
         "accentMuted": "rgba(136, 57, 239, 0.5)",
+        "accentOnSurface": "#8839ef",
         "border": "rgba(76, 79, 105, 0.16)",
         "borderLight": "rgba(76, 79, 105, 0.1)",
         "borderSubtle": "rgba(76, 79, 105, 0.06)",
@@ -929,6 +1066,7 @@
         "accent": "#a7c080",
         "accentHover": "#b5cb92",
         "accentMuted": "rgba(167, 192, 128, 0.5)",
+        "accentOnSurface": "#a7c080",
         "border": "rgba(163, 190, 140, 0.25)",
         "borderLight": "rgba(163, 190, 140, 0.15)",
         "borderSubtle": "rgba(163, 190, 140, 0.08)",

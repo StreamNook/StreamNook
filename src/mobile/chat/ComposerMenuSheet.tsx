@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -11,10 +11,13 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { MobileSheet } from '../ui/MobileSheet';
+import { fitCount } from '../../utils/fitNumber';
+import { GroupCard, GroupFooter, GroupLabel, GroupRow } from '../ui/GroupedList';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
+import { useChatTabsStore } from './chatTabsStore';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -50,8 +53,19 @@ interface Props {
   onReload: () => void;
   /** Opens the chat command browser. Absent when no chat is open. */
   onBrowseCommands?: () => void;
+  /** Opens the stream manager. Absent where there is nothing to manage
+   *  (not a Twitch chat you moderate or own). */
+  onManageChannel?: () => void;
+  /** The room's moderation sheet (moderators, Twitch). */
+  onModeration?: () => void;
+  /** Opens the room's pin, folded away by Pinned Messages > Style: Hidden.
+   *  Absent while no pin waits there. */
+  onShowPinned?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
+  /** The inbox, while a narrow message bar has no room for its tray: its
+   *  row and count live here instead. Absent while the tray is on the bar. */
+  inbox?: { unread: number; open: () => void };
 }
 
 export const ComposerMenuSheet: React.FC<Props> = ({
@@ -68,11 +82,19 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onAddChat,
   onReload,
   onBrowseCommands,
+  onManageChannel,
+  onModeration,
+  onShowPinned,
   onCloseChat,
+  inbox,
 }) => {
-  const row =
-    'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70 disabled:opacity-45';
-  const iconBox = 'flex w-6 h-6 shrink-0 items-center justify-center';
+  // The stream's own chat closes with the player unless you keep it; every
+  // other open chat is already one of yours.
+  const streamTab = useChatTabsStore((s) => {
+    const t = s.tabs.find((tab) => tab.channel === s.activeChannel);
+    return t?.pinnedToStream ? t : null;
+  });
+  const keep = useChatTabsStore((s) => s.keep);
 
   // The desktop client's follow logic, ported rather than reimplemented: this
   // hook lives in hooks/ precisely so several surfaces can share it, and it
@@ -119,24 +141,21 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   // The sheet stays open on tap.
   const followRow =
     channelId && isFollowing !== null && followSlot !== null ? (
-      <button
+      <GroupRow
         onClick={() => void handleFollowClick()}
         disabled={followLoading}
-        className={`${row} ${isFollowing ? '!text-error' : ''}`}
+        className={isFollowing ? '!text-error' : ''}
+        icon={isFollowing ? <HeartBreak size={ICON} /> : <Heart size={ICON} className="text-success" />}
       >
-        <span className={iconBox}>
-          {isFollowing ? <HeartBreak size={ICON} /> : <Heart size={ICON} className="text-success" />}
-        </span>
-        <span className="flex-1 text-left">
-          {isFollowing ? 'Unfollow' : 'Follow'}
-          {activeLabel ? ` ${activeLabel}` : ''}
-        </span>
-      </button>
+        {isFollowing ? 'Unfollow' : 'Follow'}
+        {activeLabel ? ` ${activeLabel}` : ''}
+      </GroupRow>
     ) : null;
 
   return (
     <MobileSheet open={open} onClose={onClose} title={activeLabel ?? 'Chat'} maxHeightFraction={0.5}>
-      <div className="flex flex-col">
+      {/* The same grouped pieces as the settings pages, as the iPhone menu
+          draws them: the room's modes above, the actions on one card. */}
         {/* Room state lives here rather than above the composer. Followers-only
             while you can still talk is context worth having, not a warning worth
             a permanent line over chat. Status, not actions: one quiet block, its
@@ -145,10 +164,8 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             name and what it means; the footer says where you stand when every
             mode spares you. */}
         {roomModes && roomModes.modes.length > 0 && (
-          <div className="px-2 pb-3 mb-1 border-b border-borderSubtle">
-            <div className="text-[12px] font-semibold uppercase tracking-wide text-textMuted mb-2">
-              This chat is in
-            </div>
+          <div className="px-4 pb-3">
+            <GroupLabel className="mb-2">This chat is in</GroupLabel>
             <div className="flex flex-col gap-2">
               {roomModes.modes.map((mode) => {
                 const Icon = MODE_ICONS[mode.kind];
@@ -172,6 +189,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             )}
           </div>
         )}
+      <GroupCard>
         {/* Follow, at the top when you do not follow yet. */}
         {followRow && followSlot === 'top' && followRow}
 
@@ -179,111 +197,163 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             states the desktop control shows, in the platform's own words. The
             sheet closes because the checkout opens over it. */}
         {canSubscribe && (
-          <button
+          <GroupRow
             onClick={() => {
               onClose();
               void handleSubscribeClick();
             }}
-            className={row}
-          >
-            <span className={iconBox}>
-              {subscriberBadgeUrl ? (
+            icon={
+              subscriberBadgeUrl ? (
                 <img src={subscriberBadgeUrl} alt="" draggable={false} className="w-[22px] h-[22px]" />
               ) : (
                 <Star size={ICON} style={{ color: PROVIDERS[provider].color }} />
-              )}
-            </span>
-            <span className="flex-1 text-left">
-              {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
-              {!isSubscribed && activeLabel ? ` to ${activeLabel}` : ''}
-            </span>
-            {isSubscribed && <span className="text-[12px] text-textMuted">Subscribed</span>}
-          </button>
+              )
+            }
+            value={isSubscribed ? 'Subscribed' : undefined}
+          >
+            {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
+            {!isSubscribed && activeLabel ? ` to ${activeLabel}` : ''}
+          </GroupRow>
         )}
 
-        <button
+        <GroupRow
           onClick={() => {
             onAddChat();
             onClose();
           }}
-          className={row}
+          icon={<ChatsCircle size={ICON} className="text-textSecondary" />}
         >
-          <span className={iconBox}>
-            <ChatsCircle size={ICON} className="text-textSecondary" />
-          </span>
-          <span className="flex-1 text-left">Add a chat</span>
-        </button>
+          Add a chat
+        </GroupRow>
 
-        <button
+        {inbox && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              inbox.open();
+            }}
+            icon={<Tray size={ICON} className="text-textSecondary" />}
+            trailing={
+              inbox.unread > 0 ? (
+                <span className="sn-inbox-badge mr-1 min-w-[18px] h-[18px] px-[5px] rounded-full text-[11px] font-bold leading-[18px] text-center tabular-nums">
+                  {fitCount(inbox.unread)}
+                </span>
+              ) : undefined
+            }
+          >
+            Inbox
+          </GroupRow>
+        )}
+
+        {onShowPinned && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              onShowPinned();
+            }}
+            icon={<PushPin size={ICON} className="text-textSecondary" />}
+          >
+            Pinned message
+          </GroupRow>
+        )}
+
+        <GroupRow
           onClick={() => {
             onReload();
             onClose();
           }}
           disabled={!activeChannel}
-          className={row}
+          icon={<ArrowsClockwise size={ICON} className="text-textSecondary" />}
         >
-          <span className={iconBox}>
-            <ArrowsClockwise size={ICON} className="text-textSecondary" />
-          </span>
-          <span className="flex-1 text-left">Reload this chat</span>
-        </button>
+          Reload this chat
+        </GroupRow>
+
+        {streamTab && (
+          <GroupRow
+            onClick={() => keep(streamTab.channel, !streamTab.kept)}
+            icon={
+              <BookmarkSimple
+                size={ICON}
+                weight={streamTab.kept ? 'fill' : 'regular'}
+                className={streamTab.kept ? 'text-accent' : 'text-textSecondary'}
+              />
+            }
+            value={streamTab.kept ? 'On' : 'Off'}
+          >
+            Keep this chat
+          </GroupRow>
+        )}
 
         {onBrowseCommands && (
-          <button
+          <GroupRow
             onClick={() => {
               onClose();
               onBrowseCommands();
             }}
-            className={row}
+            icon={<Terminal size={ICON} className="text-textSecondary" />}
           >
-            <span className={iconBox}>
-              <Terminal size={ICON} className="text-textSecondary" />
-            </span>
-            <span className="flex-1 text-left">Chat commands</span>
-          </button>
+            Chat commands
+          </GroupRow>
+        )}
+
+        {onModeration && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              onModeration();
+            }}
+            icon={<ShieldCheck size={ICON} className="text-textSecondary" />}
+            trailing={<CaretRight size={16} className="text-textMuted" />}
+          >
+            Moderation
+          </GroupRow>
+        )}
+
+        {onManageChannel && (
+          <GroupRow
+            onClick={() => {
+              onClose();
+              onManageChannel();
+            }}
+            icon={<PencilSimpleLine size={ICON} className="text-textSecondary" />}
+            trailing={<CaretRight size={16} className="text-textMuted" />}
+          >
+            Manage channel
+          </GroupRow>
         )}
 
         {/* Only offered where the actions would actually succeed: Helix rejects
             them without mod powers in this specific channel. On or off reads
             from the color and the trailing word; the glyph keeps its weight. */}
         {isModerator && (
-          <button onClick={onToggleModTools} className={row}>
-            <span className={iconBox}>
-              <ShieldCheck size={ICON} className={modToolsOn ? 'text-accent' : 'text-textSecondary'} />
-            </span>
-            <span className="flex-1 text-left">Moderator tools</span>
-            <span className="text-[12px] text-textMuted">{modToolsOn ? 'On' : 'Off'}</span>
-          </button>
+          <GroupRow
+            onClick={onToggleModTools}
+            icon={<ShieldCheck size={ICON} className={modToolsOn ? 'text-accent' : 'text-textSecondary'} />}
+            value={modToolsOn ? 'On' : 'Off'}
+          >
+            Moderator tools
+          </GroupRow>
         )}
 
-        {isModerator && modToolsOn && (
-          <div className="px-2 pb-1 text-[12px] text-textMuted leading-snug">
-            Long-press any message for delete, timeout and ban.
-          </div>
-        )}
-
-        {/* The rows that take something away, last and set apart. */}
-        {(onCloseChat || (followRow && followSlot === 'bottom')) && (
-          <div className="my-1 mx-2 border-t border-borderSubtle" />
-        )}
-
+        {/* The rows that take something away come last. */}
         {onCloseChat && (
-          <button
+          <GroupRow
             onClick={() => {
               onCloseChat();
               onClose();
             }}
-            className={`${row} !text-error`}
+            className="!text-error"
+            icon={<X size={ICON} />}
           >
-            <span className={iconBox}>
-              <X size={ICON} />
-            </span>
-            <span className="flex-1 text-left">Close this chat</span>
-          </button>
+            Close this chat
+          </GroupRow>
         )}
 
         {followRow && followSlot === 'bottom' && followRow}
-      </div>
+      </GroupCard>
+      {isModerator && modToolsOn && (
+        <GroupFooter className="px-4 pt-2">Long-press any message for delete, timeout and ban.</GroupFooter>
+      )}
     </MobileSheet>
   );
 };

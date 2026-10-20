@@ -19,6 +19,15 @@ describe('chat events', () => {
     expect(eventKeyOf({ provider: 'twitch', metadata: {} })).toBeNull();
   });
 
+  it('keys a channel points redemption row, never a reward redeemed with text', () => {
+    const redeemed = { provider: 'twitch', tags: { 'custom-reward-id': 'r1', 'sn-reward-title': 'Hydrate' } };
+    expect(eventKeyOf(redeemed)).toBe('twitch:redemption');
+    expect(isHiddenEvent(redeemed, ['twitch:redemption'])).toBe(true);
+    expect(eventKeyOf({ provider: 'twitch', tags: new Map([['sn-reward-title', 'Hydrate']]) })).toBe('twitch:redemption');
+    expect(eventKeyOf({ provider: 'twitch', tags: { 'custom-reward-id': 'r1' } })).toBeNull();
+    expect(eventKeyOf({ provider: 'kick', tags: { 'sn-reward-title': 'Hydrate' } })).toBeNull();
+  });
+
   it('hides only what the list names', () => {
     const m = { provider: 'twitch', metadata: { msg_type: 'raid' } };
     expect(isHiddenEvent(m, ['twitch:raid'])).toBe(true);

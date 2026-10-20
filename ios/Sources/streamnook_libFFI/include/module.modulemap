@@ -1,4 +1,0 @@
-module streamnook_libFFI {
-    header "streamnook_libFFI.h"
-    export *
-}

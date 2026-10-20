@@ -25,40 +25,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::services::app_paths;
-use crate::services::cache_service;
+use crate::services::live_poll::poll::{notif_flag, read_settings};
 use crate::services::twitch_service::TwitchService;
 
-/// Notified channels are remembered this long. Long enough that a channel which
-/// drops off the followed-live list and returns is not announced twice, short
-/// enough that the file cannot grow without bound.
-const SHOWN_TTL_SECS: i64 = 7 * 24 * 60 * 60;
-
-/// The push lane's server. Registration is authed by the user's own Twitch
-/// token; the server validates it against Twitch and stores only the user id,
-/// device token and followed channel ids.
-const NOTIFY_SERVER: &str = "https://notify.streamnook.app";
-
-/// Serializes every read-modify-write of `notify_state.json`. The poll lane
-/// (WorkManager -> `pollOnce`) and the push lane (`claimShow`) run in the same
-/// process on different threads, so a process-local lock is sufficient — and
-/// without it a claim landing between the poll's read and write is silently
-/// dropped, which resurfaces as a duplicate notification far from the cause.
-static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct ShownEntry {
-    /// The stream's own start time. Keyed on this rather than on "is currently
-    /// live" so a genuinely new broadcast is always announced while an ongoing
-    /// one never is, no matter how the live list churns between polls.
-    started_at: String,
-    seen_at: i64,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct NotifyState {
-    #[serde(default)]
-    shown: HashMap<String, ShownEntry>,
-}
+// The live check itself, its `notify_state.json` record and the lock around
+// it are shared with the iPhone in `services::live_poll`; this file keeps what
+// only Android does with them (JNI, badges, avatars, notification channels).
 
 /// Badge drops, from the same edge-cached feed the app polls as its socket
 /// fallback (`src/services/badgeSocketService.ts`).
@@ -205,59 +177,6 @@ fn resolve_base(candidate: &str) -> Option<PathBuf> {
     None
 }
 
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-fn state_path() -> Option<PathBuf> {
-    cache_service::get_app_data_dir()
-        .ok()
-        .map(|d| d.join("notify_state.json"))
-}
-
-fn read_state() -> NotifyState {
-    state_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-/// Whether this poll has ever run before.
-///
-/// The first run has nothing recorded, so every channel that happens to be live
-/// reads as newly live. Someone following a few dozen channels would get their
-/// whole following list dumped into the shade at once, which is both useless and
-/// the kind of thing that gets notifications turned off for good. The first run
-/// therefore records the current state and announces nothing, exactly like the
-/// in-app service's own `first_run` branch.
-fn state_exists() -> bool {
-    state_path().map(|p| p.is_file()).unwrap_or(false)
-}
-
-fn write_state(state: &NotifyState) {
-    if let Some(path) = state_path() {
-        if let Ok(json) = serde_json::to_string(state) {
-            let _ = std::fs::write(path, json);
-        }
-    }
-}
-
-/// Settings are read as loose JSON rather than through the `Settings` struct on
-/// purpose: this path runs with no app around it, and a background poll should
-/// degrade to "do nothing" if a field it does not care about fails to parse,
-/// not refuse to run.
-fn read_settings() -> serde_json::Value {
-    cache_service::get_app_data_dir()
-        .ok()
-        .map(|d| d.join("settings.json"))
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(serde_json::Value::Null)
-}
-
 /// Liveness probe, called from `app.streamnook.NotifyBridge.ping`.
 ///
 /// Kept after the spike it was written for: it isolates "the library loaded and
@@ -351,7 +270,9 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_pollOnce<'local>(
 /// Called from `SNMessagingService` for every FCM live message. Evaluates the
 /// same settings the poll lane does (master switch, live toggle, mute list),
 /// then atomically checks-and-records `(channel_id, started_at)` in
-/// `notify_state.json` under `STATE_LOCK`. Returning true exactly once per
+/// `notify_state.json` under the shared lock (`live_poll::poll::claim_push`;
+/// a push's start time with milliseconds matches the poll's whole-second one).
+/// Returning true exactly once per
 /// broadcast across every lane is the whole dedupe story: a duplicate push, a
 /// push/poll overlap, or a server-side dedupe miss all collapse here.
 ///
@@ -386,201 +307,40 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_claimShow<'local>(
         return 0;
     };
     app_paths::set_base(base);
-
-    let settings = read_settings();
-    if !notif_flag(&settings, "enabled") || !notif_flag(&settings, "show_live_notifications") {
-        return 0;
-    }
-    let muted = settings
-        .get("live_notifications")
-        .and_then(|n| n.get("muted_live_channels"))
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .any(|m| m.eq_ignore_ascii_case(&login))
-        })
-        .unwrap_or(false);
-    if muted {
-        return 0;
-    }
-
-    let _guard = STATE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    if !state_exists() {
-        // See the doc comment: show, but leave seeding to the poll.
-        return 1;
-    }
-    let now = now_secs();
-    let mut state = read_state();
-    if let Some(prev) = state.shown.get_mut(&channel_id) {
-        if prev.started_at == started_at {
-            prev.seen_at = now;
-            write_state(&state);
-            return 0;
-        }
-    }
-    state.shown.insert(
-        channel_id,
-        ShownEntry {
-            started_at,
-            seen_at: now,
-        },
-    );
-    write_state(&state);
-    1
+    crate::services::live_poll::poll::claim_push(&channel_id, &started_at, &login) as jboolean
 }
 
-/// Register this device with the push server: current FCM token plus the ids
-/// of every followed channel. Called from the shell after auth and whenever the
-/// push toggle turns on; re-running is cheap and idempotent (the server
-/// replaces the follow set wholesale).
+/// The push lane's gate for a mention the mention server pushed: may it show.
 ///
-/// "no-token" is a normal outcome, not an error: the token file is written by
-/// Kotlin once Play services answers, which can trail the first boot. The next
-/// launch registers; the poll lane delivers meanwhile.
-#[tauri::command]
-pub async fn push_register() -> Result<String, String> {
-    let token_path = cache_service::get_app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("fcm_token");
-    let Some(fcm_token) = std::fs::read_to_string(&token_path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return Ok("no-token".to_string());
+/// Called from `SNMessagingService` for every FCM `mention` message. The same
+/// rules as the app's own mention notices (`mention_watch::claim_push`): the
+/// master switch and Mentions and replies on, the chat not muted, streamer
+/// mode off, and, when the app is running in this process, not a message it
+/// already caught or a chat on screen. A running app also pulls the entry into
+/// the inbox; a process Android started for the push alone leaves that to the
+/// next launch.
+#[no_mangle]
+pub extern "system" fn Java_app_streamnook_NotifyBridge_claimMention<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    base_dir: JString<'local>,
+    id: JString<'local>,
+    room: JString<'local>,
+) -> jboolean {
+    let get = |env: &mut JNIEnv<'local>, s: &JString<'local>| -> Option<String> {
+        env.get_string(s).ok().map(|v| v.into())
     };
-
-    let user_token = TwitchService::get_token().await.map_err(|e| e.to_string())?;
-
-    // Every followed channel id, paged. Reuses the shared helper rather than
-    // reimplementing the endpoint; the hard stop mirrors fetch_followed_live.
-    let mut follows: Vec<String> = Vec::new();
-    let mut cursor: Option<String> = None;
-    for _ in 0..20 {
-        let (page, next) = TwitchService::get_all_followed_channels(100, cursor)
-            .await
-            .map_err(|e| e.to_string())?;
-        follows.extend(page.into_iter().map(|c| c.user_id));
-        cursor = next;
-        if cursor.is_none() {
-            break;
-        }
-    }
-
-    let client = crate::services::http::client().clone();
-    let resp = client
-        .post(format!("{NOTIFY_SERVER}/register"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("OAuth {user_token}"),
-        )
-        .json(&serde_json::json!({ "fcm_token": fcm_token, "follows": follows }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("register failed: {status}"));
-    }
-    Ok(format!("registered:{}", follows.len()))
-}
-
-/// Drop this device from the push server (push toggle turned off). The poll
-/// lane keeps delivering; this only stops the instant pushes.
-#[tauri::command]
-pub async fn push_unregister() -> Result<(), String> {
-    let token_path = cache_service::get_app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("fcm_token");
-    let Some(fcm_token) = std::fs::read_to_string(&token_path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let (Some(candidate), Some(id), Some(room)) = (get(&mut env, &base_dir), get(&mut env, &id), get(&mut env, &room))
     else {
-        return Ok(());
+        return 0;
     };
-    let user_token = TwitchService::get_token().await.map_err(|e| e.to_string())?;
-    let client = crate::services::http::client().clone();
-    client
-        .post(format!("{NOTIFY_SERVER}/unregister"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("OAuth {user_token}"),
-        )
-        .json(&serde_json::json!({ "fcm_token": fcm_token }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Followed channels that are live right now, fully paged.
-///
-/// Deliberately NOT `TwitchService::get_followed_streams`: that one takes an
-/// `AppState` (which it never reads, but there is no app here to build one
-/// from), and it is shared with desktop, where changing its paging behaviour
-/// would be a desktop change. Doing the request here keeps desktop untouched and
-/// lets the background poll page properly.
-///
-/// Paging matters at the edges only: `first` defaults to 100 on this endpoint,
-/// which is also its maximum, so a single page already covers almost everyone.
-/// The cursor loop is for accounts with more than 100 followed channels live at
-/// once, which the unpaged version silently truncates.
-///
-/// `get_token` is reused deliberately: it is what refreshes an expired token
-/// against the compiled-in secret and re-persists it, and it is the entire
-/// reason this poll lives in Rust rather than in the worker's Kotlin.
-async fn fetch_followed_live() -> anyhow::Result<Vec<crate::models::stream::TwitchStream>> {
-    const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
-    let token = TwitchService::get_token().await?;
-    let me = TwitchService::get_user_info().await?;
-    let client = crate::services::http::client().clone();
-
-    let mut out = Vec::new();
-    let mut cursor: Option<String> = None;
-    // A hard stop rather than `loop`: a malformed cursor that keeps returning
-    // itself would otherwise spin a background job against Twitch forever.
-    for _ in 0..10 {
-        let mut url = format!(
-            "https://api.twitch.tv/helix/streams/followed?user_id={}&first=100",
-            me.id
-        );
-        if let Some(c) = &cursor {
-            url.push_str(&format!("&after={}", c));
-        }
-        let resp = client
-            .get(&url)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
-            .header("Client-Id", CLIENT_ID)
-            .send()
-            .await?
-            .json::<serde_json::Value>()
-            .await?;
-
-        match resp.get("data").and_then(|d| d.as_array()) {
-            Some(arr) if !arr.is_empty() => {
-                for v in arr {
-                    if let Ok(s) =
-                        serde_json::from_value::<crate::models::stream::TwitchStream>(v.clone())
-                    {
-                        out.push(s);
-                    }
-                }
-            }
-            _ => break,
-        }
-
-        cursor = resp
-            .get("pagination")
-            .and_then(|p| p.get("cursor"))
-            .and_then(|c| c.as_str())
-            .map(|s| s.to_string());
-        if cursor.is_none() {
-            break;
-        }
-    }
-    Ok(out)
+    let Some(base) = resolve_base(&candidate) else {
+        return 0;
+    };
+    app_paths::set_base(base);
+    let show = crate::services::mention_watch::claim_push(&read_settings(), &id, &room);
+    crate::services::mention_watch::client::on_push_arrived();
+    show as jboolean
 }
 
 /// Avatars for the handful of channels actually being announced.
@@ -634,18 +394,6 @@ async fn fetch_avatars(ids: &[String]) -> HashMap<String, String> {
     map
 }
 
-/// Read a `live_notifications` boolean, defaulting to ON when absent.
-///
-/// Matching the serde defaults on the Rust struct matters here: a settings file
-/// written before these fields existed must not read as "everything disabled".
-fn notif_flag(settings: &serde_json::Value, name: &str) -> bool {
-    settings
-        .get("live_notifications")
-        .and_then(|n| n.get(name))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
-}
-
 /// Everything the background poll should announce this run.
 ///
 /// The shared gates live here so the per-category collectors only decide their
@@ -672,92 +420,20 @@ async fn collect_all() -> Vec<OutItem> {
 }
 
 async fn collect_live(settings: &serde_json::Value) -> Vec<OutItem> {
-    let notif = settings.get("live_notifications");
-
-    let muted: Vec<String> = notif
-        .and_then(|n| n.get("muted_live_channels"))
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                .collect()
+    // The shared check (`services::live_poll`): followed and live, not muted,
+    // not announced before, the first run seeding silently.
+    let mut out: Vec<OutItem> = crate::services::live_poll::poll::collect(settings, &[], None)
+        .await
+        .into_iter()
+        .map(|alert| OutItem {
+            channel_id: alert.channel_id,
+            login: alert.login,
+            title: alert.title,
+            body: alert.body,
+            avatar: None,
+            channel: NOTIFY_CHANNEL_LIVE.to_string(),
         })
-        .unwrap_or_default();
-
-    // Network happens BEFORE the state lock, so the lock never spans an await
-    // and only covers the read-modify-write it exists for.
-    let streams = match fetch_followed_live().await {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-
-    let now = now_secs();
-    let mut out = Vec::new();
-    {
-        let _guard = STATE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // Nothing recorded yet means this is the first poll since install (or
-        // since the app's data was cleared). Seed silently: announcing here
-        // would empty the whole following list into the shade at once.
-        let seeding = !state_exists();
-        let mut state = read_state();
-
-        for stream in &streams {
-            if muted.contains(&stream.user_login.to_lowercase()) {
-                continue;
-            }
-            // Already announced THIS broadcast. A different `started_at` for
-            // the same channel is a genuinely new stream and does notify.
-            //
-            // `seen_at` is bumped rather than left alone, which matters for
-            // permanent streams: a channel live continuously for longer than
-            // the TTL would otherwise be pruned as stale and announced again
-            // while it was still broadcasting. Refreshing on every sighting
-            // means an entry only ages out once the stream has actually been
-            // gone that long.
-            if let Some(prev) = state.shown.get_mut(&stream.user_id) {
-                if prev.started_at == stream.started_at {
-                    prev.seen_at = now;
-                    continue;
-                }
-            }
-            state.shown.insert(
-                stream.user_id.clone(),
-                ShownEntry {
-                    started_at: stream.started_at.clone(),
-                    seen_at: now,
-                },
-            );
-            // Recorded above either way; the first poll records without
-            // announcing.
-            if seeding {
-                continue;
-            }
-            let body = if !stream.title.is_empty() {
-                stream.title.clone()
-            } else if !stream.game_name.is_empty() {
-                format!("Playing {}", stream.game_name)
-            } else {
-                String::new()
-            };
-            out.push(OutItem {
-                channel_id: stream.user_id.clone(),
-                login: stream.user_login.clone(),
-                title: format!("{} is live", stream.user_name),
-                body,
-                avatar: None,
-                channel: NOTIFY_CHANNEL_LIVE.to_string(),
-            });
-        }
-
-        // Age out rather than dropping everything that is no longer live.
-        // Pruning to the current live set looks tidier and is wrong: a channel
-        // that falls off the list and comes back with the same `started_at`
-        // would be announced a second time for a stream that never stopped.
-        state
-            .shown
-            .retain(|_, e| now - e.seen_at < SHOWN_TTL_SECS);
-        write_state(&state);
-    }
+        .collect();
 
     // State is written BEFORE the avatar lookup, so a failure there costs a
     // picture rather than replaying every notification on the next run.
@@ -770,4 +446,130 @@ async fn collect_live(settings: &serde_json::Value) -> Vec<OutItem> {
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Mention notifications while the app runs
+// ---------------------------------------------------------------------------
+
+/// The Kotlin side that turns a mention into a notification
+/// (`app.streamnook.MentionNotifyPlugin`).
+struct MentionNotifier<R: tauri::Runtime>(tauri::plugin::PluginHandle<R>);
+
+/// Posts every mention `services::mention_inbox` decided to announce (its
+/// `mention-notify` event: the setting, streamer mode, the per-chat cooldown,
+/// replay age and an off-screen chat are already checked there).
+///
+/// Listened for here rather than in the page because wry pauses the WebView
+/// whenever the app leaves the screen, which is exactly when a mention needs
+/// to reach the shade. The Rust event bus still runs then, and so does the
+/// activity's main looper that the plugin call lands on.
+pub fn mention_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri::{Listener, Manager};
+    tauri::plugin::Builder::new("mention-notify")
+        .setup(|app, api| {
+            let handle = api.register_android_plugin("app.streamnook", "MentionNotifyPlugin")?;
+            app.manage(MentionNotifier(handle));
+            let app_handle = app.clone();
+            app.listen(crate::services::mention_inbox::NOTIFY_EVENT, move |event| {
+                let Ok(entry) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+                    return;
+                };
+                let app = app_handle.clone();
+                // `run_mobile_plugin` blocks until Kotlin answers; never on
+                // the chat lane that emitted the event.
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = app.state::<MentionNotifier<R>>();
+                    if let Err(e) = state.0.run_mobile_plugin::<serde_json::Value>("post", entry) {
+                        log::warn!("[MentionNotify] post failed: {e}");
+                    }
+                });
+            });
+            // Whispers `whisper_inbox` decided to announce (the setting,
+            // streamer mode, not the conversation on screen): the same plugin
+            // posts them as a conversation with a reply box
+            // (`WhisperNotifier`, answered by `replyWhisper` below).
+            let whisper_app = app.clone();
+            app.listen(crate::services::whisper_inbox::NOTIFY_EVENT, move |event| {
+                let Ok(update) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+                    return;
+                };
+                let app = whisper_app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = app.state::<MentionNotifier<R>>();
+                    match state.0.run_mobile_plugin::<serde_json::Value>("postWhisper", update) {
+                        Ok(_) => log::info!("[WhisperNotify] posted"),
+                        Err(e) => log::warn!("[WhisperNotify] post failed: {e}"),
+                    }
+                });
+            });
+            Ok(())
+        })
+        .build()
+}
+
+/// A reply typed into a whisper notification (`WhisperReplyReceiver`).
+/// Returns "" when Twitch took it, else the reason it was not sent, in the
+/// words every platform shows.
+///
+/// With the app running this is exactly the desktop's notification reply:
+/// `whisper_inbox::reply_from_notification`, which sends through the same
+/// `send` as `whisper_send`, files the reply in the conversation and tells the
+/// page. Android may have ended the process since the notification was posted;
+/// a cold process has no app to file into, so it only sends (the reply is on
+/// Twitch, and the conversation shows it once the thread is pulled again).
+#[no_mangle]
+pub extern "system" fn Java_app_streamnook_NotifyBridge_replyWhisper<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    base_dir: JString<'local>,
+    user_id: JString<'local>,
+    login: JString<'local>,
+    name: JString<'local>,
+    avatar: JString<'local>,
+    text: JString<'local>,
+) -> jstring {
+    let get = |env: &mut JNIEnv<'local>, s: &JString<'local>| -> String {
+        env.get_string(s).map(|v| v.into()).unwrap_or_default()
+    };
+    let (candidate, user_id, login, name, avatar, text) = (
+        get(&mut env, &base_dir),
+        get(&mut env, &user_id),
+        get(&mut env, &login),
+        get(&mut env, &name),
+        get(&mut env, &avatar),
+        get(&mut env, &text),
+    );
+    let answer = reply_whisper(&candidate, &user_id, &login, &name, avatar, text);
+    match env.new_string(answer) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn reply_whisper(candidate: &str, user_id: &str, login: &str, name: &str, avatar: String, text: String) -> String {
+    let text = text.trim().to_string();
+    if text.is_empty() || user_id.is_empty() {
+        return String::new();
+    }
+    let avatar = (!avatar.is_empty()).then_some(avatar);
+    if let Some(app) = crate::services::providers::app_handle() {
+        log::info!("[WhisperNotify] notification reply, sending through the inbox");
+        let result = tauri::async_runtime::block_on(crate::services::whisper_inbox::reply_from_notification(
+            &app, user_id, login, name, avatar, text,
+        ));
+        return result.err().unwrap_or_default();
+    }
+    log::info!("[WhisperNotify] notification reply in a cold process, sending only");
+    if let Some(base) = resolve_base(candidate) {
+        app_paths::set_base(base);
+    }
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        return "Failed to send message. Please try again.".into();
+    };
+    runtime
+        .block_on(TwitchService::send_whisper(user_id, &text))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default()
 }

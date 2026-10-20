@@ -16,6 +16,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { OfflineCard } from '../../components/OfflineRoomScreen';
 import { makeKey } from '../../utils/providerKey';
 import { streamProvider } from '../../utils/streamProvider';
+import { useChannelSheet } from '../watch/MobileChannelSheet';
 
 function useOfflineRoomCard() {
   return useAppStore(
@@ -25,6 +26,7 @@ function useOfflineRoomCard() {
       live: s.offlineRoomLive,
       joining: s.offlineRoomJoining,
       startStream: s.startStream,
+      playVod: s.playOfflineRoomVod,
     })),
   );
 }
@@ -34,7 +36,7 @@ export const MobileOfflineRoom: React.FC<{
   /** The card is drawn below the band (MobileOfflineChin): the art only. */
   cardBelow?: boolean;
 }> = ({ mini = false, cardBelow = false }) => {
-  const { room, stream, live, joining, startStream } = useOfflineRoomCard();
+  const { room, stream, live, joining, startStream, playVod } = useOfflineRoomCard();
   const name = room?.display_name || stream?.user_name || stream?.user_login || 'This channel';
   const avatar = room?.avatar_url || stream?.profile_image_url || null;
   if (mini) return <MiniRoom name={name} avatar={avatar} />;
@@ -45,6 +47,8 @@ export const MobileOfflineRoom: React.FC<{
       fallbackAvatar={stream?.profile_image_url}
       live={live}
       joining={joining}
+      onPlayVod={() => void playVod()}
+      onVideos={stream ? () => useChannelSheet.getState().open(stream) : undefined}
       onWatchLive={(l) => void startStream(l.user_login, l, true)}
       compact
       part={cardBelow ? 'art' : 'all'}
@@ -55,7 +59,7 @@ export const MobileOfflineRoom: React.FC<{
 /** The offline room's card, in flow directly below the band, for as long as
  *  the band shows the offline art (not while a playback notice holds it). */
 export const MobileOfflineChin: React.FC = () => {
-  const { room, stream, live, joining, startStream } = useOfflineRoomCard();
+  const { room, stream, live, joining, startStream, playVod } = useOfflineRoomCard();
   const offline = useAppStore((s) => s.streamUrl === 'offline');
   const notice = useAppStore((s) => s.playbackNotice);
   const noticeShown =
@@ -72,6 +76,8 @@ export const MobileOfflineChin: React.FC = () => {
         fallbackAvatar={stream?.profile_image_url}
         live={live}
         joining={joining}
+        onPlayVod={() => void playVod()}
+        onVideos={stream ? () => useChannelSheet.getState().open(stream) : undefined}
         onWatchLive={(l) => void startStream(l.user_login, l, true)}
         compact
         part="card"

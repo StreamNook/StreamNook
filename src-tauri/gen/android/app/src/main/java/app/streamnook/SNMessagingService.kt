@@ -20,6 +20,10 @@ class SNMessagingService : FirebaseMessagingService() {
 
   override fun onMessageReceived(message: RemoteMessage) {
     val data = message.data
+    if (data["type"] == "mention") {
+      postMention(data)
+      return
+    }
     if (data["type"] != "live") return
     val channelId = data["channel_id"] ?: return
     val startedAt = data["started_at"] ?: ""
@@ -51,6 +55,40 @@ class SNMessagingService : FirebaseMessagingService() {
         ),
       )
     }
+  }
+
+  /**
+   * A mention the mention server found while the app was not in that chat.
+   * Rust decides whether it shows (`claimMention`); it posts through the same
+   * notifier as the app's own mentions, keyed by the message id, so the app's
+   * notice and the push for one message show once.
+   */
+  private fun postMention(data: Map<String, String>) {
+    val id = data["mention_id"] ?: return
+    val room = data["room"] ?: return
+    if (id.isEmpty() || room.isEmpty()) return
+    val show = try {
+      NotifyBridge.claimMention(dataDir.absolutePath, id, room)
+    } catch (e: Throwable) {
+      Log.e(NotifyRenderer.TAG, "claimMention failed", e)
+      false
+    }
+    Log.i(NotifyRenderer.TAG, "mention push -> ${if (show) "post" else "suppressed"}")
+    if (!show) return
+    MentionNotifier.post(
+      this,
+      MentionNotifier.Item(
+        id = id,
+        room = room,
+        platform = data["platform"] ?: "twitch",
+        channel = room,
+        senderLogin = data["sender_login"] ?: "",
+        senderName = data["sender_name"] ?: "",
+        text = data["body"] ?: "",
+        kind = data["kind"] ?: "mention",
+        atMs = data["at_ms"]?.toLongOrNull() ?: System.currentTimeMillis(),
+      ),
+    )
   }
 
   override fun onNewToken(token: String) {

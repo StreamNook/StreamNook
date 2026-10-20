@@ -6,6 +6,7 @@ import {
 } from '../../components/cosmeticAssets';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
 import { houseSlug } from './memberIcons';
+import { streamnookArtSrc } from '../../services/streamnookArt';
 import type {
   ExternalPickerView,
   SnMemberBadge,
@@ -64,13 +65,15 @@ export function medalUrl(sn: SnMemberBadge | null | undefined): string | null {
 }
 
 /** A badge image a renderer can load: bundled house art for a
- *  `streamnook-house:<slug>` URL, any other URL as it is. */
+ *  `streamnook-house:<slug>` URL, Rust's disk copy of StreamNook CDN art (as
+ *  the chat rows draw it), any other URL as it is. */
 export function badgeArt(url: string): string {
   const slug = houseSlug(url);
-  return (slug && COSMETIC_ASSET_BY_SLUG[slug]) || url;
+  return (slug && COSMETIC_ASSET_BY_SLUG[slug]) || streamnookArtSrc(url);
 }
 
-/** The badges you wear, in chat's order: Twitch, 7TV, StreamNook last. */
+/** The badges you wear, in chat's order: Twitch, 7TV, the chat apps,
+ *  StreamNook last. */
 export function wornPreviewBadges(
   sn: StreamNookPickerView | null,
   ext: ExternalPickerView | null,
@@ -79,6 +82,7 @@ export function wornPreviewBadges(
   return [
     ext?.twitch_selectable.find((b) => b.is_selected)?.image_url,
     ext?.seventv_badges.find((b) => b.worn)?.badge.url,
+    ...(ext?.chat_clients ?? []).map((b) => b.url),
     snWorn ? resolveCosmeticAsset({ slug: snWorn.slug, asset_path: snWorn.image_url ?? null }, { chatSize: true }) : null,
   ].filter((u): u is string => !!u);
 }

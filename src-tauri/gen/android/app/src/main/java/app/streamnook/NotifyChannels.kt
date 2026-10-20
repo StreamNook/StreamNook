@@ -21,6 +21,8 @@ object NotifyChannels {
   const val DROPS = "drops"
   const val BADGES = "badges"
   const val POINTS = "channel-points"
+  const val MENTIONS = "mentions"
+  const val WHISPERS = "whispers"
 
   /** Idempotent: creating a channel that already exists is a no-op. */
   fun ensure(nm: NotificationManager) {
@@ -30,11 +32,29 @@ object NotifyChannels {
     // Quiet on purpose: this can fire every quarter hour while watching, so it
     // belongs in the shade rather than on top of whatever you are doing.
     create(nm, POINTS, "Channel points", NotificationManager.IMPORTANCE_LOW)
+    // Someone talking to you: heads-up, like a message would be.
+    create(
+      nm,
+      MENTIONS,
+      "Mentions and replies",
+      NotificationManager.IMPORTANCE_HIGH,
+      "Someone mentioned or replied to you in a chat",
+    )
+    // A private message: heads-up, like any messaging app's.
+    create(nm, WHISPERS, "Whispers", NotificationManager.IMPORTANCE_HIGH, "Someone whispered you on Twitch")
   }
 
-  private fun create(nm: NotificationManager, id: String, name: String, importance: Int) {
+  private fun create(
+    nm: NotificationManager,
+    id: String,
+    name: String,
+    importance: Int,
+    description: String? = null,
+  ) {
     if (nm.getNotificationChannel(id) == null) {
-      nm.createNotificationChannel(NotificationChannel(id, name, importance))
+      val channel = NotificationChannel(id, name, importance)
+      description?.let { channel.description = it }
+      nm.createNotificationChannel(channel)
     }
   }
 }

@@ -636,6 +636,46 @@ body[data-window-blurred="true"] .glaze-inset::after {
   height: 100%;
   object-fit: cover;
 }
+/* A mark in place of a face (a mention's @, a download, a drop) sits at a
+   mark's size on a solid disc. Drawn edge to edge on the see-through surface,
+   overlapped marks ran into one another and the stack read as a smear.
+   The marks' colors are picked for the black island, so on a dark theme the
+   disc is the island's near-black and the mark is lifted a little. */
+.sn-notif-trigger .sn-notif-face:has(> svg) {
+  background: #121214;
+}
+.sn-notif-trigger .sn-notif-face > svg {
+  width: 62%;
+  height: 62%;
+  filter: brightness(1.35);
+}
+/* A light theme gets a light disc instead (a black coin on a pale pill was
+   heavy and foreign), a step whiter than the pill and edged with the pill's
+   own hairline so it still reads as a disc. The marks are darkened to hold
+   their contrast on it: a whisper's pale purple, an update's yellow and a
+   drop's mint all vanish on white at their island strength. */
+html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face:has(> svg) {
+  background: color-mix(in srgb, #fff 85%, var(--color-background-tertiary));
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 14%, transparent),
+    0 0 0 2px var(--color-background);
+}
+html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face > svg {
+  filter: brightness(0.52) saturate(1.4);
+}
+/* The face in front covers this one's left edge (and its ring with it), so
+   the mark sits a little right of centre to stay whole. */
+.sn-notif-trigger .sn-notif-face + .sn-notif-face > svg {
+  transform: translateX(1.5px);
+}
+/* A face for something already read is dimmed, the same rule the rows follow,
+   so the stack at full strength means something new. Only the picture dims:
+   the disc and its ring stay solid, so overlapped faces never show through
+   each other. */
+.sn-notif-trigger .sn-notif-face--read > * {
+  opacity: 0.55;
+}
 /* ===== Notification Center =====
    The panel the trigger opens into. It wears `.chrome-glaze --frosted` in the
    markup, so everything here is what sits INSIDE that: a header that does not
@@ -1965,14 +2005,6 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
 .sn-composer-row[data-narrow] .sn-composer-points-count {
   display: none;
 }
-/* The wallet's bits gem on the points icon. With the bits count on the
-   button it is redundant, until a narrow column folds that count away. */
-.sn-wallet-pip-always {
-  display: none;
-}
-.sn-composer-row[data-narrow] .sn-wallet-pip-always {
-  display: block;
-}
 /* The placeholder stays on one line, cut with an ellipsis, at any width. */
 .sn-composer-input::placeholder {
   white-space: nowrap;
@@ -2138,13 +2170,21 @@ html[data-platform="mac"] * {
    at a time, so they are cost with no use.
 
    html/body/#root are `overflow: hidden` (see the layout reset below), so this
-   never paints a document scrollbar. */
-::-webkit-scrollbar {
+   never paints a document scrollbar.
+
+   Not on the phones: there a list shows the platform's thin overlay bar, which
+   fades in while it moves and takes no width, as on the iPhone. The phone's
+   WebView drew this 8px bar even with `scrollbar-width` set, so the scope keeps
+   it off the phone rather than out-ranking it. `:where()` adds no specificity,
+   so every desktop and Mac rule ranks against these exactly as before. */
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-::-webkit-scrollbar-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
@@ -2159,41 +2199,49 @@ html[data-platform="mac"] * {
    unrecognised selector invalidates the WHOLE list it appears in, so grouping
    them would mean one unsupported spelling silently taking the supported ones
    down with it. */
-::-webkit-scrollbar-button:single-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:single-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:single-button {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:double-button {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:double-button,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:double-button {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:start:decrement {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:start:decrement,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:start:decrement {
   display: none;
   width: 0;
   height: 0;
 }
-::-webkit-scrollbar-button:end:increment {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-button:end:increment,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-button:end:increment {
   display: none;
   width: 0;
   height: 0;
 }
 
-::-webkit-scrollbar-corner {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-corner,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-track {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-track,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-track {
   background: var(--color-scrollbar-track);
 }
 
-::-webkit-scrollbar-thumb {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-thumb,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar-thumb);
   border-radius: 4px;
 }
 
-::-webkit-scrollbar-thumb:hover {
+:where(html:not([data-mobile='true'])) ::-webkit-scrollbar-thumb:hover,
+:where(html:not([data-mobile='true']))::-webkit-scrollbar-thumb:hover {
   background: var(--color-accent-muted);
 }
 
@@ -3222,27 +3270,24 @@ html[data-motion="reduced"] .sub-progress-fill {
   animation: highlight-flash 2s ease-in-out;
 }
 
-/* Mention Flash Animation (Red-shift effect) */
+/* Mention Flash Animation (Red-shift effect). Only the wash fades: the row's
+   color edge is its own inline style and stays put, so it never fades out over
+   the last half second and snaps back when the animation ends. */
 @keyframes mention-flash {
   0% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 50%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   25% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 40%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 30%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   75% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 20%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
@@ -3251,19 +3296,16 @@ html[data-motion="reduced"] .sub-progress-fill {
   border-left-width: 4px;
 }
 
-/* Reply Flash Animation */
+/* Reply Flash Animation. As the mention flash, the edge keeps its color. */
 @keyframes reply-flash {
   0% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 30%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--flash-accent-color) 15%, transparent);
-    border-left-color: var(--flash-accent-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
@@ -3273,25 +3315,23 @@ html[data-motion="reduced"] .sub-progress-fill {
 }
 
 /* User-defined highlight phrase flash. Color flows in via the inline
-   --phrase-flash-color custom property so each phrase animates in its own hue. */
+   --phrase-flash-color custom property so each phrase animates in its own hue.
+   Only the wash fades; the edge is the row's own inline style (drawn unless
+   Highlight Appearance is None), so it stays put through the flash. */
 @keyframes phrase-highlight-flash {
   0% {
     background-color: color-mix(in srgb, var(--phrase-flash-color) 35%, transparent);
-    border-left-color: var(--phrase-flash-color);
   }
   50% {
     background-color: color-mix(in srgb, var(--phrase-flash-color) 18%, transparent);
-    border-left-color: var(--phrase-flash-color);
   }
   100% {
     background-color: transparent;
-    border-left-color: transparent;
   }
 }
 
 .animate-phrase-highlight {
   animation: phrase-highlight-flash 2s ease-out;
-  border-left-width: 4px;
 }
 
 /* Iridescent gradient animation for subscription messages */
@@ -3320,6 +3360,34 @@ html[data-motion="reduced"] .sub-progress-fill {
 .sn-chat-badge--sn {
   box-sizing: border-box;
   padding: 0.09em;
+}
+
+/* A Twitch Shared Chat row from a partner channel: that channel's own color
+   (--sn-src, from the core, floored for the theme; the accent until it
+   answers) on a 3px left edge, washing in from it and gone by the middle, so
+   two partners read as two colors at chat speed. Behind the row's content
+   (the row is isolated), so it never fights a mention's border or a member's
+   background. The home channel's rows carry nothing. */
+.sn-shared-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  box-shadow: inset 3px 0 0 var(--sn-src, var(--color-accent));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sn-src, var(--color-accent)) 10%, transparent),
+    transparent 55%
+  );
+}
+
+/* The partner channel's face leading its row: round, ringed in the channel's
+   color, a step apart from the badges that follow. */
+.sn-shared-face {
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1.5px var(--sn-src, var(--color-accent));
+  margin-right: 0.15em;
 }
 
 /* Every chat row's badge group, centred on the name it sits beside. An
@@ -7360,6 +7428,11 @@ html[data-motion="off"] .sn-immersive {
 .chest-attention:hover {
   animation: none;
 }
+@media (prefers-reduced-motion: reduce) {
+  .chest-attention {
+    animation: none;
+  }
+}
 
 
 /* ============================================================
@@ -8248,5 +8321,22 @@ html[data-motion="reduced"] .sn-tbt-pointer {
   }
   .sn-tbt-pointer {
     transform: translate(58px, 2px);
+  }
+}
+
+/* The phones' swipe slider: the bar under its chip fills while Ban's hold runs. */
+/* Swipe to moderate (phones): a sideways move on a row never becomes the browser's own pan, so
+   the swipe keeps its pointer events. Set on the rows, inside the list's scroll container, where
+   the browser reads it. */
+.sn-swipe-mod [data-message-id] {
+  touch-action: pan-y;
+}
+
+@keyframes sn-swipe-dwell {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
   }
 }

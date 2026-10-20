@@ -627,6 +627,8 @@ pub async fn set_extra_channels(ids: Vec<String>) {
 /// nothing. Signed out, nothing. Answers whether a reload started, so the shell
 /// can renew its previews; the lists land as `home-snapshot` updates.
 pub async fn note_app_resumed() -> bool {
+    // What the mention server found while the app was away.
+    crate::services::mention_watch::client::pull_soon();
     let Some(inner) = SERVICE.get() else { return false };
     if !signed_in().await {
         return false;
@@ -1067,16 +1069,13 @@ async fn refresh_directories(inner: &Arc<Inner>, max_age: u64) {
 
 fn discovery_prefs(state: &AppState) -> (Vec<String>, bool) {
     let Ok(settings) = state.settings.lock() else { return (Vec::new(), false) };
-    let languages = settings
-        .extra
-        .get("discovery_languages")
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-        .unwrap_or_default();
     let personalized = settings
         .extra
         .get("discovery_personalized")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    drop(settings);
+    let languages = crate::services::browse_languages::resolve_stored(&crate::services::browse_languages::stored(state));
     (languages, personalized)
 }
 
@@ -1689,7 +1688,11 @@ async fn refresh_recommended_with(
     // Discovery preferences are frontend-shaped settings that ride the serde
     // catch-all; read them the way the store did when it made this call.
     let (stored_languages, stored_personalized) = discovery_prefs(&state);
-    let languages = languages.unwrap_or(stored_languages);
+    // An override is the setting as the store holds it, so it goes through
+    // the same rule (empty means the device language, `any` means all).
+    let languages = languages
+        .map(|l| crate::services::browse_languages::resolve_stored(&l))
+        .unwrap_or(stored_languages);
     let personalized = personalized.unwrap_or(stored_personalized);
     let (streams, cursor) = match TwitchService::get_recommended_streams_paginated(
         &state,

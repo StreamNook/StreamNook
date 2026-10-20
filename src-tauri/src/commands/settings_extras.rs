@@ -27,6 +27,10 @@ pub struct CommunityInvite {
     pub name: Option<String>,
     pub description: Option<String>,
     pub icon_url: Option<String>,
+    /// The server icon to try in order: the animated one first when the hash
+    /// is animated, then the same icon as a still. A page falls back to its own
+    /// art when none loads. Empty when the server has no icon.
+    pub icon_urls: Vec<String>,
     /// The hosted banner first, then the server's own.
     pub banner_urls: Vec<String>,
     pub online: Option<u64>,
@@ -43,6 +47,16 @@ fn discord_image(kind: &str, id: &str, hash: &str, size: u32) -> String {
     format!("https://cdn.discordapp.com/{kind}/{id}/{hash}.{ext}?size={size}")
 }
 
+/// Every URL a picture can load from, best first: an animated (`a_`) hash is
+/// also served as a still, which loads where the animation does not.
+fn discord_image_urls(kind: &str, id: &str, hash: &str, size: u32) -> Vec<String> {
+    let mut urls = vec![discord_image(kind, id, hash, size)];
+    if hash.starts_with("a_") {
+        urls.push(format!("https://cdn.discordapp.com/{kind}/{id}/{hash}.png?size={size}"));
+    }
+    urls
+}
+
 fn invite_from(body: &Value) -> CommunityInvite {
     let guild = body.get("guild").cloned().unwrap_or(Value::Null);
     let text = |key: &str| guild.get(key).and_then(Value::as_str).map(str::to_string);
@@ -55,6 +69,7 @@ fn invite_from(body: &Value) -> CommunityInvite {
         name: text("name"),
         description: text("description").filter(|d| !d.trim().is_empty()),
         icon_url: text("icon").map(|hash| discord_image("icons", &id, &hash, 128)),
+        icon_urls: text("icon").map(|hash| discord_image_urls("icons", &id, &hash, 128)).unwrap_or_default(),
         banner_urls,
         online: body.get("approximate_presence_count").and_then(Value::as_u64),
         members: body.get("approximate_member_count").and_then(Value::as_u64),
@@ -176,6 +191,13 @@ pub async fn search_settings(query: String) -> Result<Vec<crate::services::setti
     Ok(crate::services::settings_catalog::search(&query, 40))
 }
 
+/// The alert types this build sends, in the order the phones list them: each
+/// with its setting, its OS category, and whether the setup wizard offers it.
+#[tauri::command]
+pub fn get_alert_types() -> Vec<crate::services::alert_types::AlertType> {
+    crate::services::alert_types::alert_types()
+}
+
 /// The settings rows whose values differ from a fresh install, in page order,
 /// for the "changed from default" review.
 #[tauri::command]
@@ -218,6 +240,17 @@ pub async fn get_theme_catalog(state: State<'_, AppState>) -> Result<Value, Stri
     Ok(crate::services::theme_palette::catalog(&custom, accent.as_deref()))
 }
 
+/// A palette as a shell is about to paint it (a built-in, a custom theme, one being edited, OLED
+/// in a picked accent), with Rust's floors applied: muted and secondary text, and the accent on
+/// cards (`accentOnSurface`). The desktop and Android paint the palette they hold and take these
+/// floored keys from here, so every theme clears the same contrast the iPhone gets.
+#[tauri::command]
+pub fn lift_theme_palette(palette: Value) -> Value {
+    let mut palette = palette;
+    crate::services::theme_palette::lift_text(&mut palette);
+    palette
+}
+
 /// The palette the saved theme paints with.
 #[tauri::command]
 pub async fn get_active_theme(
@@ -247,6 +280,13 @@ mod tests {
             "approximate_presence_count": 12, "approximate_member_count": 340,
         }));
         assert_eq!(card.icon_url.as_deref(), Some("https://cdn.discordapp.com/icons/1/a_abc.gif?size=128"));
+        assert_eq!(
+            card.icon_urls,
+            vec![
+                "https://cdn.discordapp.com/icons/1/a_abc.gif?size=128".to_string(),
+                "https://cdn.discordapp.com/icons/1/a_abc.png?size=128".to_string(),
+            ]
+        );
         assert_eq!(card.banner_urls[0], HOSTED_BANNER);
         assert_eq!(card.banner_urls[1], "https://cdn.discordapp.com/banners/1/def.png?size=512");
         assert_eq!(card.description, None);
@@ -254,5 +294,12 @@ mod tests {
         let empty = invite_from(&Value::Null);
         assert_eq!(empty.name, None);
         assert_eq!(empty.banner_urls, vec![HOSTED_BANNER.to_string()]);
+        assert!(empty.icon_urls.is_empty());
+    }
+
+    #[test]
+    fn a_still_icon_has_one_url() {
+        let card = invite_from(&json!({ "guild": { "id": "1", "icon": "abc" } }));
+        assert_eq!(card.icon_urls, vec!["https://cdn.discordapp.com/icons/1/abc.png?size=128".to_string()]);
     }
 }

@@ -9,7 +9,8 @@
 // comment in App.tsx).
 //
 // Deliberately NOT replicated (desktop-only surfaces): session resume, whisper
-// import, eventsub://channel-moderate (mod tools), drop-progress automation,
+// import (the phone reads and replies to whispers; the archive import from
+// twitch.tv is desktop's), eventsub://channel-moderate (mod tools), drop-progress automation,
 // snippet sync, window sizing, universal-cache disk sync (features.assetDiskCache).
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -21,7 +22,7 @@ import {
   type CosmeticUpdatePayload,
   type EmoteSetUpdatePayload,
 } from '../../services/seventvEventApi';
-import { useWatchedChestStat } from '../../hooks/useWatchedChestStat';
+import { useRewardGrantedToast } from '../../hooks/useRewardGrantedToast';
 import {
   isSupabaseConfigured,
   refreshEntitlementRegistries,
@@ -39,7 +40,10 @@ import {
   stableNotifyId,
   syncBackgroundChecks,
 } from '../notifications';
-import { consumePendingChannel } from '../nativeBridge';
+import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
+import { openWhisperByKey } from '../whispers/whisperInbox';
+import { alertOn, loadAlertTypes } from '../alertTypes';
+import { openMentionById } from '../mentions/mentionInbox';
 import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
 import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
 import type { ProviderId } from '../../types/providers';
@@ -48,14 +52,11 @@ import { Logger } from '../../utils/logger';
 import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
 
 export function useMobileBoot(): void {
-  // Lifetime points stat: the same hook desktop mounts in App.tsx, counting
-  // `watched-chest-claimed`. Every chest, automatic or a tap on the composer's
-  // button, goes through Rust's watched_chest::claim, which emits that event
-  // once per chest. The phone used to count `channel-points-earned` instead,
-  // which other sources also emit (the points socket, the balance poll), so
-  // the two shells scored different things. Mounted once, here, because the
-  // phone has a single window.
-  useWatchedChestStat();
+  // "Achievement unlocked" for a reward Rust's claims just granted, the same
+  // hook desktop mounts in App.tsx. The lifetime stats themselves are counted
+  // in Rust (services/member_stats.rs). Mounted once, here, because the phone
+  // has a single window.
+  useRewardGrantedToast();
 
   useEffect(() => {
     let isMounted = true;
@@ -292,9 +293,15 @@ export function useMobileBoot(): void {
       // nothing. Only when setup is already complete (a fresh install gets the
       // wizard's own prompt) and only when Android will still show the dialog:
       // once it has decided the refusal is permanent, asking again does nothing
-      // and the settings panel is the only honest route.
+      // and the settings panel is the only honest route. And only while some
+      // alert type is on: the wizard's Notifications step writes each type
+      // off unless chosen, and someone who chose none is never asked.
       void (async () => {
-        if (!useAppStore.getState().settings.setup_complete) return;
+        const types = await loadAlertTypes();
+        const { settings } = useAppStore.getState();
+        if (!settings.setup_complete) return;
+        const prefs = settings.live_notifications;
+        if (prefs?.enabled === false || !types.some((t) => alertOn(t, prefs))) return;
         if ((await getNotificationPermission()) !== 'default') return;
         await ensureNotificationPermission();
       })();
@@ -345,8 +352,28 @@ export function useMobileBoot(): void {
       await addListener<string>('streamnook:watch', () => {
         void drainWatchLink();
       });
-      const tapped = consumePendingChannel();
-      if (tapped) {
+      // A tapped mention notification (posted from Rust, android_notify.rs)
+      // opens that mention: its chat, then the jump to the message. A warm tap
+      // is pushed in; it clears the native copy too, so a later remount does
+      // not open it a second time.
+      (window as Window & { __SN_OPEN_MENTION__?: (id: string) => void }).__SN_OPEN_MENTION__ = (id) => {
+        consumePendingMention();
+        if (id) void openMentionById(id);
+      };
+      // A tapped whisper notification (also posted from Rust) opens its
+      // conversation, the same two ways.
+      (window as Window & { __SN_OPEN_WHISPER__?: (key: string) => void }).__SN_OPEN_WHISPER__ = (key) => {
+        consumePendingWhisper();
+        if (key) void openWhisperByKey(key);
+      };
+      const tappedWhisper = consumePendingWhisper();
+      const tappedMention = tappedWhisper ? null : consumePendingMention();
+      const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();
+      if (tappedWhisper) {
+        void openWhisperByKey(tappedWhisper);
+      } else if (tappedMention) {
+        void openMentionById(tappedMention);
+      } else if (tapped) {
         openChannel(tapped);
       } else {
         void drainWatchLink();

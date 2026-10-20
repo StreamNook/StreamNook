@@ -1,7 +1,5 @@
 import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { invoke } from '@tauri-apps/api/core';
-import type { TwitchUser } from '../types';
-import { getClientConfig } from './clientConfig';
 
 import { Logger } from '../utils/logger';
 import type { Atmosphere } from './atmospheres';
@@ -13,7 +11,7 @@ import {
     withStreamnookArtCopies,
 } from './streamnookArt';
 import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
-import type { ActiveEquipment, CosmeticSlot } from './cosmetics/types';
+import type { ActiveEquipment, AssetManifest, CosmeticSlot } from './cosmetics/types';
 // Supabase client singleton
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -161,11 +159,10 @@ const buildPayload = (userId?: string, displayName?: string, appVersion?: string
     // of the running client, not of the call site.
     //
     // `clientPlatform()` rather than `IS_MOBILE ? 'android' : 'desktop'`: that
-    // expression labelled an iPhone 'android' while `clientPlatform()` (which
-    // feeds `record_client` and `/api/v1/user/sync`) called the same client
-    // 'ios', so presence and the persisted row disagreed by construction. One
-    // answer now. Same three values as before on every other client, so nothing
-    // downstream re-buckets.
+    // expression labelled an iPhone 'android'. The persisted row and
+    // `record_client` are written by Rust (services/member_signin.rs), which
+    // names the client from its build target with the same three values, so
+    // presence and the row agree.
     platform: clientPlatform(),
 });
 
@@ -277,77 +274,6 @@ export const updatePresence = async (userId: string, displayName: string, appVer
     await trackPresence(userId, displayName, appVersion);
 };
 
-/**
- * Upsert user data to the users table on login
- * @param user - TwitchUser object
- * @param appVersion - Optional app version
- */
-export const upsertUser = async (user: TwitchUser, appVersion?: string): Promise<void> => {
-    // Server-authoritative path. The server takes the user id from the bearer
-    // token, so this can only ever write the caller's own row.
-    const synced = await writeViaApi('/api/v1/user/sync', {
-        username: user.login || user.username,
-        display_name: user.display_name || user.username,
-        avatar_url: user.profile_image_url ?? null,
-        app_version: appVersion ?? null,
-        platform: clientPlatform(),
-    });
-    if (synced.handled) {
-        // recordClient is folded into the sync endpoint; presence is separate and
-        // still ours to send. Sent regardless of whether the row write succeeded:
-        // presence and liveness must not disappear just because the sync failed,
-        // or a broken cohort goes invisible instead of looking broken.
-        await updatePresence(user.user_id, user.display_name || user.username, appVersion);
-        return;
-    }
-
-    if (!supabase) {
-        Logger.debug('[Supabase] Skipping user upsert - not configured');
-        return;
-    }
-
-    try {
-        const payload: any = {
-            id: user.user_id,
-            username: user.login || user.username,
-            display_name: user.display_name || user.username,
-            avatar_url: user.profile_image_url || null,
-            last_seen: new Date().toISOString(),
-        };
-
-        if (appVersion) {
-            payload.app_version = appVersion;
-        }
-
-        const { error } = await supabase
-            .from('users')
-            .upsert(payload, {
-                onConflict: 'id',
-            });
-
-        if (error) {
-            // Deliberately does NOT return. The client-record and presence calls
-            // below have nothing to do with whether the `users` row was written,
-            // and bailing here makes a client that cannot write `users` also stop
-            // refreshing last_seen, stop recording which client it is, and never
-            // join presence. That cohort then goes INVISIBLE rather than looking
-            // broken, which is the worst possible failure for the adoption
-            // measurement that gates revoking the anon write.
-            Logger.error('[Supabase] Failed to upsert user:', error);
-        } else {
-            Logger.debug('[Supabase] User upserted:', user.display_name || user.username);
-        }
-
-        // Which client they signed in from. Not awaited: it is reporting, and
-        // presence is what the user actually notices.
-        void recordClient(user.user_id);
-
-        // Also update presence with user info
-        await updatePresence(user.user_id, user.display_name || user.username, appVersion);
-    } catch (error) {
-        Logger.error('[Supabase] Failed to upsert user:', error);
-    }
-};
 
 /**
  * Which StreamNook client this is.
@@ -362,27 +288,6 @@ const clientPlatform = (): string =>
         ? (/android/i.test(navigator.userAgent) ? 'android' : 'ios')
         : 'desktop';
 
-/**
- * Record which client a member signed in from.
- *
- * Presence answers "who is on Android right now"; this answers "who uses
- * Android". Without a persisted row an offline Android user looks like a
- * desktop one.
- *
- * Fire-and-forget: reporting must never be able to fail a sign-in.
- */
-const recordClient = async (twitchUserId: string): Promise<void> => {
-    if (!supabase || !twitchUserId) return;
-    try {
-        const { error } = await supabase.rpc('record_client', {
-            p_user_id: twitchUserId,
-            p_platform: clientPlatform(),
-        });
-        if (error) Logger.debug('[Supabase] Could not record client:', error);
-    } catch (e) {
-        Logger.debug('[Supabase] Could not record client:', e);
-    }
-};
 
 /**
  * Get the current count of online users via presence. Deduped by user_id so a
@@ -772,129 +677,6 @@ export const grantAccolade = async (userId: string, accoladeId: string): Promise
 };
 
 /**
- * Claim a reward (event or milestone). The server function (claim_reward,
- * security definer) checks the gate against its own state: an event window
- * against its own clock, or a milestone threshold against the real stored value
- * (e.g. subscriber months, watch hours). A rolled-back clock or a faked client
- * number cannot earn it. It then grants the accolade or cosmetic. `granted` is
- * true only on a fresh earn (idempotent: re-claiming returns ok with
- * granted:false). `reason` carries 'window_closed' / 'not_started' /
- * 'below_threshold' / 'inactive' / 'unknown_reward' on a server reject, or the
- * error code on a transport/RLS failure.
- */
-export const claimReward = async (
-    userId: string,
-    rewardId: string,
-    context: Record<string, unknown> = {},
-): Promise<{ ok: boolean; granted?: boolean; reason?: string; rewardId?: string }> => {
-    if (!supabase || !userId || !rewardId) return { ok: false, reason: 'unconfigured' };
-    try {
-        const { data, error } = await supabase.rpc('claim_reward', {
-            p_twitch_user_id: userId,
-            p_reward_id: rewardId,
-            p_context: context,
-        });
-        if (error) {
-            // 42501 = RLS denial; 42883/PGRST202 = function not deployed yet.
-            Logger.error('[Supabase] claim_reward failed:', error.message, error.code);
-            return { ok: false, reason: error.code || 'error' };
-        }
-        const res = (data ?? {}) as { ok?: boolean; granted?: boolean; reason?: string; reward_id?: string };
-        return { ok: !!res.ok, granted: res.granted, reason: res.reason, rewardId: res.reward_id };
-    } catch (error) {
-        Logger.error('[Supabase] Exception claiming reward:', error);
-        return { ok: false, reason: 'exception' };
-    }
-};
-
-export interface EventReward {
-    id: string;
-    title: string | null;
-    reward_kind: string;
-    reward_id: string;
-}
-
-/**
- * Active event rewards (the watch-to-earn kind), cached briefly since they rarely
- * change. Lets the generic watch-reward claimer treat new events as config, not a
- * release. Reads the world-readable rewards table; returns the last good result
- * if a refresh fails.
- */
-let eventRewardsCache: { at: number; rows: EventReward[] } | null = null;
-export const listActiveEventRewards = async (): Promise<EventReward[]> => {
-    if (!supabase) return [];
-    const now = Date.now();
-    if (eventRewardsCache && now - eventRewardsCache.at < 5 * 60_000) return eventRewardsCache.rows;
-    try {
-        const { data, error } = await supabase
-            .from('rewards')
-            .select('id, title, reward_kind, reward_id')
-            .eq('active', true)
-            .eq('gate_kind', 'event');
-        if (error) {
-            Logger.warn('[Supabase] listActiveEventRewards failed:', error.message);
-            return eventRewardsCache?.rows ?? [];
-        }
-        const rows = (data ?? []) as EventReward[];
-        eventRewardsCache = { at: now, rows };
-        return rows;
-    } catch (error) {
-        Logger.warn('[Supabase] listActiveEventRewards exception:', error);
-        return eventRewardsCache?.rows ?? [];
-    }
-};
-
-/**
- * Active milestone rewards (the tenure kind, e.g. subscriber-month badges gated
- * on total_months). Same world-readable rewards table, cached briefly. Claiming
- * is gated server-side by claim_reward against the real stored value, so a new
- * milestone badge is pure config (a cosmetics row + a rewards row) with no
- * client release.
- */
-let milestoneRewardsCache: { at: number; rows: EventReward[] } | null = null;
-export const listActiveMilestoneRewards = async (): Promise<EventReward[]> => {
-    if (!supabase) return [];
-    const now = Date.now();
-    if (milestoneRewardsCache && now - milestoneRewardsCache.at < 5 * 60_000) return milestoneRewardsCache.rows;
-    try {
-        const { data, error } = await supabase
-            .from('rewards')
-            .select('id, title, reward_kind, reward_id')
-            .eq('active', true)
-            .eq('gate_kind', 'milestone');
-        if (error) {
-            Logger.warn('[Supabase] listActiveMilestoneRewards failed:', error.message);
-            return milestoneRewardsCache?.rows ?? [];
-        }
-        const rows = (data ?? []) as EventReward[];
-        milestoneRewardsCache = { at: now, rows };
-        return rows;
-    } catch (error) {
-        Logger.warn('[Supabase] listActiveMilestoneRewards exception:', error);
-        return milestoneRewardsCache?.rows ?? [];
-    }
-};
-
-/**
- * Sync the caller's owned subscriber atmospheres. The server function
- * (grant_atmosphere_ownership, security definer) grants ownership of every
- * current subscriber atmosphere ONLY if the user is an active subscriber, so a
- * lapsed member keeps what they already own but stops accruing newly-added ones.
- * Fire-and-forget at login; idempotent. Silent when the RPC is not yet deployed.
- */
-export const grantAtmosphereOwnership = async (userId: string): Promise<void> => {
-    if (!supabase || !userId) return;
-    try {
-        const { error } = await supabase.rpc('grant_atmosphere_ownership', { p_twitch_user_id: userId });
-        if (error && error.code !== '42883' && error.code !== 'PGRST202') {
-            Logger.warn('[Supabase] grant_atmosphere_ownership failed:', error.message, error.code);
-        }
-    } catch (error) {
-        Logger.warn('[Supabase] Exception in grant_atmosphere_ownership:', error);
-    }
-};
-
-/**
  * Claim today's login accolades (seasonal windows + cake day) server-side. The
  * claim_login_accolades RPC enforces the window against the server clock and
  * reads the verified Twitch creation date, then grants idempotently. Returns the
@@ -1190,20 +972,6 @@ const postToApi = async (path: string, body: Record<string, unknown>): Promise<A
 };
 
 /**
- * The same post, behind the server-controlled kill switch.
- *
- * For writes that used to go straight to Supabase and can still do so: if the
- * new endpoint misbehaves, one field in the update manifest sends every build
- * back to the legacy path without a release. Fails OPEN to the legacy path, so a
- * Cloudflare blip cannot take writes down with it.
- */
-const writeViaApi = async (path: string, body: Record<string, unknown>): Promise<ApiWriteResult> => {
-    const { write_via_api: enabled } = await getClientConfig();
-    if (!enabled) return { handled: false, ok: false };
-    return postToApi(path, body);
-};
-
-/**
  * Set the member's profile theme ('tier' | 'paint' | an atmosphere id). Rust
  * owns the write (services/member_theme.rs: the server path when switched on,
  * else the direct upsert) and repaints the member's chat rows at once in every
@@ -1362,6 +1130,9 @@ export interface CosmeticCatalogEntry {
     // Set on Contributor badge tiers: the shipped contribution points that earn
     // the tier. These are granted by the database, never bought.
     contribution_min_points?: number | null;
+    // The art variants (animated, static, poster); Rust draws from it first,
+    // so every surface that resolves art passes it on.
+    asset_manifest?: AssetManifest | null;
 }
 
 let snRegistry: Map<string, number> = new Map();
@@ -1526,9 +1297,12 @@ const loadSnapshot = (): Promise<void> => {
     if (snapshotLoading) { snapshotReloadQueued = true; return snapshotLoading; }
     snapshotLoading = (async () => {
         try {
-            applySnapshot(await invoke<RegistrySnapshot>('sn_registry_snapshot'));
+            const snap = await invoke<RegistrySnapshot>('sn_registry_snapshot');
+            applySnapshot(snap);
+            retryUnloadedSnapshot(snap);
         } catch (e) {
             Logger.warn('[Supabase] registry snapshot unavailable:', e);
+            retryUnloadedSnapshot({ membersLoaded: false, cosmeticsLoaded: false } as RegistrySnapshot);
         } finally {
             snapshotLoading = null;
             if (snapshotReloadQueued) { snapshotReloadQueued = false; void loadSnapshot(); }
@@ -1537,14 +1311,32 @@ const loadSnapshot = (): Promise<void> => {
     return snapshotLoading;
 };
 
-/** Reads the snapshot once and follows Rust's change event from then on. */
+/** Reads the snapshot once and follows Rust's change event from then on. The
+ *  listener goes on before the first read: Rust announces only a change, so a
+ *  load that finished between a read and a late listener was never heard, and
+ *  the page kept an empty member list (no StreamNook badges) for the session. */
 const ensureRegistries = (): void => {
     if (snapshotListening) return;
     snapshotListening = true;
-    void loadSnapshot();
     void import('@tauri-apps/api/event')
         .then(({ listen }) => listen('sn-registry-changed', () => { void loadSnapshot(); }))
-        .catch((e) => Logger.warn('[Supabase] registry change listener unavailable:', e));
+        .catch((e) => Logger.warn('[Supabase] registry change listener unavailable:', e))
+        .finally(() => { void loadSnapshot(); });
+};
+
+/** Re-reads a snapshot Rust answered before its registries had loaded, a few
+ *  times with growing gaps, in case their change event is never heard. */
+const SNAPSHOT_RETRY_MS = [2000, 4000, 8000, 15000, 30000];
+let snapshotRetry = 0;
+const retryUnloadedSnapshot = (snap: RegistrySnapshot): void => {
+    if (snap.membersLoaded && snap.cosmeticsLoaded) {
+        snapshotRetry = 0;
+        return;
+    }
+    const wait = SNAPSHOT_RETRY_MS[snapshotRetry];
+    if (wait === undefined) return;
+    snapshotRetry += 1;
+    setTimeout(() => { void loadSnapshot(); }, wait);
 };
 
 /**
@@ -1926,7 +1718,6 @@ export default {
     isSupabaseConfigured,
     trackPresence,
     updatePresence,
-    upsertUser,
     getOnlineCount,
     getOnlinePresenceSnapshot,
     subscribeToOnlineCount,

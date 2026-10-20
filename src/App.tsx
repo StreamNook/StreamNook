@@ -8,7 +8,6 @@ import { useAppStore, type WhisperImportProgress, type SettingsTab } from './sto
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
 import { primeClientConfig } from './services/clientConfig';
-import { maybeClaimWatchRewards } from './services/watchRewards';
 import { lastUpdateStatus, type BundleUpdateStatus } from './services/updateStatus';
 import TitleBar from './components/TitleBar';
 import DynamicIsland from './components/DynamicIsland';
@@ -25,7 +24,7 @@ import Home from './components/Home';
 import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
 import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
 import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
-import { useWatchedChestStat } from './hooks/useWatchedChestStat';
+import { useRewardGrantedToast } from './hooks/useRewardGrantedToast';
 import { useChatDockHold, useDockView } from './hooks/useChatDock';
 import { chatKey } from './stores/chatDockStore';
 import ChatDockPane from './components/chat/ChatDockPane';
@@ -203,8 +202,8 @@ function App() {
   // rather than each running a check of their own.
   usePlatformSessionCheck();
   usePlatformAccountSync();
-  // Main window only: one listener, or each collected chest counts twice.
-  useWatchedChestStat();
+  // Main window only: one listener, or each new reward is announced twice.
+  useRewardGrantedToast();
   // The chat dock: loads the docked chats from Rust and keeps them joined.
   useChatDockHold();
   // Plays the mention sound when Rust says a live message mentioned you.
@@ -353,10 +352,6 @@ function App() {
   // the sole chat surface — no duplicate chat across windows.
   const channelsInPopouts = useAppStore((s) => s.channelsInPopouts);
   const currentStream = useAppStore((s) => s.currentStream);
-  // Watch-reward inputs: the watched channel + its (live-updating) category, so
-  // event-reward claims can fire the moment a streamer switches categories.
-  const watchRewardChannel = currentStream?.user_login ?? null;
-  const watchRewardGame = currentStream?.game_name ?? null;
   const activeChatChannelInPopout = !!(
     currentStream?.user_login &&
     channelsInPopouts.has(currentStream.user_login.toLowerCase())
@@ -1557,68 +1552,10 @@ function App() {
     activeChatChannelInPopoutRef.current = activeChatChannelInPopout;
   }, [activeChatChannelInPopout]);
 
-  // Track watch time and streams watched in Supabase.
-  //
-  // Keyed on the *stream identity*, NOT streamUrl. The native resolver
-  // reassigns streamUrl mid-stream on every ad pivot and quality change
-  // (applyAdPivot / changeStreamQuality). Keying the tracker on streamUrl made
-  // each of those tear down and restart the minute interval (silently dropping
-  // watch minutes) and re-fire streams_watched (counting one stream many
-  // times). currentStream's channel id stays put across those events, so the
-  // timer runs uninterrupted and a stream is counted exactly once per session.
-  const streamSessionKey = currentStream
-    ? (currentStream.user_id || currentStream.user_login || null)
-    : null;
-  useEffect(() => {
-    if (!streamSessionKey || !isSupabaseConfigured()) return;
-
-    const { currentUser, isAuthenticated } = useAppStore.getState();
-    if (!isAuthenticated || !currentUser?.user_id) return;
-
-    // Count this stream once when the session begins (ad pivots and quality
-    // changes leave currentStream untouched, so they don't recount).
-    Logger.debug('[Stats] Stream session started, incrementing streams_watched');
-    incrementStat(currentUser.user_id, 'streams_watched', 1);
-
-    // Claim any active watch-to-earn event reward this stream qualifies for.
-    // Check on stream start, then every minute below. TWITCH ONLY: the rewards
-    // are keyed to Twitch channels and the category fallback is Helix, so on a
-    // provider stream this only produced a failed lookup on every tick.
-    const rewardsEligible =
-      streamProvider(useAppStore.getState().currentStream) === 'twitch';
-    if (rewardsEligible) void maybeClaimWatchRewards(
-      currentUser.user_id,
-      useAppStore.getState().currentStream?.user_login,
-      useAppStore.getState().currentStream?.game_name,
-    );
-
-    // Watch time itself (hours_watched and the favourite-channel minutes) is
-    // reported by Rust (services/watch_minutes.rs) through the authenticated
-    // API, only while a live channel is actually playing. This tick only
-    // retries watch-to-earn reward claims. Reads fresh state each tick so it
-    // follows the live user/channel even as other store fields churn.
-    const watchTimeInterval = setInterval(() => {
-      const { isAuthenticated: stillAuth, currentUser: user, currentStream: cs } = useAppStore.getState();
-      if (stillAuth && user?.user_id) {
-        void maybeClaimWatchRewards(user.user_id, cs?.user_login, cs?.game_name);
-      }
-    }, 60000); // Every minute
-
-    return () => {
-      clearInterval(watchTimeInterval);
-    };
-  }, [streamSessionKey]);
-
-  // A streamer can switch category mid-stream (EventSub channel.update refreshes
-  // currentStream.game_name). The watch-time tracker above only re-checks once a
-  // minute, so also attempt watch-reward claims the moment the category changes,
-  // instead of making the viewer wait for the next tick.
-  useEffect(() => {
-    if (!isSupabaseConfigured() || !watchRewardChannel) return;
-    const { currentUser, isAuthenticated } = useAppStore.getState();
-    if (!isAuthenticated || !currentUser?.user_id) return;
-    void maybeClaimWatchRewards(currentUser.user_id, watchRewardChannel, watchRewardGame);
-  }, [watchRewardChannel, watchRewardGame]);
+  // Streams watched and the watch-to-earn reward claims are Rust's now
+  // (services/member_stats.rs, member_rewards.rs), counted where the watch
+  // session starts so every client counts the same; watch time itself is
+  // services/watch_minutes.rs.
 
 
   // Publish the current constraint to the native sizing hook, which applies it

@@ -7,9 +7,14 @@ import {
   ToastPosition,
   DEFAULT_TOAST_POSITION,
   DEFAULT_TOAST_EDGE_OFFSET,
+  type LiveNotificationSettings,
+  type MentionSettings,
 } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
-import { Award, Bell, Gift } from 'lucide-react';
+import { Award, Bell, ExternalLink, Gift, X } from 'lucide-react';
+import { ProviderLogo } from '../ProviderLogo';
+import { parseKey } from '../../utils/providerKey';
+import { toggleMentionChatMuted } from '../../stores/mentionInboxStore';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { SoundVolume } from './SoundControls';
 import { useSettingReset } from './settingReset';
@@ -21,13 +26,43 @@ import {
   NOTIF_CLICK_THRESHOLD,
   bumpTestNotificationClicks,
 } from '../../utils/notifAchievement';
+import { alertKey, loadAlertTypes, useAlertTypes } from '../../mobile/alertTypes';
+import { openSystemNotifySettings, useSystemNotifyPermission } from '../../utils/systemNotifyPermission';
 
 import { Logger } from '../../utils/logger';
 import { IS_LINUX, IS_MAC } from '../../utils/platform';
 
+// The "Notify me about" rows are the alert types Rust lists for desktop
+// (services/alert_types.rs, `get_alert_types`), in its order and with the
+// words both phones use. Read as soon as this panel's code loads, so the page
+// draws whole on its first frame rather than growing a section under the
+// reader.
+void loadAlertTypes();
+
 // The operating system's name for its own notifications.
 const SYSTEM_NAME = IS_MAC ? 'macOS' : IS_LINUX ? 'desktop' : 'Windows';
 const IS_WINDOWS_DESKTOP = !IS_MAC && !IS_LINUX;
+
+// What each type's notification does on desktop beyond its one-line detail,
+// behind the row's help glyph.
+const TYPE_HELP: Record<string, string> = {
+  live: 'The moment it starts streaming. Clicking it opens the stream.',
+  favorite_live: 'Even a favorite you do not follow on Twitch. Clicking it opens the stream.',
+  mentions: 'While that chat is not on screen. Clicking it opens the chat at that message.',
+  whispers: 'Each new whisper. Clicking it opens the conversation.',
+  drops: 'A notification confirms each drop StreamNook claims for you. New drops: at startup, StreamNook checks your favorite categories and tells you when they have new drops to earn.',
+  gift_subs: 'Even for a channel you were not watching at the time.',
+  twitch_rewards: 'Which badge you earned or which drop reward is waiting, by name, however it was earned.',
+  channel_points: IS_WINDOWS_DESKTOP
+    ? 'With the channel\'s face and its own name for its points. While StreamNook is in the background, points for watching do not pop up. Each channel keeps one entry in Action Center with what it gave you this session, and a newer notification for a channel replaces its older one. Rewards button adds a button that opens the channel\'s rewards, and Next reward adds a bar toward the cheapest reward you cannot afford yet. Both need System notifications.'
+    : 'With the channel\'s face and its own name for its points. While StreamNook is in the background, points for watching do not pop up.',
+  predictions: 'While StreamNook is in the background, with its choices and how long betting stays open. Clicking it opens the stream.',
+  updates: 'It opens the changelog to what is new. Turning this off leaves the update button in the title bar and Check for updates in the changelog.',
+};
+
+// Every type's switch starts on except predictions, as Rust's defaults have
+// them; read only when a saved copy lacks the key.
+const OFF_BY_DEFAULT = new Set(['predictions']);
 
 // The six supported toast anchors, placed on a 3x3 grid that stands in for the
 // screen. The middle row's sides are intentionally inert (vertically-centered
@@ -127,11 +162,15 @@ const TryButton = ({ onClick }: { onClick: () => void }) => (
 const NotificationsSettings = () => {
   const { settings, updateSettings, currentUser, addToast } = useAppStore();
   const resetFor = useSettingReset();
+  const alertTypes = useAlertTypes();
+  // macOS asks before StreamNook's first system notification; elsewhere this
+  // is granted and never read.
+  const { permission, ask } = useSystemNotifyPermission();
   // Brief green flash on press, used as the Test button's feedback instead of a
   // text/width swap. See handleTestNotification + the button's className.
   const [testFlash, setTestFlash] = useState(false);
 
-  const liveNotifications = settings.live_notifications || {
+  const liveNotifications: LiveNotificationSettings = settings.live_notifications || {
     enabled: true,
     play_sound: true,
     show_live_notifications: true,
@@ -145,15 +184,17 @@ const NotificationsSettings = () => {
     show_gift_sub_notifications: true,
     show_twitch_reward_notifications: true,
     show_mention_notifications: true,
+    show_prediction_notifications: false,
     use_dynamic_island: true,
     use_toast: true,
     toast_position: DEFAULT_TOAST_POSITION,
     toast_edge_offset: DEFAULT_TOAST_EDGE_OFFSET,
   };
+  const systemOn = liveNotifications.use_native_notifications ?? false;
 
   const soundOptions = useSoundOptions({ defaultId: 'boop' });
 
-  const updateLiveNotifications = (updates: Partial<typeof liveNotifications>) => {
+  const updateLiveNotifications = (updates: Partial<LiveNotificationSettings>) => {
     updateSettings({
       ...settings,
       live_notifications: {
@@ -162,6 +203,23 @@ const NotificationsSettings = () => {
       },
     });
   };
+
+  // System notifications on a Mac need its permission, asked the first time
+  // they would be used: when they are turned on, or when a type is turned on
+  // while they are. A refusal is shown under the System notifications row.
+  const askIfNeeded = () => {
+    if (IS_MAC && permission === 'default') void ask();
+  };
+
+  // What counts as a mention, and the chats that never notify (Rust's
+  // `MentionSettings`; it reads them on save).
+  const mentions: MentionSettings = settings.mentions ?? {};
+  const updateMentions = (updates: Partial<MentionSettings>) => {
+    updateSettings({ ...settings, mentions: { ...mentions, ...updates } });
+  };
+  const mutedChats = mentions.muted_channels ?? [];
+  // A platform mark only where platforms mix in the list.
+  const mutedMixed = new Set(mutedChats.map((r) => parseKey(r).provider)).size > 1;
 
   // Dev builds only. Gift subs arrive days apart, so there is otherwise no
   // way to look at that row on demand. Prefers a real one off the feed and
@@ -225,16 +283,20 @@ const NotificationsSettings = () => {
     }
   };
 
+  // The list is read once a run, started when this code loaded; until it
+  // answers (a moment, the first time) the page waits rather than drawing
+  // without its types and then pushing everything under them down.
+  if (alertTypes === null) return null;
+
   return (
     <div className="space-y-8">
-      <SettingsSection
-        label="Notifications"
-        description="Turn everything on or off here, then choose where alerts show and which ones you want below."
-      >
+      <SettingsSection label="Notifications">
         <SettingsRow
-          title="All notifications"
+          title="Notifications"
           onReset={resetFor(['live_notifications.enabled', true])}
-          description="Turn this off to silence every notification at once; your choices below stay saved for when you turn it back on."
+          description={liveNotifications.enabled
+            ? 'StreamNook can alert you about the categories below.'
+            : 'All StreamNook notifications are off.'}
           control={
             <Toggle
               enabled={liveNotifications.enabled}
@@ -320,252 +382,135 @@ const NotificationsSettings = () => {
                 : 'They stay silent, since StreamNook already plays your sound. While this is on they take the place of the cards in MultiChat.'}
               control={
                 <Toggle
-                  enabled={liveNotifications.use_native_notifications ?? false}
-                  onChange={() => updateLiveNotifications({
-                    use_native_notifications: !(liveNotifications.use_native_notifications ?? false)
-                  })}
+                  enabled={systemOn}
+                  onChange={() => {
+                    updateLiveNotifications({ use_native_notifications: !systemOn });
+                    if (!systemOn) askIfNeeded();
+                  }}
                 />
               }
             >
-              {(liveNotifications.use_native_notifications ?? false) && (
-                <SubControls>
-                  <SubControl
-                    title="Try one"
-                    control={<TryButton onClick={handleTestSystemNotification} />}
-                  />
-                </SubControls>
+              {systemOn && (
+                <>
+                  {/* Only a Mac can refuse. Said under the row it stops, with
+                      the way to undo it, the same line the setup step shows. */}
+                  {IS_MAC && permission === 'denied' && (
+                    <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-warning/30 bg-warning/5 py-2.5 pl-4 pr-3">
+                      <p className="text-[12px] leading-relaxed text-textSecondary">
+                        Notifications are turned off for StreamNook in macOS settings, so these will not reach you outside StreamNook until you allow them there.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={openSystemNotifySettings}
+                        className="glass-button flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium text-textPrimary"
+                      >
+                        Open macOS settings
+                        <ExternalLink size={12} />
+                      </button>
+                    </div>
+                  )}
+                  <SubControls>
+                    <SubControl
+                      title="Try one"
+                      control={<TryButton onClick={handleTestSystemNotification} />}
+                    />
+                  </SubControls>
+                </>
               )}
             </SettingsRow>
           </SettingsSection>
 
           <SettingsSection
-            label="Notification Types"
+            label="Notify me about"
             description="Pick which events are worth a notification."
           >
-            <SettingsRow
-              title="Followed channels"
-              onReset={resetFor(['live_notifications.show_live_notifications', true])}
-              description="When a channel you follow goes live, the moment it starts streaming. Clicking it opens the stream."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_live_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_live_notifications: !(liveNotifications.show_live_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Favorite channels"
-              onReset={resetFor(['live_notifications.show_favorite_live_notifications', true])}
-              description="When a favorite channel goes live, even one you do not follow on Twitch."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_favorite_live_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_favorite_live_notifications: !(liveNotifications.show_favorite_live_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Whispers"
-              onReset={resetFor(['live_notifications.show_whisper_notifications', true])}
-              description="A notification shows each new whisper, and clicking it opens the conversation."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_whisper_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_whisper_notifications: !(liveNotifications.show_whisper_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Mentions and replies"
-              onReset={resetFor(['live_notifications.show_mention_notifications', true])}
-              description="A notification shows when someone mentions you or replies to you in a Twitch chat while StreamNook is in the background, and clicking it opens that chat."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_mention_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_mention_notifications: !(liveNotifications.show_mention_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            {/* The notification opens the changelog popup on the new
-                version, with Install beside the notes. Turning this row off
-                still leaves the title-bar button and Check for updates in the
-                changelog, which is what the description says. */}
-            <SettingsRow
-              title="App updates"
-              onReset={resetFor(['live_notifications.show_update_notifications', true])}
-              description="A notification tells you when a new StreamNook version is out, and opens the changelog to what is in it. Turning this off leaves the update button in the title bar and Check for updates in the changelog."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_update_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_update_notifications: !(liveNotifications.show_update_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Claimed drops"
-              onReset={resetFor(['live_notifications.show_drops_notifications', true])}
-              description="A notification confirms each drop StreamNook claims for you."
-              help="New drops: at startup, StreamNook checks your favorite categories and tells you when they have new drops to earn."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_drops_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_drops_notifications: !(liveNotifications.show_drops_notifications ?? true)
-                  })}
-                />
-              }
-            >
-              {(liveNotifications.show_drops_notifications ?? true) && (
-                <SubControls>
-                  <SubControl
-                    title="New drops"
-                    onReset={resetFor(['live_notifications.show_favorite_drops_notifications', true])}
-                    control={
-                      <Toggle
-                        enabled={liveNotifications.show_favorite_drops_notifications ?? true}
-                        onChange={() => updateLiveNotifications({
-                          show_favorite_drops_notifications: !(liveNotifications.show_favorite_drops_notifications ?? true)
-                        })}
+            {alertTypes.map((type) => {
+              const key = alertKey(type);
+              if (!key) return null;
+              const saved = liveNotifications[key];
+              const on = typeof saved === 'boolean' ? saved : !OFF_BY_DEFAULT.has(type.id);
+              return (
+                <SettingsRow
+                  key={type.id}
+                  title={type.title}
+                  onReset={resetFor(type.setting)}
+                  description={type.detail}
+                  help={TYPE_HELP[type.id]}
+                  control={
+                    <Toggle
+                      enabled={on}
+                      onChange={() => {
+                        updateLiveNotifications({ [key]: !on } as Partial<LiveNotificationSettings>);
+                        if (!on && systemOn) askIfNeeded();
+                      }}
+                    />
+                  }
+                >
+                  {/* What a type's own notification can carry on desktop,
+                      nested under it while it is on. One expression, so a
+                      type with nothing nested passes no children at all and
+                      its row keeps the plain height. */}
+                  {type.id === 'drops' && on ? (
+                    <SubControls>
+                      <SubControl
+                        title="New drops"
+                        onReset={resetFor(['live_notifications.show_favorite_drops_notifications', true])}
+                        control={
+                          <Toggle
+                            enabled={liveNotifications.show_favorite_drops_notifications ?? true}
+                            onChange={() => updateLiveNotifications({
+                              show_favorite_drops_notifications: !(liveNotifications.show_favorite_drops_notifications ?? true)
+                            })}
+                          />
+                        }
                       />
-                    }
-                  />
-                </SubControls>
-              )}
-            </SettingsRow>
-
-            <SettingsRow
-              title="Channel points"
-              onReset={resetFor(['live_notifications.show_channel_points_notifications', true])}
-              description="A notification for the points you earn: bonus chests, raids, watch streaks and prediction results, with the channel's face and its own name for its points."
-              help={IS_WINDOWS_DESKTOP
-                ? 'While StreamNook is in the background, points for watching do not pop up. Each channel keeps one entry in Action Center with what it gave you this session, and a newer notification for a channel replaces its older one. Rewards button adds a button that opens the channel\'s rewards, and Next reward adds a bar toward the cheapest reward you cannot afford yet. Both need System notifications.'
-                : 'While StreamNook is in the background, points for watching do not pop up.'}
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_channel_points_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_channel_points_notifications: !(liveNotifications.show_channel_points_notifications ?? true)
-                  })}
-                />
-              }
-            >
-              {(liveNotifications.show_channel_points_notifications ?? true) && (liveNotifications.use_native_notifications ?? false) && (
-                <SubControls>
-                  {IS_WINDOWS_DESKTOP && (
-                    <SubControl
-                      title="Rewards button"
-                      onReset={resetFor(['live_notifications.points_rewards_button', false])}
-                      control={
-                        <Toggle
-                          enabled={liveNotifications.points_rewards_button ?? false}
-                          onChange={() => updateLiveNotifications({
-                            points_rewards_button: !(liveNotifications.points_rewards_button ?? false)
-                          })}
+                    </SubControls>
+                  ) : type.id === 'channel_points' && on && systemOn ? (
+                    <SubControls>
+                      {IS_WINDOWS_DESKTOP && (
+                        <SubControl
+                          title="Rewards button"
+                          onReset={resetFor(['live_notifications.points_rewards_button', false])}
+                          control={
+                            <Toggle
+                              enabled={liveNotifications.points_rewards_button ?? false}
+                              onChange={() => updateLiveNotifications({
+                                points_rewards_button: !(liveNotifications.points_rewards_button ?? false)
+                              })}
+                            />
+                          }
                         />
-                      }
-                    />
-                  )}
-                  {IS_WINDOWS_DESKTOP && (
-                    <SubControl
-                      title="Next reward"
-                      onReset={resetFor(['live_notifications.points_next_reward', false])}
-                      control={
-                        <Toggle
-                          enabled={liveNotifications.points_next_reward ?? false}
-                          onChange={() => updateLiveNotifications({
-                            points_next_reward: !(liveNotifications.points_next_reward ?? false)
-                          })}
+                      )}
+                      {IS_WINDOWS_DESKTOP && (
+                        <SubControl
+                          title="Next reward"
+                          onReset={resetFor(['live_notifications.points_next_reward', false])}
+                          control={
+                            <Toggle
+                              enabled={liveNotifications.points_next_reward ?? false}
+                              onChange={() => updateLiveNotifications({
+                                points_next_reward: !(liveNotifications.points_next_reward ?? false)
+                              })}
+                            />
+                          }
                         />
-                      }
-                    />
-                  )}
-                  <SubControl
-                    title="Try one"
-                    control={<TryButton onClick={() => handleTestPoints('one')} />}
-                  />
-                </SubControls>
-              )}
-            </SettingsRow>
-
-            <SettingsRow
-              title="Predictions"
-              onReset={resetFor(['live_notifications.show_prediction_notifications', false])}
-              description="When a prediction opens on a channel you are watching while StreamNook is in the background, with its choices and how long betting stays open. Clicking it opens the stream."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_prediction_notifications ?? false}
-                  onChange={() => updateLiveNotifications({
-                    show_prediction_notifications: !(liveNotifications.show_prediction_notifications ?? false)
-                  })}
-                />
-              }
-            >
-              {(liveNotifications.show_prediction_notifications ?? false) && (liveNotifications.use_native_notifications ?? false) && (
-                <SubControls>
-                  <SubControl
-                    title="Try one"
-                    control={<TryButton onClick={() => handleTestPoints('prediction')} />}
-                  />
-                </SubControls>
-              )}
-            </SettingsRow>
-
-            <SettingsRow
-              title="New badges"
-              onReset={resetFor(['live_notifications.show_badge_notifications', true])}
-              description="You hear about new badges as soon as they become available to earn."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_badge_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_badge_notifications: !(liveNotifications.show_badge_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Gift subs"
-              onReset={resetFor(['live_notifications.show_gift_sub_notifications', true])}
-              description="You hear about gift subs you receive, even for a channel you were not watching at the time."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_gift_sub_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_gift_sub_notifications: !(liveNotifications.show_gift_sub_notifications ?? true)
-                  })}
-                />
-              }
-            />
-
-            <SettingsRow
-              title="Earned rewards"
-              onReset={resetFor(['live_notifications.show_twitch_reward_notifications', true])}
-              description="When Twitch names a reward for you: which badge you earned or which drop reward is waiting, by name, however it was earned."
-              control={
-                <Toggle
-                  enabled={liveNotifications.show_twitch_reward_notifications ?? true}
-                  onChange={() => updateLiveNotifications({
-                    show_twitch_reward_notifications: !(liveNotifications.show_twitch_reward_notifications ?? true)
-                  })}
-                />
-              }
-            />
+                      )}
+                      <SubControl
+                        title="Try one"
+                        control={<TryButton onClick={() => handleTestPoints('one')} />}
+                      />
+                    </SubControls>
+                  ) : type.id === 'predictions' && on && systemOn ? (
+                    <SubControls>
+                      <SubControl
+                        title="Try one"
+                        control={<TryButton onClick={() => handleTestPoints('prediction')} />}
+                      />
+                    </SubControls>
+                  ) : null}
+                </SettingsRow>
+              );
+            })}
           </SettingsSection>
 
           <SettingsSection
@@ -669,6 +614,99 @@ const NotificationsSettings = () => {
           </SettingsSection>
         </>
       )}
+
+      {/* Outside the master switch: what counts as a mention also decides
+          what the Dynamic Island's notification history keeps, notifications
+          or not. Whether a mention notifies is its row in Notify me about. */}
+      <SettingsSection
+        label="Mentions"
+        description="Everything that mentions or replies to you is kept in the Dynamic Island's notification history."
+      >
+        <SettingsRow
+          title="Counts as a mention"
+          description="Your @name always counts. These count too, for notifications and in that history."
+        >
+          <SubControls>
+            <SubControl
+              title="Name without @"
+              onReset={resetFor(['mentions.match_bare_login', true])}
+              control={
+                <Toggle
+                  enabled={mentions.match_bare_login ?? true}
+                  onChange={() => updateMentions({ match_bare_login: !(mentions.match_bare_login ?? true) })}
+                />
+              }
+            />
+            <SubControl
+              title="Display name"
+              onReset={resetFor(['mentions.match_display_name', true])}
+              control={
+                <Toggle
+                  enabled={mentions.match_display_name ?? true}
+                  onChange={() => updateMentions({ match_display_name: !(mentions.match_display_name ?? true) })}
+                />
+              }
+            />
+            <SubControl
+              title="Highlight words"
+              onReset={resetFor(['mentions.highlight_words', true])}
+              control={
+                <Toggle
+                  enabled={mentions.highlight_words ?? true}
+                  onChange={() => updateMentions({ highlight_words: !(mentions.highlight_words ?? true) })}
+                />
+              }
+            />
+          </SubControls>
+        </SettingsRow>
+        <SettingsRow
+          title="Muted chats"
+          onReset={resetFor(['mentions.muted_channels', []])}
+          description={mutedChats.length === 0
+            ? 'None. Nothing said in a chat you mute notifies you or is kept in that history.'
+            : 'Nothing said in these chats notifies you or is kept in that history.'}
+        >
+          {mutedChats.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {mutedChats.map((room) => {
+                const { provider, channel } = parseKey(room);
+                return (
+                  <span
+                    key={room}
+                    className="glass-input inline-flex h-7 items-center gap-1.5 rounded-full pl-2.5 pr-1 text-[12.5px] text-textPrimary"
+                  >
+                    {mutedMixed && <ProviderLogo provider={provider} size={12} />}
+                    {channel}
+                    <Tooltip content="Unmute" side="top">
+                      <button
+                        type="button"
+                        aria-label={`Unmute ${channel}`}
+                        onClick={() => void toggleMentionChatMuted(room)}
+                        className="flex h-5 w-5 items-center justify-center rounded-full text-textMuted transition-colors hover:bg-white/10 hover:text-textPrimary"
+                      >
+                        <X size={12} />
+                      </button>
+                    </Tooltip>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </SettingsRow>
+        {/* Rust tells the server and pulls what it found into that history on
+            launch (services/mention_watch.rs); the desktop gets no push. */}
+        <SettingsRow
+          title="Mentions while you're away"
+          onReset={resetFor(['mentions.away_alerts', false])}
+          description="StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days."
+          control={
+            <Toggle
+              enabled={mentions.away_alerts ?? false}
+              onChange={() => updateMentions({ away_alerts: !(mentions.away_alerts ?? false) })}
+            />
+          }
+        />
+      </SettingsSection>
 
       <SettingsSection label="About" bare>
         <div className="glass-panel p-3 rounded-lg border border-accent/20">

@@ -104,13 +104,45 @@ html[data-mobile='true'] [data-sn-chat-hover-handle] {
 
 /* --------------------------------------------------------------- scroll --- */
 
-html[data-mobile='true'] .scrollbar-thin,
-html[data-mobile='true'] .custom-scrollbar {
+/* Everything that scrolls up and down on the phone shows the platform's own
+   bar: Android's thin overlay bar, which fades in while a list moves, fades out
+   after, and takes no width. The standard property is the switch: it overrides
+   the desktop's custom 8px bar (the bare ::-webkit-scrollbar rules in
+   globals.css) and hands the scroller back to the platform, the same lever the
+   Mac build uses. Scoped to the root, so sheets and menus that portal into
+   <body> get it too. */
+html[data-mobile='true'] * {
+  scrollbar-width: thin;
+}
+
+/* Rails that scroll sideways (tabs, chips, emote and reward rows) stay bare:
+   they read as a strip to swipe, and a bar under each would be noise. */
+html[data-mobile='true'] .overflow-x-auto,
+html[data-mobile='true'] .overflow-x-scroll,
+html[data-mobile='true'] .scrollbar-none,
+html[data-mobile='true'] .sn-rail {
   scrollbar-width: none;
 }
 
-html[data-mobile='true'] .scrollbar-thin::-webkit-scrollbar,
-html[data-mobile='true'] .custom-scrollbar::-webkit-scrollbar {
+/* Live chat moves itself for every new message, so its bar would flicker on
+   and off at the bottom. It shows once the list is paused (scrolled up), where
+   it tells you how far back you are. */
+html[data-mobile='true'] .sn-chat-live {
+  scrollbar-width: none;
+}
+
+/* The same rails and live chat, for the bar Chromium builds from
+   ::-webkit-scrollbar (the desktop's 8px bar in globals.css). The phone's
+   WebView drew that bar over the Chats room strip and live chat with
+   scrollbar-width: none set, so the standard property alone does not hide it
+   there. A zero-size, undisplayed pseudo-element hides it whichever of the two
+   the WebView honors; the rails still scroll by touch. */
+html[data-mobile='true'] .overflow-x-auto::-webkit-scrollbar,
+html[data-mobile='true'] .overflow-x-scroll::-webkit-scrollbar,
+html[data-mobile='true'] .scrollbar-none::-webkit-scrollbar,
+html[data-mobile='true'] .sn-rail::-webkit-scrollbar,
+html[data-mobile='true'] .sn-chat-live::-webkit-scrollbar {
+  display: none;
   width: 0;
   height: 0;
 }

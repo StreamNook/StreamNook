@@ -62,7 +62,7 @@ type TabMeta = {
 const TABS: TabMeta[] = [
   { id: 'Player',          label: 'Player',          icon: PlayCircle,    tint: 'rgba(120, 155, 200, 0.22)', description: 'Streamlink, video player, and auto-switch' },
   { id: 'Chat',            label: 'Chat',            icon: MessageSquare, tint: 'rgba(150, 160, 210, 0.22)', description: 'Chat design, behavior, and pop-out' },
-  { id: 'Moderation',      label: 'Moderation',      icon: Shield,        tint: 'rgba(210, 140, 140, 0.22)', description: 'Mod logs, visibility, and mass actions' },
+  { id: 'Moderation',      label: 'Moderation',      icon: Shield,        tint: 'rgba(210, 140, 140, 0.22)', description: 'Mod actions, logs, and mass actions' },
   { id: 'Overlay',         label: 'Stream Overlay',  icon: MonitorPlay,   tint: 'rgba(130, 185, 210, 0.22)', description: 'Design a chat overlay for OBS and StreamElements' },
   { id: 'Interface',       label: 'Interface',       icon: Layout,        tint: 'rgba(140, 195, 170, 0.22)', description: 'Sidebar, compact mode, and chrome' },
   { id: 'Theme',           label: 'Theme',           icon: Palette,       tint: 'rgba(220, 145, 175, 0.20)', description: 'Color theme and theme editor' },

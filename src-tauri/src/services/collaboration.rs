@@ -7,12 +7,13 @@
 //! cached for `FRESH` and a second caller inside that window reads the cache
 //! instead of asking Twitch again. One anonymous GQL request covers up to
 //! `BATCH` channels, through the same list field twitch.tv reads for the
-//! channels on its screen.
+//! channels on its screen, and up to `PARALLEL` of them run at once.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use futures::stream::{self, StreamExt};
 use log::warn;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -22,7 +23,10 @@ use crate::services::twitch_service::TwitchService;
 /// Channels per request. They go in one list argument, not an alias each, so
 /// Twitch's cap of 15 aliases per request does not apply; a Home's worth of
 /// cards fits in one.
-const BATCH: usize = 100;
+pub(crate) const BATCH: usize = 100;
+/// Requests in flight at once, so a longer card list still answers inside the
+/// Home snapshot's wait.
+const PARALLEL: usize = 3;
 /// How long an answer serves every caller.
 const FRESH: Duration = Duration::from_secs(30);
 /// Entries not asked about for this long are dropped.
@@ -112,8 +116,16 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<Collaboration>> {
             }
         }
     }
-    for chunk in due.chunks(BATCH) {
-        let rows = match TwitchService::get_collaborations(chunk).await {
+    // Owned chunks: a borrowed one makes the future not `Send` for the
+    // spawned tasks that await it.
+    let mut answers = stream::iter(due.chunks(BATCH).map(<[String]>::to_vec))
+        .map(|chunk| async move {
+            let answer = TwitchService::get_collaborations(&chunk).await;
+            (chunk, answer)
+        })
+        .buffer_unordered(PARALLEL);
+    while let Some((chunk, answer)) = answers.next().await {
+        let rows = match answer {
             Ok(rows) => rows,
             Err(e) => {
                 warn!("[Collaboration] {} channels: {e}", chunk.len());
@@ -125,7 +137,7 @@ pub async fn fetch(ids: &[String]) -> HashMap<String, Option<Collaboration>> {
             rows.iter().filter_map(|row| Some((row.get("id")?.as_str()?, row))).collect();
         let now = Instant::now();
         let mut cache = cache().lock().await;
-        for id in chunk {
+        for id in &chunk {
             let collab = by_id.get(id.as_str()).and_then(|row| parse(row));
             cache.insert(id.clone(), (now, collab.clone()));
             out.insert(id.clone(), collab);

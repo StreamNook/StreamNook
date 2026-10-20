@@ -613,6 +613,7 @@ fn apply_settings_patch(
     // `channel_links` by the link service. A patch never overrides them.
     next.adopt_backend_owned(current);
     next.lift_custom_theme_muted();
+    next.map_legacy_event_keys();
     Ok(next)
 }
 
@@ -628,8 +629,10 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
     crate::services::mention_ping::refresh(settings);
-    #[cfg(desktop)]
-    crate::services::mention_notify::refresh(settings);
+    crate::services::mention_inbox::refresh(settings);
+    // Mentions while you're away: the server follows the switch and the rule.
+    crate::services::mention_watch::client::refresh(settings);
+    crate::services::whisper_inbox::refresh_settings(settings);
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
     // restart and "off" costs no task at all.
     crate::services::onsite_notifications::refresh(settings);
@@ -638,6 +641,9 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     crate::services::reminder_service::refresh(settings);
     #[cfg(target_os = "ios")]
     crate::services::twitch_resolver::refresh_device_codecs(settings);
+    // The phone's go-live push registration follows the switches and the mute list.
+    #[cfg(mobile)]
+    crate::services::push_alerts::server::refresh(settings);
     crate::services::hidden_channels::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
@@ -692,6 +698,13 @@ pub async fn open_settings_folder(_app: AppHandle) -> Result<(), String> {
 /// app/UI customization and no account info.
 #[tauri::command]
 pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let json = portable_settings_json(&state)?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+    Ok(())
+}
+
+/// The backup file's text: every setting but this machine's session and login keys.
+fn portable_settings_json(state: &AppState) -> Result<String, String> {
     let settings = { state.settings.lock().unwrap().clone() };
     let mut value = serde_json::to_value(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
@@ -700,10 +713,56 @@ pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result
             obj.remove(*key);
         }
     }
-    let json = serde_json::to_string_pretty(&value)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
-    Ok(())
+    serde_json::to_string_pretty(&value).map_err(|e| format!("Failed to serialize settings: {}", e))
+}
+
+/// Settings > Backup > Settings file > Export on Android: the same file `export_settings` writes,
+/// put in the app cache, then saved to Downloads (`to = "downloads"`) or offered to the share
+/// sheet (`to = "share"`). Answers "saved" or "shared"; on Android 9 and older Downloads needs a
+/// storage permission the app does not hold, so a save falls back to the share sheet.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn share_settings_file(app: AppHandle, to: String, state: State<'_, AppState>) -> Result<String, String> {
+    use tauri::Manager;
+
+    const MIME: &str = "application/json";
+    let json = portable_settings_json(&state)?;
+    let dest = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("shared-settings")
+        .join("streamnook-settings.json");
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fs::write(&dest, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+    let name = format!("streamnook-settings-{}.json", chrono::Local::now().format("%Y-%m-%d"));
+    let result = match to.as_str() {
+        "downloads" => match crate::twitch_login_plugin::save_to_downloads(&app, &dest, &name, MIME)? {
+            true => "saved",
+            false => {
+                crate::twitch_login_plugin::share_file(&app, &dest, &name, MIME)?;
+                "shared"
+            }
+        },
+        "share" => {
+            crate::twitch_login_plugin::share_file(&app, &dest, &name, MIME)?;
+            "shared"
+        }
+        other => return Err(format!("unknown settings file destination: {}", other)),
+    };
+    Ok(result.to_string())
+}
+
+/// Settings > Backup > Settings file > Import on Android, from the text of the file the picker
+/// opened: a phone's file picker hands the page the file's contents, never a path.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn import_settings_text(app: AppHandle, json: String, state: State<'_, AppState>) -> Result<(), String> {
+    let incoming: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
+    apply_imported_settings(&app, &state, &incoming)
 }
 
 /// Apply a previously exported backup at `path`. Portable preferences from the
@@ -755,6 +814,7 @@ pub(crate) fn apply_imported_settings(
     let mut imported: Settings = serde_json::from_value(merged)
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
     imported.lift_custom_theme_muted();
+    imported.map_legacy_event_keys();
 
     let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {

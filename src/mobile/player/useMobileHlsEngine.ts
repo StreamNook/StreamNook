@@ -35,6 +35,7 @@ import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
+import { isCodecFailure } from '../../utils/codecFailure';
 import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
 
 // The earning gate (drops progress, channel points, watch time) is Rust's
@@ -112,8 +113,15 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     // from low latency, and how many rebuilds this URL has had since it last
     // played. All per URL: a new URL starts the count again.
     let lowLatency = false;
+    // A low-latency broadcast the parts origin did not take (Twitch's PREFETCH
+    // hints on whole segments): the relay promotes its in-progress segments,
+    // so it rides closer than a normal-latency one, as on the desktop.
+    let promoted = false;
     let fellBack = false;
     let reloads = 0;
+    // Whether the core was already told this URL's codec failed to decode:
+    // once per URL, so a fallback or a rebuild never asks again.
+    let codecReported = false;
     // Still asking the core which route this stream is on; nothing built yet.
     let probing = true;
     // A restart or quality switch is cycling the relay (isRestartingStream).
@@ -212,7 +220,17 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       teardownPlayer();
       setReason(why);
       setState('error');
+      // As the desktop player does: the core confirms whether the stream ended
+      // (offline room, auto-switch) or reloads it in place when it is still live.
+      if (!vodStart) void useAppStore.getState().handleStreamOffline('player');
     };
+
+    // A VOD (opened from the offline room, a channel's videos, or a rewind) as
+    // the core started it: a real timeline, not a live edge. It begins at the
+    // position Rust answered (the saved one when resume is on), and none of the
+    // live machinery below (the edge snap, the latency governor, the parts
+    // route) applies to it.
+    const vodStart = useAppStore.getState().vodPlayback;
 
     const build = (ll: boolean) => {
       lowLatency = ll;
@@ -220,9 +238,12 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // The viewer's chosen distance behind live. On the parts path the edge
       // trails the broadcaster by a measured delay, so the edge target sits
       // that much lower to land on what they actually asked for.
-      // The phone has no prefetch probe yet, so a whole-segment ride is
-      // treated as a normal-latency broadcast (the safe side).
-      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, ll ? 'll' : 'plain');
+      // The same three paths as the desktop: parts, a promoted low-latency
+      // broadcast on whole segments, or a normal-latency one.
+      const llTargetDisplayed = resolveLiveEdgeGap(
+        current?.ll_target_latency,
+        ll ? 'll' : promoted ? 'promotion' : 'plain',
+      );
       const llTargetRaw = ll ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
 
       const hls = new Hls({
@@ -239,7 +260,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         nudgeMaxRetry: 3,
         maxFragLookUpTolerance: 0.5,
         liveSyncDuration: llTargetRaw + linkCushion(),
-        liveMaxLatencyDuration: 60,
+        liveMaxLatencyDuration: vodStart ? undefined : 60,
         // The core owns the stall reaction (link_adapt's cushion), so hls.js's
         // own one-second-per-stall ramp stays off, as on the desktop.
         liveSyncOnStallIncrease: 0,
@@ -247,7 +268,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         // quantized coarsely enough to be audible. The governor below does it
         // smoothly instead.
         maxLiveSyncPlaybackRate: 1,
-        liveDurationInfinity: true,
+        // Live is endless; a VOD (even one still recording) has a real, growing duration.
+        liveDurationInfinity: !vodStart,
+        // Where a VOD begins; -1 (live) lets hls.js pick the edge.
+        startPosition: vodStart ? (vodStart.start_position_secs ?? 0) : -1,
         manifestLoadingTimeOut: 10000,
         manifestLoadingMaxRetry: 3,
         manifestLoadingRetryDelay: 1000,
@@ -318,10 +342,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         playStarted = true;
         // Clamped into what is actually buffered so this can never seek into a
         // hole, and a no-op when the buffer is already inside the cushion, so
-        // it never drags anyone CLOSER to live than they asked to be.
-        const syncDur = hls.config.liveSyncDuration ?? llTargetRaw;
-        const target = Math.max(bufStart, bufEnd - syncDur);
-        if (target > video.currentTime + 0.5) video.currentTime = target;
+        // it never drags anyone CLOSER to live than they asked to be. A VOD has
+        // no edge to sync to: it plays from where it started.
+        if (!vodStart) {
+          const syncDur = hls.config.liveSyncDuration ?? llTargetRaw;
+          const target = Math.max(bufStart, bufEnd - syncDur);
+          if (target > video.currentTime + 0.5) video.currentTime = target;
+        }
 
         video.play().catch(() => {
           video.muted = true;
@@ -360,14 +387,49 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       };
       armStartGiveUp();
 
+      // A codec the probe passed can still fail on this phone. The core then
+      // drops it from selection and says whether restarting gets away from it,
+      // so the stream comes back on a tier the phone plays instead of reloading
+      // the same one into an error. hls.js names the failed type only in the
+      // non-fatal add-codec error just before the fatal one.
+      let failedCodecMime: string | null = null;
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!live()) return;
-        if (!data.fatal) return;
+        if (!data.fatal) {
+          if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
+            failedCodecMime = data.mimeType ?? null;
+          }
+          return;
+        }
         if (recoverFromSequenceMismatch(hls, data)) {
           Logger.warn('[MobilePlayer] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
           return;
         }
         Logger.warn('[MobilePlayer] fatal hls error:', data.type, data.details);
+        if (
+          data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+          !codecReported &&
+          video &&
+          isCodecFailure(data.details, video, firstFrame)
+        ) {
+          codecReported = true;
+          invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })
+            .catch(() => false)
+            .then((restart) => {
+              if (!live()) return;
+              if (!restart) {
+                fail('media');
+                return;
+              }
+              Logger.warn('[MobilePlayer] codec failed to decode; restarting on a tier this phone plays');
+              void useAppStore
+                .getState()
+                .restartStream({ quiet: true })
+                .then(() => useAppStore.getState().addToast('Switched to a quality this phone can play', 'info'));
+            });
+          return;
+        }
         fail(
           data.type === Hls.ErrorTypes.NETWORK_ERROR
             ? 'network'
@@ -509,7 +571,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // playhead toward a behind-live target and is tuned tightly enough that
       // it needs the buffer floor to stay safe; the ordinary one just mops up
       // drift against the forward buffer.
-      stopGovernor = ll
+      // A VOD has no live edge to hold: no governor at all.
+      stopGovernor = vodStart
+        ? null
+        : ll
         ? startLatencyGovernor(hls, video, {
             label: 'mobile-ll',
             // Read live rather than captured, so moving the gap slider applies
@@ -584,10 +649,22 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // buffer, and would also hand playhead control to a controller the
       // governor is meant to own.
       let isLowLatencyChannel = false;
-      try {
-        isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
-      } catch {
-        /* command unavailable or the stream went away */
+      // A VOD is never on the parts route.
+      if (!vodStart) {
+        try {
+          isLowLatencyChannel = await invoke<boolean>('get_stream_low_latency');
+        } catch {
+          /* command unavailable or the stream went away */
+        }
+      }
+      // The second relay fact, as the desktop reads it: a low-latency broadcast
+      // (PREFETCH hints) that the parts origin did not take over.
+      if (!vodStart && !isLowLatencyChannel) {
+        try {
+          promoted = await invoke<boolean>('get_stream_prefetch_present');
+        } catch {
+          /* command unavailable or the stream went away */
+        }
       }
       // Extra distance from the edge the core keeps after stalls on a poor
       // link (Rust link_adapt); zero on a good one.

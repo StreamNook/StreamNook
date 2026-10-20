@@ -63,7 +63,7 @@ export function gifSendMessage(outcome: SendGifOutcome): string {
   if (outcome.sent) return '';
   const wait = outcome.seconds_until_can_send;
   if (outcome.error === 'TEMPORARILY_UNAVAILABLE') {
-    return 'GIFs are temporarily unavailable. Try again in a moment.';
+    return "GIFs didn't go through. Try again in a moment.";
   }
   if (wait > 0) return `Slow down a moment, you can send another GIF in ${wait}s.`;
   return 'That GIF could not be sent.';

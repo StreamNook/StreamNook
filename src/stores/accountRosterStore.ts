@@ -27,6 +27,12 @@ export interface RosterAccount<Id extends string = string> {
   /** Set only on an `expired` row StreamNook ended itself. Only Twitch carries
    *  one today. */
   reason?: SignInReason | null;
+  /** This build can run the platform's sign-in here (Rust `can_sign_in`). YouTube
+   *  and TikTok sign in through a desktop webview only. */
+  can_sign_in?: boolean;
+  /** This build can watch the platform's streams and chat (Rust `can_watch`).
+   *  The phones watch Twitch and Kick only. */
+  can_watch?: boolean;
 }
 
 export interface AccountRoster {

@@ -100,6 +100,39 @@ async fn resign_blocking(stale: &str) -> Option<String> {
 /// it, so `relay_probe` measures both paths against the same edge.
 const PLAIN_PLAYLIST: &str = "plain.m3u8";
 
+/// Auto distance behind live on a promoted low-latency broadcast and on a
+/// normal-latency one: the desktop's and Android's `AUTO_GAP` (src/utils/latency.ts).
+const AUTO_PROMOTION_GAP_SECS: f64 = 3.0;
+const AUTO_PLAIN_GAP_SECS: f64 = 5.0;
+
+/// AVPlayer's whole-segment playlist carries the same target as the other apps:
+/// `EXT-X-SERVER-CONTROL:HOLD-BACK` from the viewer's gap (or the path's Auto)
+/// plus `link_adapt`'s cushion after stalls. Never under three target durations,
+/// the spec's floor, which AVPlayer enforces anyway. A playlist that already
+/// declares server control is left as it is.
+fn with_plain_hold_back(playlist: &str, gap_secs: f64, cushion_secs: f64) -> String {
+    if playlist.contains("#EXT-X-SERVER-CONTROL") {
+        return playlist.to_string();
+    }
+    let Some(target) = playlist
+        .lines()
+        .find_map(|l| l.strip_prefix("#EXT-X-TARGETDURATION:"))
+        .and_then(|v| v.trim().parse::<f64>().ok())
+    else {
+        return playlist.to_string();
+    };
+    let hold = (gap_secs + cushion_secs).max(target * 3.0);
+    let mut out = String::with_capacity(playlist.len() + 48);
+    for line in playlist.lines() {
+        out.push_str(line);
+        out.push('\n');
+        if line.starts_with("#EXT-X-TARGETDURATION:") {
+            out.push_str(&format!("#EXT-X-SERVER-CONTROL:HOLD-BACK={hold:.3}\n"));
+        }
+    }
+    out
+}
+
 /// A one-variant master over `plain.m3u8` that declares the stream as AAC
 /// audio only. Played for the `audio_only` rendition on the iPhone: given the
 /// bare media playlist, AVPlayer cannot tell there is no video and keeps a
@@ -1221,6 +1254,15 @@ impl StreamServer {
                         work = promoted;
                     }
                 }
+                if plain && is_live {
+                    let promoted = parse_directive(&raw_query, "promote") == Some(1);
+                    let gap = crate::services::ll_origin::target_gap_secs().unwrap_or(if promoted {
+                        AUTO_PROMOTION_GAP_SECS
+                    } else {
+                        AUTO_PLAIN_GAP_SECS
+                    });
+                    work = with_plain_hold_back(&work, gap, crate::services::link_adapt::extra_cushion(crate::services::link_adapt::SOLO));
+                }
                 if plain && crate::services::relay_probe::is_active() {
                     // The newest listed sequence number, comparable with `vseg`.
                     let first: i64 = work
@@ -1372,6 +1414,17 @@ impl StreamServer {
 #[cfg(test)]
 mod relay_rewrite_tests {
     use super::*;
+
+    #[test]
+    fn the_plain_playlist_carries_the_target_never_under_three_targets() {
+        let pl = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:5\n#EXTINF:2.000,\nseg.ts\n";
+        let auto = with_plain_hold_back(pl, AUTO_PLAIN_GAP_SECS, 0.0);
+        assert!(auto.contains("#EXT-X-TARGETDURATION:2\n#EXT-X-SERVER-CONTROL:HOLD-BACK=6.000\n"));
+        let wide = with_plain_hold_back(pl, 8.0, 1.5);
+        assert!(wide.contains("HOLD-BACK=9.500"));
+        let declared = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n";
+        assert_eq!(with_plain_hold_back(declared, 9.0, 0.0), declared);
+    }
 
     #[test]
     fn the_audio_only_master_declares_aac_alone_over_the_plain_playlist() {

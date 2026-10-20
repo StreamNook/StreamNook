@@ -132,6 +132,14 @@ impl ChatService {
                     Ok((_, false, drop_reason)) => {
                         // Twitch accepted the request but dropped the message
                         // (AutoMod, etc.). Report it; do NOT also send over IRC.
+                        if let Some(ch) = target_channel.filter(|_| {
+                            crate::services::chat_warning::is_warned_refusal(None, drop_reason.as_deref())
+                        }) {
+                            let (ch, text) = (ch.to_string(), drop_reason.clone());
+                            tokio::spawn(async move {
+                                crate::services::chat_warning::on_refusal(&ch, None, text.as_deref()).await;
+                            });
+                        }
                         return Ok(SendResult {
                             message_id: None,
                             is_sent: false,
@@ -171,22 +179,21 @@ impl ChatService {
     ///
     /// `window` is the caller. While another window still holds a Twitch channel
     /// (a floating chat, a MultiChat window) the connection is theirs too and
-    /// stays up; the caller's own channels PART through its releases. With
-    /// providers on the bridge the stop would be Twitch-only and leave every
-    /// socket open, so no store would notice and claim again: then the caller's
-    /// own held channels (docked chats) keep the connection up as well. A full
-    /// stop closes the sockets and each store re-claims on reconnect.
+    /// stays up; the caller's own channels PART through its releases. The same
+    /// goes for a room the viewer keeps open beside any stream, a docked chat
+    /// on desktop or a kept chat on the phones' Chats screen: closing the
+    /// player must not take its connection away while it is still on screen.
+    /// With providers on the bridge the stop would be Twitch-only and leave
+    /// every socket open, so no store would notice and claim again: then any
+    /// channel the caller holds keeps the connection up as well. A full stop
+    /// closes the sockets and each store re-claims on reconnect.
     ///
     /// Returns whether the connection actually went down (false = kept).
     pub async fn stop(window: &str) -> Result<bool> {
         let providers = crate::services::providers::has_active_bridge_users();
-        let kept_for = if IrcService::held_by_other_windows(window).await {
-            Some("another window holds a channel")
-        } else if providers && IrcService::held_by_window(window).await {
-            Some("this window still holds a channel")
-        } else {
-            None
-        };
+        let other_windows = IrcService::held_by_other_windows(window).await;
+        let held = IrcService::channels_held_by(window).await;
+        let kept_for = stop_kept_for(other_windows, providers, &held, &kept_rooms());
         if let Some(why) = kept_for {
             crate::services::irc_service::record_lifecycle(&format!(
                 "stop_chat from {} kept the connection: {}",
@@ -195,9 +202,17 @@ impl ChatService {
             return Ok(false);
         }
         if providers {
+            crate::services::irc_service::record_lifecycle(&format!(
+                "stop_chat from {}: Twitch side stopped, the bridge stays for other platforms",
+                window
+            ));
             IrcService::stop_twitch_only().await;
             return Ok(true);
         }
+        crate::services::irc_service::record_lifecycle(&format!(
+            "stop_chat from {}: full stop (held {:?})",
+            window, held
+        ));
         IrcService::stop().await.map(|_| true)
     }
 
@@ -227,5 +242,96 @@ impl ChatService {
 
     pub async fn leave_channel(channel: &str, window: &str) -> Result<()> {
         IrcService::leave_channel(channel, window).await
+    }
+}
+
+/// Why the user's stop leaves the shared connection up, or `None` to take it down.
+///
+/// `held` is what the calling window holds (Twitch channel keys); `kept` names
+/// the Twitch rooms the viewer keeps open beside any stream. A kept room counts
+/// only while the caller actually holds it: one restored but never joined has
+/// nothing riding the connection.
+fn stop_kept_for(other_windows: bool, providers: bool, held: &[String], kept: &[String]) -> Option<&'static str> {
+    if other_windows {
+        return Some("another window holds a channel");
+    }
+    if held.iter().any(|c| kept.contains(c)) {
+        return Some("a chat kept open beside the stream holds a channel");
+    }
+    if providers && !held.is_empty() {
+        return Some("this window still holds a channel");
+    }
+    None
+}
+
+/// The Twitch rooms the viewer keeps open beside any stream, by channel key: a
+/// kept chat on the phones' Chats screen (the stream's own tab only when kept)
+/// and a docked chat on desktop.
+fn kept_rooms() -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut rooms: Vec<String> = crate::services::chat_tabs::joined()
+        .into_iter()
+        .filter(|t| t.kept && t.provider == "twitch")
+        .map(|t| t.login.trim().to_lowercase())
+        .collect();
+    #[cfg(desktop)]
+    rooms.extend(
+        crate::commands::chat_dock::get_chat_dock()
+            .chats
+            .into_iter()
+            .filter(|c| c.provider == "twitch")
+            .map(|c| c.login.trim().to_lowercase()),
+    );
+    rooms
+}
+
+#[cfg(test)]
+mod stop_decision_tests {
+    use super::stop_kept_for;
+
+    fn keys(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn closing_the_player_keeps_a_kept_chats_room() {
+        // The phone case: the stream's room is also one of your chats, so the
+        // Chats screen still shows it after the player closes.
+        let why = stop_kept_for(false, false, &keys(&["kathi"]), &keys(&["kathi"]));
+        assert!(why.is_some());
+    }
+
+    #[test]
+    fn a_kept_room_beside_another_stream_keeps_the_connection() {
+        let why = stop_kept_for(false, false, &keys(&["nicewigg", "summit1g"]), &keys(&["summit1g"]));
+        assert!(why.is_some());
+    }
+
+    #[test]
+    fn a_docked_chat_keeps_the_connection_without_other_platforms() {
+        let why = stop_kept_for(false, false, &keys(&["xqc", "lirik"]), &keys(&["lirik"]));
+        assert_eq!(why, Some("a chat kept open beside the stream holds a channel"));
+    }
+
+    #[test]
+    fn the_stream_chat_alone_goes_down_with_the_stream() {
+        assert_eq!(stop_kept_for(false, false, &keys(&["xqc"]), &[]), None);
+        assert_eq!(stop_kept_for(false, false, &[], &[]), None);
+    }
+
+    #[test]
+    fn a_kept_room_that_was_never_joined_holds_nothing() {
+        assert_eq!(stop_kept_for(false, false, &keys(&["xqc"]), &keys(&["lirik"])), None);
+    }
+
+    #[test]
+    fn another_window_always_keeps_it() {
+        assert_eq!(stop_kept_for(true, false, &[], &[]), Some("another window holds a channel"));
+    }
+
+    #[test]
+    fn with_other_platforms_on_the_bridge_any_held_channel_keeps_it() {
+        assert_eq!(stop_kept_for(false, true, &keys(&["xqc"]), &[]), Some("this window still holds a channel"));
+        assert_eq!(stop_kept_for(false, true, &[], &[]), None);
     }
 }

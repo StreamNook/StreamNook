@@ -4,7 +4,7 @@
 //! their watch streak milestone in chat when they've watched 3+ consecutive streams.
 
 use crate::services::drops_auth_service::DropsAuthService;
-use log::debug;
+use log::{debug, info, warn};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -96,6 +96,16 @@ struct GqlWatchStreakMilestoneInner {
 #[derive(Debug, Deserialize)]
 struct ShareMilestoneResponse {
     data: Option<ShareMilestoneData>,
+    /// GraphQL's own errors. Twitch answers a refused share (unauthenticated, a failed integrity
+    /// check) with HTTP 200, these, and a null `shareViewerMilestone`.
+    #[serde(default)]
+    errors: Vec<GqlError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlError {
+    #[serde(default)]
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,8 +243,11 @@ pub async fn get_watch_streak(channel_id: String) -> Result<Option<WatchStreakMi
         Some(m) => {
             let streak_val = m.inner_milestone.value.parse::<i32>().unwrap_or(0);
 
-            debug!(
-                "[WatchStreak] Found milestone: streak={}, threshold={}, status={}, bonus={}",
+            // What Twitch offers in this room, in the core log: a missing banner is then either
+            // Twitch's answer or our bug, never a guess.
+            info!(
+                "[WatchStreak] offer: channel={} streak={} threshold={} status={} bonus={}",
+                channel_id,
                 streak_val,
                 m.watch_streak_threshold,
                 m.inner_milestone.share_status,
@@ -251,32 +264,54 @@ pub async fn get_watch_streak(channel_id: String) -> Result<Option<WatchStreakMi
                     copo_bonus: m.watch_streak_copo_bonus,
                 }))
             } else {
-                debug!(
-                    "[WatchStreak] Streak exists but status is '{}', not shareable",
-                    m.inner_milestone.share_status
-                );
                 Ok(None)
             }
         }
+        // No milestone: Twitch has none to offer, or the read itself was refused (GraphQL errors
+        // come back with HTTP 200 and an empty viewer edge, which reads the same).
+        None if response_text.contains("\"errors\"") => {
+            warn!("[WatchStreak] offer check failed: channel={} answer={}", channel_id, response_text);
+            Ok(None)
+        }
         None => {
-            debug!("[WatchStreak] No watch streak milestone available for this channel");
+            info!("[WatchStreak] offer: channel={} none", channel_id);
             Ok(None)
         }
     }
 }
 
+/// What a ShareMilestone answer means: `Ok(true)` only when Twitch returned the share's payload
+/// with no error of any kind; `Ok(false)` when Twitch refused it with a code; `Err` with Twitch's
+/// words when GraphQL failed it outright. Anything less than a clean payload is not a share.
+fn share_outcome(response_text: &str) -> Result<bool, String> {
+    let parsed: ShareMilestoneResponse =
+        serde_json::from_str(response_text).map_err(|e| format!("Failed to parse response: {}", e))?;
+    if !parsed.errors.is_empty() {
+        let words: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+        return Err(format!("Twitch refused the share: {}", words.join("; ")));
+    }
+    let Some(payload) = parsed.data.and_then(|d| d.share_viewer_milestone) else {
+        return Err("Twitch answered the share with no result".to_string());
+    };
+    Ok(payload.error.and_then(|e| e.code).is_none())
+}
+
 /// Share (send) the watch streak milestone to chat.
-/// Uses the ShareMilestone mutation with an inline GQL document (no persisted hash).
-/// Returns true if successful, false otherwise.
+/// Uses the ShareMilestone mutation (persisted hash) with the Android client, the client the
+/// drops token belongs to: the same pairing MakePrediction and the poll vote use, since Twitch
+/// holds web-client mutations to an integrity check this app cannot pass. Returns true only when
+/// Twitch confirms the share.
 #[tauri::command]
 pub async fn share_watch_streak(
     channel_id: String,
     milestone_id: String,
     message: Option<String>,
 ) -> Result<bool, String> {
-    debug!(
-        "[WatchStreak] Sharing watch streak for channel: {}, milestone: {}, message: {:?}",
-        channel_id, milestone_id, message
+    info!(
+        "[WatchStreak] share start: channel={} milestone={} with_message={}",
+        channel_id,
+        milestone_id,
+        message.as_deref().is_some_and(|m| !m.is_empty())
     );
 
     // Get auth token
@@ -318,13 +353,17 @@ pub async fn share_watch_streak(
 
     let response = client
         .post("https://gql.twitch.tv/gql")
-        .headers(create_web_gql_headers(&token))
+        .headers(create_gql_headers(&token))
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("GQL request failed: {}", e))?;
+        .map_err(|e| {
+            warn!("[WatchStreak] share failed: channel={} request error: {}", channel_id, e);
+            format!("GQL request failed: {}", e)
+        })?;
 
     if !response.status().is_success() {
+        warn!("[WatchStreak] share failed: channel={} HTTP {}", channel_id, response.status());
         return Err(format!("GQL returned HTTP {}", response.status()));
     }
 
@@ -333,25 +372,18 @@ pub async fn share_watch_streak(
         .await
         .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    // Parse response
-    let parsed: ShareMilestoneResponse = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    // Check for errors in the mutation response
-    let has_error = parsed
-        .data
-        .and_then(|d| d.share_viewer_milestone)
-        .and_then(|p| p.error)
-        .and_then(|e| e.code);
-
-    match has_error {
-        Some(code) => {
-            debug!("[WatchStreak] Share failed with error code: {}", code);
+    match share_outcome(&response_text) {
+        Ok(true) => {
+            info!("[WatchStreak] share sent: channel={} milestone={}", channel_id, milestone_id);
+            Ok(true)
+        }
+        Ok(false) => {
+            warn!("[WatchStreak] share refused: channel={} answer={}", channel_id, response_text);
             Ok(false)
         }
-        None => {
-            debug!("[WatchStreak] Watch streak shared successfully!");
-            Ok(true)
+        Err(why) => {
+            warn!("[WatchStreak] share failed: channel={} {} answer={}", channel_id, why, response_text);
+            Err(why)
         }
     }
 }
@@ -451,4 +483,37 @@ pub async fn get_watch_streaks_batch(
     }
 
     Ok(results_map)
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::share_outcome;
+
+    #[test]
+    fn a_clean_payload_is_a_share() {
+        assert_eq!(share_outcome(r#"{"data":{"shareViewerMilestone":{"error":null}}}"#), Ok(true));
+    }
+
+    #[test]
+    fn a_refusal_code_is_not_a_share() {
+        assert_eq!(
+            share_outcome(r#"{"data":{"shareViewerMilestone":{"error":{"code":"MILESTONE_ALREADY_SHARED"}}}}"#),
+            Ok(false)
+        );
+    }
+
+    /// Twitch's real answer to an unauthenticated share (captured anonymously, fake ids): HTTP 200,
+    /// a GraphQL error and a null payload. It used to count as shared.
+    #[test]
+    fn graphql_errors_with_a_null_payload_are_not_a_share() {
+        let answer = r#"{"errors":[{"message":"unauthenticated","path":["shareViewerMilestone"],"extensions":{"code":"Unauthenticated"}}],"data":{"shareViewerMilestone":null},"extensions":{"durationMilliseconds":6,"operationName":"ShareMilestone"}}"#;
+        let outcome = share_outcome(answer);
+        assert!(matches!(&outcome, Err(why) if why.contains("unauthenticated")), "{outcome:?}");
+    }
+
+    #[test]
+    fn no_payload_at_all_is_not_a_share() {
+        assert!(share_outcome(r#"{"data":{"shareViewerMilestone":null}}"#).is_err());
+        assert!(share_outcome(r#"{"data":null}"#).is_err());
+    }
 }

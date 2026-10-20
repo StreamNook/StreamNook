@@ -4,6 +4,7 @@
 import React from 'react';
 import { useAppStore } from '../stores/AppStore';
 import { signInReasonText, useTwitchSignInReason } from '../utils/twitchSignIn';
+import { TwitchSignInButton } from '../components/ui/TwitchSignInButton';
 
 export const MobileOnboarding: React.FC = () => {
   const loginToTwitch = useAppStore((s) => s.loginToTwitch);
@@ -30,14 +31,13 @@ export const MobileOnboarding: React.FC = () => {
           ? signInReasonText(signInReason)
           : 'Watch Twitch with your emotes, badges, and cosmetics everywhere.'}
       </div>
-      <button
+      {/* The setup wizard's Twitch button, so signing in looks the same both times. */}
+      <TwitchSignInButton
+        label={isLoading ? 'Waiting for sign-in' : signInReason ? 'Sign in again' : 'Sign in with Twitch'}
         onClick={() => void loginToTwitch()}
-        disabled={isLoading}
-        className="sn-touch glass-button w-full max-w-[320px] px-6 text-[15px] font-semibold text-textPrimary disabled:opacity-60"
-        style={{ height: 48 }}
-      >
-        {isLoading ? 'Signing in…' : signInReason ? 'Sign in again' : 'Sign in with Twitch'}
-      </button>
+        busy={isLoading}
+        className="sn-touch w-full max-w-[320px] py-4 text-base"
+      />
     </div>
   );
 };

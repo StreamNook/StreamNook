@@ -146,7 +146,7 @@ fn decodable(v: &Variant, pref: &[String]) -> bool {
 /// codec it decodes and the AV1 & h265 setting allows. StreamNook serves one
 /// rendition with no player-side fallback, so a tier outside that list is a
 /// black picture; it never reaches `best`, a quality pick or the quality menu.
-/// Twitch serves its 1440p tier in HEVC, so a machine without an HEVC decoder
+/// Twitch serves its 1440p tier in HEVC, so a machine or phone without an HEVC decoder
 /// plays the 1080p H.264 tier as `best` instead of failing on 1440p.
 pub fn playable_variants(master: &str) -> Vec<Variant> {
     retain_playable(parse_master(master), &effective_codec_pref())

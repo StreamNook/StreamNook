@@ -314,6 +314,15 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
         crate::services::cast_session::on_watch_target(&app, &target);
     }
 
+    // A stream on screen counts once toward the member's streams watched, and
+    // a Twitch one is checked against StreamNook's watch rewards.
+    if !target.offline {
+        crate::services::member_stats::stream_started(&format!("{}:{}", target.provider, target.login.to_lowercase()));
+        if target.provider == "twitch" {
+            crate::services::member_rewards::watching_changed();
+        }
+    }
+
     // This channel's EventSub, unless MultiNook's focused tile holds the
     // socket. A Twitch subscription must not keep firing over a Kick stream.
     aim_watch_socket(&app).await;
@@ -748,6 +757,10 @@ pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
         }),
     );
     if let Some(target) = target {
+        // A new category can qualify for a watch reward the old one did not.
+        if target.provider == "twitch" {
+            crate::services::member_rewards::watching_changed();
+        }
         let app = app.clone();
         tauri::async_runtime::spawn(async move { publish_presence(&app, &target).await });
     }

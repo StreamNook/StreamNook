@@ -11,17 +11,20 @@
 // see neither. A panel that reports only the permission is how someone ends up
 // being told everything is fine while they receive nothing, so all three are
 // read here and each one names its own fix.
-import React, { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { ArrowSquareOut, BatteryCharging, BellSimple, CaretRight, Warning } from 'phosphor-react';
+import React, { createElement, useCallback, useEffect, useState } from 'react';
+import { ArrowSquareOut } from 'phosphor-react';
+import { BatteryWarning, BellRing, ChevronRight, Send, TriangleAlert } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { SettingsRow, SettingsSection, SettingsSubGroup } from '../../components/settings/_primitives';
+import { thenRun, useSettingReset } from '../../components/settings/settingReset';
+import { GROUP_ICON, GROUP_ICON_STROKE, GroupCard, GroupIcon, GroupRow } from '../ui/GroupedList';
+import { settingIcon } from './settingsIcons';
 import { NotifiedChannelsSheet } from './NotifiedChannelsSheet';
 import {
+  applyDelivery,
   ensureNotificationPermission,
   getNotifyDelivery,
   postSystemNotification,
-  syncBackgroundChecks,
-  NOTIFY_CHANNEL,
   type NotifyChannelId,
   type NotifyDelivery,
 } from '../notifications';
@@ -34,42 +37,16 @@ import {
 import type { LiveNotificationSettings } from '../../types';
 import { Logger } from '../../utils/logger';
 import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { roomName, roomProvider, setRoomMuted } from '../mentions/mentionInbox';
+import { alertKey, alertOn, useAlertTypes } from '../alertTypes';
 
-const TOGGLES: {
-  key: keyof LiveNotificationSettings;
-  channel: NotifyChannelId;
-  label: string;
-  description: string;
-}[] = [
-  {
-    key: 'show_live_notifications',
-    channel: NOTIFY_CHANNEL.live,
-    label: 'Live channels',
-    description: 'Alert when a channel you follow starts streaming',
-  },
-  {
-    key: 'show_drops_notifications',
-    channel: NOTIFY_CHANNEL.drops,
-    label: 'Drops',
-    description: 'Campaign progress and claimable rewards',
-  },
-  {
-    key: 'show_badge_notifications',
-    channel: NOTIFY_CHANNEL.badges,
-    label: 'New badges',
-    description: 'When a new global badge becomes available',
-  },
-  // No Whispers row. Whispers are not implemented on this platform at all, so
-  // the toggle offered control over something that could never happen. The
-  // setting itself still exists and desktop still uses it; it just is not
-  // advertised here.
-  //
-  // No Channel points row either. The composer's "+N" float covers the app
-  // being open, and a backgrounded WebView cannot poll, so the only state the
-  // old notification could actually fire in was picture-in-picture, where it
-  // flooded the shade. The OS channel id stays reserved in case the Rust watch
-  // heartbeat ever reports credits itself.
-];
+// The "Notify me about" rows are the alert types Rust lists for this build
+// (services/alert_types.rs), the same list and words the iPhone draws. Types
+// the phone cannot send are not in it: no Channel points (a backgrounded
+// WebView cannot poll, so the only state it
+// could fire in was picture-in-picture, where it flooded the shade; its OS
+// channel id stays reserved).
 
 const INTERVALS = [15, 30, 60];
 
@@ -94,18 +71,107 @@ const Toggle: React.FC<{ on: boolean; disabled?: boolean; onChange: () => void }
   </button>
 );
 
-const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide mb-1.5 px-1">
-    {children}
-  </div>
-);
+/** The mention rules, as Rust reads them (services/mention_inbox.rs and the
+ *  chat rules). Each row writes its one field. */
+const MENTION_RULES: { key: 'match_bare_login' | 'match_display_name' | 'highlight_words'; label: string }[] = [
+  { key: 'match_bare_login', label: 'Name without @' },
+  { key: 'match_display_name', label: 'Display name' },
+  { key: 'highlight_words', label: 'Highlight words' },
+];
+
+/**
+ * Mentions: what counts as one and the chats where they stay quiet, the
+ * `mentions` group. Whether a mention notifies is its "Notify me about" row.
+ * Rust decides every notification and every inbox entry from these. Same
+ * rows as the iPhone.
+ */
+const MentionsSection: React.FC = () => {
+  const mentions = useAppStore((s) => s.settings.mentions);
+  const resetFor = useSettingReset();
+  const muted = mentions?.muted_channels ?? [];
+  const mixed = new Set(muted.map(roomProvider)).size > 1;
+
+  const write = (changes: Record<string, unknown>) =>
+    setSettingsFields(changes).catch((err) => {
+      Logger.warn('[MobileNotificationsSettings] save failed:', err);
+      useAppStore.getState().addToast('Could not save that change.', 'error');
+    });
+
+  return (
+    <SettingsSection label="Mentions">
+      {/* What counts, its own row: these also decide what the Mentions list
+          keeps, so they stay live with the notification off. */}
+      <SettingsRow
+        title="Counts as a mention"
+        description="Your @name always counts. These count too, in Mentions and for notifications."
+      />
+      <SettingsSubGroup>
+        {MENTION_RULES.map(({ key, label }) => {
+          const on = mentions?.[key] !== false;
+          return (
+            <SettingsRow
+              key={key}
+              title={label}
+              onReset={resetFor(`mentions.${key}`)}
+              control={<Toggle on={on} onChange={() => void write(fieldsIn('mentions', { [key]: !on }))} />}
+            />
+          );
+        })}
+      </SettingsSubGroup>
+
+      <SettingsRow
+        title="Muted chats"
+        description={
+          muted.length > 0
+            ? 'Mentions here never notify you or reach the Mentions list.'
+            : 'None. Mute a chat from its row in Mentions.'
+        }
+        onReset={resetFor('mentions.muted_channels')}
+      >
+        {muted.length > 0 && (
+          <div className="-mt-1 flex flex-col">
+            {muted.map((room) => (
+              <div key={room} className="flex items-center gap-2 min-h-[40px]">
+                {mixed && <ProviderMark provider={roomProvider(room)} size={14} />}
+                <span className="flex-1 min-w-0 truncate text-[14px] text-textPrimary">{roomName(room)}</span>
+                <button
+                  onClick={() => void setRoomMuted(room, false)}
+                  className="sn-touch -mr-2 px-2 text-[13px] font-medium text-textSecondary active:text-textPrimary"
+                  aria-label={`Unmute ${roomName(room)}`}
+                >
+                  Unmute
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsRow>
+
+      {/* Rust tells the server and pulls what it finds into Mentions
+          (services/mention_watch.rs). */}
+      <SettingsRow
+        title="Mentions while you're away"
+        description="StreamNook's server watches chat in channels you follow for your name and replies, and keeps matches for 7 days."
+        onReset={resetFor('mentions.away_alerts')}
+        control={
+          <Toggle
+            on={mentions?.away_alerts === true}
+            onChange={() => void write(fieldsIn('mentions', { away_alerts: mentions?.away_alerts !== true }))}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+};
 
 const MobileNotificationsSettings: React.FC = () => {
   const settings = useAppStore((s) => s.settings);
+  const resetFor = useSettingReset();
   const [delivery, setDelivery] = useState<NotifyDelivery | null>(null);
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [channelsOpen, setChannelsOpen] = useState(false);
   const mutedCount = settings.live_notifications?.muted_live_channels?.length ?? 0;
+  const alertTypes = useAlertTypes() ?? [];
 
   // Every fix on this screen happens in Android's own settings, which means
   // leaving the app and coming back. Without re-reading on return the panel
@@ -155,15 +221,7 @@ const MobileNotificationsSettings: React.FC = () => {
         useAppStore.getState().addToast('Could not save that change.', 'error');
         return;
       }
-      const next = { ...current, ...written };
-      syncBackgroundChecks(next);
-      // Push registration follows the same switches: registered while the
-      // master and push toggles are both on, dropped from the server otherwise.
-      if (next.enabled !== false && next.push_notifications !== false) {
-        void invoke('push_register').catch(() => {});
-      } else {
-        void invoke('push_unregister').catch(() => {});
-      }
+      applyDelivery({ ...current, ...written });
     },
     [],
   );
@@ -174,53 +232,71 @@ const MobileNotificationsSettings: React.FC = () => {
   };
 
   const permission = delivery?.permission ?? 'default';
+
+  // Turning a type on asks for the permission when Android will still show the
+  // prompt, as the setup step does; a refusal Android has made permanent leaves
+  // the card's settings route.
+  const toggleType = async (key: keyof LiveNotificationSettings, on: boolean) => {
+    await patch({ [key]: on } as Partial<LiveNotificationSettings>);
+    if (on && permission !== 'granted' && permission !== 'blocked') await requestPermission();
+  };
+  // The master switch asks the same way, when it brings back a type that is on.
+  const toggleMaster = async () => {
+    const on = !masterOn;
+    await patch({ enabled: on });
+    const anyOn = alertTypes.some((t) => alertOn(t, prefs));
+    if (on && anyOn && permission !== 'granted' && permission !== 'blocked') await requestPermission();
+  };
   const granted = permission === 'granted';
   // Granted but switched off at the app level: the runtime permission alone
   // would report this as working.
   const appOff = granted && delivery?.appEnabled === false;
   const blocked = delivery?.blockedChannels ?? [];
 
+  // A reset goes through the same follow-up as a toggle: the background
+  // checks and the push registration track the switches.
+  const resetWith = (...specs: Parameters<typeof resetFor>) =>
+    thenRun(resetFor(...specs), (next) => {
+      if (next.live_notifications) applyDelivery(next.live_notifications);
+    });
+
+  // Sections in the settings pages' grouped style, named as the settings
+  // catalog names them so a search hit lands on its row.
   return (
-    <div className="flex flex-col gap-4">
+    <div className="space-y-6">
       {/* Master switch. Off means nothing arrives by any route, so it says so
           rather than leaving the categories below looking live. */}
-      <div className="glass-panel p-3.5 flex items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <BellSimple size={17} className="text-accent" />
-            <span className="text-[14.5px] font-semibold text-textPrimary">Notifications</span>
-          </div>
-          <div className="text-[12px] text-textMuted leading-snug mt-1">
-            {masterOn
-              ? 'StreamNook can alert you about the categories below.'
-              : 'All StreamNook notifications are off.'}
-          </div>
-        </div>
-        <Toggle on={masterOn} onChange={() => void patch({ enabled: !masterOn })} />
-      </div>
+      <SettingsSection label="Notifications">
+        <SettingsRow
+          title="Notifications"
+          description={
+            masterOn ? 'StreamNook can alert you about the categories below.' : 'All StreamNook notifications are off.'
+          }
+          onReset={resetWith(['live_notifications.enabled', true])}
+          control={<Toggle on={masterOn} onChange={() => void toggleMaster()} />}
+        />
+      </SettingsSection>
 
       {masterOn && (
         <>
           {/* Permission. Whenever it is missing, BOTH routes are offered: the
               in-app prompt stops working once Android decides the refusal is
               permanent, and nothing in the app can tell that apart reliably, so
-              the settings route is never hidden behind a guess. */}
+              the settings route is never hidden behind a guess. A state, not a
+              setting, so a card with no label of its own. */}
           {!granted || appOff ? (
-            <div className="glass-panel p-3.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Warning size={17} className="text-warning" />
-                <span className="text-[14.5px] font-semibold text-textPrimary">
-                  {appOff ? 'Turned off in Android settings' : 'Notifications are not allowed yet'}
-                </span>
-              </div>
-              <p className="text-[12.5px] text-textSecondary leading-relaxed mb-2.5">
-                {appOff
-                  ? 'StreamNook has permission, but notifications are switched off for the app in Android settings. Nothing will arrive until that is turned back on.'
-                  : permission === 'blocked'
-                    ? 'Android will not ask again, so this has to be turned on in system settings.'
-                    : 'Allow notifications so alerts reach you when StreamNook is closed.'}
-              </p>
-              <div className="flex flex-col gap-2">
+            <GroupCard>
+              <StatusBlock
+                icon={<TriangleAlert size={GROUP_ICON} strokeWidth={GROUP_ICON_STROKE} className="text-warning" />}
+                title={appOff ? 'Turned off in Android settings' : 'Notifications are not allowed yet'}
+                text={
+                  appOff
+                    ? 'StreamNook has permission, but notifications are switched off for the app in Android settings. Nothing will arrive until that is turned back on.'
+                    : permission === 'blocked'
+                      ? 'Android will not ask again, so this has to be turned on in system settings.'
+                      : 'Allow notifications so alerts reach you when StreamNook is closed.'
+                }
+              >
                 {!granted && permission !== 'blocked' && (
                   <button
                     onClick={() => void requestPermission()}
@@ -236,135 +312,131 @@ const MobileNotificationsSettings: React.FC = () => {
                   Open system settings
                   <ArrowSquareOut size={14} />
                 </button>
-              </div>
-            </div>
+              </StatusBlock>
+            </GroupCard>
           ) : (
-            <div className="glass-panel p-3.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <BellSimple size={17} className="text-accent" />
-                <span className="text-[14.5px] font-semibold text-textPrimary">
-                  System notifications
-                </span>
-              </div>
-              <p className="text-[12.5px] text-textSecondary leading-relaxed mb-2.5">
-                StreamNook can post to your notification shade.
-              </p>
-              <button
-                onClick={openNotificationSettings}
-                className="glass-button sn-touch w-full text-[13.5px] font-medium text-textSecondary flex items-center justify-center gap-1.5"
+            <GroupCard>
+              <StatusBlock
+                icon={<BellRing size={GROUP_ICON} strokeWidth={GROUP_ICON_STROKE} className="text-textSecondary" />}
+                title="System notifications"
+                text="StreamNook can post to your notification shade."
               >
-                Sounds and categories in Android
-                <ArrowSquareOut size={14} />
-              </button>
-            </div>
+                <button
+                  onClick={openNotificationSettings}
+                  className="glass-button sn-touch w-full text-[13.5px] font-medium text-textSecondary flex items-center justify-center gap-1.5"
+                >
+                  Sounds and categories in Android
+                  <ArrowSquareOut size={14} />
+                </button>
+              </StatusBlock>
+            </GroupCard>
           )}
 
-          <div>
-            <SectionLabel>Notify me about</SectionLabel>
-            <div className="glass-panel divide-y divide-borderSubtle">
-              {TOGGLES.map(({ key, channel, label, description }) => {
-                const on = prefs[key] !== false;
-                // Silenced in Android's own settings. The in-app toggle cannot
-                // undo it, so saying "on" here would be a lie.
-                const osBlocked = blocked.includes(channel);
-                return (
-                  <div key={key} className="flex items-center gap-3 p-3.5">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[14px] text-textPrimary">{label}</div>
-                      <div className="text-[12px] text-textMuted leading-snug mt-0.5">
-                        {description}
-                      </div>
-                      {osBlocked && (
-                        <button
-                          onClick={() => openChannelSettings(channel)}
-                          className="text-[12px] text-warning mt-1 flex items-center gap-1"
-                        >
-                          Silenced in Android settings
-                          <ArrowSquareOut size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <Toggle
-                      on={on && !osBlocked}
-                      disabled={osBlocked}
-                      onChange={() => void patch({ [key]: !on } as Partial<LiveNotificationSettings>)}
-                    />
-                  </div>
-                );
-              })}
+          <SettingsSection label="Notify me about">
+            {alertTypes.map((type) => {
+              const key = alertKey(type);
+              if (!key) return null;
+              const on = alertOn(type, prefs);
+              // Silenced in Android's own settings. The in-app toggle cannot
+              // undo it, so saying "on" here would be a lie.
+              const osBlocked = blocked.includes(type.channel as NotifyChannelId);
+              return (
+                <React.Fragment key={type.id}>
+                  <SettingsRow
+                    title={type.title}
+                    description={type.detail}
+                    onReset={resetWith([type.setting, true])}
+                    control={
+                      <Toggle
+                        on={on && !osBlocked}
+                        disabled={osBlocked}
+                        onChange={() => void toggleType(key, !on)}
+                      />
+                    }
+                  >
+                    {osBlocked && (
+                      <button
+                        onClick={() => openChannelSettings(type.channel)}
+                        className="-mt-2 text-[13px] text-warning flex items-center gap-1"
+                      >
+                        Silenced in Android settings
+                        <ArrowSquareOut size={12} />
+                      </button>
+                    )}
+                  </SettingsRow>
+                  {/* Right under the row it narrows. Only meaningful while live
+                      alerts are on, but shown either way so the setting does not
+                      appear and disappear under the reader. */}
+                  {type.id === 'live' && (
+                    <GroupRow
+                      data-setting-row="Which channels"
+                      onClick={() => setChannelsOpen(true)}
+                      icon={createElement(settingIcon('Notify me about', 'Which channels'), {
+                        size: GROUP_ICON,
+                        strokeWidth: GROUP_ICON_STROKE,
+                        className: 'text-textSecondary',
+                      })}
+                      detail={mutedCount > 0 ? `Everything you follow except ${mutedCount}` : 'Everything you follow'}
+                      trailing={
+                        <span className="flex h-6 shrink-0 items-center self-start">
+                          <ChevronRight size={16} className="text-textMuted" />
+                        </span>
+                      }
+                    >
+                      Which channels
+                    </GroupRow>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </SettingsSection>
 
-              {/* Only meaningful while live alerts are on, but shown either way
-                  so the setting does not appear and disappear under the reader. */}
-              <button
-                onClick={() => setChannelsOpen(true)}
-                className="w-full flex items-center gap-3 p-3.5 text-left"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14px] text-textPrimary">Which channels</div>
-                  <div className="text-[12px] text-textMuted leading-snug mt-0.5">
-                    {mutedCount > 0
-                      ? `Everything you follow except ${mutedCount}`
-                      : 'Everything you follow'}
-                  </div>
-                </div>
-                <CaretRight size={16} className="text-textMuted shrink-0" />
-              </button>
-            </div>
-          </div>
+          <MentionsSection />
 
-          <div>
-            <SectionLabel>Background checking</SectionLabel>
-            <div className="glass-panel divide-y divide-borderSubtle">
+          {/* The background poll and push only carry go-live alerts: listed
+              with them. */}
+          {alertTypes.some((t) => t.id === 'live') && (
+            <SettingsSection label="Background checking">
               {/* Battery first, deliberately. Android withholds network from
                   background work entirely once an app it considers unused drops
                   far enough down, so this is not a tuning knob: it decides
                   whether closed-app notifications happen at all. */}
               {batteryExempt === false && (
-                <div className="p-3.5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <BatteryCharging size={17} className="text-warning" />
-                    <span className="text-[14px] font-semibold text-textPrimary">
-                      Alerts will be unreliable
-                    </span>
-                  </div>
-                  <p className="text-[12px] text-textMuted leading-snug mb-2.5">
-                    Android is limiting StreamNook in the background. Until that is lifted, alerts
-                    can be delayed by hours or not arrive at all while the app is closed.
-                  </p>
+                <StatusBlock
+                  icon={<BatteryWarning size={GROUP_ICON} strokeWidth={GROUP_ICON_STROKE} className="text-warning" />}
+                  title="Alerts will be unreliable"
+                  text="Android is limiting StreamNook in the background. Until that is lifted, alerts can be delayed by hours or not arrive at all while the app is closed."
+                >
                   <button
                     onClick={requestIgnoreBatteryOptimizations}
                     className="glass-button sn-touch w-full text-[13.5px] font-semibold text-textPrimary"
                   >
                     Let StreamNook run in the background
                   </button>
-                </div>
+                </StatusBlock>
               )}
 
-              <div className="flex items-center gap-3 p-3.5">
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14px] text-textPrimary">Instant alerts</div>
-                  <div className="text-[12px] text-textMuted leading-snug mt-0.5">
-                    Pushed the moment a channel goes live. When off, alerts arrive on the
-                    scheduled check below.
-                  </div>
-                </div>
-                <Toggle
-                  on={prefs.push_notifications !== false}
-                  onChange={() =>
-                    void patch({ push_notifications: prefs.push_notifications === false })
-                  }
-                />
-              </div>
+              <SettingsRow
+                title="Instant alerts"
+                description="Pushed the moment a channel goes live. When off, alerts arrive on the scheduled check below."
+                onReset={resetWith(['live_notifications.push_notifications', true])}
+                control={
+                  <Toggle
+                    on={prefs.push_notifications !== false}
+                    onChange={() => void patch({ push_notifications: prefs.push_notifications === false })}
+                  />
+                }
+              />
 
               {/* No separate background toggle: the periodic check IS the
                   delivery pipeline, app open or closed, so the master switch
                   above is the only honest control. A second toggle here meant
                   "notifications on" could silently deliver nothing. */}
-              <div className="p-3.5">
-                <div className="text-[14px] text-textPrimary mb-0.5">How often to check</div>
-                <div className="text-[12px] text-textMuted leading-snug mb-2.5">
-                  Checking less often uses less battery. Android may still wait longer than this.
-                </div>
+              <SettingsRow
+                title="How often to check"
+                description="Checking less often uses less battery. Android may still wait longer than this."
+                onReset={resetWith(['live_notifications.background_interval_minutes', 15])}
+              >
                 <div className="flex gap-2">
                   {INTERVALS.map((m) => {
                     const active = (prefs.background_interval_minutes ?? 15) === m;
@@ -373,9 +445,7 @@ const MobileNotificationsSettings: React.FC = () => {
                         key={m}
                         onClick={() => void patch({ background_interval_minutes: m })}
                         className={`flex-1 sn-touch rounded-lg py-2 text-[13px] transition-colors ${
-                          active
-                            ? 'bg-accent text-white font-semibold'
-                            : 'bg-surface text-textSecondary'
+                          active ? 'bg-accent text-white font-semibold' : 'bg-surface text-textSecondary'
                         }`}
                       >
                         {m} min
@@ -383,27 +453,52 @@ const MobileNotificationsSettings: React.FC = () => {
                     );
                   })}
                 </div>
-              </div>
-            </div>
-          </div>
+              </SettingsRow>
+            </SettingsSection>
+          )}
         </>
       )}
 
-      <button
-        onClick={() =>
-          void postSystemNotification({
-            title: 'StreamNook',
-            body: 'Notifications are working.',
-          })
-        }
-        className="glass-button sn-touch w-full text-[13.5px] font-medium text-textSecondary"
-      >
-        Send a test notification
-      </button>
+      {/* What counts as a mention also fills the Mentions list, so it stays
+          reachable with every notification switched off. */}
+      {!masterOn && <MentionsSection />}
+
+      <GroupCard>
+        <GroupRow
+          onClick={() =>
+            void postSystemNotification({
+              title: 'StreamNook',
+              body: 'Notifications are working.',
+            })
+          }
+          icon={<Send size={GROUP_ICON} strokeWidth={GROUP_ICON_STROKE} className="text-textSecondary" />}
+        >
+          Send a test notification
+        </GroupRow>
+      </GroupCard>
 
       <NotifiedChannelsSheet open={channelsOpen} onClose={() => setChannelsOpen(false)} />
     </div>
   );
 };
+
+/** A state the page reports rather than a setting (a missing permission, a
+ *  battery limit): its glyph and name on one line, what it means under the
+ *  name, and the buttons that fix it under that, in the rows' text column. */
+const StatusBlock: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  text: string;
+  children: React.ReactNode;
+}> = ({ icon, title, text, children }) => (
+  <div className="py-3">
+    <div className="flex items-center gap-3">
+      <GroupIcon>{icon}</GroupIcon>
+      <span className="text-[15px] leading-6 font-semibold text-textPrimary">{title}</span>
+    </div>
+    <p className="pl-9 mt-0.5 text-[13px] leading-[18px] text-textSecondary">{text}</p>
+    <div className="pl-9 mt-3 flex flex-col gap-2">{children}</div>
+  </div>
+);
 
 export default MobileNotificationsSettings;

@@ -8,11 +8,12 @@
 // a re-render rather than a reconnect. This pane renders whichever tab is active
 // via `useChannelChat`.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CaretDown } from 'phosphor-react';
+import { CaretDown, HandPointing, X } from 'phosphor-react';
 import ChatMessageList from '../../components/ChatMessageList';
 import {
   setChannelPaused,
   useChannelChat,
+  useChannelChatMeta,
   useChannelEmotes,
 } from '../../stores/chatConnectionStore';
 import { useAppStore } from '../../stores/AppStore';
@@ -20,27 +21,40 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { parseMessage } from '../../services/twitchChat';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import { Logger } from '../../utils/logger';
+import { moderateWithToast } from '../../services/moderation';
 import { MobileChatInput, type ChatGating } from './MobileChatInput';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
 import { ChatTabStrip } from './ChatTabStrip';
 import { AddChatSheet } from './AddChatSheet';
 import { useChatTabsStore } from './chatTabsStore';
 import { useChatWatchdog } from './useChatWatchdog';
-import { banUser, deleteMessage, isModeratorFrom, pinMessage, unbanUser } from './modActions';
+import { isModeratorFrom, pinMessage } from './modActions';
 import { ChatFanOut, type FanAction, type FanTarget } from './ChatFanOut';
 import { hapticCommit } from '../ui/haptics';
 import { usePhonePrefs } from '../phonePrefs';
 import { isWindowHidden } from '../../utils/windowVisibility';
 import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
-import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
-import { streamProvider } from '../../utils/streamProvider';
+import { useMentionJump } from '../mentions/useMentionJump';
+import { useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
+import { InboxSheet } from '../mentions/InboxSheet';
+import { InboxArrival } from '../mentions/InboxArrival';
+import { useMobileNavStore } from '../navStore';
+import { useAutomodStore } from '../../stores/automodStore';
+import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
+import { SwipeModerator } from './SwipeModerator';
+import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type SwipeTarget, type TouchSlider } from './swipeSteps';
+import { invoke } from '@tauri-apps/api/core';
+import { setVodReplayShowing, useVodReplaySnapshot, useVodReplayStore, type ReplayShowing } from '../../stores/vodReplayStore';
+import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
 // it causes from fighting each other frame by frame. See `pause` below.
 const PAUSE_SETTLE_MS = 120;
+/** Set once a swipe has run (or its hint was dismissed): the hint stays gone. */
+const SWIPE_HINT_KEY = 'sn-swipe-mod-learned';
 
 /** What the read-only overlay leaves out of the fan. Module-level so the fan
  *  sees one array, not a fresh one per render. */
@@ -48,50 +62,83 @@ const READ_ONLY_HIDES: FanAction[] = ['reply'];
 /** A non-Twitch room has no profile the phone can show: the sheet is Helix-backed. */
 const OTHER_PLATFORM_HIDES: FanAction[] = ['profile'];
 const OTHER_PLATFORM_READ_ONLY_HIDES: FanAction[] = ['reply', 'profile'];
+/** What Hold menu buttons off takes out of the fan (Settings > Moderation); the
+ *  user card's Moderate row and the swipe keep them. */
+const MOD_TILES: FanAction[] = ['delete', 'timeout', 'ban'];
+
+/** The desktop's VOD chat switch, word for word. */
+const REPLAY_SEGMENTS: Segment<ReplayShowing>[] = [
+  { value: 'replay', label: 'VOD Chat' },
+  { value: 'live', label: 'Live Chat' },
+];
+
+/** The mention that buzzed last. The watch layer keeps its pane mounted under
+ *  the mini player while the Chats screen shows another, so one mention reaches
+ *  two panes; it buzzes once. */
+let lastBuzzed: string | null = null;
 
 /**
  * `readOnly`: the landscape overlay. Chat is for reading there; the composer,
  * tap-to-reply and the fan's Reply are gone, because a keyboard over a
  * sideways video is not something anyone asked for.
+ *
+ * `strip`: the tab strip over the list. The Chats screen draws its own, with
+ * the play and add controls beside the tabs.
+ *
+ * `paused`: the pane is mounted but out of sight (the Chats tab behind another
+ * tab). It reads no room, so arriving messages render nothing until it shows.
+ *
+ * `top`: what sits between the tab strip and the list (the watch screen's
+ * poll, prediction and drop stack). In the flow, so it takes room from the
+ * list rather than painting over it, and under the tabs, since it belongs to
+ * the room on screen.
+ *
+ * `surface`: which chat this is (under the player, or the Chats tab), for the
+ * inbox: its sheet opens in the chat whose tray was tapped, and a new
+ * mention's card rises only over the chat that is on screen.
+ *
+ * The stream tab is pointed at the player by `useChatsLifecycle`, once, in the
+ * shell: a pane only exists while it is on screen.
  */
-export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = false }) => {
-  const currentStream = useAppStore((s) => s.currentStream);
+export const MobileChatPane: React.FC<{
+  readOnly?: boolean;
+  strip?: boolean;
+  paused?: boolean;
+  top?: React.ReactNode;
+  surface?: InboxSurface;
+}> = ({ readOnly = false, strip = true, paused = false, top, surface = 'watch' }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
-  const syncStreamTab = useChatTabsStore((s) => s.syncStreamTab);
   const removeTab = useChatTabsStore((s) => s.removeTab);
   const reload = useChatTabsStore((s) => s.reload);
-
-  // Keep the stream-following tab pointed at whatever is playing, on the
-  // platform it plays on: a Kick stream's room is `kick:slug`, never a Twitch
-  // room that happens to share the name.
-  const streamProv = streamProvider(currentStream);
-  useEffect(() => {
-    syncStreamTab(
-      currentStream?.user_login ?? null,
-      currentStream?.user_id ?? null,
-      currentStream?.user_name || currentStream?.user_login || '',
-      currentStream?.profile_image_url ?? null,
-      streamProv,
-    );
-  }, [
-    currentStream?.user_login,
-    currentStream?.user_id,
-    currentStream?.user_name,
-    currentStream?.profile_image_url,
-    streamProv,
-    syncStreamTab,
-  ]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.channel === activeChannel) ?? null,
     [tabs, activeChannel],
   );
 
-  const chat = useChannelChat(activeChannel);
+  // A VOD's recorded chat takes the stream's tab under the player, replayed by
+  // Rust in step with the player (as on desktop and the iPhone), with the
+  // switch back to the channel's live chat. Replay is read-only.
+  const currentMediaType = useAppStore((s) => s.currentMediaType);
+  const replayActive = useVodReplayStore((s) => s.active);
+  const replayShowing = useVodReplayStore((s) => s.showing);
+  const replayError = useVodReplayStore((s) => s.error);
+  const vodHere =
+    surface === 'watch' &&
+    replayActive &&
+    !!activeTab?.pinnedToStream &&
+    (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
+  const replayOn = vodHere && replayShowing === 'replay';
+  const noSend = readOnly || replayOn;
+  const replayChat = useVodReplaySnapshot();
+  const liveChat = useChannelChat(paused ? null : activeChannel);
+  const chat = replayOn ? replayChat : liveChat;
+  // The join's history answered with nothing: the room says so until a row arrives.
+  const historyLoaded = useChannelChatMeta(activeChannel).historyLoaded;
   const {
     messages,
     renderToken,
@@ -126,7 +173,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       return;
     }
     if (lastId === cur.lastId) return;
-    let buzz = false;
+    let buzz: string | null = null;
     const now = Date.now();
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i] as BackendChatMessage | string;
@@ -137,11 +184,14 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       const ts = Number(m.timestamp);
       const at = Number.isFinite(ts) ? (ts < 1e12 ? ts * 1000 : ts) : Date.parse(m.timestamp);
       if (Number.isFinite(at) && now - at > 8000) continue;
-      buzz = true;
+      buzz = m.id;
       break;
     }
     mentionCursor.current = { channel: activeChannel, lastId };
-    if (buzz && mentionHaptic && !isWindowHidden()) hapticCommit();
+    if (buzz && buzz !== lastBuzzed && mentionHaptic && !isWindowHidden()) {
+      lastBuzzed = buzz;
+      hapticCommit();
+    }
   }, [messages, activeChannel, mentionHaptic, currentUser?.user_id]);
 
   // Rebuilds the connection if it dies while the app is open. Every room rides
@@ -168,6 +218,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       blocked: view?.blocked ?? null,
       reason: view?.reason ?? null,
       view: view && view.modes.length > 0 ? view : null,
+      warning: view?.warning ?? null,
     };
   }, [roomState]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
@@ -198,9 +249,6 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   // (which is a cascading-render error under react-hooks v7), and coming back to
   // a room restores nothing stale because the key simply stops matching.
   const [pausedChannel, setPausedChannel] = useState<string | null>(null);
-  // Briefly marks the message a reply jumped to, so it is findable after the
-  // glide lands. ChatMessageList already renders this; mobile just never set it.
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const isPaused = !!activeChannel && pausedChannel === activeChannel;
 
   const [sheetUser, setSheetUser] = useState<SheetUser | null>(null);
@@ -448,18 +496,27 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   const handleReplyClick = useCallback(
     (parentMsgId: string) => {
       pause(true, { force: true });
-      const ok = scrollChatToMessage(parentMsgId, { align: 'center' });
-      if (!ok) {
-        addToast('Original message is no longer in chat history', 'info');
-        return;
-      }
-      setHighlightedMessageId(parentMsgId);
-      // Long enough to find the message by eye after the glide lands, short
-      // enough that it does not linger as a permanent-looking selection.
-      window.setTimeout(() => setHighlightedMessageId(null), 2000);
+      // The flash marks the message for ~2 s after the glide lands: long
+      // enough to find it by eye, short enough not to read as a selection. The
+      // same flash a mention jump uses, and it shows on a parent that is
+      // itself a mention, which the row's own highlight prop could not.
+      const ok = scrollChatToMessage(parentMsgId, { align: 'center', flash: true });
+      if (!ok) addToast('Original message is no longer in chat history', 'info');
     },
     [pause, addToast],
   );
+
+  // Opening a mention (an inbox row or a notification) lands here once its
+  // chat is on screen: scroll and flash, or one backfill, or the context card.
+  useMentionJump({
+    activeChannel,
+    messages,
+    getMessageId,
+    pause,
+    login: activeTab?.login ?? null,
+    provider: activeProvider,
+    channelId: broadcasterId,
+  });
 
   const onUsernameClick = useCallback(
     (
@@ -482,6 +539,8 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   /** Pull the author and body out of a rendered row's message id. */
   const describeMessage = useCallback(
     (messageId: string) => {
+      // A held message has its own Allow and Deny, and nothing to reply to yet.
+      if (isHeldRowId(messageId)) return null;
       for (const message of messages) {
         if (getMessageId(message) !== messageId) continue;
         try {
@@ -529,13 +588,25 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       window.removeEventListener('streamnook-clear-local-chat', clearRows);
     };
   }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  // Messages AutoMod held, inline where they arrived, for a moderator of this
+  // room: Allow and Deny on the row, which folds once someone decides it.
+  const heldKey = isModerator && activeChannel ? activeChannel.toLowerCase() : '';
+  const heldNow = useAutomodStore((s) => (heldKey ? s.held[heldKey] : undefined));
+  const decidedNow = useAutomodStore((s) => (heldKey ? s.decided[heldKey] : undefined));
+  useEffect(() => {
+    if (heldKey) void useAutomodStore.getState().seed(heldKey);
+  }, [heldKey]);
+  const heldMessages = useMemo(() => heldRows(heldNow, decidedNow).map(heldRowMessage), [heldNow, decidedNow]);
   const shownMessages = useMemo(() => {
-    if (!hiddenRows || hiddenRows.channel !== activeChannel) return messages;
-    return messages.filter((m) => {
-      const id = getMessageId(m);
-      return !id || !hiddenRows.ids.has(id);
-    });
-  }, [hiddenRows, activeChannel, messages, getMessageId]);
+    const visible =
+      !hiddenRows || hiddenRows.channel !== activeChannel
+        ? messages
+        : messages.filter((m) => {
+            const id = getMessageId(m);
+            return !id || !hiddenRows.ids.has(id);
+          });
+    return mergeHeld(visible, heldMessages);
+  }, [hiddenRows, activeChannel, messages, getMessageId, heldMessages]);
 
   // Suppress the synthesized contextmenu entirely: the fan-out owns the hold now,
   // and letting both fire would open a menu behind the fan.
@@ -559,16 +630,153 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
     [describeMessage],
   );
 
+  // Swiping a row to moderate it is on where moderator tools are, never in
+  // the read-only overlay.
+  const swipeSetting = useAppStore((s) => s.settings.chat_design?.mod_slider ?? true);
+  const holdModButtons = useAppStore((s) => s.settings.chat_design?.mod_hold_buttons ?? true);
+  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !noSend;
   const press = useLongPressDrag({
     resolve: resolveRow,
     onArm: onArmFan,
     scrollLockRef: listRef,
+    // A sideways drift gives the hold up sooner, so the fan never opens over a swipe.
+    cancelSlop: swipeOn ? 6 : undefined,
   });
 
   const closeFan = useCallback(() => {
     setFanTarget(null);
     press.release();
   }, [press]);
+
+  // Swipe right on a message to moderate it. Rust lays the slider out for each
+  // press, from where the thumb landed and with the chatter's name in its
+  // words; the saved steps, Length and Style are read there.
+  const sliderFor = useCallback(
+    (rowWidth: number, startX: number, target: SwipeTarget) =>
+      invoke<TouchSlider>('get_touch_mod_slider', {
+        provider: 'twitch',
+        rowWidth,
+        startX,
+        targetName: target.name,
+        targetId: target.userId,
+        targetBadges: target.badges,
+        channel: activeTab?.login ?? activeChannel,
+      }).catch((err) => {
+        Logger.debug('[Swipe] slider unavailable:', err);
+        return null;
+      }),
+    [activeTab?.login, activeChannel],
+  );
+  // The fan's quick Timeout is the swipe's first timeout length.
+  const sliderSettings = useAppStore((s) => (s.settings.chat_design?.mod_slider_timeouts ?? []).join(','));
+  const [quickSeconds, setQuickSeconds] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!swipeOn) return;
+    let cancelled = false;
+    void invoke<TouchSlider>('get_touch_mod_slider', { provider: 'twitch', rowWidth: 390 })
+      .then((slider) => !cancelled && setQuickSeconds(slider.quick_seconds))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [swipeOn, sliderSettings]);
+  const [hintLearned, setHintLearned] = useState(() => {
+    try {
+      return localStorage.getItem(SWIPE_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const learnSwipe = useCallback(() => {
+    setHintLearned(true);
+    try {
+      localStorage.setItem(SWIPE_HINT_KEY, '1');
+    } catch {
+      // Private storage is off; the hint just shows again next time.
+    }
+  }, []);
+
+  // The viewer's standing here, for what Twitch allows on each message.
+  const viewerRole: 'broadcaster' | 'moderator' | null = !modToolsArmed
+    ? null
+    : !!broadcasterId && currentUser?.user_id === broadcasterId
+      ? 'broadcaster'
+      : 'moderator';
+
+  /** The chatter behind a row and what Twitch allows on it (`messageReach`):
+   *  Delete alone on the viewer's own message, nothing on the broadcaster's. */
+  const reachOf = useCallback(
+    (messageId: string): { target: SwipeTarget; reach: MessageReach } | null => {
+      if (isHeldRowId(messageId)) return null;
+      for (const message of messages) {
+        if (getMessageId(message) !== messageId) continue;
+        try {
+          const parsed = parseMessage(message as string | BackendChatMessage);
+          const userId = parsed.tags.get('user-id') ?? '';
+          if (!userId || parsed.username === 'System') return null;
+          // Subs, raids and other event rows are the room's, not a chatter's line.
+          if (parsed.tags.get('system-msg')) return null;
+          const badges = (parsed.tags.get('badges') ?? '').split(',').filter(Boolean);
+          const target = { userId, name: parsed.tags.get('display-name') || parsed.username || '', badges };
+          return { target, reach: messageReach(viewerRole, currentUser?.user_id ?? '', userId, badges) };
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    },
+    [messages, getMessageId, viewerRole, currentUser?.user_id],
+  );
+  const swipeTargetFor = useCallback(
+    (messageId: string): SwipeTarget | null => {
+      const found = reachOf(messageId);
+      if (found && found.reach !== 'nothing') return found.target;
+      // Why a press starts no swipe, for the app log (the iPhone logs the same).
+      const why = !found
+        ? 'no chatter on this row'
+        : `Twitch allows nothing on it (own ${found.target.userId === currentUser?.user_id}, role ${viewerRole ?? 'viewer'}, sender badges ${found.target.badges.join(',') || 'none'})`;
+      Logger.warn('[Swipe]', `down on ${messageId}: not swipeable: ${why}`);
+      return null;
+    },
+    [reachOf, viewerRole, currentUser?.user_id],
+  );
+  // The room's resolved role, logged when it changes.
+  useEffect(() => {
+    if (!isTwitchRoom) return;
+    Logger.warn(
+      '[Swipe]',
+      `room ${activeTab?.login ?? activeChannel}: role ${viewerRole ?? 'viewer'}, viewer ${currentUser?.user_id || 'unknown'}, mod tools ${modToolsArmed ? 'on' : 'off'}, room id ${broadcasterId ?? 'unknown'}`,
+    );
+  }, [isTwitchRoom, viewerRole, modToolsArmed, broadcasterId, currentUser?.user_id, activeTab?.login, activeChannel]);
+
+  // What the fan leaves out: by platform and the read-only overlay, and the mod
+  // tiles while Hold menu buttons is off.
+  const fanHides = useMemo(() => {
+    const base = isTwitchRoom
+      ? noSend
+        ? READ_ONLY_HIDES
+        : undefined
+      : noSend
+        ? OTHER_PLATFORM_READ_ONLY_HIDES
+        : OTHER_PLATFORM_HIDES;
+    if (!holdModButtons) return [...(base ?? []), ...MOD_TILES];
+    // Only what Twitch allows on the held message: Delete alone on your own.
+    const reach = fanTarget ? (reachOf(fanTarget.messageId)?.reach ?? 'nothing') : 'all';
+    const refused: FanAction[] = [
+      ...(reachCanDelete(reach) ? [] : (['delete'] as FanAction[])),
+      ...(reachCanTimeout(reach) ? [] : (['timeout', 'ban'] as FanAction[])),
+    ];
+    return refused.length ? [...(base ?? []), ...refused] : base;
+  }, [isTwitchRoom, noSend, holdModButtons, fanTarget, reachOf]);
+
+  // Out of sight, nothing of this room stays up: the fan and the sheets draw
+  // outside the pane, so hiding the pane would not hide them.
+  useEffect(() => {
+    if (!paused) return;
+    closeFan();
+    setSheetUser(null);
+    setAddChatOpen(false);
+  }, [paused, closeFan]);
 
   const runFanAction = useCallback(
     (action: FanAction, timeoutSecs?: number) => {
@@ -594,38 +802,41 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
             color: '#9147FF',
           });
           break;
+        // The same door as desktop's hover dock: Rust's words and Undo on
+        // success, Twitch's reason on a refusal, and the first saved reason on
+        // a timeout or ban.
         case 'delete':
           if (broadcasterId) {
-            void deleteMessage(broadcasterId, t.messageId).then(
-              (ok) => !ok && addToast('Could not delete that message.', 'error'),
-            );
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'delete', messageId: t.messageId },
+            });
           }
           break;
         case 'timeout':
           if (broadcasterId && t.userId) {
-            void banUser(broadcasterId, t.userId, timeoutSecs ?? 600).then((ok) => {
-              if (!ok) addToast('Could not time out that user.', 'error');
-              else
-                addToast(
-                  `Timed out ${t.username} for ${formatDuration(timeoutSecs ?? 600)}`,
-                  'success',
-                  {
-                    label: 'Undo',
-                    onClick: () => void unbanUser(broadcasterId, t.userId),
-                  },
-                );
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'timeout', seconds: timeoutSecs ?? 600 },
+              useSavedReason: true,
             });
           }
           break;
         case 'ban':
           if (broadcasterId && t.userId) {
-            void banUser(broadcasterId, t.userId, null).then((ok) => {
-              if (!ok) addToast('Could not ban that user.', 'error');
-              else
-                addToast(`Banned ${t.username}`, 'success', {
-                  label: 'Undo',
-                  onClick: () => void unbanUser(broadcasterId, t.userId),
-                });
+            void moderateWithToast({
+              provider: 'twitch',
+              broadcasterId,
+              targetUserId: t.userId,
+              targetName: t.username,
+              action: { kind: 'ban' },
+              useSavedReason: true,
             });
           }
           break;
@@ -648,7 +859,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   // the data attribute below) so the gesture is discoverable rather than secret.
   const onListClick = useCallback(
     (e: React.MouseEvent) => {
-      if (readOnly || !isPaused || press.isArmed()) return;
+      if (noSend || !isPaused || press.isArmed()) return;
       const el = e.target as HTMLElement;
       // Usernames and links keep their own behaviour.
       if (el.closest('a,[data-no-drag],button')) return;
@@ -664,20 +875,42 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         channel: activeChannel ?? '',
       });
     },
-    [readOnly, isPaused, press, describeMessage, activeChannel],
+    [noSend, isPaused, press, describeMessage, activeChannel],
   );
 
 
+  // The inbox over this chat: its bottom sheet, or a new mention's card. The
+  // watch pane stays mounted under the mini player and behind Chats, so the
+  // card rises only where the chat is on screen.
+  const navTab = useMobileNavStore((s) => s.activeTab);
+  const playerFull = useMobileNavStore((s) => s.playerMode === 'full');
+  const onScreen = surface === 'chats' ? !paused : navTab !== 'chats' && playerFull;
+  const inboxSide = useAppStore((s) => (s.settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'));
+  const cardHere = useMentionsStore((s) => !!s.arrival && !s.composerBusy && !s.sheetIn) && onScreen && !readOnly;
+  // Rows under the card fade out above it instead of showing as slivers; the
+  // top fade stays when the pane draws one.
+  const clear = cardHere ? '62px' : null;
+  const listMask = clear
+    ? `linear-gradient(to bottom, ${strip ? '#000 0' : 'transparent 0, #000 24px'}, #000 calc(100% - ${clear} - 24px), transparent calc(100% - ${clear}))`
+    : undefined;
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <ChatTabStrip />
+      {strip && <ChatTabStrip />}
+      {top}
+      <div className="flex-1 min-h-0 relative flex flex-col">
       <div
         ref={listRef}
+        style={listMask ? { WebkitMaskImage: listMask, maskImage: listMask } : undefined}
+        data-chat-list=""
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
         // long-press on text by starting its OWN text selection, which wins the
         // gesture and the fan never arms. Chat text needs no selection anyway —
         // the fan's Copy bucket is the way to take a message.
-        className="flex-1 min-h-0 relative select-none [-webkit-touch-callout:none]"
+        // With swiping on, a sideways move on a row is the swipe's from the first pixel: `sn-swipe-mod`
+        // gives the rows themselves `touch-action: pan-y`. On this wrapper it would do nothing, since
+        // the browser reads touch-action only from the touched element up to its scroll container.
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${swipeOn ? 'sn-swipe-mod' : ''}`}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}
@@ -686,10 +919,11 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         onClick={onListClick}
         // While paused, rows are tappable to reply. Signposted by the hint pill
         // below rather than left as a secret gesture.
-        data-tap-reply={isPaused && !readOnly ? 'true' : undefined}
+        data-tap-reply={isPaused && !noSend ? 'true' : undefined}
       >
         <ChatMessageList
           messages={shownMessages}
+          emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
           renderToken={renderToken}
           isPaused={isPaused}
           onPauseIntent={() => pause(true)}
@@ -699,7 +933,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           onEmoteRightClick={() => {}}
           onUsernameRightClick={() => {}}
           onBadgeClick={() => {}}
-          highlightedMessageId={highlightedMessageId}
+          highlightedMessageId={null}
           deletedMessageIds={deletedMessageIds}
           clearedUserContexts={clearedUserContexts}
           emotes={emotes}
@@ -708,9 +942,21 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           homeProvider={activeProvider}
           getMessageId={getMessageId}
         />
+        {swipeOn && !hintLearned && (
+          <div className="pointer-events-none absolute left-0 right-0 top-2 z-10 flex justify-center">
+            {/* Only the X takes a touch: a swipe on the row under the pill still starts. */}
+            <div className="glass-badge flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1.5 text-[12px] text-textPrimary">
+              <HandPointing size={14} weight="bold" className="text-accent" />
+              Swipe right on a message to moderate it
+              <button type="button" onClick={learnSwipe} aria-label="Dismiss the swipe hint" className="pointer-events-auto p-1 text-textMuted">
+                <X size={11} weight="bold" />
+              </button>
+            </div>
+          </div>
+        )}
         {isPaused && (
           <div className="absolute bottom-2 left-0 right-0 flex flex-col items-center gap-1 z-10 pointer-events-none">
-            {!readOnly && (
+            {!noSend && (
               <span className="glass-badge rounded-full px-2 py-0.5 text-[10.5px] text-textMuted">
                 Tap a message to reply
               </span>
@@ -725,8 +971,29 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           </div>
         )}
       </div>
-      {!readOnly && (
+      {/* Outside the list, so a press in them never reaches its gestures. */}
+      {onScreen && !readOnly && <InboxArrival side={inboxSide} />}
+      <InboxSheet surface={surface} />
+      </div>
+      {/* The landscape overlay has no room for it and shows whichever is chosen. */}
+      {vodHere && !readOnly && (
+        <div
+          className="px-2.5 pt-1.5"
+          // With no composer under it, the switch clears the gesture bar itself.
+          style={replayOn ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 10px)' } : undefined}
+        >
+          <SegmentedControl
+            label="Chat for this video"
+            segments={REPLAY_SEGMENTS}
+            value={replayShowing}
+            onChange={setVodReplayShowing}
+            fill
+          />
+        </div>
+      )}
+      {!noSend && (
         <MobileChatInput
+          inboxSurface={surface}
           channel={activeTab?.login ?? null}
           provider={activeProvider}
           channelId={broadcasterId}
@@ -756,20 +1023,22 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       <AddChatSheet open={addChatOpen} onClose={handleCloseAddChat} />
       {/* Long-press fan-out. Owns every per-message action now, for everyone:
           moderators simply get more buckets. */}
+      <SwipeModerator
+        listRef={listRef}
+        enabled={swipeOn}
+        broadcasterId={broadcasterId}
+        targetFor={swipeTargetFor}
+        sliderFor={sliderFor}
+        fanArmed={press.isArmed}
+        onDone={learnSwipe}
+      />
       <ChatFanOut
         target={fanTarget}
         isModerator={modToolsArmed}
         canPin={modToolsArmed && !!broadcasterId}
-        hide={
-          isTwitchRoom
-            ? readOnly
-              ? READ_ONLY_HIDES
-              : undefined
-            : readOnly
-              ? OTHER_PLATFORM_READ_ONLY_HIDES
-              : OTHER_PLATFORM_HIDES
-        }
+        hide={fanHides}
         onCommit={runFanAction}
+        quickSeconds={quickSeconds}
         onCancel={closeFan}
       />
     </div>

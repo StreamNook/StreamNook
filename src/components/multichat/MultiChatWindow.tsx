@@ -48,9 +48,12 @@ import {
   resolveYouTubeIdentifier,
   youTubeChannelTitle,
 } from '../../services/channelLookup';
-import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
+import { CHAT_PROVIDERS, PROVIDERS, isProviderId, type ProviderId } from '../../types/providers';
 import { ProviderLogo } from '../ProviderLogo';
 import { BlendedChatPane } from './BlendedChatPane';
+import { MentionsList } from '../mentions/MentionsList';
+import { mentionRoomKey, requestMentionJump } from '../../stores/mentionJumpStore';
+import { useVisibleMentionRooms } from '../../stores/mentionInboxStore';
 import ModRoomPane from '../modroom/ModRoomPane';
 import { useChannelEmotes } from '../../stores/chatConnectionStore';
 import { isCachedModerator, loadModeratedChannelIds, subscribeModeratedChannels } from '../../services/modRoomService';
@@ -101,7 +104,7 @@ import { MULTICHAT_BASE_WIDTH, openMultiChatWindow } from '../../utils/multichat
 import { Tooltip } from '../ui/Tooltip';
 import { TabScroller } from '../ui/TabScroller';
 import { Logger } from '../../utils/logger';
-import type { TwitchStream } from '../../types';
+import type { MentionEntry, TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
 import SplitLayout from './SplitLayout';
 import BadgeSpotlightHost from '../BadgeSpotlightHost';
@@ -1915,6 +1918,42 @@ export default function MultiChatWindow() {
     };
   }, []);
 
+  // The chats this window has on screen, for Rust's mentions inbox (which
+  // reads them as read and does not notify for them). The Mentions list and
+  // the mod room show no chat.
+  const mentionVisibleRooms = useMemo(() => {
+    if (modsMode || isMentionsMode) return '';
+    const keys = isBlendedMode ? channels.map(entryKey) : [...visibleSet];
+    return keys
+      .map((k) => {
+        const p = parseKey(k);
+        return mentionRoomKey(p.provider, p.channel);
+      })
+      .sort()
+      .join('|');
+  }, [modsMode, isMentionsMode, isBlendedMode, channels, visibleSet]);
+  useVisibleMentionRooms(mentionVisibleRooms);
+
+  // Opening a row in the Mentions list: Rust marks it read; the chat for its
+  // room comes forward (added when it is not open here) and takes the jump.
+  const openMentionHere = useCallback(
+    (entry: MentionEntry) => {
+      invoke('open_mention', { id: entry.id }).catch((e) =>
+        Logger.debug('[MultiChatWindow] open_mention failed:', e),
+      );
+      const room = entry.room.toLowerCase();
+      requestMentionJump({ id: entry.id, room, entry });
+      const open = channels.find((c) => mentionRoomKey(c.provider ?? 'twitch', c.channel) === room);
+      if (open) {
+        selectChannel(entryKey(open));
+        return;
+      }
+      setIsMentionsMode(false);
+      void addChannel(entry.channel_login, isProviderId(entry.platform) ? entry.platform : 'twitch');
+    },
+    [channels, selectChannel, addChannel],
+  );
+
   return (
     <div className="flex h-screen flex-col bg-background text-textPrimary">
       {/* Badge clicks here open their card in this window, not main. */}
@@ -2274,13 +2313,12 @@ export default function MultiChatWindow() {
               onStartSetup={startGoLiveSetup}
             />
           ) : isMentionsMode ? (
-            // Mentions feed: every open source, only the rows the Rust rule
-            // engine stamped as a mention, a reply to us, or a highlight match.
-            <ErrorBoundary
-              componentName="Mentions feed"
-              resetKeys={[channels.map((c) => `${c.provider ?? 'twitch'}:${c.channel}`).join('|')]}
-            >
-              <BlendedChatPane channels={channels} mode="mentions" />
+            // Mentions: the account's inbox from Rust (every chat, not only
+            // the ones open here). Opening a row brings its chat forward.
+            <ErrorBoundary componentName="Mentions">
+              <div className="flex min-h-0 flex-1 flex-col">
+                <MentionsList compact onOpen={openMentionHere} />
+              </div>
             </ErrorBoundary>
           ) : isBlendedMode ? (
             // Blended mode: every open source merged into one time-ordered feed
@@ -2800,7 +2838,7 @@ function TitleBar({
           data-tauri-drag-region="false"
         >
           <LayoutToggleButton
-            label="Mentions: only messages that mention you, reply to you, or match a highlight"
+            label="Mentions: every mention of you and reply to you, from every chat"
             active={isMentionsMode}
             onClick={onToggleMentions}
           >

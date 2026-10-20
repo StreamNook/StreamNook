@@ -51,6 +51,29 @@ pub struct RosterAccount {
     /// Why this account has to sign in again, when StreamNook signed it out
     /// itself. Only Twitch carries one today (`twitch_signin`).
     pub reason: Option<SignInReason>,
+    /// This build can sign in to it here. YouTube and TikTok sign in through a desktop webview
+    /// only, so the phones offer them nowhere until their own sign-in lands.
+    pub can_sign_in: bool,
+    /// This build can open that platform's streams and chat. The phones list,
+    /// follow and play Twitch and Kick only, so YouTube and TikTok rows, the
+    /// settings that only touch them, and their share links stay off there.
+    pub can_watch: bool,
+}
+
+/// Whether this build can run `id`'s sign-in.
+pub fn can_sign_in(id: &str) -> bool {
+    match id {
+        "youtube" | "tiktok" => cfg!(desktop),
+        _ => true,
+    }
+}
+
+/// Whether this build can watch `id`'s streams and chat.
+pub fn can_watch(id: &str) -> bool {
+    match id {
+        "youtube" | "tiktok" => cfg!(desktop),
+        _ => true,
+    }
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
@@ -157,6 +180,8 @@ fn empty(id: &'static str, status: AccountStatus) -> RosterAccount {
         avatar_url: None,
         account_id: None,
         reason: None,
+        can_sign_in: can_sign_in(id),
+        can_watch: can_watch(id),
     }
 }
 
@@ -203,6 +228,8 @@ async fn platform_row(id: &'static str) -> RosterAccount {
         avatar_url,
         account_id,
         reason: None,
+        can_sign_in: can_sign_in(id),
+        can_watch: can_watch(id),
     }
 }
 
@@ -230,6 +257,8 @@ fn twitch_row_from(identity: Option<UserInfo>, reason: Option<SignInReason>) -> 
             avatar_url: user.profile_image_url,
             account_id: Some(user.id),
             reason: None,
+            can_sign_in: true,
+            can_watch: true,
         },
         None => empty("twitch", AccountStatus::NotConnected),
     }
@@ -271,6 +300,16 @@ pub async fn build() -> AccountRoster {
     }
 }
 
+/// The Twitch account whose whispers to listen for: the connected one, else
+/// nobody (signed out, or signed out by StreamNook until it signs in again).
+fn whisper_account(roster: &AccountRoster) -> Option<String> {
+    roster
+        .main_account("twitch")
+        .filter(|a| a.status == AccountStatus::Connected)
+        .and_then(|a| a.account_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
 /// Rebuild the roster and tell every window, if it changed.
 ///
 /// Cheap and safe to call from any credential write: it spawns, reads memory,
@@ -286,9 +325,16 @@ pub fn notify() {
         // Claims are reported from every build (they dedupe on their own), so a
         // retry after a cooldown goes out even when the roster did not change.
         crate::services::linked_accounts::on_roster(&roster);
+        // The whisper socket follows the Twitch account on every platform:
+        // listening while it is connected, closed on sign-out or once Twitch
+        // needs the sign-in again.
+        crate::services::whisper_service::follow_account(&app, whisper_account(&roster));
         if last.as_ref() == Some(&roster) {
             return;
         }
+        // A new account (or the first one this run) opts in and pulls its own
+        // mentions while you're away.
+        crate::services::mention_watch::client::on_account_changed();
         let _ = app.emit("account-roster-changed", &roster);
         *last = Some(roster);
     });
@@ -297,6 +343,23 @@ pub fn notify() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn youtube_and_tiktok_sign_in_only_where_the_build_can() {
+        assert!(can_sign_in("twitch") && can_sign_in("kick") && can_sign_in("twitch_drops"));
+        assert_eq!(can_sign_in("youtube"), cfg!(desktop));
+        assert_eq!(can_sign_in("tiktok"), cfg!(desktop));
+    }
+
+    #[test]
+    fn youtube_and_tiktok_watch_only_where_the_build_can() {
+        assert!(can_watch("twitch") && can_watch("kick"));
+        assert_eq!(can_watch("youtube"), cfg!(desktop));
+        assert_eq!(can_watch("tiktok"), cfg!(desktop));
+        let row = empty("youtube", AccountStatus::NotConnected);
+        assert_eq!(row.can_watch, cfg!(desktop));
+        assert_eq!(serde_json::to_value(&row).unwrap()["can_watch"], cfg!(desktop));
+    }
 
     #[test]
     fn expired_clears_on_reconnect() {

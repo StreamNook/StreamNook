@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and lower. Same set as data_extraction_rules.xml: an include
+     list, so a file added to the data dir later stays out unless it is named
+     here. The data dir is Tauri's app_data_dir (the app's dataDir, domain
+     "root") plus "StreamNook". -->
+<full-backup-content>
+    <include domain="root" path="StreamNook/settings.json" />
+    <include domain="root" path="StreamNook/settings-backups" />
+</full-backup-content>

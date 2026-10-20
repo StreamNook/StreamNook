@@ -10,7 +10,9 @@
 //! their lookups finish, then once more when their personal emote sets land.
 //! The channel's own moderator and VIP art (its FFZ room) is the same kind of
 //! late answer, so a backlog answered before the room was read is patched again
-//! once it has been.
+//! once it has been. So is the channel's own badge set (its subscriber art):
+//! history reads it itself when it is not noted yet, waits the same short time
+//! for it, and patches the backlog once it lands.
 //! Only native shells draw from the stamped view; the web renderers resolve a
 //! row's cosmetics on the page.
 
@@ -35,7 +37,8 @@ const FOLLOW_WAIT: Duration = Duration::from_secs(20);
 const PERSONAL_WAIT: Duration = Duration::from_secs(6);
 /// Lets the shell put the answer's rows on screen before a patch names them.
 const PATCH_DELAY: Duration = Duration::from_millis(500);
-/// How long the follow-up waits for the channel's FFZ room to be read.
+/// How long the follow-up waits for the channel's FFZ room, or its own badge
+/// set, to be read.
 const ROOM_ART_WAIT: Duration = Duration::from_secs(10);
 /// How long the registry may take to load before members are looked up.
 const REGISTRY_WAIT: Duration = Duration::from_secs(5);
@@ -149,17 +152,32 @@ pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> 
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    let room = rows.iter().find_map(|m| m.tags.get("room-id").cloned());
     // A room not read yet draws Twitch's own moderator and VIP badges until it is.
-    let room_art = rows
-        .iter()
-        .find_map(|m| m.tags.get("room-id").cloned())
-        .filter(|room| ffz_room_badges::enabled() && !ffz_room_badges::has_entry(room));
+    let room_art = room.clone().filter(|room| ffz_room_badges::enabled() && !ffz_room_badges::has_entry(room));
+    // A channel whose own badge set is not noted yet would put Twitch's default
+    // subscriber badge on every backlog row: it is read now and briefly waited
+    // on, and a read that takes longer patches the backlog when it lands.
+    let mut rows = rows;
+    let mut set_read = room.filter(|room| !chat_row_view::has_room_badges(room)).map(|room| {
+        tokio::spawn(async move {
+            if let Err(e) = crate::commands::badges::fetch_channel_badges(room.clone()).await {
+                log::debug!("[ChatHistory] channel badges for {room} unavailable: {e}");
+            }
+        })
+    });
+    if let Some(read) = set_read.as_mut() {
+        if tokio::time::timeout(ANSWER_WAIT, read).await.is_ok() {
+            set_read = None;
+            rows = IrcService::parse_historical_messages(raw.to_vec()).await;
+        }
+    }
     // Members are only known once the registry has loaded; before that, the
     // lookup task waits for it and the members arrive by patch.
     if registry::ready(Duration::ZERO).await && needed_now(&authors).is_empty() {
         log::info!("[ChatHistory] {channel}: every author's cosmetics known, answered at once");
-        if room_art.is_some() {
-            spawn_follow(channel, raw, &rows, None, Vec::new(), room_art);
+        if room_art.is_some() || set_read.is_some() {
+            spawn_follow(channel, raw, &rows, None, Vec::new(), room_art, set_read);
         }
         return rows;
     }
@@ -173,22 +191,22 @@ pub async fn decorate(channel: &str, raw: &[String], rows: Vec<ChatMessage>) -> 
     });
     let rows = match tokio::time::timeout(ANSWER_WAIT, &mut lookups).await {
         Ok(Ok(None)) | Ok(Err(_)) => {
-            if room_art.is_some() {
-                spawn_follow(channel, raw, &rows, None, Vec::new(), room_art);
+            if room_art.is_some() || set_read.is_some() {
+                spawn_follow(channel, raw, &rows, None, Vec::new(), room_art, set_read);
             }
             rows
         }
         Ok(Ok(Some(sets))) => {
             let rows = IrcService::parse_historical_messages(raw.to_vec()).await;
-            if !sets.is_empty() || room_art.is_some() {
-                spawn_follow(channel, raw, &rows, None, sets, room_art);
+            if !sets.is_empty() || room_art.is_some() || set_read.is_some() {
+                spawn_follow(channel, raw, &rows, None, sets, room_art, set_read);
             }
             rows
         }
         Err(_) => {
             // Some lookups are slow: answer with what is known now, patch the rest.
             let rows = IrcService::parse_historical_messages(raw.to_vec()).await;
-            spawn_follow(channel, raw, &rows, Some(lookups), Vec::new(), room_art);
+            spawn_follow(channel, raw, &rows, Some(lookups), Vec::new(), room_art, set_read);
             rows
         }
     };
@@ -203,11 +221,18 @@ fn spawn_follow(
     pending: Option<JoinHandle<Option<Vec<(String, String)>>>>,
     sets: Vec<(String, String)>,
     room_art: Option<String>,
+    set_read: Option<JoinHandle<()>>,
 ) {
     let channel = channel.to_string();
     let raw = raw.to_vec();
     let mut before: HashMap<String, String> = shown.iter().map(|m| (m.id.clone(), signature(m))).collect();
     tokio::spawn(async move {
+        // First, as it is usually quick: the channel's own badge set.
+        if let Some(read) = set_read {
+            let _ = tokio::time::timeout(ROOM_ART_WAIT, read).await;
+            tokio::time::sleep(PATCH_DELAY).await;
+            patch(&channel, &raw, &mut before).await;
+        }
         let mut sets = sets;
         if let Some(handle) = pending {
             if let Ok(Ok(Some(found))) = tokio::time::timeout(FOLLOW_WAIT, handle).await {

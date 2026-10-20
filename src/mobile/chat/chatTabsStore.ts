@@ -1,12 +1,14 @@
-// Open chat tabs for the mobile pane.
+// Open chat tabs: the strip under the player and the Chats screen.
 //
 // The tab rules live in Rust (`services/chat_tabs.rs`), shared with the iPhone
 // app: the stream tab is first and not closable, a room already open is never
 // opened twice, closing the room on screen falls back to the first one left,
-// and the stream tab follows the player unless you sit on another room. This
-// store mirrors Rust's list (from each command's answer and the `chat-tabs`
-// event, newest revision wins) and applies the connections each change asks
-// for.
+// and the stream tab follows the player unless you sit on another room. Rooms
+// you open yourself are your chats: Rust saves them per account, restores them
+// at launch and joins them on the first look at the Chats screen (or when a
+// stream starts). This store mirrors Rust's list (from each command's answer
+// and the `chat-tabs` event, newest revision wins) and applies the connections
+// each change asks for.
 //
 // Every tab holds its own reference on the shared IRC connection via
 // chatConnectionStore's `acquireChannel`/`releaseChannel`, which is
@@ -45,7 +47,19 @@ export interface ChatTab {
   /** True for the tab that follows the stream being watched. It is not
    *  removable and it re-points when the user switches streams. */
   pinnedToStream: boolean;
+  /** One of your chats: saved, and kept when the player closes. Every tab
+   *  you opened is kept; the stream tab only when you chose to keep it. */
+  kept: boolean;
+  /** Live now; null until the room's live line has answered. */
+  live: boolean | null;
+  viewerCount: number | null;
+  /** Mentions of you here not read yet. */
+  mentions: number;
 }
+
+/** Whether the rooms are joined: restored and waiting for a first look,
+ *  joined, or left after a while in the background. */
+export type ChatConnection = 'idle' | 'connected' | 'parked';
 
 /** A tab as Rust sends it. */
 interface RustTab {
@@ -56,12 +70,20 @@ interface RustTab {
   label: string;
   avatar: string | null;
   pinned_to_stream: boolean;
+  kept?: boolean;
+  live?: boolean | null;
+  viewer_count?: number | null;
+  mentions?: number;
 }
 
 interface RustView {
   tabs: RustTab[];
   active_channel: string | null;
   mixed_platforms: boolean;
+  connection?: ChatConnection;
+  mention_total?: number;
+  park_after_secs?: number;
+  keep_awake_idle_secs?: number;
   revision: number;
 }
 
@@ -73,6 +95,13 @@ interface RustChange extends RustView {
 interface ChatTabsState {
   tabs: ChatTab[];
   activeChannel: string | null;
+  connection: ChatConnection;
+  /** Unread mentions across every tab: the Chats tab's badge. */
+  mentionTotal: number;
+  /** Android leaves every room after this long in the background with no player. */
+  parkAfterSecs: number;
+  /** The Chats screen keeps the phone awake until this long passes with no touch. */
+  keepAwakeIdleSecs: number;
   /** Rust's revision of the list shown, so an older answer never wins. */
   revision: number;
   /** Bumped per channel to force a chat reload. */
@@ -96,6 +125,15 @@ interface ChatTabsState {
   removeTab: (channel: string) => void;
   setActive: (channel: string) => void;
   reload: (channel: string) => void;
+  /** Reads the saved chats (at launch: Rust restores them, not joined yet). */
+  load: () => void;
+  /** Joins every chat not joined yet: the Chats screen's first look, or the
+   *  return from a park. */
+  connect: () => void;
+  /** Leaves every chat after a while in the background (refused under a stream). */
+  park: () => void;
+  /** Keeps the stream's chat after the player closes, or lets it close with it. */
+  keep: (channel: string, keep: boolean) => void;
 }
 
 function fromRust(t: RustTab): ChatTab {
@@ -107,6 +145,10 @@ function fromRust(t: RustTab): ChatTab {
     label: t.label,
     avatar: t.avatar,
     pinnedToStream: t.pinned_to_stream,
+    kept: t.kept ?? !t.pinned_to_stream,
+    live: t.live ?? null,
+    viewerCount: t.viewer_count ?? null,
+    mentions: t.mentions ?? 0,
   };
 }
 
@@ -120,7 +162,15 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
   /** Shows Rust's list unless a newer one is already on screen. */
   const mirror = (view: RustView | null | undefined) => {
     if (!view || view.revision < get().revision) return;
-    set({ tabs: view.tabs.map(fromRust), activeChannel: view.active_channel, revision: view.revision });
+    set({
+      tabs: view.tabs.map(fromRust),
+      activeChannel: view.active_channel,
+      connection: view.connection ?? 'connected',
+      mentionTotal: view.mention_total ?? 0,
+      parkAfterSecs: view.park_after_secs ?? get().parkAfterSecs,
+      keepAwakeIdleSecs: view.keep_awake_idle_secs ?? get().keepAwakeIdleSecs,
+      revision: view.revision,
+    });
   };
 
   /** Mirrors the change, then leaves and joins the rooms it names. */
@@ -158,8 +208,30 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
   return {
     tabs: [],
     activeChannel: null,
+    connection: 'idle',
+    mentionTotal: 0,
+    parkAfterSecs: 120,
+    keepAwakeIdleSecs: 1800,
     revision: 0,
     reloadNonce: {},
+
+    load: () => {
+      follow();
+      void invoke<RustView>('chat_tabs_get')
+        .then(mirror)
+        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_get failed:', err));
+    },
+
+    connect: () => change('chat_tabs_connect', {}),
+
+    park: () => change('chat_tabs_park', {}),
+
+    keep: (channel, keep) => {
+      follow();
+      void invoke<RustView>('chat_tabs_keep', { channel, keep })
+        .then(mirror)
+        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_keep failed:', err));
+    },
 
     syncStreamTab: (channel, channelId, label, avatar, provider) =>
       change('chat_tabs_sync_stream', {
@@ -219,11 +291,11 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
       // clears that state.
       //
       // Forced, because a deliberate tap must always act even if something else
-      // rebuilt the connection moments ago. hardCycleChat bumps the nonce for
-      // every room it touches, so this one gets refreshed along the way.
+      // rebuilt the connection moments ago. Every room keeps its rows through
+      // the rebuild, and its history load fills what the outage missed.
       //
-      // Imported here rather than at the top because chatRecovery reads this
-      // store, and a static import both ways is a cycle.
+      // Imported here rather than at the top to keep the recovery module out
+      // of this store's load.
       void (async () => {
         try {
           const { hardCycleChat } = await import('./chatRecovery');

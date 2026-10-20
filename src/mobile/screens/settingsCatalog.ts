@@ -3,10 +3,11 @@
 // by. Settings search and Changed settings both list its rows; this maps a row
 // onto the phone's settings pages.
 import { useMobileNavStore } from '../navStore';
+import { Logger } from '../../utils/logger';
 
 /** Mirrors Rust `settings_catalog::CatalogRow`. */
 export interface CatalogRow {
-  /** `player`, `adFree`, `chat`, `theme`, `notifications`, `cache`, `support`. */
+  /** `player`, `adFree`, `chat`, `moderation`, `theme`, `notifications`, `cache`, `support`. */
   page: string;
   section: string;
   title: string;
@@ -25,6 +26,7 @@ const PAGE_VIEW: Record<string, string> = {
   player: 'Player',
   adFree: 'Ad-free',
   chat: 'Chat',
+  moderation: 'Moderation',
   theme: 'Theme',
   notifications: 'Notifications',
   cache: 'Cache',
@@ -37,6 +39,17 @@ export const CATALOG_PAGES = Object.keys(PAGE_VIEW);
 /** The settings page a catalog page id names, or null for a page this phone
  *  does not have. */
 export const pageViewOf = (page: string): string | null => PAGE_VIEW[page] ?? null;
+
+/** The rows this phone can draw: a row it cannot read, or one on a page it
+ *  does not have, is logged and left out, so one row never blanks a list (the
+ *  iPhone does the same). */
+export function knownRows(rows: CatalogRow[], where: string): CatalogRow[] {
+  return rows.filter((row) => {
+    if (row && typeof row.title === 'string' && Array.isArray(row.paths) && pageViewOf(row.page)) return true;
+    Logger.warn(`[${where}] settings row skipped:`, row);
+    return false;
+  });
+}
 
 /** "Chat › Message Layout": where the row lives. A section named like its page
  *  ("Cache" on Cache) says it once; a nested row adds the row it sits under. */

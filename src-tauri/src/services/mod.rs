@@ -7,6 +7,7 @@ pub mod badge_feed;
 pub mod badge_polling_service;
 pub mod badge_earn;
 pub mod badge_service;
+pub mod browse_languages;
 pub mod badge_standing;
 pub mod badge_wall;
 pub mod badge_window;
@@ -29,6 +30,7 @@ pub mod cast_pick;
 #[cfg(target_os = "android")]
 pub mod cast_session;
 pub mod changelog;
+pub mod channel_media;
 pub mod channel_avatars;
 pub mod ll_diagnostics;
 pub mod channel_points_websocket_service;
@@ -38,6 +40,7 @@ pub mod chat_bridge_route;
 pub mod chat_history;
 pub mod chat_rules;
 pub mod chat_row_view;
+pub mod shared_chat_emotes;
 pub mod history_cosmetics;
 pub mod command_catalog;
 pub mod chat_send_limiter;
@@ -52,9 +55,18 @@ pub mod version_report;
 pub mod twitch_recap;
 pub mod pronouns;
 pub mod mention_ping;
+pub mod mention_watch;
+pub mod mention_match;
+pub mod mention_inbox;
+pub mod stream_manager;
 pub mod streamer_mode;
 pub mod suspicious_users;
 pub mod user_notes;
+pub mod mod_history;
+pub mod chat_warning;
+pub mod chatter_card;
+pub mod touch_mod_slider;
+pub mod room_mod_log;
 pub mod diagnostic_logger;
 pub mod hls_projection;
 pub mod hls_seq_ids;
@@ -73,6 +85,7 @@ pub mod drop_words;
 pub mod drops_overview;
 pub mod drops_service;
 pub mod game_suggest;
+pub mod wallet_glyph;
 pub mod watched_chest;
 pub mod reward_drops;
 pub mod reward_redeem;
@@ -96,6 +109,7 @@ pub mod http;
 pub mod hype_train_watch;
 pub mod irc_service;
 pub mod ivr;
+pub mod late_third_party;
 pub mod irc_transport;
 pub mod kick_auth_service;
 pub mod layout_service;
@@ -107,8 +121,7 @@ pub mod youtube_auth_service;
 pub mod favorite_categories;
 pub mod hidden_channels;
 pub mod favorite_live_service;
-// Reads the chat dock, which is desktop only.
-#[cfg(desktop)]
+// The live line for the desktop chat dock and the phone chats.
 pub mod chat_dock_live;
 pub mod live_announce;
 pub mod live_bookmark;
@@ -123,7 +136,17 @@ pub mod link_adapt;
 pub mod ll_origin;
 pub mod theme_palette;
 pub mod settings_backups;
+pub mod install_marker;
 pub mod settings_catalog;
+pub mod alert_types;
+// Phones only: go-live push registration. Its rules are tested on desktop.
+#[cfg(any(mobile, test))]
+pub mod push_alerts;
+// Phones only: the background go-live check and its never-twice record. Its
+// rules are tested on desktop.
+#[cfg(any(mobile, test))]
+pub mod live_poll;
+pub mod client_capabilities;
 #[cfg(test)]
 mod ll_soak;
 #[cfg(test)]
@@ -146,6 +169,7 @@ pub mod multi_nook_raids;
 pub mod profile_cache_service;
 pub mod providers;
 pub mod quality;
+pub mod my_clips;
 pub mod relay_probe;
 pub mod reminder_service;
 pub mod seventv_auth_service;
@@ -159,6 +183,9 @@ pub mod streamnook_backend;
 pub mod css_fill;
 pub mod cosmetics_registry;
 pub mod member_profile;
+pub mod member_rewards;
+pub mod member_signin;
+pub mod member_stats;
 pub mod member_theme;
 pub mod profile_view;
 pub mod flv_fmp4;
@@ -192,14 +219,23 @@ pub mod channel_rewards;
 pub mod channel_state;
 // The phone chat pane's open rooms (both phone shells).
 pub mod chat_tabs;
+pub mod chat_picker;
 // Rebuilds a dead Twitch chat connection with its rooms (the phones' reload and watchdog).
 pub mod chat_recovery;
 // A native shell's outage row and gap backfill for Twitch chat.
 pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
+pub mod link_preview_cache;
+pub mod shared_chat_source;
+// The Custom interface font's files on the phones.
+pub mod custom_font;
 pub mod share_link;
 pub mod slash_commands;
+pub mod chat_top_stack;
+pub mod poll_view;
+pub mod predictions;
+pub mod sleep_timer;
 pub mod slash_dispatch;
 pub mod nuke;
 pub mod hls_kind;
@@ -209,6 +245,7 @@ pub mod unified_following;
 pub mod muted_segments;
 pub mod vod_chapters;
 pub mod vod_progress_service;
+pub mod vod_replay;
 pub mod vod_sync;
 pub mod vod_storyboard;
 pub mod watch_heartbeat_service;

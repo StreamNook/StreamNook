@@ -21,6 +21,11 @@ export interface ThemePalette {
     accent: string;
     accentHover: string;
     accentMuted: string;
+    /** The accent floored to 3:1 on the raised surface (Rust's
+     *  theme_palette::accent_on_surface), for accent marks that sit on a card:
+     *  share bars, accent words and icons. Every built-in ships it; a palette
+     *  without it paints the accent. */
+    accentOnSurface?: string;
 
     // Border colors
     border: string;
@@ -122,8 +127,10 @@ export const getThemesByCategory = (category: Theme['category']): Theme[] => {
 // CUSTOM THEME UTILITIES
 // ============================================
 
+import { invoke } from '@tauri-apps/api/core';
 import type { CustomTheme, CustomThemeColor, CustomThemePalette } from '../types';
 import { IS_MOBILE } from '../utils/platform';
+import { Logger } from '../utils/logger';
 
 // Resolve a CustomThemeColor to a CSS-compatible string
 const resolveColor = (c: CustomThemeColor): string => {
@@ -159,6 +166,9 @@ export const customThemeToTheme = (custom: CustomTheme): Theme => {
             accent: resolveColor(p.accent),
             accentHover: resolveColor(p.accentHover),
             accentMuted: resolveColor(p.accentMuted),
+            // Rust writes the floored accent into custom themes on load; one
+            // saved before that has none and paints its accent.
+            accentOnSurface: resolveColor(p.accentOnSurface ?? p.accent),
             border: resolveColor(p.border),
             borderLight: resolveColor(p.borderLight),
             borderSubtle: resolveColor(p.borderSubtle),
@@ -308,6 +318,16 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
     };
 };
 
+/**
+ * A phone's page floors: nothing shows behind a phone's app (desktop's window
+ * can be see-through, a phone's never is), so a custom theme's see-through
+ * background is what it looks like over black, and the tertiary floor sits on
+ * that. Flattened once here, every surface built as solid from them (static
+ * popovers, menus, the tab bar floor, fades, Glassiness 0) is solid.
+ */
+export const phoneFloors = (background: string, tertiary: string): { background: string; tertiary: string } =>
+    opaqueFloors(background, tertiary, PHONE_FLOOR);
+
 // Whether a background needs light-coloured content drawn on top of it.
 // Relative luminance with the sRGB coefficients, split at the midpoint. Used for
 // the Android system bars, which sit over the app's own background: only the
@@ -370,6 +390,10 @@ export const getOledTheme = (accentHex?: string): Theme => {
             accent,
             accentHover: lightenColor(accent, 20),
             accentMuted: `rgba(${r}, ${g}, ${b}, 0.5)`,
+            // Every preset already clears 3:1 on OLED's near-black cards (the
+            // Rust core's tests prove it), so the accent paints first; a picked
+            // accent that does not is floored by applyTheme's ask to Rust.
+            accentOnSurface: accent,
             // Soft tint of the accent (lavender for purple, peach for orange…),
             // mixed toward white so secondary text stays readable on black.
             textSecondary: lightenColor(accent, OLED_SECONDARY_LIGHTEN),
@@ -409,9 +433,10 @@ let lastGlassStrength = 1;
 // glassiness would show the content behind it sharp enough to fight the text on
 // it, so with blur off the tint never gets more see-through than this. The
 // cap matches the member card's pinned strength, the app's existing "glass
-// that still reads" level.
+// that still reads" level. It lives in the shared JSON so the iPhone's native
+// theme light caps glassiness the same way.
 let glassBlurEnabled = true;
-const BLUR_OFF_MAX_STRENGTH = 0.45;
+const BLUR_OFF_MAX_STRENGTH: number = builtIn.glassBlurOffMaxStrength;
 const effectiveGlassStrength = (): number =>
     glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
 
@@ -446,6 +471,58 @@ const writeSurfaceGlass = (strength: number): void => {
     root.style.setProperty('--color-surface-active', blendSurfaceForGlass(surfaceActive, tertiary, strength));
 };
 
+// ─── Rust's contrast floors ──────────────────────────────────────────────────
+// The core (`lift_theme_palette`, services/theme_palette.rs) lifts muted and
+// secondary text to their contrast floors and floors the accent for cards.
+// Built-ins ship those values, but a custom theme, OLED in a picked accent and a
+// theme being edited only get them from Rust, so every paint asks. The palette
+// paints first with what it holds; the answer lands a moment later.
+
+/** The palette keys Rust floors, and the variable each one paints. */
+const FLOORED_VARS = [
+    ['accentOnSurface', '--color-accent-on-surface'],
+    ['textMuted', '--color-text-muted'],
+    ['textSecondary', '--color-text-secondary'],
+] as const;
+
+type FlooredKey = (typeof FLOORED_VARS)[number][0];
+
+// Every paint bumps this, so only the newest request's answer paints: dragging
+// an accent in the editor fires many, and one answering late must not land over
+// a newer color.
+let floorSeq = 0;
+// The theme whose floored values are on screen from Rust. Repainting that same
+// theme (the glass slider, a re-sent settings object, a drag in the editor)
+// keeps them until the new answer, instead of flashing the unfloored colors
+// for a frame on every repaint.
+let flooredThemeId: string | null = null;
+
+const paintFloors = (root: HTMLElement, values: Partial<Record<FlooredKey, unknown>>): void => {
+    for (const [key, cssVar] of FLOORED_VARS) {
+        const value = values[key];
+        if (typeof value !== 'string' || !value) continue;
+        if (root.style.getPropertyValue(cssVar) !== value) root.style.setProperty(cssVar, value);
+    }
+};
+
+const askRustFloors = (root: HTMLElement, themeId: string, painted: ThemePalette, fallback: Record<FlooredKey, string>): void => {
+    const seq = ++floorSeq;
+    // Wrapped so a missing Tauri bridge (tests, the harness) that throws
+    // instead of rejecting lands in the same catch.
+    Promise.resolve()
+        .then(() => invoke<Partial<Record<FlooredKey, unknown>>>('lift_theme_palette', { palette: painted }))
+        .then((lifted) => {
+            if (seq !== floorSeq) return;
+            paintFloors(root, lifted ?? {});
+            flooredThemeId = themeId;
+        })
+        .catch(() => {
+            // No answer: the palette's own values stand (a held repaint still
+            // shows the previous answer, so put this palette's values back).
+            if (seq === floorSeq) paintFloors(root, fallback);
+        });
+};
+
 // Apply theme to CSS variables. `floor` is what sits under the page; only a
 // window that is itself see-through (the Windows chat overlay, whose slab
 // alpha is its own slider) passes null to keep the theme's alpha.
@@ -476,15 +553,25 @@ export const applyTheme = (
     };
     writeSurfaceGlass(effectiveGlassStrength());
 
+    // The floored colors (see askRustFloors). A different theme paints its own
+    // values at once; a repaint of the theme already on screen keeps Rust's.
+    const holdFloors = theme.id === flooredThemeId;
+    if (!holdFloors) flooredThemeId = null;
+
     // Text colors
     root.style.setProperty('--color-text-primary', palette.textPrimary);
-    root.style.setProperty('--color-text-secondary', palette.textSecondary);
-    root.style.setProperty('--color-text-muted', palette.textMuted);
+    if (!holdFloors) {
+        root.style.setProperty('--color-text-secondary', palette.textSecondary);
+        root.style.setProperty('--color-text-muted', palette.textMuted);
+    }
 
     // Accent colors
     root.style.setProperty('--color-accent', palette.accent);
     root.style.setProperty('--color-accent-hover', palette.accentHover);
     root.style.setProperty('--color-accent-muted', palette.accentMuted);
+    if (!holdFloors) {
+        root.style.setProperty('--color-accent-on-surface', palette.accentOnSurface ?? palette.accent);
+    }
     // Generate neon variant by lightening accent by 30%
     root.style.setProperty('--color-accent-neon', lightenColor(palette.accent, 30));
     // Raw accent channels for rgba(var(--color-accent-rgb), a) shadows/halos.
@@ -538,6 +625,7 @@ export const applyTheme = (
     // call: this file is shared, and shared code must not reach for a native
     // bridge that only exists on the phone.
     themeDark = needsLightContentOn(floors.background);
+    root.dataset.themeTone = themeDark ? 'dark' : 'light';
     window.dispatchEvent(
         new CustomEvent('sn:theme-applied', {
             detail: {
@@ -545,6 +633,19 @@ export const applyTheme = (
                 lightContent: needsLightContentOn(floors.background),
             },
         }),
+    );
+
+    // Rust measures against the floors as painted (a see-through custom
+    // background flattened over what is under the page), not the raw alpha.
+    askRustFloors(
+        root,
+        theme.id,
+        { ...palette, background: floors.background, backgroundTertiary: floors.tertiary },
+        {
+            accentOnSurface: palette.accentOnSurface ?? palette.accent,
+            textMuted: palette.textMuted,
+            textSecondary: palette.textSecondary,
+        },
     );
 };
 
@@ -601,8 +702,7 @@ export interface FontOption {
     stack: string;
     /**
      * Chat message body weight for this font, written to --chat-body-weight.
-     * Denser faces (Inter) read heavier at a given weight, so they go lighter
-     * here to keep chat looking lean. Defaults to 300 when omitted.
+     * Defaults to 300 when omitted; Twitch's own chat is Inter at 400.
      */
     chatWeight?: number;
 }
@@ -617,11 +717,10 @@ export const FONT_OPTIONS: FontOption[] = [
     {
         id: 'twitch',
         label: 'Twitch',
-        description: 'Inter — the open-source typeface Twitch uses across its UI and chat.',
+        description: 'Inter, the typeface Twitch uses for chat.',
         stack: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        // Inter is denser than Satoshi, so chat at the normal 300 reads heavy.
-        // Drop to 200 (ExtraLight) so chat stays lean under the Twitch font.
-        chatWeight: 200,
+        // Twitch draws chat in Inter 400 (names 700, buttons 600).
+        chatWeight: 400,
     },
     {
         id: 'geist',
@@ -667,7 +766,7 @@ const FONT_BY_ID: Record<string, FontOption> = Object.fromEntries(
     FONT_OPTIONS.map((o) => [o.id, o]),
 );
 
-// Default chat message body weight (most fonts). Inter overrides lighter.
+// Default chat message body weight (most fonts). The Twitch font sets its own.
 export const DEFAULT_CHAT_BODY_WEIGHT = 300;
 
 // ─── Custom font ────────────────────────────────────────────────────────────
@@ -689,10 +788,10 @@ export const SUGGESTED_FONTS: string[] = [
 export const sanitizeFontFamily = (raw: string): string =>
     (raw || '').replace(/["',;{}()\\]/g, '').trim().slice(0, 64);
 
-// Same fallback tail the bundled options use, so an unresolvable name still
-// lands somewhere readable instead of blanking the UI.
+// A name no font answers to falls back to the house font, then the same tail
+// the bundled options use, so it lands somewhere readable instead of blanking.
 export const customFontStack = (family: string): string =>
-    `"${family}", -apple-system, BlinkMacSystemFont, sans-serif`;
+    `"${family}", "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif`;
 
 // Families that never need a network fetch: CSS generics, and the faces this
 // app already ships as local woff2 (see the @font-face blocks in globals.css).
@@ -743,6 +842,55 @@ const whenFamilyReady = (family: string, done: () => void): void => {
 let webfontTimer: ReturnType<typeof setTimeout> | null = null;
 let loadedFamily = '';
 
+interface CoreFontFace { weight: number; data?: string }
+type CoreFontLookup =
+    | { state: 'ready'; font: { faces: CoreFontFace[] } }
+    | { state: 'not_found' }
+    | { state: 'unreachable' };
+const coreFaces = new Set<string>();
+
+// Where the typed Custom family stands on a phone, for the line under its name
+// field: being read, drawn, not a Google Font, or Google Fonts out of reach.
+export type CustomFontState = 'idle' | 'loading' | 'ready' | 'not_found' | 'unreachable';
+export interface CustomFontStatus { family: string; state: CustomFontState }
+let customFontStatus: CustomFontStatus = { family: '', state: 'idle' };
+const customFontListeners = new Set<() => void>();
+const setCustomFontStatus = (family: string, state: CustomFontState): void => {
+    if (customFontStatus.family === family && customFontStatus.state === state) return;
+    customFontStatus = { family, state };
+    customFontListeners.forEach((listener) => listener());
+};
+export const getCustomFontStatus = (): CustomFontStatus => customFontStatus;
+export const subscribeCustomFontStatus = (listener: () => void): (() => void) => {
+    customFontListeners.add(listener);
+    return () => { customFontListeners.delete(listener); };
+};
+
+// The phone reads a typed family through the core, which fetches its files from
+// Google Fonts once and keeps them on disk (so the font holds offline), and
+// hands them over to load as FontFaces. Resolves false when there is no font to
+// draw; the stack then falls back to the house font.
+const loadCoreFont = async (family: string): Promise<boolean> => {
+    setCustomFontStatus(family, 'loading');
+    const answer = await invoke<CoreFontLookup>('get_custom_font', { family, withData: true });
+    if (answer.state !== 'ready' || !answer.font.faces.length) {
+        Logger.warn(`[CustomFont] ${family}: ${answer.state === 'ready' ? 'no faces' : answer.state}`);
+        setCustomFontStatus(family, answer.state === 'not_found' ? 'not_found' : 'unreachable');
+        return false;
+    }
+    for (const face of answer.font.faces) {
+        const key = `${family.toLowerCase()}|${face.weight}`;
+        if (coreFaces.has(key) || !face.data) continue;
+        const bytes = Uint8Array.from(atob(face.data), (c) => c.charCodeAt(0));
+        const loaded = await new FontFace(family, bytes, { weight: String(face.weight) }).load();
+        document.fonts.add(loaded);
+        coreFaces.add(key);
+    }
+    Logger.warn(`[CustomFont] ${family}: drawing ${answer.font.faces.map((f) => f.weight).join(', ')}`);
+    setCustomFontStatus(family, 'ready');
+    return true;
+};
+
 // Load a typed family, then call back once it is usable. ONE <link> is reused
 // and its href swapped, so switching fonts never leaves dead stylesheets
 // behind, and the fetch is debounced so typing a name does not fire a request
@@ -755,11 +903,27 @@ export const loadWebFont = (family: string, onReady?: () => void): void => {
     if (webfontTimer) { clearTimeout(webfontTimer); webfontTimer = null; }
     const lower = family.toLowerCase();
     if (!family || NO_FETCH_FAMILIES.has(lower) || lower === loadedFamily) {
+        if (family) setCustomFontStatus(family, 'ready');
         onReady?.();
         return;
     }
     webfontTimer = setTimeout(() => {
         webfontTimer = null;
+        if (IS_MOBILE) {
+            // Only a family that drew counts as loaded, so one that failed
+            // (offline, say) is asked again the next time it is typed.
+            void loadCoreFont(family)
+                .catch((e) => {
+                    Logger.warn(`[CustomFont] ${family}: the core call failed`, e);
+                    setCustomFontStatus(family, 'unreachable');
+                    return false;
+                })
+                .then((drawn) => {
+                    if (drawn) loadedFamily = lower;
+                    onReady?.();
+                });
+            return;
+        }
         loadedFamily = lower;
         let link = document.getElementById(WEBFONT_LINK_ID) as HTMLLinkElement | null;
         if (!link) {

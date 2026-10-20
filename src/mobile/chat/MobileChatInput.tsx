@@ -13,64 +13,69 @@
 // Channel comes in as a prop rather than being read off `currentStream`: with
 // several chat tabs open the composer must target the tab you are looking at,
 // which is not necessarily the stream playing.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
-import { CircleSlash } from 'lucide-react';
+import { emotePanelHeight, useLastKeyboardHeight } from '../ui/keyboardHeight';
+import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
+import { KeyboardHideIcon, KeyboardShowIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
-import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { sliceLookupKey } from '../../utils/providerKey';
+import { varyRepeat } from '../../utils/sentContent';
 import type { EmoteSet } from '../../services/emoteService';
 import { Logger } from '../../utils/logger';
 import { EmotePickerPanel, useSwappingSmiley } from '../../components/chat/EmotePickerPanel';
 import { CheerBar } from '../../components/chat/CheerBar';
 import { useCheerDraft } from '../../stores/cheerPromptStore';
 import { WalletSheet } from '../../components/chat/ChannelWallet';
+import { SplitWalletGlyph, WalletChestGlyph } from '../../components/chat/SplitWalletGlyph';
 import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
 import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
-import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
+import { matchEmoteFill, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
+import { closeInboxSheet, setComposerBusy, toggleInboxSheet, useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
+import { fitCount } from '../../utils/fitNumber';
+import { InboxTray } from '../mentions/InboxTray';
+import { INBOX_SPRING } from '../mentions/inboxText';
 import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
-import { StreakBanners } from './StreakBanners';
-import type { RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import { StreakBanners, type ArmedShare } from './StreakBanners';
+import type { ChatWarningView, RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
+import { WarningBox } from './WarningBox';
 import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
+import { formatShortCount } from '../../utils/streamStats';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
+import { ManageChannelSheet } from './ManageChannelSheet';
+import { ModerationSheet } from './ModerationSheet';
+import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
-// Shorter than the desktop's 520px so the panel still clears the soft keyboard,
-// and opaque rather than the panel's own 95%. That 5% reads as solid over a
-// desktop-sized popover but lets a whole screen of chat show through at phone
-// size, which is most of what made the old picker hard to read. `!` is needed
-// because the shared panel sets its background inline.
-//
-// Deliberately NOT solved with a backdrop blur: that gets stripped entirely
-// when Glassiness is off, so it cannot be what keeps text legible, and a large
-// blur is exactly the per-frame cost just removed from chat rows for phone GPUs.
-//
-// The height clamp is keyboard-aware on purpose. `vh` is the whole screen here
-// (edge-to-edge means the soft keyboard does not resize the viewport, the native
-// inset bridge reports it as --sn-kb instead), so a fixed 52vh panel grows
-// straight up past the status bar once the keyboard opens.
-//
-// It sits ON the composer, flat-bottomed: a floating card with a margin left a
-// strip of chat (and its rounded corners) showing between panel and field.
-const PANEL_CLASS =
-  'absolute bottom-full left-0 right-0 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-b-0 border-borderSubtle rounded-t-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
+// The emote menu takes the keyboard's place, at the keyboard's last height,
+// the platform's own emoji-keyboard pattern: the emote button swaps one for
+// the other and the composer stays where it was, so the field can be watched
+// filling while several emotes are tapped. It fills the wrapper that sizes it.
+const PANEL_CLASS = 'h-full w-full border-t border-borderSubtle flex flex-col overflow-hidden !bg-background';
+
+/** About 12 characters of the placeholder at 15 px: the least the field
+ *  keeps before the inbox tray leaves a narrow bar. */
+const FIELD_MIN_PX = 92;
+const FOLD_HYSTERESIS_PX = 12;
+/** What the tray takes from the field: its 40 px and the 6 px gap. */
+const TRAY_ROOM = 46;
+
+/** One of the right end's marks, stacked in the same spot and crossfaded. */
+const END_MARK = 'absolute inset-0 flex items-center justify-center transition-opacity duration-200 pointer-events-none';
 
 /** Twitch's message limit; the counter shows from COUNTER_FROM characters. */
 const MESSAGE_LIMIT = 500;
 const COUNTER_FROM = 400;
-
-/** Twitch refuses the same message twice in a row; a space and the invisible
- *  U+E0000 tag make the repeat a new message (the desktop composer's suffix). */
-const DUPLICATE_BYPASS_SUFFIX = ' \u{E0000}';
 
 /** A message the room did not take: the text as sent and why. */
 interface SendFailure {
@@ -96,6 +101,9 @@ export interface ChatGating {
   /** The room's modes in full for the chat menu, whatever the composer's
    *  room-mode icons are set to. */
   view?: RoomModeView | null;
+  /** A moderator's warning you have not acknowledged: the field stays locked
+   *  behind the Acknowledge box above it. */
+  warning?: ChatWarningView | null;
 }
 
 interface Props {
@@ -121,6 +129,8 @@ interface Props {
   onReload: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
+  /** Which chat's inbox sheet the tray opens. */
+  inboxSurface?: InboxSurface;
 }
 
 // Memoized below. The pane re-renders on every arriving chat message and the
@@ -145,6 +155,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   onAddChat,
   onReload,
   onCloseChat,
+  inboxSurface = 'watch',
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
@@ -157,6 +168,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // that is still in flight answers into the room it was typed in.
   const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [manageOpen, setManageOpen] = useState(false);
+  const [moderationOpen, setModerationOpen] = useState(false);
+  // A pin folded away by Pinned Messages > Style: Hidden opens from the menu.
+  const pins = usePinsOpen();
+  const hiddenPinWaiting = useHiddenPinWaiting();
   const text = drafts[roomKey] ?? '';
   const setDraftFor = useCallback((key: string, next: string | ((prev: string) => string)) => {
     setDrafts((d) => {
@@ -186,17 +202,45 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const failure = failures[roomKey];
   const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
+  // The panel's height: the keyboard it stands in for.
+  const keyboardHeight = useLastKeyboardHeight();
+  // A swipe down on the panel's top (search and tabs) puts it away.
+  const panelSwipe = useRef<number | null>(null);
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
+  // The whole composer: the emote picker's company (typing, sending and the
+  // emote button leave it open, as on the iPhone) and the suggestions'.
+  const composerRef = useRef<HTMLDivElement>(null);
+  // The draft the suggestions were put away for by a tap outside; typing
+  // brings them back.
+  const [suggestionsHiddenFor, setSuggestionsHiddenFor] = useState<string | null>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The inbox tray's end of the bar (Settings > Chat > Inbox button); the chat
+  // menu (and Send, which shares its slot) takes the other end.
+  const trayRight = chatInput?.inbox_button_side === 'right';
+  // A message bar dragged narrow (the side chat beside the video) gives the
+  // field priority: the tray stays off the bar while it would leave the field
+  // under about 12 characters, and the chat menu carries the inbox and its
+  // count instead. Read from the field's real width, so any narrow bar
+  // behaves the same; the gap between the two thresholds keeps it from
+  // flickering at the edge.
+  const [trayFolded, setTrayFolded] = useState(false);
+  const inboxUnread = useMentionsStore((s) => s.unreadTotal);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // A streak share the banner armed: the next send goes to it instead of to
+  // chat, with whatever is typed (nothing typed is fine).
+  const armedShare = useRef<ArmedShare | null>(null);
+  const [shareArmed, setShareArmed] = useState<'watch' | 'resub' | null>(null);
+  // Whether the field has the keyboard: while it does, the commands button is
+  // the way to put the keyboard away (scrolling the chat never does).
+  const [typing, setTyping] = useState(false);
   // The composer rows of Settings > Chat that this field honors.
   const spellcheck = chatInput?.spellcheck_enabled ?? true;
   const hidePlaceholder = chatInput?.hide_placeholder ?? false;
   const hideEmoteButton = chatInput?.hide_emote_button ?? false;
-  // The last message each room took, for Duplicate sends.
+  // The last line sent to each room, as it went out, for Duplicate sends.
   const lastSent = useRef<Map<string, string>>(new Map());
 
   // Slow mode: when each room lets you send again, counted from your last
@@ -253,6 +297,22 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const composerCheer = useCheerDraft(isTwitch ? channel : null, text);
   const cheerBlocked = !!composerCheer && composerCheer.problems.length > 0;
   const hasWallet = isTwitch && !!channel && !!channelId && (points.balance !== null || !!walletBits);
+  // Wallet balance: Always puts the short balance beside the icon; Hidden (and
+  // a saved desktop On hover, which a touch cannot do) keeps just the icon.
+  const balanceAlways = useAppStore(
+    (s) => s.settings.chat_input?.show_points_balance_inline === true && s.settings.chat_input?.hide_points_balance !== true,
+  );
+  const shownBalances =
+    balanceAlways && !pointsOpen && !points.availableClaimId
+      ? [points.balance, walletBits?.balance ?? null].filter((n): n is number => n !== null)
+      : [];
+  // The channel's own points art, or Twitch's glyph.
+  const pointsArt = (size: number) =>
+    points.iconUrl ? (
+      <img src={points.iconUrl} alt="" style={{ width: size, height: size }} className="object-contain" draggable={false} />
+    ) : (
+      <ChannelPointsIcon size={size} />
+    );
   // One rewards read per channel while it has a points button, so the sheet's
   // first open paints Rust's list instead of waiting on Twitch.
   const hasPointsButton = !!channel && !!channelId && points.balance !== null;
@@ -266,9 +326,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const flash = points.gain;
   const clearFlash = points.clearGain;
 
-  const canSend = !!text.trim();
+  const canSend = !!text.trim() || !!shareArmed;
 
   const send = async () => {
+    if (armedShare.current) {
+      const key = roomKey;
+      const shared = await armedShare.current(text.trim());
+      // Shared: the text went with it. Not: it stays for another try.
+      if (shared) setDraftFor(key, '');
+      return;
+    }
     const message = text.trim();
     if (!message || !channel || sending || slowWait > 0) return;
     // Captured now: the answer lands in this room even if you switch tabs.
@@ -312,7 +379,12 @@ const MobileChatInputImpl: React.FC<Props> = ({
       }
       return;
     }
-    if (!currentUser) return;
+    if (!currentUser) {
+      // Signed in with the profile still on its way (a session kept through a
+      // network failure): keep the draft and say why, never drop it silently.
+      if (useAppStore.getState().isAuthenticated) failed('your Twitch profile is still loading');
+      return;
+    }
     const identity = {
       username: currentUser.login || currentUser.username,
       displayName: currentUser.display_name || currentUser.username,
@@ -321,16 +393,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
       badges: '',
     };
     // Chat text to the room. With Duplicate sends on, a repeat of the last
-    // message this room took gets the invisible suffix; commands are never
+    // line sent here goes out varied or plain, whichever differs from that
+    // line (varyRepeat, the desktop composer's rule); commands are never
     // deduplicated by Twitch, so they go as typed.
     const chatSend = async (msg: string, reply?: string) => {
-      const repeat =
-        !!useAppStore.getState().settings.chat_input?.bypass_duplicate &&
-        !msg.startsWith('/') &&
-        lastSent.current.get(key) === msg;
-      const out = await sendChannelMessage(channel, repeat ? `${msg}${DUPLICATE_BYPASS_SUFFIX}` : msg, identity, reply);
-      if (out && out.is_sent !== false) lastSent.current.set(key, msg);
-      return out;
+      const text =
+        !!useAppStore.getState().settings.chat_input?.bypass_duplicate && !msg.startsWith('/')
+          ? varyRepeat(msg, lastSent.current.get(key))
+          : msg;
+      // What actually went out, so the next repeat flips the other way.
+      lastSent.current.set(key, text.trimEnd());
+      return sendChannelMessage(channel, text, identity, reply);
     };
     setSending(true);
     try {
@@ -393,9 +466,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
       sent();
       startSlowWait(key, channel);
       onCancelReply?.();
-      incrementStat(currentUser.user_id, 'messages_sent', 1).catch((err) => {
-        Logger.warn('[MobileChatInput] messages_sent stat failed:', err);
-      });
     } catch (err) {
       Logger.error('[MobileChatInput] send failed:', err);
       failed(failureWords(err));
@@ -413,7 +483,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // name for emotes and the character itself for emoji.
   const insertEmote = (token: string) => {
     setText((t) => (t.length === 0 || t.endsWith(' ') ? `${t}${token} ` : `${t} ${token} `));
-    inputRef.current?.focus();
+    if (!emotesOpen) inputRef.current?.focus();
   };
 
   // Suggestions for the word being typed.
@@ -430,27 +500,34 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // of this correctly, since the word at the end is then empty.
   const [wordStart, wordEnd] = getWordRange(text, text.length);
   const word = text.slice(wordStart, wordEnd);
-  // Ranked in Rust over the sets it already holds; each answer is kept with the
-  // word it answers, so a late reply for an older word is never shown.
+  // The desktop's emote fill menu, asked the same way (ranked in Rust over the
+  // sets it already holds), so a word lists the same emotes in the same order
+  // on every app. Each answer is kept with the word it answers, so a late
+  // reply for an older word is never shown.
   const [answered, setAnswered] = useState<{ word: string; items: EmoteTabCandidate[] }>({ word: '', items: [] });
   const [suggestSeq] = useState(createRequestSeq);
   useEffect(() => {
-    // One character matches most of the set and is noise, not help.
-    if (word.length < 2 || !channel) return;
+    if (!word || !channel) return;
     const n = suggestSeq.next();
-    // Rust's cycle answer carries the room's recent chatters after the emotes.
-    void matchEmotes({ provider, channel, channelId }, word, 'cycle').then((res) => {
+    // The answer carries the room's recent chatters after the emotes. One
+    // letter is enough for the full list.
+    void matchEmoteFill({ provider, channel, channelId }, word).then((res) => {
       if (!suggestSeq.isCurrent(n)) return;
       setAnswered({ word, items: rowsToTabCandidates(res.rows) });
     });
   }, [word, channel, channelId, provider, suggestSeq]);
-  const suggestions = word.length >= 2 && answered.word === word ? answered.items : [];
+  const suggestions = word && answered.word === word ? answered.items : [];
 
   // What the empty field says: why you cannot send when a mode stops you, the
   // slow-mode wait, else "Send a message" (nothing when Settings hides it). A
   // mode that only may hold you back is said once, by its icon at the field's
   // end; the chat menu names it in full.
-  const placeholder = gating.blocked
+  const placeholder = gating.warning
+    ? gating.warning.prompt
+    : shareArmed
+    ? // The armed share rides the next send: the field says what it is for.
+      `Add a message to your ${shareArmed === 'watch' ? 'watch streak' : 'resub'}`
+    : gating.blocked
     ? (gating.reason ?? 'Chat restricted')
     : slowWait > 0
       ? `Slow mode: you can send again in ${slowWait}s`
@@ -464,7 +541,62 @@ const MobileChatInputImpl: React.FC<Props> = ({
     (chatInput?.emote_tab_complete_enabled ?? true) &&
     !emotesOpen &&
     !pointsOpen &&
-    suggestions.length > 0;
+    suggestions.length > 0 &&
+    suggestionsHiddenFor !== text;
+  // A tap outside the composer puts the suggestions away with the keyboard.
+  const markSuggestionsInside = useOutsidePress(showSuggestions, [composerRef], () => setSuggestionsHiddenFor(text));
+
+  // A new mention's card rises into the room just above the bar. The bar's own
+  // risers use that room too (the suggestions strip over a draft, the emote
+  // and wallet panels), so the card waits while one is up and shows once it
+  // clears, after the send. A taller draft lifts the card with the bar.
+  useEffect(() => {
+    setComposerBusy(showSuggestions || emotesOpen || pointsOpen);
+  }, [showSuggestions, emotesOpen, pointsOpen]);
+  useEffect(() => () => setComposerBusy(false), []);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const read = () => {
+      // Typing hides the tray anyway, so the bar's resting width is not on
+      // screen to judge by; the call waits for the keyboard to go.
+      if (document.activeElement === el) return;
+      const w = el.clientWidth;
+      setTrayFolded((folded) =>
+        folded ? w - TRAY_ROOM < FIELD_MIN_PX + FOLD_HYSTERESIS_PX : w < FIELD_MIN_PX,
+      );
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // What each end of the bar holds. Send is always the right end's job (see
+  // the button); the swap setting decides which of the tray and the chat menu
+  // sits left. A narrow bar folds the tray away and the menu takes the right.
+  const leftEnd: 'tray' | 'menu' | null = trayFolded ? null : trayRight ? 'menu' : 'tray';
+  const rightEnd: 'tray' | 'menu' = trayFolded ? 'menu' : trayRight ? 'tray' : 'menu';
+  // While the emote panel holds the keyboard's place, the end brings the
+  // keyboard back (Send still wins once there is a message).
+  const endMode: 'send' | 'keyboardUp' | 'keyboard' | 'tray' | 'menu' = canSend
+    ? 'send'
+    : emotesOpen
+      ? 'keyboardUp'
+      : typing
+        ? 'keyboard'
+        : rightEnd;
+  // Back to the keyboard: it comes up where the panel was.
+  const backToKeyboard = () => {
+    setEmotesOpen(false);
+    inputRef.current?.focus();
+  };
+  const inboxOpenHere = useMentionsStore((s) => s.sheetIn === inboxSurface);
+  const openMenu = () => {
+    setEmotesOpen(false);
+    setPointsOpen(false);
+    setMenuOpen(true);
+  };
 
   // Replace the word being typed rather than appending, which is what makes
   // this a completion instead of a second insertion.
@@ -484,6 +616,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
     // lift above the keyboard is kb + safe-b (max left the input clipped by
     // exactly the gesture-bar height).
     <div
+      ref={composerRef}
+      data-chat-composer=""
+      onPointerDownCapture={markSuggestionsInside}
       className="shrink-0 border-t border-borderSubtle"
       style={{
         paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
@@ -495,8 +630,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
       <StreakBanners
         channel={channel}
         channelId={channelId}
-        message={text}
-        onShared={() => setText('')}
+        armedRef={armedShare}
+        onArmedChange={setShareArmed}
+        focusComposer={() => inputRef.current?.focus()}
       />
       {/* No warning line here, deliberately. It rendered `gating.reason`, which
           is the exact string the disabled field's placeholder already shows, in
@@ -504,6 +640,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
           placeholder alone says why the field is dead, and it says it in the
           field you were about to type in. The chat menu carries the room's full
           state, and now the Follow action alongside it. */}
+      {/* A moderator's warning: what they said, and Acknowledge, the one way to
+          chat here again. Where the room's words live, so it cannot scroll away;
+          Rust unlocks the field once Twitch takes the acknowledgement. */}
+      {gating.warning && channelId && <WarningBox warning={gating.warning} roomId={channelId} />}
       {/* A message the room did not take. The text stays in the field; this
           says why once, beside it, with the two ways forward. */}
       {shownFailure && (
@@ -551,6 +691,40 @@ const MobileChatInputImpl: React.FC<Props> = ({
             />
           )}
         </AnimatePresence>
+        {/* The bar's left end: the inbox tray, or the chat menu when Settings
+            swaps the pair. While you type it slides out its own side and the
+            field grows into its room, in one spring (width and transform
+            only); it comes back the same way. A bar too narrow for the tray
+            keeps nothing here: the chat menu takes the right end. */}
+        {leftEnd && (
+          <motion.div
+            className="shrink-0 self-end"
+            style={{ order: -1 }}
+            initial={false}
+            animate={{ width: typing ? 0 : 40, marginRight: typing ? -6 : 0 }}
+            transition={INBOX_SPRING}
+            aria-hidden={typing}
+          >
+            <motion.div
+              initial={false}
+              animate={{ x: typing ? -48 : 0, opacity: typing ? 0 : 1 }}
+              transition={INBOX_SPRING}
+              style={{ pointerEvents: typing ? 'none' : undefined }}
+            >
+              {leftEnd === 'tray' ? (
+                <InboxTray surface={inboxSurface} side="left" />
+              ) : (
+                <button
+                  onClick={openMenu}
+                  className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center w-10 h-10 text-textSecondary active:text-textPrimary"
+                  aria-label="Chat options"
+                >
+                  <DotsThreeVertical size={22} weight="bold" />
+                </button>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
         {/* The emote trigger and the points button live INSIDE the field so the
             typing area keeps full width instead of being squeezed by chrome.
             Exactly 40px, the height of the round button beside it. */}
@@ -561,31 +735,33 @@ const MobileChatInputImpl: React.FC<Props> = ({
             <button
               ref={emoteButtonRef}
               onClick={() => {
-                cycleEmoteSmiley();
                 setPointsOpen(false);
-                setEmotesOpen((v) => !v);
+                if (emotesOpen) {
+                  backToKeyboard();
+                  return;
+                }
+                cycleEmoteSmiley();
+                // The keyboard goes and the panel takes its place.
+                inputRef.current?.blur();
+                setEmotesOpen(true);
               }}
               className={`shrink-0 w-9 h-9 flex items-center justify-center text-[20px] leading-none active:opacity-70 ${
                 emotesOpen ? 'text-accent' : ''
               }`}
-              aria-label={emotesOpen ? 'Close emotes' : 'Emotes and emoji'}
+              aria-label="Emotes and emoji"
+              aria-pressed={emotesOpen}
             >
-              {/* Becomes an X while open, so the button that opened the panel is
-                  visibly the one that closes it. Same swap the desktop composer
-                  does. */}
-              {emotesOpen ? (
-                <X size={19} weight="bold" />
-              ) : (
-                <span
-                  className="transition-[opacity,transform] duration-100"
-                  style={{
-                    opacity: isSmileyTransitioning ? 0 : 1,
-                    transform: isSmileyTransitioning ? 'scale(0.8)' : 'scale(1)',
-                  }}
-                >
-                  {currentSmiley}
-                </span>
-              )}
+              {/* Always the emoji button; the way back to the keyboard is the
+                  bar's right end while the panel is open. */}
+              <span
+                className="transition-[opacity,transform] duration-100"
+                style={{
+                  opacity: isSmileyTransitioning ? 0 : 1,
+                  transform: isSmileyTransitioning ? 'scale(0.8)' : 'scale(1)',
+                }}
+              >
+                {currentSmiley}
+              </span>
             </button>
           )}
           {needsKickSignIn ? (
@@ -601,6 +777,15 @@ const MobileChatInputImpl: React.FC<Props> = ({
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
+              // Its own hide-keyboard button takes the menu's slot while typing.
+              data-keyboard-hide="own"
+              onFocus={() => {
+                setTyping(true);
+                setEmotesOpen(false);
+                // The bar is for writing now: an open inbox goes first.
+                closeInboxSheet();
+              }}
+              onBlur={() => setTyping(false)}
               onKeyDown={(e) => {
                 // An IME's Enter confirms the composed word; it never sends.
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -612,7 +797,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The placeholder says why, in the
               // field's ordinary placeholder ink: a statement, not an alarm.
-              disabled={!!gating.blocked}
+              disabled={!!gating.blocked || !!gating.warning}
               spellCheck={spellcheck}
               autoCorrect={spellcheck ? 'on' : 'off'}
               rows={1}
@@ -642,7 +827,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
             ) : (
               roomModes &&
               !roomModesAsPrompt &&
-              !gating.blocked && <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
+              !gating.blocked && <RoomModeIndicator
+                  view={roomModes}
+                  inline
+                  onActivate={() => {
+                    setEmotesOpen(false);
+                    setMenuOpen(true);
+                  }}
+                />
             ))}
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
@@ -660,11 +852,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
               <CircleSlash size={19} strokeWidth={2} />
             </button>
           )}
-          {/* Icon only. The balance was briefly shown here to prove earning was
-              happening, and once proven it went back: it cost the message field
-              real width to state a number nobody needs at rest, and the menu has
-              always printed it in full. What matters is the MOMENT of earning,
-              which the flash and the floating amount carry. */}
+          {/* Icon only unless Wallet balance is Always: a number at rest costs
+              the message field real width, and the menu always prints it in
+              full. What matters is the MOMENT of earning, which the flash and
+              the floating amount carry. */}
           {hasWallet && (
             <button
               onClick={() => {
@@ -676,9 +867,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 setEmotesOpen(false);
                 setPointsOpen((v) => !v);
               }}
-              className={`relative shrink-0 w-9 h-9 flex items-center justify-center active:opacity-70 ${
-                pointsOpen ? 'text-accent' : 'text-textSecondary'
-              }`}
+              className={`relative shrink-0 h-9 flex items-center justify-center gap-1 active:opacity-70 ${
+                shownBalances.length ? 'px-1.5' : 'w-9'
+              } ${pointsOpen ? 'text-accent' : 'text-textSecondary'}`}
               aria-label={pointsOpen ? 'Close the wallet' : 'Wallet'}
             >
               {/* The amount, drifting up off the icon and dissolving.
@@ -720,12 +911,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   </motion.span>
                 )}
               </AnimatePresence>
-              {/* A chest waiting to be collected. Only ever shows with
-                  auto-collect turned off, since otherwise it is taken the moment
-                  it appears. Tapping the button collects it. */}
-              {points.availableClaimId && (
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-accent" />
-              )}
               {/* Two amber pulses on the icon itself.
                   Driven by `filter`, not by text colour, because this is an
                   `<img>` whenever the channel has its own points art and colour
@@ -757,58 +942,122 @@ const MobileChatInputImpl: React.FC<Props> = ({
               >
                 {pointsOpen ? (
                   <X size={19} weight="bold" />
+                ) : points.availableClaimId ? (
+                  // A chest waiting (auto-collect off, or a room the player is
+                  // not on): the button becomes the chest, like the desktop's.
+                  // Tapping it collects the chest.
+                  <span className="chest-attention flex">
+                    <WalletChestGlyph size={19} />
+                  </span>
                 ) : points.balance === null && walletBits?.gem_url ? (
                   // Bits only: Twitch's still gem leads.
                   <img src={walletBits.gem_url} alt="" className="w-[19px] h-[19px] object-contain" draggable={false} />
+                ) : walletBits?.gem_url ? (
+                  // Bits live here too: points and the gem share one split glyph.
+                  <SplitWalletGlyph points={pointsArt} pointsIcon={points.iconUrl} gemUrl={walletBits.gem_url} />
                 ) : (
-                  <span className="relative flex">
-                    {points.iconUrl ? (
-                      <img
-                        src={points.iconUrl}
-                        alt=""
-                        className="w-[19px] h-[19px] object-contain"
-                        draggable={false}
-                      />
-                    ) : (
-                      <ChannelPointsIcon size={19} />
-                    )}
-                    {/* Bits live here too: a small still gem says so. */}
-                    {walletBits?.gem_url && (
-                      <img
-                        src={walletBits.gem_url}
-                        alt=""
-                        className="absolute -bottom-0.5 -right-1 h-[9px] w-[9px] object-contain"
-                        draggable={false}
-                      />
-                    )}
-                  </span>
+                  pointsArt(19)
                 )}
               </motion.span>
+              {/* Points, then Bits, in the glyph's own order: the glyph is the key. */}
+              {shownBalances.map((balance, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span className="h-3 w-px bg-textSecondary/35" aria-hidden="true" />}
+                  <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap text-textPrimary">
+                    {formatShortCount(balance)}
+                  </span>
+                </Fragment>
+              ))}
             </button>
           )}
         </div>
 
-        {/* One slot, two jobs: Send while there is a message, otherwise the chat
-            menu. Avoids parking a permanently disabled Send on screen. */}
-        {canSend ? (
-          <button
-            onClick={() => void send()}
-            // Held while slow mode makes you wait (the button counts it down)
-            // and while a cheer in the message has a problem.
-            disabled={sending || slowWait > 0 || cheerBlocked}
-            className={`chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-white transition-all duration-300 ${
-              sending || cheerBlocked ? 'opacity-50' : ''
-            }`}
-            aria-label={
-              slowWait > 0
+        {/* The bar's right end, one control with every job it has: Send the
+            moment the field holds a message, whatever sits here otherwise (the
+            chat menu, or the inbox tray when Settings swaps the pair), the way
+            to put the keyboard away while you type with nothing written
+            (scrolling the chat never does), and the way back to it while the
+            emote panel holds its place. One element in one spot: the marks
+            crossfade and the accent fill grows in under Send, so nothing slides
+            in or moves. Send is always on the right. */}
+        <button
+          // Held on the press while typing, so the field keeps the keyboard
+          // until the tap lands (and after a send, for the next message).
+          onPointerDown={(e) => {
+            if (typing) e.preventDefault();
+          }}
+          onClick={() => {
+            if (endMode === 'send') {
+              void send();
+            } else if (endMode === 'keyboardUp') {
+              backToKeyboard();
+            } else if (endMode === 'keyboard') {
+              inputRef.current?.blur();
+            } else if (endMode === 'tray') {
+              toggleInboxSheet(inboxSurface);
+            } else {
+              openMenu();
+            }
+          }}
+          // Held while slow mode makes you wait (the button counts it down)
+          // and while a cheer in the message has a problem.
+          disabled={endMode === 'send' && (sending || slowWait > 0 || cheerBlocked)}
+          data-inbox-tray={rightEnd === 'tray' ? '' : undefined}
+          style={{ order: 2 }}
+          className={`chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 transition-opacity duration-200 ${
+            endMode === 'send' ? 'sn-send-ink' : inboxOpenHere && endMode === 'tray' ? 'text-textPrimary' : 'text-textSecondary active:text-textPrimary'
+          } ${endMode === 'send' && (sending || cheerBlocked) ? 'opacity-50' : ''}`}
+          aria-label={
+            endMode === 'send'
+              ? slowWait > 0
                 ? `Send again in ${slowWait} seconds`
                 : composerCheer
                   ? `Cheer ${composerCheer.total} bits`
                   : 'Send'
-            }
-          >
+              : endMode === 'keyboardUp'
+                ? 'Show keyboard'
+                : endMode === 'keyboard'
+                ? 'Hide keyboard'
+                : endMode === 'tray'
+                  ? inboxOpenHere
+                    ? 'Close the inbox'
+                    : inboxUnread > 0
+                      ? `Inbox, ${inboxUnread} new`
+                      : 'Inbox'
+                  : trayFolded && inboxUnread > 0
+                    ? `Chat options, ${inboxUnread} new in the inbox`
+                    : 'Chat options'
+          }
+        >
+          {/* Send's accent fill, grown in under its mark (opacity and scale
+              only, so it holds the frame rate). */}
+          <span
+            aria-hidden
+            className="absolute inset-0 rounded-full bg-accent pointer-events-none"
+            style={{
+              opacity: endMode === 'send' ? 1 : 0,
+              transform: `scale(${endMode === 'send' ? 1 : 0.55})`,
+              transition: 'opacity 160ms ease-out, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+            }}
+          />
+          {/* Every mark in one place, crossfading, so nothing moves. */}
+          <span className={`${END_MARK} ${endMode === 'menu' ? 'opacity-100' : 'opacity-0'}`}>
+            <DotsThreeVertical size={22} weight="bold" />
+          </span>
+          {rightEnd === 'tray' && (
+            <span className={`${END_MARK} ${endMode === 'tray' ? 'opacity-100' : 'opacity-0'}`}>
+              {inboxOpenHere ? <XIcon size={19} strokeWidth={2.25} /> : <InboxIcon size={19} strokeWidth={2} />}
+            </span>
+          )}
+          <span className={`${END_MARK} ${endMode === 'keyboard' ? 'opacity-100' : 'opacity-0'}`}>
+            <KeyboardHideIcon size={20} />
+          </span>
+          <span className={`${END_MARK} ${endMode === 'keyboardUp' ? 'opacity-100' : 'opacity-0'}`}>
+            <KeyboardShowIcon size={20} />
+          </span>
+          <span className={`${END_MARK} ${endMode === 'send' ? 'opacity-100' : 'opacity-0'}`}>
             {slowWait > 0 ? (
-              <span className="text-[14px] font-semibold tabular-nums text-textPrimary">{slowWait}</span>
+              <span className="text-[14px] font-semibold tabular-nums">{slowWait}</span>
             ) : composerCheer?.icon_url ? (
               // The message cheers: Send spends, so it wears the gem.
               <img src={composerCheer.icon_url} alt="" className="h-5 w-5 object-contain" draggable={false} />
@@ -822,25 +1071,50 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 />
               </svg>
             )}
-          </button>
-        ) : (
-          <button
-            onClick={() => {
-              setEmotesOpen(false);
-              setPointsOpen(false);
-              setMenuOpen(true);
-            }}
-            className="chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
-            aria-label="Chat options"
-          >
-            <DotsThreeVertical size={20} weight="bold" />
-          </button>
+          </span>
+          {/* The inbox's count rides the corner beside the field: on the tray
+              when it sits here, or on the chat menu when a narrow bar folded
+              the tray into it. Not while the end is Send or the keyboard's. */}
+          {(endMode === 'tray' ? !inboxOpenHere : endMode === 'menu' && trayFolded) && inboxUnread > 0 && (
+            <span className="sn-inbox-badge absolute -top-1 -left-1 min-w-[17px] h-[17px] px-[5px] rounded-full text-[10.5px] font-bold leading-[17px] text-center tabular-nums pointer-events-none">
+              {fitCount(inboxUnread)}
+            </span>
+          )}
+        </button>
+
+        {/* While the message cheers: what Send will spend, live, and a way
+            to take the cheer out. Send is the yes. */}
+        {isTwitch && (
+          <CheerBar channelLogin={channel ?? undefined} channelId={channelId ?? undefined} text={text} onSetText={setText} />
         )}
 
+      </div>
+
+      {/* The emote menu in the keyboard's place, at its height, and never
+          shorter than one you can browse. */}
+      <div
+        className="overflow-hidden"
+        style={{ height: emotesOpen ? emotePanelHeight(keyboardHeight) : 0, marginTop: emotesOpen ? 8 : 0 }}
+        onTouchStart={(e) => {
+          const top = e.currentTarget.getBoundingClientRect().top;
+          const t = e.touches[0];
+          panelSwipe.current = t && t.clientY - top < 96 ? t.clientY : null;
+        }}
+        onTouchMove={(e) => {
+          const t = e.touches[0];
+          if (panelSwipe.current != null && t && t.clientY - panelSwipe.current > 56) {
+            panelSwipe.current = null;
+            setEmotesOpen(false);
+          }
+        }}
+        onTouchEnd={() => {
+          panelSwipe.current = null;
+        }}
+      >
         <EmotePickerPanel
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
-          ignoreRef={emoteButtonRef}
+          ignoreRef={composerRef}
           emotes={emotes}
           isTwitch={isTwitch}
           isKick={provider === 'kick'}
@@ -850,12 +1124,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
           onInsert={insertEmote}
           className={PANEL_CLASS}
         />
-        {/* While the message cheers: what Send will spend, live, and a way
-            to take the cheer out. Send is the yes. */}
-        {isTwitch && (
-          <CheerBar channelLogin={channel ?? undefined} channelId={channelId ?? undefined} text={text} onSetText={setText} />
-        )}
-
       </div>
 
       {/* The rewards, as a sheet: the phone's own surface for a menu like this.
@@ -897,8 +1165,29 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onAddChat={onAddChat}
         onReload={onReload}
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
+        onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
+        onModeration={channel && channelId && isTwitch && isModerator ? () => setModerationOpen(true) : undefined}
+        onShowPinned={hiddenPinWaiting ? () => pins.setOpen(true) : undefined}
         onCloseChat={onCloseChat}
+        inbox={trayFolded ? { unread: inboxUnread, open: () => toggleInboxSheet(inboxSurface) } : undefined}
       />
+      {channel && channelId && isTwitch && isModerator && (
+        <ModerationSheet
+          open={moderationOpen}
+          onClose={() => setModerationOpen(false)}
+          channelId={channelId}
+          channelLogin={channel}
+          onManageChannel={() => setTimeout(() => setManageOpen(true), 260)}
+        />
+      )}
+      {channel && channelId && isTwitch && isModerator && (
+        <ManageChannelSheet
+          open={manageOpen}
+          onClose={() => setManageOpen(false)}
+          channelId={channelId}
+          channelLogin={channel}
+        />
+      )}
       <MobileCommandSheet
         open={commandsOpen}
         onClose={() => setCommandsOpen(false)}

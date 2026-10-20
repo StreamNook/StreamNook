@@ -36,7 +36,9 @@ dependencies = [
  "log",
  "lru",
  "minisign-verify",
+ "objc2",
  "objc2-foundation",
+ "objc2-user-notifications",
  "objc2-web-kit",
  "once_cell",
  "phf 0.14.0",
@@ -54,8 +56,10 @@ dependencies = [
  "sevenz-rust",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "sn-mention-rule",
  "sn-tauri-headless",
  "spellbook",
+ "sys-locale",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4505,6 +4509,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.11.0",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
@@ -6644,6 +6650,10 @@ dependencies = [
  "borsh",
  "serde_core",
 ]
+
+[[package]]
+name = "sn-mention-rule"
+version = "0.1.0"
 
 [[package]]
 name = "sn-tauri-headless"

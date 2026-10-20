@@ -419,9 +419,13 @@ pub async fn profile_sheet(
                 .unwrap_or_default(),
         );
         push("Chat clients", badges.as_ref().map(third_party_badges).unwrap_or_default());
-        if let Some(m) = member.as_ref() {
-            push("StreamNook", m.streamnook.clone());
-        }
+        // StreamNook last. Without the member's profile reads (their prefs failed to
+        // read, or the member list was still loading) the badge they wear still shows.
+        let streamnook = match member.as_ref() {
+            Some(m) => m.streamnook.clone(),
+            None => member_profile::streamnook_badges(registry::member_badge(user_id, false).as_ref(), &Default::default(), &[]),
+        };
+        push("StreamNook", streamnook);
     }
     let picture = pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true));
     let (paint_def, paint) = worn_paint(user_id, inventory.as_ref());
@@ -432,7 +436,14 @@ pub async fn profile_sheet(
         shown_login: shown_login(login, display_name),
         avatar_url: helix.ok().and_then(|u| u.profile_image_url).filter(|u| !u.is_empty()),
         picture,
-        name_color: crate::services::chat_row_view::readable_color(Some(color.unwrap_or("#9147FF"))),
+        // A sheet opened from a mention carries no color; chat has usually seen it.
+        name_color: crate::services::chat_row_view::readable_color(Some(
+            color
+                .map(String::from)
+                .or_else(|| crate::services::chat_row_view::seen_color(login))
+                .as_deref()
+                .unwrap_or("#9147FF"),
+        )),
         paint,
         paint_def,
         groups,
@@ -463,14 +474,18 @@ pub struct OwnIdentity {
     pub paint: Option<PaintView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paint_def: Option<Value>,
+    /// The account's Twitch name color, made readable as chat shows it; None
+    /// when Twitch did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_color: Option<String>,
     /// The 7TV picture drawn over the platform one, when the viewer shows 7TV pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<AvatarPick>,
     /// The Twitch profile banner; None when the account has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner_url: Option<String>,
-    /// What is WORN, in order (Twitch, 7TV, the other chat apps), images only,
-    /// deduped, at most eight.
+    /// What is WORN, in surface order (Twitch, 7TV, the other chat apps, the
+    /// StreamNook badge last), images only, deduped, capped.
     pub badges: Vec<ProfileBadge>,
     /// Present only for a StreamNook member; drawn after the others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,8 +517,10 @@ const CHANNEL_SCOPED: &[&str] = &[
     "clip-champ",
 ];
 
-/// A backstop, not a design: a 127-badge wall once buried the You tab.
-const HEADER_BADGE_CAP: usize = 8;
+/// How many badges the You card's row draws (a 127-badge wall once buried the
+/// You tab). Decided here, so the phones never cut the row themselves and drop
+/// the StreamNook badge at its end.
+const HEADER_BADGE_CAP: usize = 6;
 const OWN_FILE: &str = "own_identity_header.json";
 
 fn own_path() -> Option<std::path::PathBuf> {
@@ -521,7 +538,7 @@ pub fn cached_own_identity(user_id: &str) -> Option<OwnIdentity> {
 /// The viewer's own identity header, built fresh (and saved for the next cold
 /// launch).
 pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> OwnIdentity {
-    let (badges, inventory, resolved, pictures, (atmosphere, cologne), banner_url) = tokio::join!(
+    let (badges, inventory, resolved, pictures, (atmosphere, cologne), banner_url, colors) = tokio::join!(
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
             login.to_string(),
@@ -533,8 +550,16 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         resolver::profile_pictures(vec![user_id.to_string()]),
         worn_look(user_id),
         twitch_banner(user_id),
+        crate::services::twitch_service::TwitchService::get_user_chat_colors(vec![user_id.to_string()]),
     );
     let badges = badges.ok();
+    // The card's name color before Edit profile has read it: what chat shows.
+    let name_color = colors
+        .get(user_id)
+        .filter(|c| !c.is_empty())
+        .cloned()
+        .or_else(|| crate::services::chat_row_view::seen_color(login))
+        .map(|c| crate::services::chat_row_view::readable_color(Some(&c)));
     // Twitch: what the account displays, minus the badges of one channel.
     let twitch_worn: Vec<ProfileBadge> = badges
         .as_ref()
@@ -556,8 +581,44 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
     let selected_badge = resolver::peek(user_id)
         .and_then(|c| selected(&c.badges).cloned())
         .or_else(|| inventory.as_ref().and_then(|i| selected(&i.badges).cloned()));
-    let seventv_worn: Vec<ProfileBadge> = selected_badge.as_ref().and_then(seventv_badge).into_iter().collect();
-    // The other apps: a member's Identity loadout, else the raw chat-client set.
+    // Tagged as 7TV so the surface order places it.
+    let seventv_worn: Vec<ProfileBadge> = selected_badge
+        .as_ref()
+        .and_then(seventv_badge)
+        .map(|b| ProfileBadge { provider: Some("7tv".to_string()), ..b })
+        .into_iter()
+        .collect();
+    let other = chat_clients_worn(resolved.ok(), badges.as_ref());
+    let streamnook = registry::member_badge(user_id, false);
+    let worn = own_worn_badges(streamnook.as_ref(), twitch_worn.into_iter().chain(seventv_worn).chain(other).collect());
+    let (paint_def, paint) = worn_paint(user_id, inventory.as_ref());
+    let header = OwnIdentity {
+        user_id: user_id.to_string(),
+        login: login.to_string(),
+        display_name: display_name.to_string(),
+        shown_login: shown_login(login, display_name),
+        paint,
+        paint_def,
+        name_color,
+        picture: pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true)),
+        banner_url,
+        badges: worn,
+        streamnook,
+        atmosphere,
+        cologne,
+    };
+    if let (Some(path), Ok(body)) = (own_path(), serde_json::to_vec(&header)) {
+        let _ = std::fs::write(path, body);
+    }
+    header
+}
+
+/// The chat-client badges (FFZ, BetterTTV, Chatterino and the rest) someone wears:
+/// their StreamNook Identity loadout, else the raw chat-client set.
+fn chat_clients_worn(
+    resolved: Option<crate::commands::identity::ResolvedIdentity>,
+    badges: Option<&UserBadgesResponse>,
+) -> Vec<ProfileBadge> {
     let loadout: Vec<ProfileBadge> = resolved
         .map(|r| {
             r.badges
@@ -574,34 +635,34 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
                 .collect()
         })
         .unwrap_or_default();
-    let other = if loadout.is_empty() { badges.as_ref().map(third_party_badges).unwrap_or_default() } else { loadout };
+    if loadout.is_empty() { badges.map(third_party_badges).unwrap_or_default() } else { loadout }
+}
+
+/// The header's badge row: what Twitch, 7TV and the other apps show plus your
+/// StreamNook badge, deduped, in the one surface order every badge row uses
+/// (`badge_service::surface_rank`: StreamNook last). The cap never squeezes the
+/// StreamNook badge out, and one the other apps also list is not drawn twice.
+fn own_worn_badges(streamnook: Option<&SnBadge>, rest: Vec<ProfileBadge>) -> Vec<ProfileBadge> {
+    let own = streamnook.map(|b| ProfileBadge {
+        id: b.slug.clone().unwrap_or_else(|| registry::DEFAULT_SLUG.to_string()),
+        url: b.image_url.clone(),
+        title: b.label.clone(),
+        name: Some(b.label.clone()),
+        provider: Some("streamnook".to_string()),
+        ..Default::default()
+    });
     let mut seen = HashSet::new();
-    let worn: Vec<ProfileBadge> = twitch_worn
+    let mut row: Vec<ProfileBadge> = rest
         .into_iter()
-        .chain(seventv_worn)
-        .chain(other)
+        .filter(|b| b.provider.as_deref() != Some("streamnook"))
         .filter(|b| !b.url.is_empty() && seen.insert(b.id.clone()))
-        .take(HEADER_BADGE_CAP)
         .collect();
-    let (paint_def, paint) = worn_paint(user_id, inventory.as_ref());
-    let header = OwnIdentity {
-        user_id: user_id.to_string(),
-        login: login.to_string(),
-        display_name: display_name.to_string(),
-        shown_login: shown_login(login, display_name),
-        paint,
-        paint_def,
-        picture: pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true)),
-        banner_url,
-        badges: worn,
-        streamnook: registry::member_badge(user_id, false),
-        atmosphere,
-        cologne,
-    };
-    if let (Some(path), Ok(body)) = (own_path(), serde_json::to_vec(&header)) {
-        let _ = std::fs::write(path, body);
-    }
-    header
+    let rank = |b: &ProfileBadge| crate::services::badge_service::surface_rank(b.provider.as_deref().unwrap_or(""));
+    row.sort_by_key(rank);
+    row.truncate(HEADER_BADGE_CAP - usize::from(own.is_some()));
+    row.extend(own);
+    row.sort_by_key(rank);
+    row
 }
 
 // ---- The Cosmetics screen --------------------------------------------------------
@@ -755,6 +816,10 @@ pub struct ExternalPicker {
     pub twitch_selectable: Vec<ChatIdentityBadge>,
     /// Every displayed and earned Twitch badge, for the read-only list.
     pub twitch_earned: Vec<ProfileBadge>,
+    /// The chat-client badges worn (FFZ, BetterTTV, Chatterino and the rest), in
+    /// their shared order, for the chat-row preview.
+    #[serde(default)]
+    pub chat_clients: Vec<ProfileBadge>,
     /// The account's Twitch name colour (`#rrggbb`), when Twitch says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_color: Option<String>,
@@ -798,7 +863,7 @@ pub fn named_chat_colors() -> Vec<NamedColor> {
 
 pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
     let status = crate::commands::seventv_cosmetics::get_seventv_auth_status().await;
-    let (inventory, badges, drops, colors) = tokio::join!(
+    let (inventory, badges, drops, colors, resolved) = tokio::join!(
         resolver::inventory(user_id),
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
@@ -808,6 +873,7 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
         ),
         drops_signed_in(),
         crate::services::twitch_service::TwitchService::get_user_chat_colors(vec![user_id.to_string()]),
+        crate::commands::identity::get_streamnook_identity_resolved(user_id.to_string()),
     );
     let twitch_selectable = if drops && !login.is_empty() {
         selectable_twitch_badges(login).await
@@ -849,6 +915,7 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
         drops_signed_in: drops,
         twitch_selectable,
         twitch_earned: badges.as_ref().map(twitch_badges).unwrap_or_default(),
+        chat_clients: chat_clients_worn(resolved.ok(), badges.as_ref().ok()),
         chat_color: colors.get(user_id).filter(|c| !c.is_empty()).map(|c| c.to_lowercase()),
         named_colors: named_chat_colors(),
     }
@@ -1025,5 +1092,47 @@ mod tests {
     fn the_login_line_shows_only_beyond_letter_case() {
         assert_eq!(shown_login("xqc", "xQc"), None);
         assert_eq!(shown_login("kr_user", "한국어").as_deref(), Some("kr_user"));
+    }
+
+    #[test]
+    fn the_header_row_follows_the_surface_order_with_your_streamnook_badge_last() {
+        let shown = |id: &str, provider: Option<&str>| ProfileBadge {
+            id: id.into(),
+            url: format!("https://x/{id}.webp"),
+            provider: provider.map(String::from),
+            ..Default::default()
+        };
+        let sn = SnBadge {
+            slug: Some("streamnook-singularity".into()),
+            image_url: "https://cdn.streamnook.app/badges/streamnook-singularity.webp?v=2".into(),
+            label: "StreamNook Singularity".into(),
+        };
+        let rest = vec![
+            shown("ffz-sub", Some("ffz")),
+            shown("premium", None),
+            shown("7tv-sub", Some("7tv")),
+            shown("sn-loadout", Some("streamnook")),
+        ];
+        let row = own_worn_badges(Some(&sn), rest.clone());
+        let ids: Vec<&str> = row.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["premium", "7tv-sub", "ffz-sub", "streamnook-singularity"]);
+        let last = row.last().unwrap();
+        assert_eq!((last.url.as_str(), last.provider.as_deref()), (sn.image_url.as_str(), Some("streamnook")));
+        // Not a member: the row is what the platforms show.
+        assert_eq!(own_worn_badges(None, rest).len(), 3);
+        // The cap holds with the StreamNook badge counted, and never drops it.
+        let many: Vec<ProfileBadge> = (0..20).map(|i| shown(&format!("b{i}"), None)).collect();
+        let capped = own_worn_badges(Some(&sn), many);
+        assert_eq!(capped.len(), HEADER_BADGE_CAP);
+        assert_eq!(capped.last().map(|b| b.id.as_str()), Some("streamnook-singularity"));
+    }
+
+    #[test]
+    fn every_badge_row_shares_one_surface_order() {
+        use crate::services::badge_service::surface_rank;
+        let order = ["", "twitch", "kick", "7tv", "ffz", "bttv", "dankchat", "some-new-client", "streamnook"];
+        let ranks: Vec<usize> = order.iter().map(|p| surface_rank(p)).collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+        assert!(surface_rank("some-new-client") < surface_rank("streamnook"));
     }
 }

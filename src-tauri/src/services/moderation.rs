@@ -70,6 +70,9 @@ pub enum ModAction {
         #[serde(rename = "messageId")]
         message_id: String,
     },
+    /// A Twitch warning the chatter must acknowledge before they can chat
+    /// again. The request's `reason` is what they see, so one is required.
+    Warn,
 }
 
 /// Who to act on, where, and how. Ids are the platform's own: a Twitch user
@@ -97,6 +100,10 @@ pub struct ModRequest {
     /// With no reason given, use the first saved ban reason.
     #[serde(default)]
     pub use_saved_reason: bool,
+    /// The words after the name in a typed `/timeout` ("10m spam", "spam").
+    /// With a Timeout action they set its length and reason (`typed_timeout`).
+    #[serde(default)]
+    pub typed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -403,6 +410,11 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
             },
             undoable: false,
         },
+        ModAction::Warn => ModOutcome {
+            applied_seconds: None,
+            message: format!("Warned {}", name),
+            undoable: false,
+        },
     }
 }
 
@@ -425,9 +437,34 @@ fn youtube_slug(req: &ModRequest) -> Result<String> {
     Ok(raw.strip_prefix("youtube:").unwrap_or(raw).to_string())
 }
 
+/// The words after the name in a typed `/timeout` as the seconds and the
+/// reason, read the same on every app: a leading length (plain seconds, or
+/// 30s, 10m, 1h30m, 2d, 1w) sets the time; without one it is Twitch's ten
+/// minutes and every word is the reason.
+pub fn typed_timeout(words: &str) -> (u32, Option<String>) {
+    let words = words.trim();
+    let (first, rest) = words.split_once(char::is_whitespace).unwrap_or((words, ""));
+    let (seconds, reason) = match crate::services::slash_dispatch::parse_delay(first) {
+        Some(ms) => ((ms / 1000).max(1), rest.trim()),
+        None => (600, words),
+    };
+    (u32::try_from(seconds).unwrap_or(u32::MAX), Some(reason.to_string()).filter(|r| !r.is_empty()))
+}
+
+/// Folds a typed `/timeout` tail into the request's length and reason. A
+/// reason the page gave on its own still wins.
+fn settle_typed(req: &mut ModRequest) {
+    if let (ModAction::Timeout { seconds }, Some(words)) = (&mut req.action, req.typed.take()) {
+        let (typed_seconds, typed_reason) = typed_timeout(&words);
+        *seconds = typed_seconds;
+        req.reason = req.reason.take().or(typed_reason);
+    }
+}
+
 /// Run one moderation action on the right platform. Errors carry the
 /// platform's own reason ("Twitch refused the ban: ...").
-pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
+pub async fn moderate(mut req: ModRequest) -> Result<ModOutcome> {
+    settle_typed(&mut req);
     let platform = Platform::from_provider(req.provider.as_deref());
     let reason = req
         .reason
@@ -520,14 +557,112 @@ pub async fn moderate(req: ModRequest) -> Result<ModOutcome> {
         (ModAction::Delete { message_id }, Platform::YouTube) => {
             crate::services::providers::youtube::delete_message(&youtube_slug(&req)?, message_id).await?
         }
+        (ModAction::Warn, Platform::Twitch) => {
+            let reason = reason.as_deref().ok_or_else(|| anyhow!("A warning needs a reason they will see"))?;
+            TwitchService::warn_chat_user(
+                need(&req.broadcaster_id, "channel")?,
+                need(&req.target_user_id, "chatter")?,
+                reason,
+            )
+            .await?
+        }
+        (ModAction::Warn, _) => return Err(anyhow!("Warnings are a Twitch feature")),
     }
 
     Ok(outcome_for(platform, &req.action, &name_of(&req)))
 }
 
+/// What the viewer may do to one chat message, by Twitch's own rules. Helix
+/// "Delete Chat Messages" refuses the broadcaster's messages and another
+/// moderator's ("You may not delete the broadcaster's messages", "... another
+/// moderator's messages"), so a moderator may delete their own; "Ban User"
+/// refuses users who "may not be banned" or "put in a timeout": the
+/// broadcaster, yourself, and a moderator unless the broadcaster does it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageReach {
+    /// Delete, the timeouts and ban.
+    All,
+    /// The viewer's own message in a room they moderate (not their own room).
+    DeleteOnly,
+    /// A moderator's message, seen by the broadcaster: the timeouts and ban.
+    NoDelete,
+    /// Nothing: the broadcaster's message (the viewer's own included when it is
+    /// their room), a moderator's seen by another moderator, Twitch staff, or a
+    /// room the viewer does not moderate.
+    Nothing,
+}
+
+impl MessageReach {
+    pub fn can_delete(self) -> bool {
+        matches!(self, Self::All | Self::DeleteOnly)
+    }
+    pub fn can_timeout(self) -> bool {
+        matches!(self, Self::All | Self::NoDelete)
+    }
+}
+
+/// The reach for a message by `target_id` wearing `target_badges` ("moderator"
+/// or "moderator/1"), seen by `viewer_id` with `viewer` standing. Pure, for tests.
+pub fn message_reach(viewer: crate::services::chat_send_limiter::Role, viewer_id: &str, target_id: &str, target_badges: &[String]) -> MessageReach {
+    use crate::services::chat_send_limiter::Role;
+    let broadcaster = viewer == Role::Broadcaster;
+    if !(broadcaster || viewer == Role::Moderator) || target_id.is_empty() {
+        return MessageReach::Nothing;
+    }
+    let has = |name: &str| target_badges.iter().any(|b| b == name || b.starts_with(&format!("{name}/")));
+    let own = !viewer_id.is_empty() && target_id == viewer_id;
+    if has("broadcaster") || (own && broadcaster) || has("staff") || has("admin") || has("global_mod") {
+        return MessageReach::Nothing;
+    }
+    if own {
+        return MessageReach::DeleteOnly;
+    }
+    if has("moderator") || has("lead_moderator") {
+        return if broadcaster { MessageReach::NoDelete } else { MessageReach::Nothing };
+    }
+    MessageReach::All
+}
+
+/// The slider's steps a message allows.
+pub fn steps_within(steps: Vec<ModStep>, reach: MessageReach) -> Vec<ModStep> {
+    steps
+        .into_iter()
+        .filter(|s| match s.action {
+            StepAction::Delete => reach.can_delete(),
+            StepAction::Timeout | StepAction::Ban => reach.can_timeout(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warning_is_worded_and_cannot_be_undone() {
+        let action: ModAction = serde_json::from_value(serde_json::json!({ "kind": "warn" })).unwrap();
+        let out = outcome_for(Platform::Twitch, &action, "gus");
+        assert_eq!(out.message, "Warned gus");
+        assert!(!out.undoable);
+    }
+
+    #[tokio::test]
+    async fn a_warning_without_a_reason_or_off_twitch_is_refused_before_any_call() {
+        let req = |provider: &str, reason: Option<&str>| ModRequest {
+            provider: Some(provider.into()),
+            broadcaster_id: Some("1".into()),
+            channel: None,
+            target_user_id: Some("2".into()),
+            target_name: None,
+            action: ModAction::Warn,
+            reason: reason.map(str::to_string),
+            use_saved_reason: false,
+            typed: None,
+        };
+        assert!(moderate(req("twitch", Some("  "))).await.unwrap_err().to_string().contains("needs a reason"));
+        assert!(moderate(req("kick", Some("spam"))).await.unwrap_err().to_string().contains("Twitch feature"));
+    }
 
     #[test]
     fn typed_timeout_lengths() {
@@ -660,5 +795,62 @@ mod tests {
         let unban: ModRequest =
             serde_json::from_value(serde_json::json!({ "action": { "kind": "unban" } })).unwrap();
         assert!(matches!(unban.action, ModAction::Unban { timeout: false }));
+    }
+
+    #[test]
+    fn a_typed_timeout_reads_the_same_on_every_app() {
+        assert_eq!(typed_timeout("5m spam links"), (300, Some("spam links".to_string())));
+        assert_eq!(typed_timeout("1h30m"), (5400, None));
+        assert_eq!(typed_timeout("45 caps"), (45, Some("caps".to_string())));
+        assert_eq!(typed_timeout("spam links"), (600, Some("spam links".to_string())));
+        assert_eq!(typed_timeout("10x"), (600, Some("10x".to_string())));
+        assert_eq!(typed_timeout(""), (600, None));
+    }
+
+    #[test]
+    fn a_typed_tail_sets_the_requests_length_and_reason() {
+        let mut req: ModRequest = serde_json::from_value(serde_json::json!({
+            "provider": "kick",
+            "action": { "kind": "timeout", "seconds": 600 },
+            "typed": "2h being rude"
+        }))
+        .unwrap();
+        settle_typed(&mut req);
+        assert!(matches!(req.action, ModAction::Timeout { seconds: 7200 }));
+        assert_eq!(req.reason.as_deref(), Some("being rude"));
+        assert!(req.typed.is_none());
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+    use crate::services::chat_send_limiter::Role;
+
+    fn b(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_moderator_may_delete_their_own_message_and_nothing_more() {
+        assert_eq!(message_reach(Role::Moderator, "7", "7", &b(&["moderator/1"])), MessageReach::DeleteOnly);
+        let steps = steps_within(slider_steps(Platform::Twitch, &SliderConfig { delete: true, timeouts: vec![60], ban: true }), MessageReach::DeleteOnly);
+        assert_eq!(steps.iter().map(|s| s.action).collect::<Vec<_>>(), vec![StepAction::Delete]);
+    }
+
+    #[test]
+    fn nobody_acts_on_the_broadcasters_messages_not_even_the_broadcaster() {
+        assert_eq!(message_reach(Role::Broadcaster, "1", "1", &b(&["broadcaster/1"])), MessageReach::Nothing);
+        assert_eq!(message_reach(Role::Broadcaster, "1", "1", &[]), MessageReach::Nothing, "own room, own message, badge not seen yet");
+        assert_eq!(message_reach(Role::Moderator, "7", "1", &b(&["broadcaster/1"])), MessageReach::Nothing);
+    }
+
+    #[test]
+    fn moderators_and_each_other() {
+        assert_eq!(message_reach(Role::Moderator, "7", "8", &b(&["moderator/1"])), MessageReach::Nothing);
+        assert_eq!(message_reach(Role::Broadcaster, "1", "8", &b(&["moderator/1"])), MessageReach::NoDelete);
+        assert_eq!(message_reach(Role::Moderator, "7", "9", &b(&["subscriber/12"])), MessageReach::All);
+        assert_eq!(message_reach(Role::Viewer, "7", "9", &[]), MessageReach::Nothing);
+        assert_eq!(message_reach(Role::Moderator, "7", "9", &b(&["staff/1"])), MessageReach::Nothing);
     }
 }
