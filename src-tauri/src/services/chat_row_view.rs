@@ -1302,8 +1302,24 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         source,
         nickname: own.nickname,
         previews,
+        event_art: event_art(msg),
         event: event_key(msg),
     });
+}
+
+/// What a Twitch subscription or gift notice leads with, as the desktop card
+/// draws it: Twitch's gift art (the Sub Gifter badge), except for a Prime sub,
+/// which leads with Twitch's Prime crown the shell draws itself.
+fn event_art(msg: &ChatMessage) -> Option<String> {
+    leads_with_gift_art(msg).then(|| twitch_badge_art(None, "sub-gifter", "1").map(|(url, _)| url)).flatten()
+}
+
+/// A Twitch subscription or gift notice that is not a Prime sub.
+fn leads_with_gift_art(msg: &ChatMessage) -> bool {
+    let twitch = msg.provider.is_empty() || msg.provider == "twitch";
+    let msg_type = msg.metadata.msg_type.as_deref().or_else(|| msg.tags.get("msg-id").map(String::as_str));
+    let sub_or_gift = msg_type.and_then(event_category).is_some_and(|kind| matches!(kind, "subscription" | "gift"));
+    twitch && sub_or_gift && msg.tags.get("msg-param-sub-plan").map_or(true, |plan| plan != "Prime")
 }
 
 /// A notice's chat event category by its msg-id / msg_type. Shared with the
@@ -1362,6 +1378,19 @@ mod tests {
         msg.metadata.bits_amount = bits;
         msg.tags = tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         msg
+    }
+
+    #[test]
+    fn subs_and_gifts_lead_with_twitchs_gift_art_except_prime() {
+        assert!(leads_with_gift_art(&notice("twitch", Some("resub"), &[("msg-param-sub-plan", "1000")], None)));
+        assert!(leads_with_gift_art(&notice("twitch", None, &[("msg-id", "submysterygift")], None)));
+        assert!(leads_with_gift_art(&notice("", Some("subgift"), &[("msg-param-sub-plan", "3000")], None)));
+        // A Prime sub leads with the Prime crown the shell draws.
+        assert!(!leads_with_gift_art(&notice("twitch", Some("sub"), &[("msg-param-sub-plan", "Prime")], None)));
+        // Other events, other platforms and ordinary messages lead with something else.
+        assert!(!leads_with_gift_art(&notice("twitch", Some("raid"), &[], None)));
+        assert!(!leads_with_gift_art(&notice("kick", Some("kick_gift"), &[], None)));
+        assert!(!leads_with_gift_art(&notice("twitch", None, &[], None)));
     }
 
     #[test]
