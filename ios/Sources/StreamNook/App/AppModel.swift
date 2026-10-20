@@ -177,6 +177,10 @@ final class AppModel {
         Task { await settingsStore.refresh() }
         capVideoHeight()
         await signIn.boot(core: core)
+        // The drops token cannot be refreshed, and a stored one only says a file exists: the core
+        // clears it on a real 401 (never on a network failure), so a dead one shows as not
+        // connected. Once per launch, as desktop and Android do.
+        Task { [core] in _ = try? await core.invoke("validate_drops_token", args: [:]) }
         host.start(core: core, cookies: signIn.cookies)
         home.start()
         cosmetics.start(core: core)

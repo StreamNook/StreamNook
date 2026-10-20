@@ -1862,6 +1862,26 @@ impl Settings {
         }
     }
 
+    /// Moves the retired second OLED theme onto OLED. It was a fixed-orange
+    /// variant of the now-unified OLED theme, so a viewer with no accent of
+    /// their own keeps the orange and their look is unchanged. Runs on load, so
+    /// every shell gets it; returns whether anything changed.
+    pub fn retire_oled_v2(&mut self) -> bool {
+        if self.theme != "prince0fdubai-oled-v2" {
+            return false;
+        }
+        self.theme = crate::services::theme_palette::OLED_THEME_ID.to_string();
+        let has_accent = self
+            .extra
+            .get("oled_accent")
+            .and_then(|v| v.as_str())
+            .is_some_and(|a| !a.is_empty());
+        if !has_accent {
+            self.extra.insert("oled_accent".into(), serde_json::json!("#ff9933"));
+        }
+        true
+    }
+
     pub fn retire_legacy_live_edge_gap(&mut self) {
         if self.video_player.ll_target_latency == Some(LEGACY_LIVE_EDGE_GAP_DEFAULT) {
             self.video_player.ll_target_latency = None;
@@ -1933,6 +1953,23 @@ fn legacy_event_key(key: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod backup_persistence_tests {
     use super::*;
+
+    #[test]
+    fn the_retired_oled_theme_becomes_oled_with_its_orange() {
+        let mut old = Settings::default();
+        old.theme = "prince0fdubai-oled-v2".into();
+        assert!(old.retire_oled_v2());
+        assert_eq!(old.theme, crate::services::theme_palette::OLED_THEME_ID);
+        assert_eq!(old.extra.get("oled_accent").and_then(|v| v.as_str()), Some("#ff9933"));
+        // An accent the viewer picked stays, and a second pass changes nothing.
+        let mut picked = Settings::default();
+        picked.theme = "prince0fdubai-oled-v2".into();
+        picked.extra.insert("oled_accent".into(), serde_json::json!("#00e0ff"));
+        assert!(picked.retire_oled_v2());
+        assert_eq!(picked.extra.get("oled_accent").and_then(|v| v.as_str()), Some("#00e0ff"));
+        assert!(!picked.retire_oled_v2());
+        assert!(!Settings::default().retire_oled_v2());
+    }
 
     #[test]
     fn legacy_iphone_event_keys_become_the_shared_ones() {

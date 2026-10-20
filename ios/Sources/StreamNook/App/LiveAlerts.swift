@@ -15,7 +15,8 @@ enum LiveAlerts {
     /// alerts are on; the token arrives at `registered(token:)`. Cheap to repeat: the iPhone hands
     /// back the token it already has, and the core skips a device it registered a short while ago.
     static func sync(_ model: AppModel) async {
-        guard model.started else { return }
+        // Until the settings are read, every alert switch would read as on.
+        guard model.started, model.settingsStore.loaded else { return }
         core = model.core
         let store = model.settingsStore
         let allowed = MentionAlerts.allowed(await MentionAlerts.status())

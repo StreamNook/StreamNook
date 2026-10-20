@@ -398,6 +398,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
     settings.map_legacy_event_keys();
+    settings.retire_oled_v2();
     Ok(settings)
 }
 
