@@ -144,9 +144,22 @@ body:has(.sn-mobile) .glass-input:focus {
   opacity: 0.6;
   animation: sn-atm-breathe-2 12s ease-in-out infinite;
 }
+/* The watch layer's chat fading in when it gets its box back: after the player
+   lands from the mini box, so the spring never lays chat out. No fill mode on
+   purpose: a held opacity animation keeps a stacking context, which would put
+   the pinned and hype cards under the player's cast for good. */
+.sn-mobile .sn-chat-reveal {
+  animation: sn-chat-reveal 160ms ease-out;
+}
+@keyframes sn-chat-reveal {
+  from {
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .sn-atm-breathe-1,
-  .sn-atm-breathe-2 {
+  .sn-atm-breathe-2,
+  .sn-mobile .sn-chat-reveal {
     animation: none;
   }
 }

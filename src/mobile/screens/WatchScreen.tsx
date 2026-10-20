@@ -74,6 +74,7 @@ import { ChatOverlayChrome } from '../watch/ChatOverlayChrome';
 import type { FullscreenChatSettings } from '../../types';
 import { hapticStep } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
+import { swallowTrailingClick } from '../ui/trailingClick';
 import { isTwitchStream } from '../../utils/streamProvider';
 
 const MINI_W = 200;
@@ -141,6 +142,10 @@ const COMMIT_FRACTION = 0.45;
 // A downward flick commits regardless of distance. CSS pixels per millisecond.
 const FLING_VY = 0.6;
 const SPRING = { type: 'spring', stiffness: 420, damping: 36, mass: 0.7 } as const;
+// Backstop for the layer coming to rest. The spring lands in about 450 ms; an
+// update with nothing to animate never reports completion, so this clears the
+// growing state and the chat hold after it instead.
+const SETTLE_FALLBACK_MS = 900;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -279,21 +284,53 @@ export const WatchScreen: React.FC = () => {
   // committed frame ever derives mini from the stale mode.
   const [prevShow, setPrevShow] = useState(false);
   const [forceFull, setForceFull] = useState(false);
+  // The value this pass settles on, read below in the SAME pass. A render that
+  // sets state runs again before it commits, but other adjustments made from
+  // the old value are kept, so `mini` must never read the stale one.
+  let forceFullNow = forceFull;
   if (show && !prevShow) {
     setPrevShow(true);
-    setForceFull(true);
+    forceFullNow = true;
   } else if (!show && prevShow) {
     setPrevShow(false);
-    setForceFull(false);
+    forceFullNow = false;
   } else if (forceFull && playerMode === 'full') {
-    setForceFull(false);
+    forceFullNow = false;
   }
+  if (forceFullNow !== forceFull) setForceFull(forceFullNow);
   useEffect(() => {
     if (forceFull) setPlayerMode('full');
   }, [forceFull, setPlayerMode]);
 
-  const mini = !forceFull && playerMode === 'mini';
+  const mini = !forceFullNow && playerMode === 'mini';
   const watching = !!streamUrl && streamUrl !== 'offline';
+
+  // The mini box growing back into the full player, by any route (a tap on the
+  // box, a mention, a new stream): from the commit where a box that was ON
+  // SCREEN stops being mini until the layer's spring lands. Never a fresh open,
+  // which shows no box, and never a close. While it is set chat stays hidden
+  // (chatClass) and a shield takes every press (bottom of the layer), so nothing
+  // in the moving layer is pressed and chat is never laid out mid-flight.
+  const miniOnScreen = show && mini;
+  const [prevMiniOnScreen, setPrevMiniOnScreen] = useState(false);
+  const [landing, setLanding] = useState(false);
+  if (miniOnScreen !== prevMiniOnScreen) {
+    setPrevMiniOnScreen(miniOnScreen);
+    setLanding(!miniOnScreen && show);
+  }
+  // Chat's full-size box, held from the first frame of a shrink drag until the
+  // layer is at rest again, so the shrinking layer crops chat instead of
+  // re-wrapping every row at a new width each frame.
+  const [chatFreeze, setChatFreeze] = useState<{ w: number; h: number } | null>(null);
+  const settle = useCallback(() => {
+    setLanding(false);
+    setChatFreeze(null);
+  }, []);
+  useEffect(() => {
+    if (dragging || (!landing && !chatFreeze)) return;
+    const t = setTimeout(settle, SETTLE_FALLBACK_MS);
+    return () => clearTimeout(t);
+  }, [dragging, landing, chatFreeze, settle]);
 
   // A Cast device playing this stream takes the player's place; the phone is
   // the remote and chat carries on. Rust decides everything (cast_session.rs);
@@ -720,6 +757,12 @@ export const WatchScreen: React.FC = () => {
         // Track the finger 1:1 from here on. Batched with the geometry update
         // below, so the very first moved frame already skips the spring.
         setDragging(true);
+        // Hold chat at the size it has now for the whole drag and its spring,
+        // so the shrinking layer crops it rather than re-wrapping it per frame.
+        if (g.kind === 'shrink' && chatColumnEl) {
+          const r = chatColumnEl.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) setChatFreeze({ w: r.width, h: r.height });
+        }
       }
       // Everything below moves the layer, so nothing happens until the gesture
       // has committed to being a drag rather than a tap.
@@ -767,7 +810,7 @@ export const WatchScreen: React.FC = () => {
       g.progress = vertical ? Math.min(1, dy / shrinkTravel(viewport.h)) : 0;
       setShrink(g.progress);
     },
-    [viewport.w, viewport.h],
+    [viewport.w, viewport.h, chatColumnEl],
   );
 
   const onBandPointerUp = useCallback(
@@ -791,7 +834,11 @@ export const WatchScreen: React.FC = () => {
       if (g.kind === 'move') {
         // Tap on the mini box expands. Decided here rather than in an onClick so
         // it never depends on Chromium synthesizing a compatibility click.
+        // That click still comes, and it is aimed at whatever is under the
+        // finger once this commit lands: the player's buttons, laid out in the
+        // still-small box. Eat it.
         if (!g.moved) {
+          swallowTrailingClick();
           setPlayerMode('full');
           return;
         }
@@ -980,9 +1027,11 @@ export const WatchScreen: React.FC = () => {
               overlaySide === 'left' ? 'left-0 sn-chat-overlay--left' : 'right-0'
             }`
           : 'hidden'
-      : mini
+      : // Hidden while the box grows back too, then faded in once the layer
+        // lands (sn-chat-reveal), so the spring never lays chat out.
+        mini || landing
         ? 'hidden'
-        : 'flex-1 min-h-0 relative flex flex-col';
+        : 'flex-1 min-h-0 relative flex flex-col sn-chat-reveal';
 
   return (
     <AnimatePresence>
@@ -1010,6 +1059,11 @@ export const WatchScreen: React.FC = () => {
       animate={{ ...layerGeometry, opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 40, transition: { duration: 0.18, ease: 'easeIn' } }}
       transition={dragging ? { duration: 0 } : SPRING}
+      // Fires only for an animation that ran to the end (a cancelled one never
+      // reports), so this is the layer genuinely at rest.
+      onAnimationComplete={() => {
+        if (!dragging) settle();
+      }}
     >
       <div
         // relative: the landscape chat overlay positions against this box.
@@ -1206,7 +1260,11 @@ export const WatchScreen: React.FC = () => {
                     [overlaySide === 'left' ? 'paddingLeft' : 'paddingRight']:
                       `var(--sn-safe-${overlaySide === 'left' ? 'l' : 'r'}, 0px)`,
                   } as React.CSSProperties)
-                : undefined
+                : chatFreeze
+                  ? // A shrink drag: chat keeps its full-size box and the layer's
+                    // overflow crops it (see chatFreeze).
+                    { width: chatFreeze.w, height: chatFreeze.h, flex: 'none' }
+                  : undefined
           }
         >
           {/* Chat header carries only live, transient signal now: the hype
@@ -1337,6 +1395,19 @@ export const WatchScreen: React.FC = () => {
             boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, ${(0.12 * (mini ? 1 : shrink)).toFixed(3)})`,
             transition: dragging ? undefined : 'box-shadow 200ms ease-out',
           }}
+        />
+      )}
+      {/* While the box grows back to full, one surface takes every press, so
+          nothing in the moving layer (the player's buttons, chat) is pressed
+          mid-flight. It carries its own click handler on purpose: the WebView
+          nudges a tap onto the nearest pressable element, and inside the layer
+          this is always the nearest, never a card beside the box. */}
+      {landing && (
+        <div
+          aria-hidden
+          role="presentation"
+          className="absolute inset-0 z-[36]"
+          onClick={(e) => e.stopPropagation()}
         />
       )}
     </motion.div>

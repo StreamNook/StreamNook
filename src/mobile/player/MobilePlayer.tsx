@@ -426,6 +426,18 @@ export const MobilePlayer: React.FC<{
     };
   }, [scheduleHide]);
 
+  // Back to full size from the mini box (or picture in picture), the controls
+  // show for their usual spell, as on the iPhone. The watch layer takes every
+  // press until it has landed, so they cannot be pressed mid-flight.
+  const [prevCompact, setPrevCompact] = useState(compact);
+  if (prevCompact !== compact) {
+    setPrevCompact(compact);
+    if (!compact) setControlsVisible(true);
+  }
+  useEffect(() => {
+    if (!compact) scheduleHide();
+  }, [compact, scheduleHide]);
+
   // Mute from the system PiP window. Web content cannot draw usable controls
   // there, so the toggle is a native RemoteAction; MainActivity broadcasts back
   // into the WebView, and we push the resulting state out again so the OS can

@@ -18,6 +18,9 @@ struct WatchLayer: View {
     @GestureState private var miniHeld = false
     @State private var controlsShown = true
     @State private var controlsTouch = 0
+    /// True from a tap on the mini box until the layer has grown back and landed: the band and
+    /// chat take no touches meanwhile, so a second tap cannot press a control mid-flight.
+    @State private var landing = false
     /// The landscape column's width and background while a drag or the slider leads the saved
     /// setting; nil once the setting has caught up.
     @State private var liveWidth: Double?
@@ -128,6 +131,7 @@ struct WatchLayer: View {
                                 .transition(.opacity.combined(with: .scale(scale: 0.94)))
                         }
                     }
+                    .allowsHitTesting(!landing)
                     .offset(x: band.minX, y: band.minY)
 
                 if full, !landscape {
@@ -147,16 +151,24 @@ struct WatchLayer: View {
                 let chatShown = (full && !landscape) || sideChat
                 let keyboardUp = insets.bottom > Self.homeIndicatorInset + 1
                 let bottomKeep = max(0, insets.bottom - (keyboardUp ? 0 : Self.indicatorOverlap))
+                let portraitChatHeight: CGFloat = mini
+                    ? max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress))
+                    : max(0, screen.height - (insets.top + screen.width * 9 / 16) - bottomKeep)
                 ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
                          backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
                          outerInset: landscapeChat ? outer : 0, leading: chat.leading)
-                    .frame(width: landscapeChat ? columnWidth : layer.width,
+                    // Portrait chat keeps the screen's width in every mode: ChatListView
+                    // re-measures every row when its width changes, so the list must not follow
+                    // the layer's width while it shrinks, grows or is dragged. The layer's mask
+                    // crops it instead. Its height is the full layout's until the box is mini,
+                    // where it folds to nothing so the hidden list draws no rows while browsing.
+                    .frame(width: landscapeChat ? columnWidth : screen.width,
                            height: landscapeChat ? max(0, screen.height - (keyboardUp ? insets.bottom : 0))
-                                                 : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
+                                                 : portraitChatHeight)
                     .offset(x: landscapeChat ? columnX : layer.minX, y: landscapeChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)
                     .animation(SNMotion.run(.easeOut(duration: 0.2)), value: nav.landscapeChat)
-                    .allowsHitTesting(chatShown && !dragging)
+                    .allowsHitTesting(chatShown && !dragging && !landing)
 
                 if sideChat {
                     let edge = chat.leading ? columnX + columnWidth : columnX
@@ -300,7 +312,14 @@ struct WatchLayer: View {
     }
 
     private func expand() {
-        withAnimation(SNMotion.run(SNMotion.settleBack)) { nav.playerMode = .full }
+        // The completion runs exactly once, straight away when there is nothing to animate
+        // (motion Off), so the lock can never stick.
+        landing = true
+        withAnimation(SNMotion.run(SNMotion.settleBack)) {
+            nav.playerMode = .full
+        } completion: {
+            landing = false
+        }
         touchedControls()
     }
 
