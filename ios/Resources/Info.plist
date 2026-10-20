@@ -38,6 +38,10 @@
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>StreamNook plays the stream to your Apple TV from this phone.</string>
+    <key>NSUserActivityTypes</key>
+    <array>
+        <string>INSendMessageIntent</string>
+    </array>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
 </dict>

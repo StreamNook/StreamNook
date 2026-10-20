@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The go-live banner picture extension (Sources/NotificationService). Its versions match the
+     app's Info.plist; release signing stamps both with the same numbers. -->
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>StreamNook</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <!-- True only when the app is signed with Communication Notifications (release signing sets
+         it from the app's profile); false draws the picture as the banner's thumbnail. -->
+    <key>SNCommunicationStyle</key>
+    <false/>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>IntentsSupported</key>
+            <array>
+                <string>INSendMessageIntent</string>
+            </array>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.usernotifications.service</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>SNNotificationService</string>
+    </dict>
+</dict>
+</plist>

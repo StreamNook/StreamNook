@@ -33,13 +33,24 @@ let package = Package(
         // xtool builds the product named in xtool.yml as the app.
         .library(name: "StreamNook", targets: ["StreamNook"]),
         .library(name: "SNKit", targets: ["SNKit"]),
+        // The notification service extension xtool.yml lists; xtool packs it into PlugIns/.
+        .library(name: "NotificationService", targets: ["NotificationService"]),
     ],
     targets: [
         // The bridge to the core, its fake, and the shapes of what the core answers. Foundation
         // only, so it builds and tests on Linux.
         .target(name: "SNKit", resources: [.copy("Resources/chat-frames.json"), .copy("Resources/emoji.json")]),
-        .testTarget(name: "SNKitTests", dependencies: ["SNKit"]),
+        // What the go-live banner extension fetches, and when it gives up. Foundation only and
+        // apart from SNKit, so the extension carries none of the app.
+        .target(name: "SNPush"),
+        .testTarget(name: "SNKitTests", dependencies: ["SNKit", "SNPush"]),
     ] + (kitOnly ? [] : coreTargets + [
+        // The go-live banner picture: a UNNotificationServiceExtension, Swift only (no core).
+        // iOS finds its class by the name in its Info.plist, so nothing in the extension's
+        // executable refers to it and the linker would leave the whole target out (an extension
+        // with no code, which then cannot even be signed). -ObjC keeps every Objective-C class.
+        .target(name: "NotificationService", dependencies: ["SNPush"],
+                linkerSettings: [.unsafeFlags(["-Xlinker", "-ObjC"])]),
         // The iPhone app: SwiftUI and AVFoundation over the core.
         .target(
             name: "StreamNook",
