@@ -51,6 +51,7 @@ import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { ManageChannelSheet } from './ManageChannelSheet';
 import { ModerationSheet } from './ModerationSheet';
 import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -203,6 +204,12 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
+  // The whole composer: the emote picker's company (typing, sending and the
+  // emote button leave it open, as on the iPhone) and the suggestions'.
+  const composerRef = useRef<HTMLDivElement>(null);
+  // The draft the suggestions were put away for by a tap outside; typing
+  // brings them back.
+  const [suggestionsHiddenFor, setSuggestionsHiddenFor] = useState<string | null>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
@@ -516,7 +523,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
     (chatInput?.emote_tab_complete_enabled ?? true) &&
     !emotesOpen &&
     !pointsOpen &&
-    suggestions.length > 0;
+    suggestions.length > 0 &&
+    suggestionsHiddenFor !== text;
+  // A tap outside the composer puts the suggestions away with the keyboard.
+  const markSuggestionsInside = useOutsidePress(showSuggestions, [composerRef], () => setSuggestionsHiddenFor(text));
 
   // Replace the word being typed rather than appending, which is what makes
   // this a completion instead of a second insertion.
@@ -536,7 +546,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
     // lift above the keyboard is kb + safe-b (max left the input clipped by
     // exactly the gesture-bar height).
     <div
+      ref={composerRef}
       data-chat-composer=""
+      onPointerDownCapture={markSuggestionsInside}
       className="shrink-0 border-t border-borderSubtle"
       style={{
         paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
@@ -704,7 +716,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
             ) : (
               roomModes &&
               !roomModesAsPrompt &&
-              !gating.blocked && <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
+              !gating.blocked && <RoomModeIndicator
+                  view={roomModes}
+                  inline
+                  onActivate={() => {
+                    setEmotesOpen(false);
+                    setMenuOpen(true);
+                  }}
+                />
             ))}
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
@@ -922,7 +941,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         <EmotePickerPanel
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
-          ignoreRef={emoteButtonRef}
+          ignoreRef={composerRef}
           emotes={emotes}
           isTwitch={isTwitch}
           isKick={provider === 'kick'}

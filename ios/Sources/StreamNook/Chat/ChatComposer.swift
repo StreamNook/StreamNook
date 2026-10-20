@@ -60,6 +60,11 @@ private struct ComposerBar: View {
         }
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
+        // The composer is the field's own: its buttons act and the keyboard stays, and its emote
+        // picker and suggestions stay open while it is used (typing, sending, the emote button).
+        .keepsKeyboard()
+        .outsideTapAnchor("emotes")
+        .outsideTapAnchor("suggestions")
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         // The wallet reads Rust's channel state for this room and follows its pushes.
         .task { await model.wallet?.start() }
@@ -74,6 +79,7 @@ private struct ComposerBar: View {
             if let roomID = session.roomID {
                 ManageChannelSheet(core: session.core, channelID: roomID, channelLogin: session.channel,
                                    toasts: session.rooms?.toasts)
+                    .tapsThroughKeyboard()
                     .presentationDetents([.large])
             }
         }
@@ -83,6 +89,7 @@ private struct ComposerBar: View {
                     // After this sheet has gone, so the two never present at once.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { model.manageOpen = true }
                 }
+                .tapsThroughKeyboard()
                 .presentationDetents([.medium, .large])
             }
         }
@@ -92,6 +99,7 @@ private struct ComposerBar: View {
                 model.commandsOpen = false
                 focused = true
             }
+            .tapsThroughKeyboard()
             .snSheetLight()
             .presentationDetents([.fraction(0.72), .large])
         }
@@ -112,6 +120,8 @@ private struct ComposerBar: View {
             }
             ZStack(alignment: .bottom) {
                 ChatEmotePicker(model: model)
+                    .closesOnOutsideTap(Binding(get: { model.panel == .emotes },
+                                                set: { if !$0 { model.panel = .none } }), id: "emotes")
                     .floatingSurface()
                     .opacity(model.panel == .emotes ? 1 : 0)
                     .offset(y: model.panel == .emotes ? 0 : 10)
@@ -122,6 +132,8 @@ private struct ComposerBar: View {
                     SuggestionStrip(model: model) {
                         if !model.fieldDisabled { focused = true }
                     }
+                    .closesOnOutsideTap(Binding(get: { showsStrip }, set: { if !$0 { model.suggestionsDismissed = true } }),
+                                        id: "suggestions")
                     .floatingSurface()
                     .transition(.opacity.combined(with: .offset(y: 4)))
                 }
@@ -133,7 +145,9 @@ private struct ComposerBar: View {
         .animation(.easeOut(duration: 0.12), value: showsStrip)
     }
 
-    private var showsStrip: Bool { !model.suggestions.isEmpty && session.style.suggestionsEnabled }
+    private var showsStrip: Bool {
+        !model.suggestions.isEmpty && session.style.suggestionsEnabled && !model.suggestionsDismissed
+    }
 
     private func replyChip(_ reply: ChatMessage) -> some View {
         HStack(spacing: 6) {
@@ -266,6 +280,8 @@ private struct ComposerBar: View {
                 }
                 if !session.isKick {
                     Button {
+                        // The sheet covers the picker: close it rather than leave it under there.
+                        model.panel = .none
                         model.commandsOpen = true
                     } label: {
                         Image(systemName: "slash.circle")
@@ -283,8 +299,8 @@ private struct ComposerBar: View {
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
 
-            // Send with a draft; with none, the chat menu, except while the keyboard is up: scrolling
-            // the chat never closes it, so this slot is the way down until it goes.
+            // Send with a draft; with none, the chat menu, except while the keyboard is up, when
+            // it puts the keyboard away (as a tap anywhere outside the composer does).
             Button {
                 if model.canSend {
                     Task { await model.send() }

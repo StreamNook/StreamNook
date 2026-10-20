@@ -360,7 +360,8 @@ export const RewardsScreen: React.FC = () => {
   const badgesSettled = useSettleIn(tiles.length > 0, `badges:${badgeSort}`, warmOnMount);
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    // A campaign tapped while typing a search opens, and the keyboard goes.
+    <div className="flex-1 min-h-0 flex flex-col" data-taps-through-keyboard="">
       {/* The same header as Following and Browse, so the title sits on one
           baseline on every tab. Drops and Badges sit beside it (Brandon: in the
           title row, so the row under it goes and the content moves up). */}

@@ -293,7 +293,12 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
           the fold, with only a faint fade to hint that the card scrolled. Kept
           to two rows so the outcomes keep their room above it. */}
       {canPredict && side && (
-        <div className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-2.5 border-t border-borderSubtle/60">
+        <div
+          className="sticky bottom-0 z-10 bg-background px-3 pt-2 pb-2.5 border-t border-borderSubtle/60"
+          // Phones: a chip or Predict pressed while typing an amount acts,
+          // and the keyboard goes.
+          data-taps-through-keyboard=""
+        >
           {showConfirm && bet ? (
             <div className="p-3 bg-backgroundSecondary rounded-lg border border-border text-center">
               <p className="text-sm font-semibold text-textPrimary">{bet.confirm_title}</p>

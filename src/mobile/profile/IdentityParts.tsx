@@ -4,7 +4,8 @@
 // black disc (another person's StreamNook badge on it as a medal), and the
 // name beside or below it. The iPhone draws the same shape from
 // You/IdentityViews.swift.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { Check } from 'phosphor-react';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { SevenTVLogo } from '../../components/emotesets/SevenTVLogo';
@@ -131,14 +132,8 @@ export const CutoutAvatar: React.FC<{
   const host = useRef<HTMLDivElement>(null);
   const showsSevenTv = !localUrl && !!picture && failedFor !== picture.still;
 
-  useEffect(() => {
-    if (!explaining) return;
-    const close = (e: PointerEvent) => {
-      if (!host.current?.contains(e.target as Node)) setExplaining(false);
-    };
-    document.addEventListener('pointerdown', close, true);
-    return () => document.removeEventListener('pointerdown', close, true);
-  }, [explaining]);
+  // A tap outside the note puts it away, pressing nothing else.
+  const markInside = useOutsidePress(explaining, [host], () => setExplaining(false));
 
   let face: React.ReactNode;
   if (localUrl) {
@@ -162,7 +157,7 @@ export const CutoutAvatar: React.FC<{
   }
 
   return (
-    <div ref={host} className="relative" style={{ width: size, height: size }}>
+    <div ref={host} onPointerDownCapture={markInside} className="relative" style={{ width: size, height: size }}>
       <button
         type="button"
         onClick={explains ? () => setExplaining((v) => !v) : undefined}

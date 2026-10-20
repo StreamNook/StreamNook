@@ -31,6 +31,8 @@ struct BrowseScreen: View {
         }
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .scrollDismissesKeyboard(.never)
+        // A tap on a result puts the keyboard away and opens it.
+        .tapsThroughKeyboard()
         .snShellBackground()
         .navigationTitle("Browse")
         .toolbarTitleDisplayMode(.inlineLarge)

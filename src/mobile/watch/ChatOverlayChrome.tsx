@@ -11,6 +11,7 @@
 // behind it there is nothing to see through, so it passes no opacity and gets
 // no strip.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Drop, X } from 'phosphor-react';
 import { hapticTick } from '../ui/haptics';
@@ -54,6 +55,10 @@ export const ChatOverlayChrome: React.FC<Props> = ({
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commit = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drag = useRef<{ id: number; startX: number; startW: number; lastW: number; moved: boolean } | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
+  // A tap outside the strip puts it away; its handle toggles it on its own.
+  const markStripInside = useOutsidePress(hasStrip && stripOpen, [stripRef, handleRef], () => setStripOpen(false));
 
   // The strip closes on its own once it has been left alone. Every touch on
   // it pushes the deadline back.
@@ -133,6 +138,7 @@ export const ChatOverlayChrome: React.FC<Props> = ({
           reads as the column's edge rather than a button inside it, with a
           hit area wider than the pill it draws. */}
       <div
+        ref={handleRef}
         className={`absolute top-1/2 -translate-y-1/2 z-40 w-7 h-20 flex items-center justify-center ${
           side === 'right' ? 'left-0 -translate-x-1/2' : 'right-0 translate-x-1/2'
         }`}
@@ -161,6 +167,8 @@ export const ChatOverlayChrome: React.FC<Props> = ({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.16 }}
+            ref={stripRef}
+            onPointerDownCapture={markStripInside}
             onPointerDown={armIdle}
           >
             <div className="chrome-glaze chrome-glaze--flat h-11 px-3 flex items-center gap-2.5 text-white">

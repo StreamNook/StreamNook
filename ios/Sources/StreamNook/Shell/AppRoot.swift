@@ -16,6 +16,8 @@ struct AppRoot: View {
             }
         }
         .background(ToastWindowProbe(toasts: model.toasts))
+        // A tap outside the field being typed in puts the keyboard away, on every screen.
+        .background(OutsideTapInstaller())
         .sheet(item: signInPage, onDismiss: { model.signIn.sheetClosed() }) { page in
             SignInSheet(signIn: model.signIn, page: page)
         }
