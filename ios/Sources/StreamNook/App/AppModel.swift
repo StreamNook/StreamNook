@@ -580,6 +580,14 @@ final class AppModel {
                        watched.userLogin.lowercased() == (payload["channel"] as? String ?? "").lowercased() {
                         Task { await self.streamWentOffline() }
                     }
+                case "reward-granted":
+                    // The core's reward claims granted something new (services/member_rewards.rs).
+                    // Granting only unlocks it; Apply opens the look picker to wear it.
+                    let title = Self.object(event.payloadJSON)["title"] as? String
+                    self.toasts.show("Achievement unlocked: \(title ?? "event reward")", .success, action: "Apply") { [weak self] in
+                        self?.nav.tab = .you
+                        self?.nav.push(.cosmetics)
+                    }
                 case "watch-session://went-live":
                     // The room's channel went live: the stream starts in place, chat kept, unless
                     // its latest broadcast is playing, which is never cut off.

@@ -22,7 +22,7 @@ import {
   type CosmeticUpdatePayload,
   type EmoteSetUpdatePayload,
 } from '../../services/seventvEventApi';
-import { useWatchedChestStat } from '../../hooks/useWatchedChestStat';
+import { useRewardGrantedToast } from '../../hooks/useRewardGrantedToast';
 import {
   isSupabaseConfigured,
   refreshEntitlementRegistries,
@@ -52,14 +52,11 @@ import { Logger } from '../../utils/logger';
 import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
 
 export function useMobileBoot(): void {
-  // Lifetime points stat: the same hook desktop mounts in App.tsx, counting
-  // `watched-chest-claimed`. Every chest, automatic or a tap on the composer's
-  // button, goes through Rust's watched_chest::claim, which emits that event
-  // once per chest. The phone used to count `channel-points-earned` instead,
-  // which other sources also emit (the points socket, the balance poll), so
-  // the two shells scored different things. Mounted once, here, because the
-  // phone has a single window.
-  useWatchedChestStat();
+  // "Achievement unlocked" for a reward Rust's claims just granted, the same
+  // hook desktop mounts in App.tsx. The lifetime stats themselves are counted
+  // in Rust (services/member_stats.rs). Mounted once, here, because the phone
+  // has a single window.
+  useRewardGrantedToast();
 
   useEffect(() => {
     let isMounted = true;

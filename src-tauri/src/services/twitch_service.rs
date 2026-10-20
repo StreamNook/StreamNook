@@ -1682,6 +1682,8 @@ impl TwitchService {
             ));
         }
         crate::services::account_roster::set_twitch_identity(Some(info.clone()));
+        // Every client confirms its member here, at start and after signing in.
+        crate::services::member_signin::signed_in(&info);
         Ok(info)
     }
 

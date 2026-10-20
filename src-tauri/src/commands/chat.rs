@@ -116,10 +116,13 @@ pub async fn provider_send_message(
     reply_to: Option<String>,
 ) -> Result<SendOutcome, String> {
     match registry().await.get(&provider) {
-        Some(p) => p
-            .send(&channel, &text, reply_to.as_deref())
-            .await
-            .map_err(|e| e.to_string()),
+        Some(p) => {
+            let outcome = p.send(&channel, &text, reply_to.as_deref()).await.map_err(|e| e.to_string())?;
+            if outcome.is_sent {
+                crate::services::member_stats::count(crate::services::member_stats::Stat::MessagesSent, 1);
+            }
+            Ok(outcome)
+        }
         None => Ok(SendOutcome {
             message_id: None,
             is_sent: false,
@@ -759,6 +762,7 @@ pub async fn send_chat_message(
     .map_err(|e| e.to_string())?;
     // The picker offers the emotes you just used first.
     if sent.is_sent {
+        crate::services::member_stats::count(crate::services::member_stats::Stat::MessagesSent, 1);
         if let Some(channel) = target_channel.as_deref() {
             crate::services::recent_emotes::record(channel, &message).await;
         }
