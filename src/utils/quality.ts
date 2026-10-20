@@ -48,3 +48,13 @@ export function qualitiesEquivalent(a: string, b: string): boolean {
   const bf = parseQualityFps(bn);
   return af === null || bf === null || af === bf;
 }
+
+/**
+ * How a quality reads in the player menus. "best" is "Auto": it follows the
+ * connection, so it names the rendition it plays right now when Rust has said
+ * (`playback-adapt`).
+ */
+export function qualityLabel(quality: string, autoPlaying?: string | null): string {
+  if (quality.trim().toLowerCase() === 'best') return autoPlaying ? `Auto (${autoPlaying})` : 'Auto';
+  return quality.charAt(0).toUpperCase() + quality.slice(1);
+}

@@ -240,7 +240,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Playback',
     sectionId: 'settings-section-video-player',
     title: 'Start quality',
-    description: 'Every stream opens at this quality, and you can change it anytime from the player controls. Previously "Quality to start streams at".'
+    description: 'Every stream opens at this quality, and you can change it anytime from the player controls. Auto steps down when your connection struggles, so the stream keeps playing, and back up when it recovers. Adaptive, bitrate, buffering, slow connection. Previously "Quality to start streams at", "Auto (Source)".'
   },
   {
     tab: 'Player',

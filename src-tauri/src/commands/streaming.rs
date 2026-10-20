@@ -320,6 +320,92 @@ async fn start_provider_stream(
         resolved.qualities.len()
     );
 
+    // "Auto" follows the link from here on, like Twitch. A link that just
+    // failed to hold this rung starts lower, which for an adapter means
+    // resolving again at that rung's name.
+    let mut resolved = resolved;
+    let adapts = provider != "tiktok";
+    if adapts {
+        let route = std::sync::Arc::new(ProviderSoloRoute {
+            provider,
+            channel: channel.to_string(),
+        });
+        let start = crate::services::link_adapt::begin_named(
+            crate::services::link_adapt::SOLO,
+            &resolved.qualities,
+            &resolved.quality,
+            is_auto_quality(quality),
+            route,
+        );
+        if let Some(rung) = start.filter(|r| !r.name.eq_ignore_ascii_case(&resolved.quality)) {
+            match source.resolve_playback(crate::services::stream_server::SOLO_STREAM_ID, channel, &rung.name).await {
+                Ok(lower) => resolved = lower,
+                Err(e) => log::warn!("[Streaming] {}:{} could not start on {}: {}", provider, channel, rung.name, e),
+            }
+        }
+    }
+
+    let url = serve_provider_playback(provider, channel, quality, &resolved).await?;
+    Ok(StreamStartResult {
+        url,
+        quality: resolved.quality,
+        mode: None,
+        entitled: false,
+        proxy_region: None,
+        available: hls_master::quality_names(&resolved.qualities),
+        clip_source: None,
+        vod: None,
+        kind: Some("hls".to_string()),
+    })
+}
+
+/// "Auto": the quality the link decides.
+pub(crate) fn is_auto_quality(quality: &str) -> bool {
+    matches!(quality.trim().to_ascii_lowercase().as_str(), "best" | "source" | "auto")
+}
+
+/// The solo player's Kick or YouTube stream as `link_adapt` moves it: the
+/// adapter resolves the rung by name and the stream is served again, so the
+/// player reloads. Its own segment downloads never measure the link: the
+/// relay prefetches them (and times those fetches itself), and YouTube's
+/// 1440p and up come from a local relay that does the same.
+struct ProviderSoloRoute {
+    provider: &'static str,
+    channel: String,
+}
+
+impl crate::services::link_adapt::Route for ProviderSoloRoute {
+    fn switch(&self, to: crate::services::link_adapt::Rung, _same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
+        let (provider, channel) = (self.provider, self.channel.clone());
+        Box::pin(async move {
+            let source = crate::services::providers::registry()
+                .await
+                .get_source(provider)
+                .ok_or_else(|| anyhow::anyhow!("no {provider} source"))?;
+            let resolved = source
+                .resolve_playback(crate::services::stream_server::SOLO_STREAM_ID, &channel, &to.name)
+                .await?;
+            let url = serve_provider_playback(provider, &channel, &to.name, &resolved)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            Ok(Some(url))
+        })
+    }
+
+    fn player_measures_link(&self) -> bool {
+        false
+    }
+}
+
+/// Hand a provider's resolved stream to the solo player: through the relay,
+/// or as is when the adapter already serves it from localhost. Returns the
+/// URL the player loads.
+async fn serve_provider_playback(
+    provider: &'static str,
+    channel: &str,
+    quality: &str,
+    resolved: &crate::services::providers::source::ResolvedPlayback,
+) -> Result<String, StartError> {
     // Deliberately no `auth_proxy::set_status` and no solo-session registration:
     // both address the Twitch-contractual plugin resolution protocol
     // (auth_master, ad windows, entitlement badge). A provider stream reports
@@ -338,7 +424,13 @@ async fn start_provider_stream(
                 crate::services::stream_server::set_manifest_refresher(Some(std::sync::Arc::new(
                     move || {
                         let ch = ch.clone();
-                        let q = q.clone();
+                        // The rung playing now: "Auto" may have moved off the
+                        // quality this stream started on, and a re-sign must
+                        // not quietly undo that.
+                        let q = crate::services::link_adapt::current_quality(
+                            crate::services::link_adapt::SOLO,
+                        )
+                        .unwrap_or_else(|| q.clone());
                         Box::pin(async move {
                             match crate::services::providers::kick_media::KickSource::new()
                                 .resign(&ch, &q)
@@ -418,20 +510,10 @@ async fn start_provider_stream(
             } else {
                 crate::services::stream_server::set_manifest_refresher(None).await;
             }
-            let port = StreamServer::start_proxy_server(resolved.url)
+            let port = StreamServer::start_proxy_server(resolved.url.clone())
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(StreamStartResult {
-                url: local_player_url(port),
-                quality: resolved.quality,
-                mode: None,
-                entitled: false,
-                proxy_region: None,
-                available: hls_master::quality_names(&resolved.qualities),
-                clip_source: None,
-                vod: None,
-                kind: Some("hls".to_string()),
-            })
+            Ok(local_player_url(port))
         }
         // Already localhost HLS, produced by the adapter itself (YouTube's
         // DASH-backed 1440p/2160p renditions). Sending it through the relay
@@ -444,17 +526,7 @@ async fn start_provider_stream(
             // the refresher. Inert while nothing re-signs, and wrong the moment
             // something does.
             crate::services::stream_server::set_manifest_refresher(None).await;
-            Ok(StreamStartResult {
-                url: resolved.url,
-                quality: resolved.quality,
-                mode: None,
-                entitled: false,
-                proxy_region: None,
-                available: hls_master::quality_names(&resolved.qualities),
-                clip_source: None,
-                vod: None,
-                kind: Some("hls".to_string()),
-            })
+            Ok(resolved.url.clone())
         }
         // Nothing returns these: an adapter whose upstream is FLV serves it
         // through its own local relay and reports `LocalHls`, so the player
@@ -553,6 +625,9 @@ async fn start_stream_inner(
     // Clear the prior solo session up front; only a live resolve below
     // re-registers it (keeps a stale session off clip/VOD playback).
     crate::services::stream_server::set_solo_session(None);
+    // Whatever adapted before (another channel, a clip, a VOD) stops here;
+    // only a live start below begins again.
+    crate::services::link_adapt::end(crate::services::link_adapt::SOLO);
 
     // Non-Twitch platform → its own StreamSource adapter. Dispatching on the URL
     // keeps this the single playback entry point, so quality changes, restarts
@@ -677,16 +752,35 @@ async fn start_stream_inner(
         r.available
     );
     auth_proxy::set_status(r.status.clone());
-    // On the phones the link decides the rung from here on ("Auto" only); a
-    // link that just failed to hold this rung starts lower.
+    // The link decides the rung from here on ("Auto" only), never past what
+    // this device decodes; a link that just failed to hold this rung starts
+    // lower.
     let serve_url = crate::services::link_adapt::begin(
-        &tr::parse_master(&r.master),
+        crate::services::link_adapt::SOLO,
+        &tr::playable_variants(&r.master),
         &r.url,
         r.quality == "best",
-    );
+        crate::services::stream_server::solo_twitch_route(),
+    )
+    .map_or_else(|| r.url.clone(), |rung| rung.url);
+    // Read with no await since `begin`: the session this start owns.
+    let generation = crate::services::link_adapt::generation(crate::services::link_adapt::SOLO);
     let port = StreamServer::start_proxy_server(serve_url)
         .await
         .map_err(|e| e.to_string())?;
+    // The parts origin's first downloads just measured the link. When they say
+    // this rung cannot be carried, restart on one that can before the player
+    // loads anything: a longer load instead of a freeze and a reload a few
+    // seconds into the stream.
+    let port = match crate::services::link_adapt::start_check(
+        crate::services::link_adapt::SOLO,
+        generation,
+    ) {
+        Some(rung) => StreamServer::start_proxy_server(rung.url)
+            .await
+            .map_err(|e| e.to_string())?,
+        None => port,
+    };
     // Register the live solo session AFTER the relay is serving it, so the
     // plugin protocol's "solo" stream id (set_upstream, on_ad_window) always
     // addresses a live relay.
@@ -1061,6 +1155,39 @@ pub fn set_codec_preference(prefs: Vec<String>) {
     crate::services::twitch_resolver::set_codec_preference(prefs);
 }
 
+/// The live channel the solo player last restarted for a failed codec, and the
+/// codec families it already stepped away from there.
+static SOLO_CODEC_STEPS: std::sync::Mutex<(String, Vec<&'static str>)> =
+    std::sync::Mutex::new((String::new(), Vec::new()));
+
+/// The solo player could not decode its live Twitch stream, though the probe
+/// said this machine plays that codec. The codec leaves selection for the
+/// session, and the answer says whether restarting the stream now gets away
+/// from it. `mime_type` is the SourceBuffer type the player failed to create,
+/// when it got that far; without it the rung playing now counts. Once per codec
+/// per channel: a second failure means the restart found nothing else to play.
+#[tauri::command]
+pub fn report_solo_codec_failure(mime_type: Option<String>) -> bool {
+    // Only a live Twitch resolve honors the codec list.
+    let Some(channel) = crate::services::stream_server::solo_channel() else {
+        return false;
+    };
+    let serving = crate::services::link_adapt::playing_family(crate::services::link_adapt::SOLO);
+    let Some(family) = tr::fail_codec(mime_type.as_deref(), serving.as_deref()) else {
+        return false;
+    };
+    let mut steps = SOLO_CODEC_STEPS.lock().unwrap_or_else(|e| e.into_inner());
+    if steps.0 != channel {
+        *steps = (channel.clone(), Vec::new());
+    }
+    let restart = !steps.1.contains(&family);
+    if restart {
+        steps.1.push(family);
+    }
+    debug!("[Streaming] {channel} could not decode {family}; restart={restart}");
+    restart
+}
+
 /// Report the tallest rendition this display can actually show, in pixels.
 /// 0 clears the cap.
 ///
@@ -1081,27 +1208,35 @@ pub fn set_max_video_height(height: u32) {
     crate::services::twitch_resolver::set_max_video_height(height);
 }
 
-/// The phone player's view of the link, for `link_adapt`: the core decides
-/// the rendition and the cushion, the player only reports what it saw.
+/// A player's view of the link, for `link_adapt`: the core decides the
+/// rendition (and on the phones the cushion), the player only reports what it
+/// saw. `stream_id` is the MultiNook tile reporting; none is the solo player.
 ///
 /// - `frag`: a whole segment the player downloaded itself (`bytes` in `ms`).
 ///   Only the whole-segment path sends these; on the parts path the player
 ///   reads from the relay over loopback and the origin's own reads count.
+///   Rust also drops them where a local relay served the segment from memory.
 /// - `stall`: playback has been frozen `ms` so far (sent while it lasts).
 /// - `stall_end`: a stall ended after `ms`.
 ///
 /// Decisions come back as the `playback-adapt` event.
 #[tauri::command]
-pub fn report_playback_health(event: String, bytes: Option<u64>, ms: Option<f64>) {
+pub fn report_playback_health(
+    event: String,
+    bytes: Option<u64>,
+    ms: Option<f64>,
+    stream_id: Option<String>,
+) {
+    let id = stream_id.as_deref().unwrap_or(crate::services::link_adapt::SOLO);
     let secs = ms.unwrap_or(0.0).max(0.0) / 1000.0;
     match event.as_str() {
         "frag" => {
             if let Some(bytes) = bytes {
-                crate::services::link_adapt::note_throughput(bytes, secs);
+                crate::services::link_adapt::note_player_segment(id, bytes, secs);
             }
         }
-        "stall" => crate::services::link_adapt::note_stall(secs, false),
-        "stall_end" => crate::services::link_adapt::note_stall(secs, true),
+        "stall" => crate::services::link_adapt::note_stall(id, secs, false),
+        "stall_end" => crate::services::link_adapt::note_stall(id, secs, true),
         _ => {}
     }
 }
@@ -1110,7 +1245,7 @@ pub fn report_playback_health(event: String, bytes: Option<u64>, ms: Option<f64>
 /// when a player is built (later changes arrive as `playback-adapt`).
 #[tauri::command]
 pub fn get_live_edge_cushion() -> f64 {
-    crate::services::link_adapt::extra_cushion()
+    crate::services::link_adapt::extra_cushion(crate::services::link_adapt::SOLO)
 }
 
 /// Start a low-latency diagnostic recording session. Returns the full path of the

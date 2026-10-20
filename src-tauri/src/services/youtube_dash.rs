@@ -1198,6 +1198,15 @@ async fn fetch_and_remux(&self, video: bool, sq: u64) -> Result<Vec<u8>> {
     // the work behind it is heavy.
     let fetch_ms = fetch_started.elapsed().as_millis();
     let raw_len = bytes.len();
+    // The player reads this from memory, so the link is measured here. Video
+    // only: it is the transfer the rung's bitrate is about.
+    if video {
+        crate::services::link_adapt::note_throughput(
+            &self.id,
+            raw_len as u64,
+            fetch_started.elapsed().as_secs_f64(),
+        );
+    }
     let remux_started = Instant::now();
     let out: Result<Vec<u8>> = tokio::task::spawn_blocking(move || {
         if video {

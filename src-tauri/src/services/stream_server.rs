@@ -384,6 +384,7 @@ fn prefetch_segment(index: u32) {
         url
     };
     tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
         let fetched = match HTTP_CLIENT.get(&url).send().await {
             // The reqwest body is already one contiguous `Bytes`; store it as is.
             Ok(res) if res.status().is_success() => res.bytes().await.ok(),
@@ -391,6 +392,15 @@ fn prefetch_segment(index: u32) {
             // segment itself in a moment and that path logs properly.
             _ => None,
         };
+        // The player reads this segment from memory, so the link is measured
+        // here, where it crossed the internet.
+        if let Some(bytes) = fetched.as_ref() {
+            crate::services::link_adapt::note_throughput(
+                crate::services::link_adapt::SOLO,
+                bytes.len() as u64,
+                t0.elapsed().as_secs_f64(),
+            );
+        }
         if let Ok(mut m) = pseg_map().lock() {
             m.inflight.remove(&index);
             if let Some(bytes) = fetched {
@@ -572,6 +582,11 @@ pub fn set_solo_session(channel: Option<String>) {
     *SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = channel;
 }
 
+/// The live channel the solo relay serves, if any.
+pub fn solo_channel() -> Option<String> {
+    SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// True while the solo relay is serving a live channel (the precondition for
 /// a plugin to swap its upstream).
 pub fn solo_session_active() -> bool {
@@ -608,6 +623,25 @@ pub fn emit_playback_adapt(event: &crate::services::link_adapt::AdaptEvent) {
     if let Some(app) = APP_HANDLE.get() {
         let _ = app.emit("playback-adapt", event);
     }
+}
+
+/// The solo live Twitch stream as `link_adapt` moves it: spliced or restarted
+/// by `adapt_upstream`. Its player's segments come straight from the CDN
+/// (a `vseg/` redirect) unless the parts origin serves them over loopback.
+struct SoloTwitchRoute;
+
+impl crate::services::link_adapt::Route for SoloTwitchRoute {
+    fn switch(&self, to: crate::services::link_adapt::Rung, same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
+        Box::pin(async move { adapt_upstream(&to.url, same_decoder).await })
+    }
+
+    fn player_measures_link(&self) -> bool {
+        !crate::services::ll_origin::is_active()
+    }
+}
+
+pub fn solo_twitch_route() -> std::sync::Arc<dyn crate::services::link_adapt::Route> {
+    std::sync::Arc::new(SoloTwitchRoute)
 }
 
 /// Move the live solo stream to another rendition of the same broadcast.
@@ -1002,11 +1036,17 @@ impl StreamServer {
                 warn!("[StreamServer] refused a segment url that is not an https CDN host");
                 return Ok(empty_cors(403));
             }
+            let t0 = std::time::Instant::now();
             return Ok(match HTTP_CLIENT.get(&target).send().await {
                 Ok(res) if res.status().is_success() => match res.bytes().await {
                     // `media_response` sniffs TS vs fMP4 and carries the CORS
                     // headers — the reason this detour exists at all.
                     Ok(bytes) => {
+                        crate::services::link_adapt::note_throughput(
+                            crate::services::link_adapt::SOLO,
+                            bytes.len() as u64,
+                            t0.elapsed().as_secs_f64(),
+                        );
                         // Keep it: hls.js re-requests a segment after a recovered
                         // error, and a second surface on the same stream would
                         // otherwise pay for the same download again. The clone is
@@ -1317,7 +1357,7 @@ impl StreamServer {
         *CURRENT_PORT.lock().await = None;
         reset_ad_state();
         set_solo_session(None);
-        crate::services::link_adapt::end();
+        crate::services::link_adapt::end(crate::services::link_adapt::SOLO);
         Ok(())
     }
 

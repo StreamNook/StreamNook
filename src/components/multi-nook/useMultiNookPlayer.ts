@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import Hls from 'hls.js';
 import Plyr from 'plyr';
 // Plyr's stylesheet ships ONCE, from globals.css, and its position there is
@@ -17,6 +18,11 @@ import { injectPlyrControl } from '../../utils/plyrControls';
 import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../../utils/liveButton';
 import { onTileTick } from './tileTicker';
 import { alignTile, isSynced, registerSyncTile, syncDelayFor } from './tileSync';
+import { createStallReporter, reportSegment } from '../../utils/linkAdapt';
+import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
+
+/** Shown when a codec failure leaves nothing better to switch to. */
+export const CODEC_UNPLAYABLE = "Can't play this quality here";
 
 interface UseMultiNookPlayerProps {
   streamUrl?: string; // Proxy URL
@@ -215,6 +221,7 @@ export const useMultiNookPlayer = ({
     const cushion = isLowLatencyChannel ? 3 : 8;
     const startDelay = Math.max(cushion, syncDelayFor(streamId) ?? 0);
     let unregisterSync: (() => void) | null = null;
+    let stopLinkReports: (() => void) | null = null;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -418,8 +425,21 @@ export const useMultiNookPlayer = ({
         // Wait for FRAG_BUFFERED gate.
       });
 
+      // A codec the probe passed can still fail here. Rust then drops it from
+      // selection and says whether restarting this tile gets away from it, so
+      // the tile comes back on the next tier down instead of erroring for good.
+      // hls.js names the failed type only in the non-fatal add-codec error that
+      // comes just before the fatal one. Asked once per start; Rust refuses a
+      // second restart for the same codec, so this cannot loop.
+      let failedCodecMime: string | null = null;
+      let codecReported = false;
+      let everPlayed = false;
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) {
+           if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
+             failedCodecMime = data.mimeType ?? null;
+           }
            if (data.details === 'bufferStalledError') {
              Logger.debug(`[MultiNook-${streamId}] Buffer stalled, attempting recovery...`);
              if (video.paused && !userInitiatedPauseRef.current) {
@@ -444,6 +464,25 @@ export const useMultiNookPlayer = ({
 
         if (data.fatal) {
           Logger.error(`[MultiNook-${streamId}] Fatal error:`, data);
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details, video, everPlayed)) {
+            codecReported = true;
+            const unsupported = UNSUPPORTED_CODEC.has(data.details);
+            invoke<boolean>('report_multi_nook_tile_codec_failure', { streamId, mimeType: failedCodecMime })
+              .catch(() => false)
+              .then((restart) => {
+                if (hlsRef.current !== hls) return; // the tile moved on meanwhile
+                if (restart) {
+                  Logger.warn(`[MultiNook-${streamId}] codec failed to decode; restarting on a tier this device plays`);
+                  usemultiNookStore.getState().retrySlot(streamId);
+                } else if (unsupported) {
+                  setError(CODEC_UNPLAYABLE);
+                } else {
+                  setError('Media error');
+                  hls.recoverMediaError();
+                }
+              });
+            return;
+          }
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
               setError('Network error');
@@ -496,6 +535,7 @@ export const useMultiNookPlayer = ({
 
       let joinedSync = false;
       const onPlaying = () => {
+        everPlayed = true;
         setIsPlaying(true);
         setIsBuffering(false);
         setError(null);
@@ -514,6 +554,31 @@ export const useMultiNookPlayer = ({
 
       video.addEventListener('playing', onPlaying);
       video.addEventListener('waiting', onWaiting);
+
+      // What Rust's link governor hears from this tile ("Auto" on a
+      // struggling connection): its whole segments on the whole-segment path,
+      // which come straight from the CDN, and its stalls. Parts come from the
+      // tile's relay over loopback and say nothing about the link.
+      if (!isLowLatencyChannel) {
+        hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+          if (data.part || hlsRef.current !== hls) return;
+          const { loaded, loading } = data.frag.stats;
+          reportSegment(loaded, loading.end - loading.start, streamId);
+        });
+      }
+      const stalls = createStallReporter(streamId);
+      const linkListeners = new AbortController();
+      const opts = { signal: linkListeners.signal };
+      video.addEventListener('waiting', () => {
+        if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
+      }, opts);
+      video.addEventListener('playing', () => stalls.end(), opts);
+      video.addEventListener('pause', () => stalls.cancel(), opts);
+      video.addEventListener('seeking', () => stalls.cancel(), opts);
+      stopLinkReports = () => {
+        linkListeners.abort();
+        stalls.cancel();
+      };
 
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari fallback
@@ -585,6 +650,7 @@ export const useMultiNookPlayer = ({
     }
 
     return () => {
+      stopLinkReports?.();
       if (video) {
         video.removeEventListener('error', onNativeError);
         if (onPlayingRef.current) video.removeEventListener('playing', onPlayingRef.current);

@@ -1,13 +1,10 @@
 // The phone player's side of the core's link governor (Rust `link_adapt`).
 //
 // Rust decides which rendition plays and how far behind the live edge to sit
-// on a link that changes under the phone (cellular, weak Wi-Fi). The player
-// only reports what it saw and follows the answer:
+// on a link that changes under the phone (cellular, weak Wi-Fi). The reports
+// every player sends live in utils/linkAdapt; what is phone-only is the
+// cushion, which the phone player follows (the desktop learns its own):
 //
-//   - every whole segment it downloads itself (bytes, time), on the
-//     whole-segment path only; on the parts path it reads from the relay over
-//     loopback and the origin measures the link instead;
-//   - stalls, once a second while frozen and once when they end;
 //   - `playback-adapt` comes back with the extra cushion, and with a URL when
 //     the relay restarted on another rendition (a whole-segment switch is
 //     spliced into the running playlist and needs nothing from the player).
@@ -17,14 +14,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
+import { isSoloAdapt, type PlaybackAdapt } from '../../utils/linkAdapt';
 
-export interface PlaybackAdapt {
-  quality: string;
-  auto: boolean;
-  extraCushion: number;
-  url?: string | null;
-  reason: string;
-}
+export type { PlaybackAdapt } from '../../utils/linkAdapt';
+export { createStallReporter, reportSegment } from '../../utils/linkAdapt';
 
 let extraCushion = 0;
 
@@ -44,62 +37,15 @@ export async function refreshLinkCushion(): Promise<number> {
 }
 
 export function applyPlaybackAdapt(event: PlaybackAdapt): void {
+  if (!isSoloAdapt(event)) return;
   extraCushion = event.extraCushion;
   Logger.info(
     `[LinkAdapt] ${event.quality} (${event.reason}), extra cushion ${event.extraCushion.toFixed(1)}s` +
       (event.url ? ', reloading' : ''),
   );
-  // The relay restarted on another rendition: reload on its URL, exactly as a
-  // quality change does. A stream already closed must not be revived.
-  if (event.url && useAppStore.getState().streamUrl) {
-    useAppStore.setState({ streamUrl: event.url });
-  }
+  // Names the rendition "Auto" plays, and when the relay restarted on another
+  // one, reloads on its URL exactly as a quality change does (never reviving a
+  // stream already closed).
+  useAppStore.getState().applyLinkAdapt(event);
 }
 
-function report(event: 'frag' | 'stall' | 'stall_end', bytes: number | null, ms: number): void {
-  invoke('report_playback_health', { event, bytes, ms }).catch(() => {
-    /* best effort: a lost report only delays a decision */
-  });
-}
-
-/** A whole segment downloaded from the network. */
-export function reportSegment(bytes: number, ms: number): void {
-  if (bytes > 0 && ms > 0) report('frag', bytes, ms);
-}
-
-/**
- * Stall bookkeeping for one player. `begin` on `waiting`, `end` on `playing`;
- * while it lasts the core hears about it once a second, so a stall that never
- * ends (a rendition the link cannot carry) still gets a decision.
- */
-export function createStallReporter() {
-  let since: number | null = null;
-  let timer: number | null = null;
-  const stop = () => {
-    if (timer !== null) {
-      window.clearInterval(timer);
-      timer = null;
-    }
-  };
-  return {
-    begin() {
-      if (since !== null) return;
-      since = performance.now();
-      timer = window.setInterval(() => {
-        if (since !== null) report('stall', null, performance.now() - since);
-      }, 1000);
-    },
-    end() {
-      stop();
-      if (since === null) return;
-      const ms = performance.now() - since;
-      since = null;
-      report('stall_end', null, ms);
-    },
-    /** Teardown or a pause: the freeze was not the link's doing. */
-    cancel() {
-      stop();
-      since = null;
-    },
-  };
-}

@@ -454,7 +454,7 @@ const PlayerSettings = () => {
         <SettingsRow
           title="Start quality"
           onReset={resetFor('quality')}
-          description="Every stream opens at this quality, and you can change it anytime from the player controls."
+          description="Every stream opens at this quality, and you can change it anytime from the player controls. Auto steps down when your connection struggles, so the stream keeps playing, and back up when it recovers."
         >
           <Dropdown
             value={settings.quality}
@@ -462,7 +462,7 @@ const PlayerSettings = () => {
             className="w-full"
             ariaLabel="Default stream quality"
             options={[
-              { value: 'best', label: 'Auto (Source)' },
+              { value: 'best', label: 'Auto' },
               { value: '1440p60', label: '1440p60' },
               { value: '1080p60', label: '1080p60' },
               { value: '720p60', label: '720p60' },

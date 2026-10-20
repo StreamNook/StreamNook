@@ -852,6 +852,18 @@ pub async fn check_for_bundle_update(
     check_for_bundle_update_streamnook().await
 }
 
+/// The periodic check's last answer, for a window that mounted after it was
+/// sent (reopened from the tray, a slow start). None until the first check
+/// finishes. The window that shows the announcement passes
+/// `claim_announcement`; see `services::update_watch`.
+#[tauri::command]
+pub fn get_update_status(
+    app_handle: crate::rt::AppHandle,
+    claim_announcement: bool,
+) -> Option<crate::services::update_watch::StatusUpdate> {
+    crate::services::update_watch::current(&app_handle, claim_announcement)
+}
+
 /// The installer updater's answer in the status shape the UI already reads.
 #[cfg(windows)]
 async fn check_with_installer(app: &crate::rt::AppHandle) -> Result<BundleUpdateStatus, String> {

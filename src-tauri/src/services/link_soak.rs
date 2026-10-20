@@ -1,4 +1,4 @@
-//! Shaped-network harness for live playback on the phones (`link_adapt`).
+//! Shaped-network harness for live playback on a poor link (`link_adapt`).
 //!
 //! Runs the REAL relay (resolver, `StreamServer`, the parts origin or the
 //! whole-segment projection, `link_adapt`) against a live channel, with a
@@ -17,6 +17,9 @@
 //!   whole-segment path (Android with ad-free playback on).
 //! - `SOAK_CUSHION`: the player's distance from the edge before any extra
 //!   cushion (default 5.0 whole-segment, 1.2 parts, the phones' defaults).
+//! - `SOAK_PHONE` 1/0 (default 1): the phones' rules (the player follows the
+//!   governor's cushion, the origin waits longer for late tails) or the
+//!   desktop's (the cushion stays the player's own, home deadlines).
 
 #![allow(clippy::print_stdout)]
 
@@ -125,7 +128,7 @@ impl Player {
             let due = self.last_stall_report.is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
             if adapt && held >= 0.5 && due {
                 self.last_stall_report = Some(now);
-                crate::services::link_adapt::note_stall(held, false);
+                crate::services::link_adapt::note_stall(crate::services::link_adapt::SOLO, held, false);
             }
         } else if let Some(p) = self.playhead_pdt {
             self.behind.push(now_epoch() - p);
@@ -151,7 +154,7 @@ impl Player {
                     self.stalls.push(len);
                     println!("[link-soak] STALL {len:.2}s");
                     if adapt {
-                        crate::services::link_adapt::note_stall(len, true);
+                        crate::services::link_adapt::note_stall(crate::services::link_adapt::SOLO, len, true);
                     }
                 }
             }
@@ -171,19 +174,28 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 #[ignore = "network soak; run explicitly with SOAK_CHANNEL / HTTPS_PROXY"]
 async fn link_soak() {
     let env = |k: &str| std::env::var(k).ok();
+    // The governor's own decisions (measurements, switches) in the run log.
+    let _ = env_logger::Builder::new()
+        .parse_filters(&env("RUST_LOG").unwrap_or_else(|| "warn,streamnook_lib::services::link_adapt=info".into()))
+        .is_test(true)
+        .try_init();
     let channel = env("SOAK_CHANNEL").unwrap_or_else(|| "xqc".into());
     let secs: u64 = env("SOAK_SECS").and_then(|v| v.parse().ok()).unwrap_or(180);
     let adapt = env("SOAK_ADAPT").is_none_or(|v| v == "1");
     let ll = env("SOAK_LL").is_some_and(|v| v == "1");
+    let phone = env("SOAK_PHONE").is_none_or(|v| v == "1");
     let base_cushion: f64 = env("SOAK_CUSHION")
         .and_then(|v| v.parse().ok())
         .unwrap_or(if ll { 1.2 } else { 5.0 });
     println!(
-        "[link-soak] channel={channel} secs={secs} adapt={adapt} ll={ll} cushion={base_cushion} proxy={:?}",
+        "[link-soak] channel={channel} secs={secs} adapt={adapt} ll={ll} phone={phone} cushion={base_cushion} proxy={:?}",
         env("HTTPS_PROXY")
     );
 
+    // From before the resolve: what a viewer waits for the first frame.
+    let opened = Instant::now();
     crate::services::link_adapt::force_enabled(adapt);
+    crate::services::link_adapt::force_phone_rules(phone);
     crate::services::ll_origin::set_disabled(!ll);
     let r = match crate::services::twitch_resolver::resolve_live(&channel, None, "best").await {
         Ok(r) => r,
@@ -192,8 +204,16 @@ async fn link_soak() {
             return;
         }
     };
-    let variants = crate::services::twitch_resolver::parse_master(&r.master);
-    let serve = crate::services::link_adapt::begin(&variants, &r.url, true);
+    let variants = crate::services::twitch_resolver::playable_variants(&r.master);
+    let serve = crate::services::link_adapt::begin(
+        crate::services::link_adapt::SOLO,
+        &variants,
+        &r.url,
+        true,
+        crate::services::stream_server::solo_twitch_route(),
+    )
+    .map_or_else(|| r.url.clone(), |rung| rung.url);
+    let generation = crate::services::link_adapt::generation(crate::services::link_adapt::SOLO);
     let port = match crate::services::stream_server::StreamServer::start_proxy_server(serve).await {
         Ok(p) => p,
         Err(e) => {
@@ -201,6 +221,14 @@ async fn link_soak() {
             return;
         }
     };
+    // As `start_stream`: the origin's first downloads may move the start rung
+    // before the player loads.
+    if let Some(rung) =
+        crate::services::link_adapt::start_check(crate::services::link_adapt::SOLO, generation)
+    {
+        println!("[link-soak] starting on {} after the first downloads", rung.name);
+        let _ = crate::services::stream_server::StreamServer::start_proxy_server(rung.url).await;
+    }
     crate::services::stream_server::set_solo_session(Some(channel.clone()));
     let on_ll = crate::services::ll_origin::is_active();
     println!("[link-soak] relay on {port}, parts origin active: {on_ll}");
@@ -228,8 +256,8 @@ async fn link_soak() {
 
     while Instant::now() < deadline {
         player.advance(adapt);
-        let extra = crate::services::link_adapt::extra_cushion();
-        if let Some((rung, _)) = crate::services::link_adapt::snapshot() {
+        let extra = crate::services::link_adapt::extra_cushion(crate::services::link_adapt::SOLO);
+        if let Some((rung, _)) = crate::services::link_adapt::snapshot(crate::services::link_adapt::SOLO) {
             if timeline.last().is_none_or(|(_, n)| *n != rung) {
                 println!("[link-soak] {:6.1}s rung {rung}", t0.elapsed().as_secs_f64());
                 timeline.push((t0.elapsed().as_secs_f64(), rung));
@@ -305,7 +333,7 @@ async fn link_soak() {
                 if let Ok(Some((bytes, took, pdt, dur))) = h.await {
                     transfers.push(bytes as f64 * 8.0 / took / 1e6);
                     if adapt {
-                        crate::services::link_adapt::note_throughput(bytes, took);
+                        crate::services::link_adapt::note_player_segment(crate::services::link_adapt::SOLO, bytes, took);
                     }
                     player.add(dur, pdt, (base_cushion + extra).min(3.0) * 0.6, adapt);
                     next_sn = next_sn.map(|n| n + 1);
@@ -358,7 +386,7 @@ async fn link_soak() {
     let wall = player.started.map_or(0.0, |s| s.elapsed().as_secs_f64());
     let frozen: f64 = player.stalls.iter().sum();
     let mut behind = player.behind.clone();
-    println!("\n========== LINK SOAK: {channel} adapt={adapt} ll={on_ll} ==========");
+    println!("\n========== LINK SOAK: {channel} adapt={adapt} ll={on_ll} phone={phone} ==========");
     println!(
         "played {wall:.0}s  stalls {}  frozen {frozen:.1}s ({:.1}%)",
         player.stalls.len(),
@@ -373,8 +401,11 @@ async fn link_soak() {
         println!("segment transfer p50 {:.2} Mbit/s", pct(&mut transfers, 0.5));
     }
     println!("resyncs (fell out of the live window): {resyncs}");
+    if let Some(first) = player.started {
+        println!("first frame {:.1}s after opening", (first - opened).as_secs_f64());
+    }
     println!("rungs: {timeline:?}");
-    println!("extra cushion at the end: {:.1}s", crate::services::link_adapt::extra_cushion());
-    crate::services::link_adapt::end();
+    println!("extra cushion at the end: {:.1}s", crate::services::link_adapt::extra_cushion(crate::services::link_adapt::SOLO));
+    crate::services::link_adapt::end(crate::services::link_adapt::SOLO);
     let _ = crate::services::stream_server::StreamServer::stop().await;
 }

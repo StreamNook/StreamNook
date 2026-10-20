@@ -11,9 +11,9 @@
  * looked at, and which looks identical whether you are one patch or twelve
  * releases behind.
  *
- * This module is the on-demand check the changelog popup runs. The periodic check
- * in `DynamicIsland` owns the notification bookkeeping and keeps its own copy of
- * the invoke.
+ * This module is the on-demand check the changelog popup runs, and the read of
+ * the periodic check's last answer. The periodic check itself and its
+ * once-per-version announcement live in Rust (`services/update_watch.rs`).
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -27,6 +27,26 @@ export interface BundleUpdateStatus {
   /** Published releases between the two, counted in Rust from its cached
    *  release list. Null when that list is cold. */
   releases_behind?: number | null;
+}
+
+/** What Rust kept from its last periodic check (`get_update_status`). */
+export interface UpdateStatusReplay {
+  status: BundleUpdateStatus;
+  /** True for the one caller that claimed this version's announcement. */
+  announce: boolean;
+}
+
+/**
+ * The periodic check's last answer, for a window that mounted after its
+ * `update://status` event went out. Null before the first check finishes, or
+ * when the call fails. `claimAnnouncement` is for the notification centre only.
+ */
+export async function lastUpdateStatus(claimAnnouncement: boolean): Promise<UpdateStatusReplay | null> {
+  try {
+    return await invoke<UpdateStatusReplay | null>('get_update_status', { claimAnnouncement });
+  } catch {
+    return null;
+  }
 }
 
 export type UpdateCheckResult =

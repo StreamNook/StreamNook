@@ -1866,14 +1866,13 @@ pub fn run() {
             get_relay_live_distance,
             set_experimental_low_latency,
             set_codec_preference,
+            report_solo_codec_failure,
             // Allowed only by mobile-commands.toml (a phone caps its rendition
             // height to what the panel can show); registering it on desktop
             // would just be a command the ACL denies.
             #[cfg(mobile)]
             set_max_video_height,
-            #[cfg(mobile)]
             report_playback_health,
-            #[cfg(mobile)]
             get_live_edge_cushion,
             start_ll_diag,
             append_ll_diag,
@@ -1911,6 +1910,8 @@ pub fn run() {
             promote_multi_nook_tile,
             #[cfg(desktop)]
             get_multi_nook_tile_qualities,
+            #[cfg(desktop)]
+            report_multi_nook_tile_codec_failure,
             #[cfg(desktop)]
             set_multi_nook_raid_channels,
             #[cfg(desktop)]
@@ -2259,6 +2260,7 @@ pub fn run() {
             get_local_component_versions,
             get_remote_component_versions,
             check_for_bundle_update,
+            get_update_status,
             extract_bundled_components,
             download_and_install_bundle,
             restart_to_apply_update,
