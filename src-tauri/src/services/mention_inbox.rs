@@ -922,14 +922,20 @@ pub fn clear() {
     let _ = with_inbox(|inbox| ((), inbox.clear()));
 }
 
-/// Mentions the mention server found while the app was away, filed without a
-/// sound or a notification. Muted chats are left out. Answers how many were
-/// new; None when nobody is signed in to Twitch.
-pub fn merge_remote(remote: Vec<MentionEntry>) -> Option<usize> {
+/// One page the mention server sent: its mentions filed without a sound, a
+/// notification or an arrival card, and the account's cursor moved to `next`
+/// (forward only), in one go, so a page is at most one inbox update. Muted
+/// chats are left out. Answers how many were new; None when nobody is signed
+/// in to Twitch. A cursor that moved with nothing new is written with the next
+/// change: losing it costs only a pull that refiles nothing.
+pub fn merge_remote(remote: Vec<MentionEntry>, next: i64) -> Option<usize> {
     let cfg = config();
     let remote: Vec<MentionEntry> = remote.into_iter().filter(|e| !cfg.muted.contains(&e.room)).collect();
     with_inbox(|inbox| {
         let filed = inbox.merge_remote(remote, now_ms());
+        if next > inbox.remote_cursor_ms {
+            inbox.remote_cursor_ms = next;
+        }
         (filed, filed > 0)
     })
 }
@@ -937,17 +943,6 @@ pub fn merge_remote(remote: Vec<MentionEntry>) -> Option<usize> {
 /// How far the signed-in account has pulled from the mention server.
 pub fn remote_cursor() -> Option<i64> {
     with_inbox(|inbox| (inbox.remote_cursor_ms, false))
-}
-
-/// The cursor only moves forward.
-pub fn set_remote_cursor(ms: i64) {
-    let _ = with_inbox(|inbox| {
-        let moved = ms > inbox.remote_cursor_ms;
-        if moved {
-            inbox.remote_cursor_ms = ms;
-        }
-        ((), moved)
-    });
 }
 
 /// Whether this app already holds the message (it caught it itself), or its

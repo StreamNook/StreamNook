@@ -5,10 +5,11 @@
 //! for this account: whether a bare login and the display name count, whether
 //! to push, and the users and chats to leave out. Its mention watcher reads
 //! the chat of every followed channel while it is live and keeps what it finds
-//! for 7 days. This pulls those into the inbox on launch, when a phone app
-//! comes back to the front, when a push arrives, and every few minutes while
-//! the app runs; `mention_inbox::merge_remote` files them without a sound or a
-//! notification, deduped against what this app caught itself.
+//! for 7 days. This pulls those into the inbox at once on launch, sign-in and
+//! when a phone app comes back to the front, when a push arrives, and every few
+//! minutes while the app runs; `mention_inbox::merge_remote` files them without
+//! a sound, a notification or an arrival card (the pushes already came while
+//! the viewer was away), deduped against what this app caught itself.
 //!
 //! Turning it off deletes the server's rows for the account at once. A server
 //! that no longer knows the account (14 days without a pull) answers
@@ -240,8 +241,8 @@ pub mod client {
         INPUTS.lock().ok().and_then(|i| i.clone()).unwrap_or_default()
     }
 
-    /// The settings as loaded at launch: with the switch on, the server is
-    /// told once (which also counts as seeing the account) and the inbox pulls.
+    /// The settings as loaded at launch: with the switch on, the inbox pulls
+    /// at once and the server is told (which also counts as seeing the account).
     pub fn seed(settings: &Settings) {
         let next = Inputs::from_settings(settings);
         let on = next.away_alerts;
@@ -250,6 +251,7 @@ pub mod client {
         }
         ensure_loop();
         if on {
+            pull_soon();
             schedule();
         }
     }
@@ -283,10 +285,11 @@ pub mod client {
         }
     }
 
-    /// A different account signed in (or the same one again): its own opt-in
-    /// and its own pull.
+    /// A different account signed in (or the same one again): its own pull at
+    /// once, then its own opt-in.
     pub fn on_account_changed() {
         if inputs().away_alerts {
+            pull_soon();
             schedule();
         }
     }
@@ -310,8 +313,8 @@ pub mod client {
         });
     }
 
-    /// A phone app came back to the front, or a push arrived: pull soon,
-    /// unless one ran a moment ago.
+    /// Launch, sign-in, a phone app back in front, or a push: pull now, unless
+    /// one succeeded a moment ago.
     pub fn pull_soon() {
         if !inputs().away_alerts {
             return;
@@ -413,10 +416,14 @@ pub mod client {
         if PULLING.swap(true, Ordering::SeqCst) {
             return Ok(0);
         }
-        if let Ok(mut l) = LAST_PULL.lock() {
-            *l = Some(Instant::now());
-        }
         let out = pull_pages().await;
+        // Only a pull that worked holds the next one off: one tried before
+        // sign-in must not delay the pull sign-in starts.
+        if out.is_ok() {
+            if let Ok(mut l) = LAST_PULL.lock() {
+                *l = Some(Instant::now());
+            }
+        }
         PULLING.store(false, Ordering::SeqCst);
         out
     }
@@ -438,11 +445,8 @@ pub mod client {
                 sync().await?;
                 continue;
             }
-            filed += crate::services::mention_inbox::merge_remote(page.mentions()).unwrap_or(0) as u32;
-            if page.next > cursor {
-                cursor = page.next;
-                crate::services::mention_inbox::set_remote_cursor(cursor);
-            }
+            filed += crate::services::mention_inbox::merge_remote(page.mentions(), page.next).unwrap_or(0) as u32;
+            cursor = cursor.max(page.next);
             if !page.more {
                 break;
             }
