@@ -3407,6 +3407,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // platform's own connection, so a Kick/YouTube user with no Twitch login
     // can still talk.
     const senderReady = isTwitch ? !!currentUser : canSendHere;
+    // Signed in, with the profile still on its way (a session kept through a
+    // network failure at launch): the draft stays and the toast says why,
+    // as the phone's composer does. Never a silent drop.
+    if (isTwitch && !currentUser && useAppStore.getState().isAuthenticated && messageInput.trim() && isConnected) {
+      useAppStore.getState().addToast('Not sent: your Twitch profile is still loading.', 'warning');
+      return;
+    }
     if ((messageInput.trim() || isWatchStreakMode || isResubMode) && isConnected && senderReady) {
       const inputSettings = useAppStore.getState().settings.chat_input;
       const keepInput = !!opts?.keepInput;

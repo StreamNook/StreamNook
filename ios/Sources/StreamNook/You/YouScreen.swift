@@ -81,7 +81,9 @@ struct YouScreen: View {
         if let user, let picks {
             OwnIdentityCard(model: model, user: user, picks: picks, identity: $ownIdentity)
         } else {
-            SignedOutIdentityCard(model: model)
+            // Signed in with the profile still on its way (a session kept through a network
+            // failure, or your picks loading): the card says so and offers no sign-in, as Android's.
+            SignedOutIdentityCard(model: model, waiting: model.signedIn)
         }
     }
 
@@ -95,9 +97,11 @@ struct YouScreen: View {
 }
 
 /// Signed out, the card keeps its shape: a quiet glow, an empty picture, why to sign in, and the
-/// Twitch sign-in.
+/// Twitch sign-in. `waiting`: signed in, with the profile still on its way, so the same card says
+/// so and offers no sign-in.
 private struct SignedOutIdentityCard: View {
     let model: AppModel
+    var waiting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -108,16 +112,21 @@ private struct SignedOutIdentityCard: View {
                 .padding(.leading, 16)
                 .padding(.top, 16)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Not signed in").font(.sn(24, 700)).foregroundStyle(SN.textPrimary)
-                Text("Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.")
+                Text(waiting ? "Signed in" : "Not signed in").font(.sn(24, 700)).foregroundStyle(SN.textPrimary)
+                Text(waiting
+                     ? "Your profile shows once Twitch answers."
+                     : "Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.")
                     .font(.snBody)
                     .foregroundStyle(SN.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
-            SignInButton(model: model, maxWidth: .infinity)
-                .padding(16)
+            .padding(.bottom, waiting ? 16 : 0)
+            if !waiting {
+                SignInButton(model: model, maxWidth: .infinity)
+                    .padding(16)
+            }
         }
         .background(alignment: .top) { AtmosphereGlow(look: nil).frame(height: OwnIdentityCard.glow) }
         .clipShape(RoundedRectangle(cornerRadius: OwnIdentityCard.radius, style: .continuous))
