@@ -860,7 +860,7 @@ export const MobilePlayer: React.FC<{
           {/* A status, not a control: a dot and the word, no filled badge.
               Gone while playback has failed, which is not live. */}
           <div
-            className={`flex items-center gap-[5px] min-w-0 ${state === 'error' ? 'opacity-0' : ''}`}
+            className={`flex shrink-0 items-center gap-[5px] ${state === 'error' ? 'opacity-0' : ''}`}
             role="img"
             aria-label="Live"
             aria-hidden={state === 'error'}
@@ -878,7 +878,7 @@ export const MobilePlayer: React.FC<{
           {/* The bar's buttons, left to right: the most used at the right,
               under the thumb, Minimize last. One list, so a change of order is
               one line (iPhone keeps the same list in PlayerChrome). */}
-          <div className="flex items-center -mr-[13px]">
+          <div className="flex min-w-0 items-center -mr-[13px]">
             {BAR_ORDER.map((slot) => (
               <React.Fragment key={slot}>
                 {slot === 'cast' && (
@@ -891,7 +891,7 @@ export const MobilePlayer: React.FC<{
                         e.stopPropagation();
                         setCastOpen(true);
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label="Watch on a TV"
                     >
                       <Screencast size={BAR_ICON} />
@@ -916,7 +916,7 @@ export const MobilePlayer: React.FC<{
                             shareText(`${stream.user_name} is live: ${link}`, liveTitle || stream.title || stream.user_name),
                           );
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label="Share stream"
                     >
                       <ShareNetwork size={BAR_ICON} />
@@ -928,7 +928,7 @@ export const MobilePlayer: React.FC<{
                   <>
                   <button
                     onClick={toggleMute}
-                    className="sn-touch flex items-center justify-center text-white"
+                    className="sn-bar-btn flex items-center justify-center text-white"
                     aria-label={muted ? 'Unmute' : 'Mute'}
                   >
                     {muted ? <SpeakerSlash size={BAR_ICON} /> : <SpeakerHigh size={BAR_ICON} />}
@@ -949,7 +949,7 @@ export const MobilePlayer: React.FC<{
                       void restartStream();
                       scheduleHide();
                     }}
-                    className="sn-touch flex items-center justify-center text-white"
+                    className="sn-bar-btn flex items-center justify-center text-white"
                     aria-label="Restart stream"
                   >
                     <ArrowClockwise size={BAR_ICON} className={restarting ? 'animate-spin' : ''} />
@@ -963,7 +963,7 @@ export const MobilePlayer: React.FC<{
                       e.stopPropagation();
                       setQualityOpen(true);
                     }}
-                    className="sn-touch flex items-center justify-center text-white"
+                    className="sn-bar-btn flex items-center justify-center text-white"
                     aria-label="Quality"
                   >
                     <Gear size={BAR_ICON} />
@@ -976,7 +976,7 @@ export const MobilePlayer: React.FC<{
                         e.stopPropagation();
                         onToggleLayout();
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label={
                         layoutMode === 'columns' ? 'Stack player above chat' : 'Put chat beside player'
                       }
@@ -994,7 +994,7 @@ export const MobilePlayer: React.FC<{
                         e.stopPropagation();
                         onToggleFullscreen();
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
                     >
                       {/* One glyph, filled while chat is showing: this button is
@@ -1014,7 +1014,7 @@ export const MobilePlayer: React.FC<{
                         onRotate();
                         scheduleHide();
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label={landscapeNow ? 'Rotate to portrait' : 'Rotate to landscape'}
                     >
                       {landscapeNow ? <CornersIn size={BAR_ICON} /> : <CornersOut size={BAR_ICON} />}
@@ -1030,7 +1030,7 @@ export const MobilePlayer: React.FC<{
                         e.stopPropagation();
                         onMinimize();
                       }}
-                      className="sn-touch flex items-center justify-center text-white"
+                      className="sn-bar-btn flex items-center justify-center text-white"
                       aria-label="Minimize player"
                     >
                       <CaretDown size={BAR_ICON} />

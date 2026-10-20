@@ -167,6 +167,15 @@ body:has(.sn-mobile) .glass-input:focus {
   min-width: 44px;
 }
 
+/* A player bar button: 44px when the bar has room, giving way to 34px each
+   when it is full, so a narrow phone keeps every button on one row. */
+.sn-bar-btn {
+  min-height: 44px;
+  width: 44px;
+  min-width: 34px;
+  flex-shrink: 1;
+}
+
 /* The stream manager's forms are the desktop builders' own; on the phone
    their fields and buttons get finger-sized targets and text. */
 .sn-manage-touch .glass-input,
