@@ -15,6 +15,13 @@ struct CommandRow: Decodable, Identifiable, Hashable, Sendable {
     var id: String { "\(category):\(name)" }
 }
 
+/// The signed-in Twitch account, the sign-in's cached user (as desktop and Android read
+/// currentUser): the sender of every message, whichever chat it is typed in.
+@MainActor
+enum OwnAccount {
+    static var user: @MainActor () -> TwitchUser? = { nil }
+}
+
 /// What the composer is doing: the draft, the send in flight, the suggestion strip and which
 /// panel is open. Kept apart from the list so arriving messages never rebuild it. The rules
 /// live in the core (sending, slash commands, gating, matching) and in SNKit's `ComposerText`;
@@ -226,10 +233,10 @@ final class ChatComposerModel {
         var message = text
         // Twitch refuses the same message twice in a row; an invisible tag makes the repeat new.
         if session.style.bypassDuplicate, message == lastSent { message += " \u{E0000}" }
-        // The sender, as Android and desktop name it: with it the core sends through Helix and
-        // answers with Twitch's message id (without it every line went over IRC, which has none).
-        let sender = try? await session.core.invoke("get_user_info", "{}")
-        let senderID = sender.flatMap { try? JSONDecoder().decode(TwitchUser.self, from: Data($0.utf8)) }?.id
+        // The sender is the signed-in account, read from the sign-in as Android and desktop read
+        // currentUser: with it the core sends through Helix and answers with Twitch's message id
+        // (without it a line went over IRC, which has none). No account, no send, as on Android.
+        guard let senderID = OwnAccount.user()?.id, !senderID.isEmpty else { return false }
         do {
             let json = try await session.core.invoke("send_chat_message", args: [
                 "message": message,
