@@ -1064,6 +1064,18 @@ const ProfileSettings = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const previewChat = useMemo(() => rollPreviewChat(previewEmotes), [activePreviewId, previewEmotes]);
 
+  // Signed in, with the profile still on its way (a session kept through a
+  // network failure): say so rather than offer a sign-in.
+  if (isAuthenticated && !currentUser) {
+    return (
+      <div className="flex h-full min-h-[420px] items-center justify-center">
+        <div className="glass-panel rounded-xl p-8 max-w-sm w-full text-center">
+          <p className="text-sm text-textSecondary leading-relaxed">Your profile shows once Twitch answers.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated || !currentUser) {
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center">

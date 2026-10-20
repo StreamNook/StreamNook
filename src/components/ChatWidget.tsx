@@ -2175,8 +2175,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // the wrong identity entirely.
     if (!isTwitch) return;
     if (!isConnected) return;
-    const selfId = currentUser?.user_id;
-    if (!selfId) return;
+    const me = currentUser;
+    const selfId = me?.user_id;
+    if (!me || !selfId) return;
 
     // Seed YOUR OWN user into the per-user chat store on connect. Twitch never
     // echoes your own PRIVMSG back over IRC, so the message-processing effect
@@ -2189,8 +2190,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // cosmetics onto it via the bridge.
     addUser({
       userId: selfId,
-      username: currentUser!.login || currentUser!.username || '',
-      displayName: currentUser!.display_name || currentUser!.username || selfId,
+      username: me.login || me.username || '',
+      displayName: me.display_name || me.username || selfId,
       color: '#9147FF',
     });
 
@@ -3549,17 +3550,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
         // Intercept slash commands
         if (messageToSend.startsWith('/')) {
+          // The profile can still be on its way (a session kept through a
+          // network failure at launch): the line then goes without one.
+          const user = currentUser;
           const handled = await handleSlashCommand(
-            messageToSend, 
-            currentStream?.user_id || '', 
+            messageToSend,
+            currentStream?.user_id || '',
             currentStream?.user_login || '',
-            (msg) => sendMessage(msg, {
-              username: currentUser!.login || currentUser!.username,
-              displayName: currentUser!.display_name || currentUser!.username,
-              userId: currentUser!.user_id,
-              color: undefined,
-              badges: ''
-            })
+            (msg) =>
+              user
+                ? sendMessage(msg, {
+                    username: user.login || user.username,
+                    displayName: user.display_name || user.username,
+                    userId: user.user_id,
+                    color: undefined,
+                    badges: '',
+                  })
+                : sendMessage(msg)
           );
           
           if (handled) {

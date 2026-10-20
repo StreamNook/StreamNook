@@ -111,8 +111,10 @@ const GlowLayer: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 /** Signed out, the card keeps its shape: a quiet glow, an empty picture, why
- *  to sign in, and the Twitch sign-in. */
-export const SignedOutIdentityCard: React.FC = () => {
+ *  to sign in, and the Twitch sign-in. `waiting`: signed in, with the profile
+ *  still on its way (a session kept through a network failure), so the card
+ *  says so and offers no sign-in. */
+export const SignedOutIdentityCard: React.FC<{ waiting?: boolean }> = ({ waiting = false }) => {
   const loginToTwitch = useAppStore((s) => s.loginToTwitch);
   const isLoading = useAppStore((s) => s.isLoading);
   return (
@@ -133,12 +135,15 @@ export const SignedOutIdentityCard: React.FC = () => {
           <User size={30} className="text-textMuted" />
         </div>
       </div>
-      <div className="relative px-4 pt-3">
-        <div className="text-[24px] font-bold text-textPrimary leading-tight">Not signed in</div>
+      <div className={`relative px-4 pt-3${waiting ? ' pb-4' : ''}`}>
+        <div className="text-[24px] font-bold text-textPrimary leading-tight">{waiting ? 'Signed in' : 'Not signed in'}</div>
         <div className="mt-1 text-[14px] text-textSecondary">
-          Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.
+          {waiting
+            ? 'Your profile shows once Twitch answers.'
+            : 'Sign in to show your badges, Atmosphere and 7TV paint, and to follow channels and chat.'}
         </div>
       </div>
+      {!waiting && (
       <div className="relative p-4">
         <button
           onClick={() => void loginToTwitch()}
@@ -149,6 +154,7 @@ export const SignedOutIdentityCard: React.FC = () => {
           {isLoading ? 'Signing in' : 'Sign in with Twitch'}
         </button>
       </div>
+      )}
     </div>
   );
 };

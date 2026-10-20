@@ -24,6 +24,7 @@ import { settleFirstSettings } from '../utils/settingsOnceLoaded';
 import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
+import { authFailureOutcome, HELD_SESSION_RECHECK_MS, isNetworkAuthError, readProfile } from '../utils/authErrors';
 
 /** `watch_open_room`: the room, or the live row for a stale card. */
 type RoomOpenResult = {
@@ -702,6 +703,9 @@ const upsertModLog = (logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] =>
 
 // Shown once per app session, desktop only (the phone keeps boot quiet).
 let hasShownWelcomeBackToast = false;
+
+/** The next profile read while a held session's profile is out of reach. */
+let heldSessionRecheck: ReturnType<typeof setTimeout> | null = null;
 
 // The boot veil's fade-out (App.tsx), so a greeting waits for it to finish.
 const BOOT_VEIL_FADE_MS = 450;
@@ -3459,10 +3463,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkAuthStatus: async () => {
     let hasCredentials = false;
     let authErrorMsg = '';
-    
+    // A check now answers for any read that was waiting on the network.
+    if (heldSessionRecheck) {
+      clearTimeout(heldSessionRecheck);
+      heldSessionRecheck = null;
+    }
+
     try {
-      // Check if we have stored credentials first (only on initial check, not periodic checks)
-      const wasAuthenticated = get().isAuthenticated;
+      // Signed in with a profile already. A session held through a network
+      // failure has no profile yet, so its first profile is still a sign-in
+      // for the once-a-session work below.
+      const wasAuthenticated = get().isAuthenticated && get().currentUser !== null;
+      // The core holding a token is what "signed in" means (the iPhone reads
+      // the same answer from get_boot_state); the profile below only dresses it.
       hasCredentials = await invoke('has_stored_credentials') as boolean;
 
       if (!hasCredentials) {
@@ -3486,8 +3499,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         })
         .catch(() => {});
 
-      // Try to get user info - if it works, we're authenticated
-      const userInfo = await invoke('get_user_info') as UserInfo;
+      // The profile, three tries a second apart, as the iPhone reads it: right
+      // after a launch (Rust may be refreshing an expired token) or a sign-in,
+      // Twitch can take a moment to answer.
+      const userInfo = await readProfile(() => invoke<UserInfo>('get_user_info'));
       const user: TwitchUser = {
         access_token: '', // We don't need to expose this
         username: userInfo.login,
@@ -3541,32 +3556,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       const previousUser = get().currentUser;
       authErrorMsg = e instanceof Error ? e.message : String(e);
 
-      // If it fails, we're not authenticated
-      set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
-
       // Rust signed the user out itself and says why on the roster; that prompt
       // stays until they sign in, so no other toast should talk over it.
       const isMissingScopes =
         authErrorMsg.includes('Missing scopes') ||
         authErrorMsg.includes('Sign-in required') ||
         twitchSignInReason(useAccountRosterStore.getState().roster) !== null;
-      const isNetworkError = authErrorMsg.toLowerCase().includes('error sending request') || 
-                             authErrorMsg.toLowerCase().includes('timeout') || 
-                             authErrorMsg.toLowerCase().includes('network') ||
-                             authErrorMsg.toLowerCase().includes('dns error') ||
-                             authErrorMsg.toLowerCase().includes('proxy') ||
-                             authErrorMsg.toLowerCase().includes('failed to fetch') ||
-                             authErrorMsg.includes('500') ||
-                             authErrorMsg.includes('502') ||
-                             authErrorMsg.includes('503') ||
-                             authErrorMsg.includes('504');
+      const isNetworkError = isNetworkAuthError(authErrorMsg);
+
+      // The core still holds the sign-in and only the network kept us from
+      // confirming it: stay signed in, with the profile filled in once Twitch
+      // answers (the iPhone's rule). The sign-in screen is never shown over a
+      // live session, and a refused token still signs out on a later read.
+      if (authFailureOutcome({ hasCredentials, message: authErrorMsg, missingScopes: isMissingScopes }) === 'keep-session') {
+        Logger.warn('[Auth] Network error during auth check; keeping the session and reading again soon:', authErrorMsg);
+        set({ isAuthenticated: true });
+        heldSessionRecheck = setTimeout(() => {
+          heldSessionRecheck = null;
+          void get().checkAuthStatus();
+        }, HELD_SESSION_RECHECK_MS);
+        return;
+      }
+
+      // If it fails, we're not authenticated
+      set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
 
       // Proactively notify the user if they lost their session. A scope upgrade
       // is useTwitchSignInPrompt's to announce, from the reason Rust holds.
       if (isMissingScopes) {
         Logger.info('[Auth] Twitch needs a new sign-in; the sign-in prompt covers it');
       } else if (isNetworkError) {
-        // Don't mistakenly tell them their session expired if their internet is just out
+        // No stored sign-in to keep, and the network failed too: nothing to tell them.
         Logger.warn('[Auth] Network error during auth check, failing gracefully:', authErrorMsg);
       } else if (wasAuthenticated && previousUser) {
         // They were actively using the app and the session functionally died (like 401 Unauthorized)
@@ -3578,8 +3598,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             onClick: () => get().loginToTwitch()
           }
         );
-      } else if (hasCredentials && !wasAuthenticated && authErrorMsg !== 'No stored credentials') {
-        // They booted up the app with a token on disk, but it was definitively invalid/expired
+      } else if (hasCredentials && authErrorMsg !== 'No stored credentials') {
+        // They booted up the app with a token on disk (or held it through a
+        // network failure without a profile yet), but it was definitively
+        // invalid/expired
         get().addToast(
           'Your login session expired while away. Please log in again.',
           'warning',

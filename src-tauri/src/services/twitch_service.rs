@@ -632,6 +632,69 @@ pub struct DeviceCodeInfo {
     pub expires_in: u64,
 }
 
+/// Twitch answered a token refresh with an error status.
+#[derive(Debug)]
+struct RefreshRefused {
+    status: u16,
+    body: String,
+}
+
+impl std::fmt::Display for RefreshRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Twitch refused the token refresh ({}): {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for RefreshRefused {}
+
+/// Why a token refresh failed, which decides whether the sign-in survives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefreshFailure {
+    /// Twitch was not reached, or answered that it is busy: the sign-in holds
+    /// and the next read tries again.
+    Unreachable,
+    /// Twitch turned the refresh token down: the sign-in is over.
+    Refused,
+}
+
+/// A refusal Twitch would give differently a moment later.
+fn refusal_is_transient(status: u16) -> bool {
+    status >= 500 || status == 429
+}
+
+fn refresh_failure_kind(e: &anyhow::Error) -> RefreshFailure {
+    for cause in e.chain() {
+        if let Some(refused) = cause.downcast_ref::<RefreshRefused>() {
+            return if refusal_is_transient(refused.status) {
+                RefreshFailure::Unreachable
+            } else {
+                RefreshFailure::Refused
+            };
+        }
+        if let Some(http) = cause.downcast_ref::<reqwest::Error>() {
+            if http.is_timeout() || http.is_connect() || http.is_request() || http.is_body() {
+                return RefreshFailure::Unreachable;
+            }
+        }
+    }
+    RefreshFailure::Refused
+}
+
+/// The error a failed refresh gives its caller, with its cause kept. The pages
+/// read these words: a network failure says "network", which both the shared
+/// sign-in check (`authErrors.ts`) and the iPhone's (`SignIn.isNetwork`) keep a
+/// session through; a refusal says to sign in again.
+fn refresh_failure_message(kind: RefreshFailure, cause: &str) -> String {
+    match kind {
+        RefreshFailure::Unreachable => format!(
+            "Token refresh failed with a network error; the sign-in is kept and tried again ({cause})"
+        ),
+        RefreshFailure::Refused => {
+            format!("Token expired and refresh failed ({cause}). Please log in again.")
+        }
+    }
+}
+
 /// Token health status returned by verify_token_health
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenHealthStatus {
@@ -1172,9 +1235,10 @@ impl TwitchService {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Failed to refresh token: {}", error_text));
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(anyhow::anyhow!(RefreshRefused { status: status.as_u16(), body }));
         }
 
         let token_response: TokenResponse = response.json().await?;
@@ -1234,10 +1298,9 @@ impl TwitchService {
                     let _ = Self::persist_primary_token(&token).await;
                 }
                 Err(e) => {
-                    error!("[GET_TOKEN] Failed to refresh token: {:?}", e);
-                    return Err(anyhow::anyhow!(
-                        "Token expired and refresh failed. Please log in again."
-                    ));
+                    let kind = refresh_failure_kind(&e);
+                    error!("[GET_TOKEN] Failed to refresh token ({kind:?}): {:?}", e);
+                    return Err(anyhow::anyhow!(refresh_failure_message(kind, &format!("{e:#}"))));
                 }
             }
         }
@@ -7808,5 +7871,75 @@ mod role_list_tests {
         assert_eq!(role_page(&body, ChannelRole::Moderators).unwrap().1, None);
         let no_channel = json!({ "data": { "user": null } });
         assert_eq!(role_page(&no_channel, ChannelRole::Moderators), Some((Vec::new(), None)));
+    }
+}
+
+#[cfg(test)]
+mod refresh_failure_tests {
+    use super::{refresh_failure_kind, refresh_failure_message, refusal_is_transient, RefreshFailure, RefreshRefused};
+    use std::time::Duration;
+
+    /// The words the pages read a failure as the network by: `isNetworkAuthError`
+    /// (src/utils/authErrors.ts) and the iPhone's `SignIn.isNetwork`.
+    const NETWORK_WORDS: [&str; 10] = [
+        "error sending request",
+        "timeout",
+        "network",
+        "dns error",
+        "proxy",
+        "failed to fetch",
+        "500",
+        "502",
+        "503",
+        "504",
+    ];
+
+    fn reads_as_network(text: &str) -> bool {
+        let text = text.to_lowercase();
+        NETWORK_WORDS.iter().any(|word| text.contains(word))
+    }
+
+    fn refused(status: u16, body: &str) -> anyhow::Error {
+        anyhow::anyhow!(RefreshRefused { status, body: body.to_string() })
+    }
+
+    #[test]
+    fn twitch_turning_the_refresh_token_down_ends_the_sign_in() {
+        let e = refused(400, r#"{"status":400,"message":"Invalid refresh token"}"#);
+        assert_eq!(refresh_failure_kind(&e), RefreshFailure::Refused);
+        let message = refresh_failure_message(RefreshFailure::Refused, &format!("{e:#}"));
+        assert!(!reads_as_network(&message), "a refusal must read as a sign-out: {message}");
+        assert!(message.contains("Please log in again"), "{message}");
+        assert_eq!(refresh_failure_kind(&refused(401, "")), RefreshFailure::Refused);
+    }
+
+    #[test]
+    fn a_busy_twitch_keeps_the_sign_in() {
+        assert!(refusal_is_transient(503));
+        assert!(refusal_is_transient(429));
+        assert!(!refusal_is_transient(400));
+        assert_eq!(refresh_failure_kind(&refused(503, "")), RefreshFailure::Unreachable);
+        assert_eq!(refresh_failure_kind(&refused(429, "")), RefreshFailure::Unreachable);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_that_cannot_reach_twitch_keeps_the_sign_in() {
+        // Nothing listens on the local discard port, so the connection is refused at once.
+        let err = reqwest::Client::new()
+            .post("http://127.0.0.1:9/oauth2/token")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .expect_err("nothing listens on port 9");
+        let e = anyhow::Error::new(err).context("refreshing the Twitch token");
+        assert_eq!(refresh_failure_kind(&e), RefreshFailure::Unreachable);
+        let message = refresh_failure_message(RefreshFailure::Unreachable, &format!("{e:#}"));
+        assert!(reads_as_network(&message), "a network failure must keep the session: {message}");
+        assert!(!message.contains("log in again"), "{message}");
+    }
+
+    #[test]
+    fn a_failure_of_unknown_kind_still_signs_out() {
+        assert_eq!(refresh_failure_kind(&anyhow::anyhow!("token response was not JSON")), RefreshFailure::Refused);
     }
 }

@@ -27,6 +27,7 @@ const START_TABS: Segment<MobileTab>[] = [
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
+  const isAuthenticated = useAppStore((s) => s.isAuthenticated);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
   const setMentionsOpen = useMobileNavStore((s) => s.setMentionsOpen);
   const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
@@ -63,7 +64,7 @@ export const YouScreen: React.FC = () => {
             onEdit={() => setCosmeticsOpen(true)}
           />
         ) : (
-          <SignedOutIdentityCard />
+          <SignedOutIdentityCard waiting={isAuthenticated} />
         )}
       </div>
 

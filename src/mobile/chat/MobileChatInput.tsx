@@ -379,7 +379,12 @@ const MobileChatInputImpl: React.FC<Props> = ({
       }
       return;
     }
-    if (!currentUser) return;
+    if (!currentUser) {
+      // Signed in with the profile still on its way (a session kept through a
+      // network failure): keep the draft and say why, never drop it silently.
+      if (useAppStore.getState().isAuthenticated) failed('your Twitch profile is still loading');
+      return;
+    }
     const identity = {
       username: currentUser.login || currentUser.username,
       displayName: currentUser.display_name || currentUser.username,
