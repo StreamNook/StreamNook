@@ -423,10 +423,13 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     /// The chat event this row is (`twitch:subscription`, `kick:follow`), nil for an ordinary
     /// message: the key `chat_events.hidden_provider_events` lists to hide it.
     public var event: String?
+    /// The art a subscription or gift notice leads with (Twitch's gift); nil for a Prime sub,
+    /// which leads with the Prime crown, and for every other row.
+    public var eventArt: String?
 
     enum CodingKeys: String, CodingKey {
         case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne, source, nickname
-        case previews, event
+        case previews, event, eventArt = "event_art"
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -451,6 +454,7 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
         previews = (try? c.decodeIfPresent([ChatRowPreview].self, forKey: .previews)) ?? []
         event = try c.decodeIfPresent(String.self, forKey: .event)
+        eventArt = try c.decodeIfPresent(String.self, forKey: .eventArt)
     }
 }
 

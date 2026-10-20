@@ -56,3 +56,36 @@ public struct ChannelBitsFace: Decodable, Sendable, Equatable {
         case lastGain = "last_gain"
     }
 }
+
+/// `wallet_split_layout`: how the wallet button's split glyph places the channel's points art,
+/// the Bits gem and the divider (desktop dev services/wallet_glyph.rs). Rust measures the art, so
+/// round, full-bleed and padded art all sit the same gap from the gem; the app only draws it.
+public struct SplitLayout: Decodable, Sendable, Equatable {
+    public var grid: Double
+    public var mark: Double
+    public var artAt: Double
+    public var gemAt: Double
+    public var x1: Double
+    public var y1: Double
+    public var x2: Double
+    public var y2: Double
+    public var shiftX: Double
+    public var shiftY: Double
+
+    enum CodingKeys: String, CodingKey {
+        case grid, mark, x1, y1, x2, y2
+        case artAt = "art_at"
+        case gemAt = "gem_at"
+        case shiftX = "shift_x"
+        case shiftY = "shift_y"
+    }
+
+    /// Rust's `SplitLayout::FALLBACK`: Twitch's ring against the 100-bit gem, drawn until the
+    /// measured layout arrives.
+    public static let fallback = SplitLayout(grid: 24, mark: 11.5, artAt: 2.42, gemAt: 12.5,
+                                             x1: 19.74, y1: 8.24, x2: 8.24, y2: 19.74, shiftX: -0.73, shiftY: -1.35)
+
+    public static func parse(_ json: String) -> SplitLayout? {
+        try? JSONDecoder().decode(SplitLayout.self, from: Data(json.utf8))
+    }
+}

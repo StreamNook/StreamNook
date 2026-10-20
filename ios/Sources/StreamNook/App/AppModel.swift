@@ -56,6 +56,10 @@ final class AppModel {
     /// The Channel sheet (a channel's videos and clips).
     var channelSheet: TwitchStream?
     private(set) var started = false
+    /// The core's one start, shared by boot and a background live check.
+    @ObservationIgnored private var coreStart: Task<Bool, Never>?
+    /// Boot ran (or is running); the core may have started before it, for a live check.
+    @ObservationIgnored private var booted = false
     private(set) var startError: String?
     private(set) var startMS: Int?
     private(set) var eventCount = 0
@@ -113,6 +117,8 @@ final class AppModel {
         chat.followedLive = { home.lists.followingLive }
         chat.homeSnapshots = { home.snapshots }
         chat.groupFor = { id in home.lists.collaborations[id] ?? home.lists.sharedChats[id] }
+        // A background live check that launches the app finds the core here.
+        LiveCheck.model = self
     }
 
     var signedIn: Bool { signIn.signedIn }
@@ -120,11 +126,16 @@ final class AppModel {
     /// The Browse list, which drive steps open streams from.
     var streams: [TwitchStream] { home.recommended }
 
-    /// Starts the core once, reads the settings, then who is signed in, then picks the first
-    /// screen. The loader always drops, whatever failed.
-    func boot() async {
-        guard !started, startError == nil else { return }
-        defer { if phase == .booting { phase = .main } }
+    /// Starts the core once; true when it runs. Boot and a background live check (which can launch
+    /// the app with no screen at all) both come through here, so it starts only once.
+    func startCore() async -> Bool {
+        if let coreStart { return await coreStart.value }
+        let start = Task { await self.runCoreStart() }
+        coreStart = start
+        return await start.value
+    }
+
+    private func runCoreStart() async -> Bool {
         listenForEvents()
         let core = core
         let clock = ContinuousClock.now
@@ -137,11 +148,21 @@ final class AppModel {
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
             log.notice("core started (\(core.kind, privacy: .public)) in \(self.startMS ?? 0) ms, codecs \(codecs.joined(separator: ","), privacy: .public)")
+            return true
         } catch {
             startError = "\(error)"
             log.error("core start failed: \(String(describing: error), privacy: .public)")
-            return
+            return false
         }
+    }
+
+    /// Starts the core once, reads the settings, then who is signed in, then picks the first
+    /// screen. The loader always drops, whatever failed.
+    func boot() async {
+        guard !booted, startError == nil else { return }
+        booted = true
+        defer { if phase == .booting { phase = .main } }
+        guard await startCore() else { return }
         let settings = await loadSettings()
         alertTypes = await AlertTypes.load(core: core)
         // The watch layer reads its landscape chat and player rows from the settings view.
@@ -433,6 +454,9 @@ final class AppModel {
             Task { await home.resumed() }
             // Notifications may have been allowed in iPhone Settings meanwhile.
             Task { await LiveAlerts.sync(self) }
+            // Go-live pushes that arrived meanwhile are recorded, then the live check catches
+            // what the push left out (at most every five minutes).
+            Task { await LiveCheck.foregrounded() }
         }
     }
 

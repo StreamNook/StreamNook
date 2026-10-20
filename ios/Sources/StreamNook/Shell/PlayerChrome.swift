@@ -417,19 +417,17 @@ struct PlayerChrome: View {
             // A status, not a control: a dot and the word, no filled badge.
             if !watch.roomVod, watch.playingVod == nil {
                 // How far behind live sits beside the word, in a slot sized for the widest
-                // reading so the bar never shifts. It is sized first: the buttons give up a few
-                // points each to make room, and only a bar too narrow even then drops the number.
-                ViewThatFits(in: .horizontal) {
-                    liveStatus(behind: watch.behindLabel)
-                    liveStatus(behind: nil)
-                }
+                // reading so the bar never shifts. It is sized first and never dropped: the
+                // buttons give up a few points each to make room (eight of them at their floor
+                // still leave it room on the narrowest phone).
+                liveStatus(behind: watch.behindLabel)
                 .opacity(watch.error == nil ? 1 : 0)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(watch.behindSpoken.map { "Live, \($0)" } ?? "Live")
                 .accessibilityHidden(watch.error != nil)
                 .layoutPriority(1)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 12)
             ForEach(Self.barOrder, id: \.self) { slot in barButton(slot) }
         }
         // The last icon's ink, not its 44 pt target, ends on the header's right edge.
@@ -658,7 +656,7 @@ private struct RoutePicker: UIViewRepresentable {
     func updateUIView(_ picker: AVRoutePickerView, context: Context) {}
 }
 
-/// A bottom-bar button: 44 points wide when the bar has room, down to 34 when it is full, so the
+/// A bottom-bar button: 44 points wide when the bar has room, down to 32 when it is full, so the
 /// LIVE status and its behind-live number always fit beside a full row of buttons.
 private struct BarButton: View {
     let symbol: String
@@ -682,8 +680,8 @@ private struct BarButton: View {
 }
 
 private extension View {
-    /// A bar button's box: 44 points, giving way to 34 when the row is short of room.
+    /// A bar button's box: 44 points, giving way to 32 when the row is short of room.
     func barSlot() -> some View {
-        frame(minWidth: 34, idealWidth: 44, maxWidth: 44, minHeight: 44, maxHeight: 44)
+        frame(minWidth: 32, idealWidth: 44, maxWidth: 44, minHeight: 44, maxHeight: 44)
     }
 }

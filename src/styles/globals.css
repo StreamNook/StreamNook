@@ -2005,14 +2005,6 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
 .sn-composer-row[data-narrow] .sn-composer-points-count {
   display: none;
 }
-/* The wallet's bits gem on the points icon. With the bits count on the
-   button it is redundant, until a narrow column folds that count away. */
-.sn-wallet-pip-always {
-  display: none;
-}
-.sn-composer-row[data-narrow] .sn-wallet-pip-always {
-  display: block;
-}
 /* The placeholder stays on one line, cut with an ellipsis, at any width. */
 .sn-composer-input::placeholder {
   white-space: nowrap;
@@ -7399,6 +7391,11 @@ html[data-motion="off"] .sn-immersive {
 }
 .chest-attention:hover {
   animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chest-attention {
+    animation: none;
+  }
 }
 
 
