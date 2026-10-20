@@ -16,10 +16,10 @@
 import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { DotsThreeVertical, Keyboard, WarningCircle, X } from 'phosphor-react';
+import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { useLastKeyboardHeight } from '../ui/keyboardHeight';
 import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
-import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
+import { KeyboardHideIcon, KeyboardShowIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { sliceLookupKey } from '../../utils/providerKey';
@@ -35,7 +35,7 @@ import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
 import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
-import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
+import { matchEmoteFill, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
 import { closeInboxSheet, setComposerBusy, toggleInboxSheet, useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
 import { fitCount } from '../../utils/fitNumber';
@@ -495,16 +495,18 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // of this correctly, since the word at the end is then empty.
   const [wordStart, wordEnd] = getWordRange(text, text.length);
   const word = text.slice(wordStart, wordEnd);
-  // Ranked in Rust over the sets it already holds; each answer is kept with the
-  // word it answers, so a late reply for an older word is never shown.
+  // The desktop's emote fill menu, asked the same way (ranked in Rust over the
+  // sets it already holds), so a word lists the same emotes in the same order
+  // on every app. Each answer is kept with the word it answers, so a late
+  // reply for an older word is never shown.
   const [answered, setAnswered] = useState<{ word: string; items: EmoteTabCandidate[] }>({ word: '', items: [] });
   const [suggestSeq] = useState(createRequestSeq);
   useEffect(() => {
     if (!word || !channel) return;
     const n = suggestSeq.next();
-    // Rust's cycle answer carries the room's recent chatters after the emotes.
-    // A one-character word gets only an emote of exactly that name ("0").
-    void matchEmotes({ provider, channel, channelId }, word, 'cycle', { typing: true }).then((res) => {
+    // The answer carries the room's recent chatters after the emotes. A
+    // one-character word gets only an emote of exactly that name ("0").
+    void matchEmoteFill({ provider, channel, channelId }, word).then((res) => {
       if (!suggestSeq.isCurrent(n)) return;
       setAnswered({ word, items: rowsToTabCandidates(res.rows) });
     });
@@ -570,7 +572,20 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // sits left. A narrow bar folds the tray away and the menu takes the right.
   const leftEnd: 'tray' | 'menu' | null = trayFolded ? null : trayRight ? 'menu' : 'tray';
   const rightEnd: 'tray' | 'menu' = trayFolded ? 'menu' : trayRight ? 'tray' : 'menu';
-  const endMode: 'send' | 'keyboard' | 'tray' | 'menu' = canSend ? 'send' : typing ? 'keyboard' : rightEnd;
+  // While the emote panel holds the keyboard's place, the end brings the
+  // keyboard back (Send still wins once there is a message).
+  const endMode: 'send' | 'keyboardUp' | 'keyboard' | 'tray' | 'menu' = canSend
+    ? 'send'
+    : emotesOpen
+      ? 'keyboardUp'
+      : typing
+        ? 'keyboard'
+        : rightEnd;
+  // Back to the keyboard: it comes up where the panel was.
+  const backToKeyboard = () => {
+    setEmotesOpen(false);
+    inputRef.current?.focus();
+  };
   const inboxOpenHere = useMentionsStore((s) => s.sheetIn === inboxSurface);
   const openMenu = () => {
     setEmotesOpen(false);
@@ -717,9 +732,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               onClick={() => {
                 setPointsOpen(false);
                 if (emotesOpen) {
-                  // Back to the keyboard: it comes up where the panel was.
-                  setEmotesOpen(false);
-                  inputRef.current?.focus();
+                  backToKeyboard();
                   return;
                 }
                 cycleEmoteSmiley();
@@ -730,23 +743,20 @@ const MobileChatInputImpl: React.FC<Props> = ({
               className={`shrink-0 w-9 h-9 flex items-center justify-center text-[20px] leading-none active:opacity-70 ${
                 emotesOpen ? 'text-accent' : ''
               }`}
-              aria-label={emotesOpen ? 'Keyboard' : 'Emotes and emoji'}
+              aria-label="Emotes and emoji"
+              aria-pressed={emotesOpen}
             >
-              {/* Becomes the keyboard while open: it swaps back, as the
-                  emoji key of a phone keyboard does. */}
-              {emotesOpen ? (
-                <Keyboard size={20} weight="regular" />
-              ) : (
-                <span
-                  className="transition-[opacity,transform] duration-100"
-                  style={{
-                    opacity: isSmileyTransitioning ? 0 : 1,
-                    transform: isSmileyTransitioning ? 'scale(0.8)' : 'scale(1)',
-                  }}
-                >
-                  {currentSmiley}
-                </span>
-              )}
+              {/* Always the emoji button; the way back to the keyboard is the
+                  bar's right end while the panel is open. */}
+              <span
+                className="transition-[opacity,transform] duration-100"
+                style={{
+                  opacity: isSmileyTransitioning ? 0 : 1,
+                  transform: isSmileyTransitioning ? 'scale(0.8)' : 'scale(1)',
+                }}
+              >
+                {currentSmiley}
+              </span>
             </button>
           )}
           {needsKickSignIn ? (
@@ -959,9 +969,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
 
         {/* The bar's right end, one control with every job it has: Send the
             moment the field holds a message, whatever sits here otherwise (the
-            chat menu, or the inbox tray when Settings swaps the pair), and the
-            way to put the keyboard away while you type with nothing written
-            (scrolling the chat never does). One element in one spot: the marks
+            chat menu, or the inbox tray when Settings swaps the pair), the way
+            to put the keyboard away while you type with nothing written
+            (scrolling the chat never does), and the way back to it while the
+            emote panel holds its place. One element in one spot: the marks
             crossfade and the accent fill grows in under Send, so nothing slides
             in or moves. Send is always on the right. */}
         <button
@@ -973,6 +984,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
           onClick={() => {
             if (endMode === 'send') {
               void send();
+            } else if (endMode === 'keyboardUp') {
+              backToKeyboard();
             } else if (endMode === 'keyboard') {
               inputRef.current?.blur();
             } else if (endMode === 'tray') {
@@ -996,7 +1009,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 : composerCheer
                   ? `Cheer ${composerCheer.total} bits`
                   : 'Send'
-              : endMode === 'keyboard'
+              : endMode === 'keyboardUp'
+                ? 'Show keyboard'
+                : endMode === 'keyboard'
                 ? 'Hide keyboard'
                 : endMode === 'tray'
                   ? inboxOpenHere
@@ -1031,6 +1046,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
           )}
           <span className={`${END_MARK} ${endMode === 'keyboard' ? 'opacity-100' : 'opacity-0'}`}>
             <KeyboardHideIcon size={20} />
+          </span>
+          <span className={`${END_MARK} ${endMode === 'keyboardUp' ? 'opacity-100' : 'opacity-0'}`}>
+            <KeyboardShowIcon size={20} />
           </span>
           <span className={`${END_MARK} ${endMode === 'send' ? 'opacity-100' : 'opacity-0'}`}>
             {slowWait > 0 ? (

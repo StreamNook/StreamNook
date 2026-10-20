@@ -113,6 +113,53 @@ impl Order {
     }
 }
 
+/// The emote fill menu's row cap.
+pub const FILL_LIMIT: usize = 150;
+
+/// What one `match_emote_tokens` call asks, resolved from what the caller sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub profile: Profile,
+    pub order: Order,
+    pub limit: usize,
+    pub typing: bool,
+    /// The room's recent chatters follow the emotes (`chatter_rows`).
+    pub chatters: bool,
+}
+
+impl Request {
+    /// `profile` "fill" is the emote fill menu, asked the same way by the
+    /// desktop's colon list and both phones' suggestion strip, so one word gets
+    /// one list everywhere: ranked by closeness (`Profile::Search`), Twitch
+    /// first, as the viewer types, with the room's chatters after the emotes for
+    /// a plain word (a `:` word names none). "cycle" and "search" keep the
+    /// caller's own order and typing.
+    pub fn resolve(profile: Option<&str>, order: Option<&str>, limit: Option<usize>, typing: Option<bool>) -> Self {
+        if profile == Some("fill") {
+            return Request {
+                profile: Profile::Search,
+                order: Order::TwitchFirst,
+                limit: limit.unwrap_or(FILL_LIMIT),
+                typing: true,
+                chatters: true,
+            };
+        }
+        let profile = match profile {
+            Some("search") => Profile::Search,
+            _ => Profile::Cycle,
+        };
+        let order = match order {
+            Some("twitch_first") => Order::TwitchFirst,
+            _ => Order::Default,
+        };
+        let limit = limit.unwrap_or(match profile {
+            Profile::Cycle => 50,
+            Profile::Search => 60,
+        });
+        Request { profile, order, limit, typing: typing.unwrap_or(false), chatters: profile == Profile::Cycle }
+    }
+}
+
 // "Contains" instead of "starts with", from chat_input.emote_tab_complete_match_mode.
 static CONTAINS_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -1008,6 +1055,41 @@ mod tests {
 
     fn names(rows: &[Row]) -> Vec<&str> {
         rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// The emote fill menu gives a phone's word and the desktop's colon form of
+    /// it the same rows, for every word in the fixture the TypeScript and Swift
+    /// tests read too.
+    #[test]
+    fn fill_menu_is_one_answer_for_every_app() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/utils/emoteFill.fixture.json")).expect("fixture");
+        let req = Request::resolve(Some("fill"), None, None, None);
+        assert_eq!((req.profile, req.order, req.limit, req.typing), (Profile::Search, Order::TwitchFirst, FILL_LIMIT, true));
+        // What the caller sends besides the profile does not change the question.
+        assert_eq!(Request::resolve(Some("fill"), Some("default"), None, Some(false)), req);
+        let f = Fixture::new();
+        let run = |query: &str| -> Vec<String> {
+            let mut c = Collector::new(
+                Spec { query, profile: req.profile, order: req.order, contains: false, limit: req.limit },
+                Context {
+                    channel_id: Some("42"),
+                    favorites: &f.favorites,
+                    seventv_globals: &f.globals,
+                    ffz_subwoofer: false,
+                },
+            )
+            .typing(req.typing);
+            c.offer_set(&set());
+            c.finish().0.into_iter().map(|r| r.name).collect()
+        };
+        let words = fixture["words"].as_array().expect("words");
+        assert!(!words.is_empty());
+        for word in words {
+            let word = word.as_str().expect("word");
+            assert_eq!(run(word), run(&format!(":{word}")), "{word}");
+        }
+        assert!(!run("lo").is_empty());
     }
 
     #[test]

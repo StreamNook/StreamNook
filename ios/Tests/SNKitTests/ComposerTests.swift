@@ -31,6 +31,24 @@ import Testing
         #expect(names("0", false) == ["0", "00", "0head"])
     }
 
+    @Test func theFillMenuGivesAWordAndItsColonFormOneList() throws {
+        // The fixture Rust's emote_match test and vitest read too.
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../../src/utils/emoteFill.fixture.json").standardized
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let words = try #require(fixture?["words"] as? [String])
+        #expect(!words.isEmpty)
+        let emotes = Data(#"{"twitch":[{"id":"t","name":"LUL","url":"u"}],"7tv":[{"id":"a","name":"lol","url":"u"},{"id":"b","name":"Kappa","url":"u"}]}"#.utf8)
+        let names = { (query: String) -> [String] in
+            let answer = FakeCore.emoteMatches(emotes, args: ["query": query, "profile": EmoteFill.profile])
+            return (answer["rows"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+        }
+        for word in words {
+            #expect(names(word) == names(":" + word), "\(word)")
+        }
+        #expect(EmoteFill.profile == "fill")
+    }
+
     @Test func anInsertIsSpacedFromWhatCameBefore() {
         #expect(ComposerText.inserting("Kappa", into: "") == "Kappa ")
         #expect(ComposerText.inserting("Kappa", into: "hi") == "hi Kappa ")

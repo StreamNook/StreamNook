@@ -1,5 +1,5 @@
 use crate::services::emote_credit::{self as credit, CreditProvider, EmoteCredit};
-use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
+use crate::services::emote_match::{self, Collector, Context, Seed, Slot, Spec};
 use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
@@ -109,8 +109,10 @@ pub struct EmoteMatchResult {
 }
 
 /// Emotes matching what the user is typing, ranked, for the Tab cycle
-/// (`profile` "cycle") or the emote list ("search"). Reads the sets already in
-/// memory and never fetches, so it is cheap enough to run on every keystroke.
+/// (`profile` "cycle"), the emote list ("search") or the emote fill menu
+/// ("fill": the desktop colon list and both phones' strip, see
+/// `emote_match::Request`). Reads the sets already in memory and never
+/// fetches, so it is cheap enough to run on every keystroke.
 ///
 /// `channel` and `channel_id` are what `ensureChannelEmotes` fetched the set
 /// with: a Twitch login and user id, a Kick slug, or a YouTube identifier.
@@ -130,21 +132,10 @@ pub async fn match_emote_tokens(
     typing: Option<bool>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteMatchResult, String> {
-    // Asked as the viewer types (the phones' strip, the desktop colon list),
-    // not on Tab: a one-character word then finds only an exact emote name.
-    let typing = typing.unwrap_or(false);
-    let profile = match profile.as_deref() {
-        Some("search") => Profile::Search,
-        _ => Profile::Cycle,
-    };
-    let order = match order.as_deref() {
-        Some("twitch_first") => Order::TwitchFirst,
-        _ => Order::Default,
-    };
-    let limit = limit.unwrap_or(match profile {
-        Profile::Cycle => 50,
-        Profile::Search => 60,
-    });
+    // `typing`: asked as the viewer types (the fill menu), not on Tab, so a
+    // one-character word finds only an exact emote name.
+    let request = emote_match::Request::resolve(profile.as_deref(), order.as_deref(), limit, typing);
+    let (profile, order, limit, typing) = (request.profile, request.order, request.limit, request.typing);
     let tier = render_tier(tier.as_deref());
     let channel_id = channel_id.filter(|id| !id.is_empty());
 
@@ -271,10 +262,10 @@ pub async fn match_emote_tokens(
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }
 
-    // The cycle and the phone strip offer the room's recent chatters after
-    // the emotes (provider `user`).
+    // The cycle and the fill menu offer the room's recent chatters after the
+    // emotes (provider `user`); a colon word names none (`chatter_rows`).
     // A one-character word typed in passing names no chatter either.
-    if profile == Profile::Cycle && !(typing && emote_match::is_short_word(&query)) {
+    if request.chatters && !(typing && emote_match::is_short_word(&query)) {
         let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
         let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);
         rows.extend(chatters);

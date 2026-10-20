@@ -6,6 +6,12 @@ import Foundation
 
 // MARK: Suggestions (`match_emote_tokens`)
 
+/// The emote fill menu: the desktop's colon list and both phones' suggestion strip ask the core
+/// the same question, so one word gets one list on every app (Rust `emote_match::Request`).
+public enum EmoteFill {
+    public static let profile = "fill"
+}
+
 /// A row of the core's emote match: an emote, or (provider "user") a chatter it offers after
 /// the emotes for the word being typed.
 public struct EmoteMatch: Decodable, Identifiable, Hashable, Sendable {
