@@ -391,6 +391,8 @@ struct ChatListHost: UIViewRepresentable {
 
     func updateUIView(_ list: ChatListView, context: Context) {
         list.readOnly = readOnly
+        // The join's history answered with nothing: the room says so until a row arrives.
+        list.emptyNote = session.historyLoaded ? "No recent messages" : nil
         list.setStyle(session.style)
         // Swiping is on where moderator tools are; the core lays the slider out per press.
         list.swipeEnabled = session.moderatorTools && session.roomID != nil && !readOnly
