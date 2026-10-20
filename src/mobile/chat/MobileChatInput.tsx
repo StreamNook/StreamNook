@@ -20,7 +20,6 @@ import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
 import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
-import { incrementStat } from '../../services/supabaseService';
 import { refreshChannelEmotes, sendChannelMessage, useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { sliceLookupKey } from '../../utils/providerKey';
 import type { EmoteSet } from '../../services/emoteService';
@@ -473,9 +472,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
       sent();
       startSlowWait(key, channel);
       onCancelReply?.();
-      incrementStat(currentUser.user_id, 'messages_sent', 1).catch((err) => {
-        Logger.warn('[MobileChatInput] messages_sent stat failed:', err);
-      });
     } catch (err) {
       Logger.error('[MobileChatInput] send failed:', err);
       failed(failureWords(err));

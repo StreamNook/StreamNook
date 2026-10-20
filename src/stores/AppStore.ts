@@ -10,7 +10,7 @@ import { getPlayerControls } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
 import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
-import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
+import { updatePresence } from '../services/supabaseService';
 import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
@@ -3497,59 +3497,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         .then((s) => set({ ffzIsSubwoofer: !!s?.is_subwoofer }))
         .catch(() => set({ ffzIsSubwoofer: false }));
 
-      // Track user in Supabase for analytics (only on initial login, not periodic checks)
+      // The member row, today's accolades, owned atmospheres and the login
+      // and tenure rewards are Rust's (services/member_signin.rs), run once a
+      // session when get_user_info above confirms the member, on every client.
+      // Presence is still this page's: rejoin it under the signed-in member.
       if (!wasAuthenticated) {
-        try {
-          // getAppVersion(), which reads the merged Tauri config through
-          // `get_client_identity`. NOT get_current_app_version / get_app_version:
-          // both return env!("CARGO_PKG_VERSION"), the DESKTOP number even inside
-          // an Android build, because the tauri.android.conf.json override feeds
-          // Gradle and never reaches Cargo. Android had been reporting 8.3.9.
-          // This used to import getVersion() directly, which was correct but was
-          // a SECOND source: the presence payload read the Cargo one, so the same
-          // user could publish two different versions at once and whichever
-          // landed last won. One source now, and tests/version_parity.rs keeps
-          // Cargo.toml and tauri.conf.json from drifting apart on desktop.
-          const appVersion = await getAppVersion();
-          upsertUser(user, appVersion).catch((e) => {
-            Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
-          });
-        } catch (vErr) {
-          Logger.warn('[Auth] Failed to get app version for stats:', vErr);
-          upsertUser(user).catch((e) => {
-            Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
-          });
-        }
-
-        // Collect today's season/holiday + cake-day accolades server-side (the
-        // RPC enforces the window against the server clock and reads the verified
-        // creation date; idempotent). Fire and forget.
-        claimLoginAccolades(user.user_id).catch((e) => {
-          Logger.warn('[Auth] Failed to claim login accolades:', e);
-        });
-
-        // Claim login-window event rewards (server enforces the window). Lazy
-        // import: watchRewards reads this store, a static import would cycle.
-        import('../services/watchRewards')
-          .then((m) => m.maybeClaimLoginRewards(user.user_id))
-          .catch((e) => {
-            Logger.warn('[Auth] Failed to claim login rewards:', e);
-          });
-
-        // Claim subscriber-tenure milestone badges (server gates on the real
-        // total_months; below-threshold members simply aren't granted). Lazy
-        // import for the same store-cycle reason as above.
-        import('../services/watchRewards')
-          .then((m) => m.maybeClaimMilestoneRewards(user.user_id))
-          .catch((e) => {
-            Logger.warn('[Auth] Failed to claim milestone rewards:', e);
-          });
-
-        // Keep an active subscriber's owned atmospheres current (server gates on
-        // active status, so a lapsed member accrues nothing new). Idempotent.
-        grantAtmosphereOwnership(user.user_id).catch((e) => {
-          Logger.warn('[Auth] Failed to sync atmosphere ownership:', e);
-        });
+        getAppVersion()
+          .catch(() => undefined)
+          .then((appVersion) => updatePresence(user.user_id, user.display_name || user.username, appVersion))
+          .catch((e) => Logger.warn('[Auth] Failed to update presence:', e));
       }
 
       // A restored session gets one greeting per app session on desktop. The

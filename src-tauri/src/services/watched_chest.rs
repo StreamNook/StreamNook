@@ -129,6 +129,10 @@ pub async fn claim(
     };
     IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).remove(claim_id);
     let result = result?;
+    crate::services::member_stats::count(
+        crate::services::member_stats::Stat::ChannelPointsCollected,
+        i64::from(result.points_earned),
+    );
     crate::services::channel_state::points_gained(
         channel_id,
         i64::from(result.points_earned),
