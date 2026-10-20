@@ -34,8 +34,14 @@ struct ChatsScreen: View {
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rooms.tabs.isEmpty {
-                // No chat open: the tab is the picker itself.
+                // No chat open: the tab is the picker itself, on the large glass the "Add a chat"
+                // sheet wears (solid at 0 percent glassiness).
                 ChatPicker(rooms: rooms, onClose: { model.nav.exitChats() })
+                    .padding(.top, 14)
+                    .snGlass(RoundedRectangle(cornerRadius: 28, style: .continuous), light: .dialog)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
                     .onAppear { model.nav.chatsFloor = nil }
             } else if let session = rooms.activeSession {
                 ChatPanel(session: session, rooms: rooms, onProfile: { model.cosmetics.open($0) },
@@ -56,7 +62,8 @@ struct ChatsScreen: View {
         // only what the watch layer keeps below the chat is kept (the inset less 24 pt).
         .padding(.bottom, Self.bottomKeep)
         .ignoresSafeArea(.container, edges: .bottom)
-        .background(SN.background)
+        // The page every tab sits on: the theme's background with the room's light on it.
+        .snShellBackground()
         .offset(y: drop)
         .toolbar(.hidden, for: .navigationBar)
         // A full-screen surface: no tab bar here.
