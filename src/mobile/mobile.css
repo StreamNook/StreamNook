@@ -501,3 +501,77 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-mobile .settings-row input[type="range"] {
   max-width: none;
 }
+
+/* The inbox (mentions/InboxSheet, InboxArrival, InboxTray). Over chat the
+   glaze takes a fuller frost than chrome over chrome, so the words behind
+   never compete with the rows; its shadow falls up, onto the chat, never onto
+   the message bar it grows out of. */
+.sn-inbox-sheet,
+.sn-inbox-arrival {
+  --glaze-frost: 78%;
+}
+.sn-inbox-sheet {
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35);
+}
+/* Flush on the message bar: its shadow stops at the foot, and the glaze's rim
+   runs off the bottom (clipped) so the bar's own hairline is the only seam. */
+.sn-inbox-sheet--flush {
+  clip-path: inset(-48px -48px 0 -48px);
+}
+.sn-inbox-sheet--flush::before,
+.sn-inbox-sheet--flush::after {
+  bottom: -4px;
+}
+.sn-inbox-arrival {
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.3);
+}
+/* The tray's count: the accent inked with the page, ringed with the bar so it
+   sits cleanly on the glass rim. */
+.sn-inbox-badge {
+  background: var(--color-accent);
+  color: var(--color-background);
+  color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
+  box-shadow: 0 0 0 2px var(--color-background);
+}
+.sn-inbox-badge--plain {
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+}
+/* The kind's mark on a face's corner. */
+.sn-inbox-kind {
+  background: var(--color-background-tertiary);
+  color: var(--color-accent-on-surface, var(--color-accent));
+  box-shadow: 0 0 0 1.5px var(--color-background-secondary);
+}
+/* Chips: a faint ink wash and a hairline, readable on light themes as on dark
+   ones; the chosen one a step stronger. */
+.sn-inbox-chip {
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+.sn-inbox-chip--on {
+  background: color-mix(in srgb, var(--color-text-primary) 11%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 18%, transparent);
+}
+.sn-inbox-notch {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-background-tertiary) 90%, transparent);
+}
+/* A one-line snippet fades at its end instead of an ellipsis. */
+.sn-inbox-fade-end {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* The list runs under a soft fade at its foot. */
+.sn-inbox-list {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+/* Chat under an inbox overlay fades out above it rather than showing slivers
+   and half-cut lines; --sn-inbox-clear is how far the overlay reaches. */
+.sn-inbox-clear {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
+  mask-image: linear-gradient(to top, transparent 0, transparent var(--sn-inbox-clear), #000 calc(var(--sn-inbox-clear) + 24px));
+}
+/* Send's mark on the accent fill: black on a light accent, white on a dark
+   one, the same rule as the inbox count. */
+.sn-send-ink {
+  color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
+}

@@ -1473,6 +1473,24 @@
   {
    "page": "chat",
    "section": "Chat Input",
+   "title": "Inbox button",
+   "paths": [
+    "chat_input.inbox_button_side"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Which end of the message bar the inbox sits at. Right swaps it with the chat menu, for a right thumb.",
+   "aliases": [
+    "mentions",
+    "inbox",
+    "left handed",
+    "right handed",
+    "swap"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
    "title": "Wallet balance",
    "paths": [
     "chat_input.hide_points_balance",

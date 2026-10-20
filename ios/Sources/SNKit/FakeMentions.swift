@@ -46,6 +46,16 @@ public final class FakeMentions: Sendable {
                          watchURL: "https://www.youtube.com/@NookCasts/live", channelLogin: "@NookCasts", senderID: "UCfake7",
                          senderLogin: "tidepool", senderName: "Tidepool", senderColor: "#60a5fa",
                          text: "nookviewer is here too!", kind: .mention, atMs: ms - 6 * 24 * 60 * minute, read: true),
+            // A bot saying the same line three times in a row: the inbox folds them into one row.
+            MentionEntry(id: "fm-8", room: "nookstreamer", channelLogin: "nookstreamer", channelID: "4242", senderID: "1008",
+                         senderLogin: "botwatcher", senderName: "BotWatcher", senderColor: "#f5a742",
+                         text: "@nookviewer hi", kind: .mention, atMs: ms - 7 * 24 * 60 * minute, read: true),
+            MentionEntry(id: "fm-9", room: "nookstreamer", channelLogin: "nookstreamer", channelID: "4242", senderID: "1008",
+                         senderLogin: "botwatcher", senderName: "BotWatcher", senderColor: "#f5a742",
+                         text: "@nookviewer hi", kind: .mention, atMs: ms - 7 * 24 * 60 * minute - minute, read: true),
+            MentionEntry(id: "fm-10", room: "nookstreamer", channelLogin: "nookstreamer", channelID: "4242", senderID: "1008",
+                         senderLogin: "botwatcher", senderName: "BotWatcher", senderColor: "#f5a742",
+                         text: "@nookviewer hi", kind: .mention, atMs: ms - 7 * 24 * 60 * minute - 2 * minute, read: true),
         ]
     }
 
@@ -118,9 +128,70 @@ public final class FakeMentions: Sendable {
             return try Self.encode(Self.object(found))
         case "set_visible_mention_rooms":
             return "null"
+        case "get_inbox_view":
+            let filter = args["filter"] as? String ?? "all"
+            let before = Self.int(args["beforeMs"])
+            let limit = Int(min(max(Self.int(args["limit"]) ?? 50, 1), 200))
+            let list = entries.withLock { $0 }
+            let (rows, more, cursor) = Self.view(list, filter: filter, before: before, limit: limit)
+            let chips: [[String: Any]] = ["all", "mentions", "highlights"].map { chip in
+                ["id": chip, "unread": list.filter { !$0.read && !$0.removed && Self.admits(chip, $0.kind) }.count]
+            }
+            let rowObjects: [Any] = rows.map { row in
+                [
+                    "entry": Self.object(row.entry),
+                    "folded": row.folded.map { ["id": $0.id, "at_ms": $0.atMs, "read": $0.read] as [String: Any] },
+                    "unread": row.unread,
+                    "avatar": NSNull(),
+                ] as [String: Any]
+            }
+            return try Self.encode([
+                "rows": rowObjects, "has_more": more, "before_ms": cursor.map { $0 as Any } ?? NSNull(),
+                "unread_total": list.filter { !$0.read && !$0.removed }.count, "chips": chips,
+            ] as [String: Any])
         default:
             return nil
         }
+    }
+
+    static func admits(_ filter: String, _ kind: MentionEntry.Kind) -> Bool {
+        switch filter {
+        case "mentions": kind == .mention || kind == .reply
+        case "highlights": kind == .word
+        default: true
+        }
+    }
+
+    /// The core's view rules (`Inbox::view`) over the fixture rows: newest first, the chip's
+    /// kinds, identical messages in a row folded, pages that never split a fold.
+    static func view(_ list: [MentionEntry], filter: String, before: Int64?, limit: Int)
+        -> ([InboxRowView], Bool, Int64?) {
+        let shown = list.sorted { $0.atMs > $1.atMs }
+            .filter { admits(filter, $0.kind) && (before == nil || $0.atMs < before!) }
+        func same(_ a: MentionEntry, _ b: MentionEntry) -> Bool {
+            !a.removed && !b.removed && a.kind == b.kind && a.room == b.room
+                && (a.senderID.isEmpty ? a.senderLogin.lowercased() : a.senderID)
+                == (b.senderID.isEmpty ? b.senderLogin.lowercased() : b.senderID)
+                && a.text.lowercased().split(separator: " ") == b.text.lowercased().split(separator: " ")
+        }
+        var rows: [InboxRowView] = []
+        var cursor: Int64?
+        var i = 0
+        while i < shown.count {
+            let head = shown[i]
+            var row = InboxRowView(entry: head, unread: !head.read && !head.removed)
+            cursor = head.atMs
+            i += 1
+            while i < shown.count, same(head, shown[i]) {
+                row.folded.append(InboxFolded(id: shown[i].id, atMs: shown[i].atMs, read: shown[i].read))
+                row.unread = row.unread || (!shown[i].read && !shown[i].removed)
+                cursor = shown[i].atMs
+                i += 1
+            }
+            rows.append(row)
+            if rows.count >= limit { return (rows, i < shown.count, cursor) }
+        }
+        return (rows, false, cursor)
     }
 
     /// A JSON number, however this platform's JSONSerialization boxed it.

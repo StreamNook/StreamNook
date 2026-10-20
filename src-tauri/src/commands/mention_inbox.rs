@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::services::mention_inbox::{self, MentionEntry};
+use crate::services::mention_inbox::{self, InboxFilter, InboxRow, MentionEntry};
 
 const PAGE_DEFAULT: usize = 50;
 const PAGE_MAX: usize = 200;
@@ -24,6 +24,54 @@ pub async fn get_mention_inbox(before_ms: Option<i64>, limit: Option<u32>) -> Me
     match mention_inbox::page(before_ms, limit) {
         Some((entries, has_more, unread_total)) => MentionPage { entries, has_more, unread_total },
         None => MentionPage { entries: Vec::new(), has_more: false, unread_total: 0 },
+    }
+}
+
+#[derive(Serialize)]
+pub struct InboxChip {
+    pub id: &'static str,
+    pub unread: u32,
+}
+
+#[derive(Serialize)]
+pub struct InboxView {
+    /// Newest first; identical messages in a row folded into one.
+    pub rows: Vec<InboxRow>,
+    pub has_more: bool,
+    /// What `before_ms` asks for to get the next page.
+    pub before_ms: Option<i64>,
+    pub unread_total: u32,
+    /// The chips the phones show, in order, with their unread counts.
+    pub chips: Vec<InboxChip>,
+}
+
+/// The phones' inbox: one page of the timeline for a chip (`all`,
+/// `mentions`, `highlights`), with the senders' pictures that are cached.
+/// The rest are looked up and land as `channel-avatars`; read again then.
+#[tauri::command]
+pub async fn get_inbox_view(filter: Option<InboxFilter>, before_ms: Option<i64>, limit: Option<u32>) -> InboxView {
+    let limit = limit.map(|l| l as usize).unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX);
+    let Some((mut rows, has_more, cursor, unread_total, chips)) =
+        mention_inbox::view(filter.unwrap_or_default(), before_ms, limit)
+    else {
+        return InboxView {
+            rows: Vec::new(),
+            has_more: false,
+            before_ms: None,
+            unread_total: 0,
+            chips: InboxFilter::CHIPS.iter().map(|f| InboxChip { id: f.id(), unread: 0 }).collect(),
+        };
+    };
+    let pictures = mention_inbox::avatars_for(rows.iter().map(|r| &r.entry));
+    for row in &mut rows {
+        row.avatar = mention_inbox::avatar_of(&row.entry, &pictures);
+    }
+    InboxView {
+        rows,
+        has_more,
+        before_ms: cursor,
+        unread_total,
+        chips: chips.into_iter().map(|(f, unread)| InboxChip { id: f.id(), unread }).collect(),
     }
 }
 

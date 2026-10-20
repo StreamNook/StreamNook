@@ -179,7 +179,8 @@ struct WatchLayer: View {
                         .offset(x: edge - 14, y: screen.height / 2 - 40)
                     if !chat.beside, stripOpen {
                         ChatBackgroundStrip(opacity: chat.opacity, onChange: { liveOpacity = $0 },
-                                            onHide: hideLandscapeChat, onTouch: { stripTouch += 1 })
+                                            onHide: hideLandscapeChat, onTouch: { stripTouch += 1 },
+                                            inbox: model.signedIn ? model.mentions : nil)
                             .frame(width: columnWidth - outer - 24)
                             .closesOnOutsideTap(Binding(get: { stripOpen }, set: { if !$0 { stripOpen = false } }),
                                                 id: "chat-strip")

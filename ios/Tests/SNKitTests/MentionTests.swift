@@ -139,7 +139,7 @@ import Testing
         #expect(first.entries.count == 2 && first.hasMore && first.unreadTotal == 3)
         let next = try await core.invoke("get_mention_inbox", args: ["beforeMs": first.entries[1].atMs, "limit": 50],
                                          as: MentionPage.self)
-        #expect(next.entries.count == 5 && !next.hasMore)
+        #expect(next.entries.count == 8 && !next.hasMore)
         let opened = try await core.invoke("open_mention", args: ["id": "fm-1"], as: MentionEntry?.self)
         #expect(opened?.read == true)
         var iterator = changes.makeAsyncIterator()
@@ -151,5 +151,71 @@ import Testing
         _ = try await core.invoke("clear_mention_inbox", args: [:])
         let empty = try await core.invoke("get_mention_inbox", args: [:], as: MentionPage.self)
         #expect(empty.entries.isEmpty)
+    }
+}
+
+@Suite struct InboxModelTests {
+    /// The shape the core's `get_inbox_view` sends.
+    static let viewJSON = """
+    {"rows":[
+      {"entry":{"id":"m3","platform":"twitch","room":"xqc","channel_login":"xqc","sender_id":"5","sender_login":"viewer",
+       "sender_name":"Viewer","text":"@you hi Kappa","kind":"mention","at_ms":3000,"read":false,"removed":false,
+       "parts":[{"type":"text","text":"@you hi "},{"type":"emote","name":"Kappa","url":"https://e/25"}]},
+       "folded":[{"id":"m2","at_ms":2000,"read":true},{"id":"m1","at_ms":1000,"read":false}],
+       "unread":true,"avatar":"https://p/5.png"}
+    ],"has_more":true,"before_ms":1000,"unread_total":2,
+    "chips":[{"id":"all","unread":2},{"id":"mentions","unread":2},{"id":"highlights","unread":0}]}
+    """
+
+    @Test func decodesTheCoresView() throws {
+        let view = try JSONDecoder().decode(InboxView.self, from: Data(Self.viewJSON.utf8))
+        #expect(view.hasMore && view.beforeMs == 1000 && view.unreadTotal == 2)
+        #expect(view.chips.map(\.id) == ["all", "mentions", "highlights"])
+        let row = try #require(view.rows.first)
+        #expect(row.ids == ["m3", "m2", "m1"] && row.unread && row.avatar == "https://p/5.png")
+        #expect(row.entry.parts == [.text("@you hi "), .emote(name: "Kappa", url: "https://e/25")])
+        #expect(InboxText.folded(row.entry, count: row.folded.count + 1) == "3 identical mentions")
+    }
+
+    @Test func anOlderEntryWithoutPartsStillDecodes() throws {
+        let page = try JSONDecoder().decode(MentionPage.self, from: Data(MentionModelTests.pageJSON.utf8))
+        #expect(page.entries.allSatisfy { $0.parts.isEmpty })
+    }
+
+    @Test func pagesAppendWithoutRepeats() throws {
+        var view = try JSONDecoder().decode(InboxView.self, from: Data(Self.viewJSON.utf8))
+        view.append(InboxView(rows: view.rows, hasMore: false, beforeMs: nil, unreadTotal: 0, chips: []))
+        #expect(view.rows.count == 1 && !view.hasMore && view.unreadTotal == 0)
+    }
+
+    @Test func picturesAreKeyedInEachPlatformsIdSpace() {
+        let twitch = MentionEntry(id: "a", room: "xqc", channelLogin: "xqc", senderID: "123", senderLogin: "Viewer",
+                                  senderName: "Viewer", text: "", atMs: 0)
+        #expect(InboxText.avatarKey(twitch) == "twitch:123")
+        var kick = twitch
+        kick.platform = "kick"
+        #expect(InboxText.avatarKey(kick) == "kick:viewer")
+        var other = twitch
+        other.platform = "tiktok"
+        #expect(InboxText.avatarKey(other) == nil)
+    }
+
+    @Test func chipsAndEmptyListsHaveWords() {
+        #expect(InboxText.chip("mentions") == "Mentions" && InboxText.chip("whispers") == "Whispers")
+        #expect(InboxText.empty("highlights").text == "No highlights yet.")
+    }
+
+    @Test func theFakeFoldsAndFiltersLikeTheCore() async throws {
+        let core = FakeCore(fixtures: FakeFixtures(signedIn: true))
+        try core.start(dirs: CoreDirs(data: "/tmp", cache: "/tmp", logs: "/tmp"), version: "test",
+                       vaultKey: Data(repeating: 1, count: 32), codecs: [])
+        let all = try await core.invoke("get_inbox_view", args: ["filter": "all", "limit": 50], as: InboxView.self)
+        // Ten fixture entries, the bot's three identical lines folded into one row.
+        #expect(all.rows.count == 8 && !all.hasMore)
+        #expect(all.rows.last?.folded.map(\.id) == ["fm-9", "fm-10"])
+        let words = try await core.invoke("get_inbox_view", args: ["filter": "highlights"], as: InboxView.self)
+        #expect(words.rows.map(\.id) == ["fm-4"])
+        let first = try await core.invoke("get_inbox_view", args: ["filter": "all", "limit": 2], as: InboxView.self)
+        #expect(first.rows.count == 2 && first.hasMore && first.beforeMs == first.rows[1].entry.atMs)
     }
 }

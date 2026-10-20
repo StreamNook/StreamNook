@@ -37,6 +37,10 @@ import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 import { useMentionJump } from '../mentions/useMentionJump';
+import { useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
+import { InboxSheet } from '../mentions/InboxSheet';
+import { InboxArrival } from '../mentions/InboxArrival';
+import { useMobileNavStore } from '../navStore';
 import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 import { SwipeModerator } from './SwipeModerator';
@@ -81,6 +85,10 @@ let lastBuzzed: string | null = null;
  * list rather than painting over it, and under the tabs, since it belongs to
  * the room on screen.
  *
+ * `surface`: which chat this is (under the player, or the Chats tab), for the
+ * inbox: its sheet opens in the chat whose tray was tapped, and a new
+ * mention's card rises only over the chat that is on screen.
+ *
  * The stream tab is pointed at the player by `useChatsLifecycle`, once, in the
  * shell: a pane only exists while it is on screen.
  */
@@ -89,7 +97,8 @@ export const MobileChatPane: React.FC<{
   strip?: boolean;
   paused?: boolean;
   top?: React.ReactNode;
-}> = ({ readOnly = false, strip = true, paused = false, top }) => {
+  surface?: InboxSurface;
+}> = ({ readOnly = false, strip = true, paused = false, top, surface = 'watch' }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -843,12 +852,30 @@ export const MobileChatPane: React.FC<{
   );
 
 
+  // The inbox over this chat: its sheet, or a new mention's card. The watch
+  // pane stays mounted under the mini player and behind Chats, so the card
+  // rises only where the chat is on screen.
+  const navTab = useMobileNavStore((s) => s.activeTab);
+  const playerFull = useMobileNavStore((s) => s.playerMode === 'full');
+  const onScreen = surface === 'chats' ? !paused : navTab !== 'chats' && playerFull;
+  const inboxSide = useAppStore((s) => (s.settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'));
+  const sheetHere = useMentionsStore((s) => s.sheetIn === surface);
+  const cardHere = useMentionsStore((s) => !!s.arrival && !s.composerBusy && !s.sheetIn) && onScreen && !readOnly;
+  // Rows under the overlay fade out above it instead of showing as slivers;
+  // the top fade stays when the pane draws one.
+  const clear = sheetHere ? (readOnly ? 'calc(68% + 60px)' : '68%') : cardHere ? '62px' : null;
+  const listMask = clear
+    ? `linear-gradient(to bottom, ${strip ? '#000 0' : 'transparent 0, #000 24px'}, #000 calc(100% - ${clear} - 24px), transparent calc(100% - ${clear}))`
+    : undefined;
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {strip && <ChatTabStrip />}
       {top}
+      <div className="flex-1 min-h-0 relative flex flex-col">
       <div
         ref={listRef}
+        style={listMask ? { WebkitMaskImage: listMask, maskImage: listMask } : undefined}
         data-chat-list=""
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
         // long-press on text by starting its OWN text selection, which wins the
@@ -857,7 +884,7 @@ export const MobileChatPane: React.FC<{
         // With swiping on, a sideways move on a row is the swipe's from the first pixel: `sn-swipe-mod`
         // gives the rows themselves `touch-action: pan-y`. On this wrapper it would do nothing, since
         // the browser reads touch-action only from the touched element up to its scroll container.
-        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip ? '' : 'sn-fade-top'} ${swipeOn ? 'sn-swipe-mod' : ''}`}
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${swipeOn ? 'sn-swipe-mod' : ''}`}
         onContextMenu={onListContextMenu}
         onPointerDown={press.onPointerDown}
         onPointerMove={press.onPointerMove}
@@ -918,8 +945,15 @@ export const MobileChatPane: React.FC<{
           </div>
         )}
       </div>
+      {/* Outside the list, so a press in them never reaches its gestures. */}
+      {onScreen && !readOnly && <InboxArrival side={inboxSide} />}
+      {/* In landscape the column has no message bar: the sheet rises from the
+          overlay strip that holds its tray (ChatOverlayChrome, 60 px tall). */}
+      <InboxSheet surface={surface} side={readOnly ? 'left' : inboxSide} bottom={readOnly ? 60 : 0} />
+      </div>
       {!readOnly && (
         <MobileChatInput
+          inboxSurface={surface}
           channel={activeTab?.login ?? null}
           provider={activeProvider}
           channelId={broadcasterId}
