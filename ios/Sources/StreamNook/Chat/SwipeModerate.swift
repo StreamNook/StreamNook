@@ -226,19 +226,16 @@ final class SwipeModOverlay: UIView {
             railPill.layer.cornerRadius = 9
             railPill.layer.cornerCurve = .continuous
             rail.addSubview(railPill)
-            for (i, step) in slider.steps.enumerated() {
+            for step in slider.steps {
                 let label = UILabel()
                 label.text = step.label
                 label.font = .systemFont(ofSize: 12, weight: .semibold)
                 label.textColor = Self.railInk(step)
                 label.textAlignment = .center
-                // A legend spread evenly along the rail, so short zones never crowd their labels
-                // together; the lit pill marks the step under the finger.
-                let slot = rail.bounds.width / CGFloat(max(slider.steps.count, 1))
-                label.frame = CGRect(x: slot * CGFloat(i), y: 0, width: slot, height: rail.bounds.height)
                 rail.addSubview(label)
                 railLabels.append(label)
             }
+            layOutRailLegend()
         } else {
             wash.frame = CGRect(x: 0, y: local.minY, width: 0, height: local.height)
             wash.startPoint = CGPoint(x: 0, y: 0.5)
@@ -286,6 +283,31 @@ final class SwipeModOverlay: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The rail's legend: each name in a box its own width plus 8 points either side (the lit
+    /// pill's size), the first and last boxes 4 points in from the rail's ends and equal gaps
+    /// between, so "Delete" and "Ban" sit the same distance from their edges. A rail too narrow
+    /// for that shares its width evenly instead.
+    private func layOutRailLegend() {
+        let inset: CGFloat = 4
+        let height = rail.bounds.height
+        let room = rail.bounds.width - 2 * inset
+        let widths = railLabels.map { $0.intrinsicContentSize.width + 16 }
+        let total = widths.reduce(0, +)
+        guard railLabels.count > 1, total <= room else {
+            let slot = room / CGFloat(max(railLabels.count, 1))
+            for (i, label) in railLabels.enumerated() {
+                label.frame = CGRect(x: inset + slot * CGFloat(i), y: 0, width: slot, height: height)
+            }
+            return
+        }
+        let gap = (room - total) / CGFloat(railLabels.count - 1)
+        var x = inset
+        for (i, label) in railLabels.enumerated() {
+            label.frame = CGRect(x: x, y: 0, width: widths[i], height: height)
+            x += widths[i] + gap
+        }
+    }
 
     /// `quiet`: Ban's rest is running, so the chip reads as a warning, not an armed step.
     func show(slide: CGFloat, step: Int?, words: String, tint: UIColor?, quiet: Bool) {
