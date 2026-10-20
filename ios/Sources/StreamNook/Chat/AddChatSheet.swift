@@ -61,13 +61,14 @@ struct ChatPicker: View {
             .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
             // The capsule is the field's own: clearing or tapping its padding keeps the keyboard.
             .keepsKeyboard()
-            .overlay(alignment: .trailing) {
-                // Chats' way out, beside the search, on the field's center line.
+            .overlay(alignment: .leading) {
+                // Chats' way out, the header's minimize arrow, left of the search on the
+                // field's center line.
                 if let onClose {
-                    ChatsCloseButton(action: onClose).offset(x: 52)
+                    ChatsMinimizeButton(action: onClose).offset(x: -54)
                 }
             }
-            .padding(.trailing, onClose == nil ? 0 : 50)
+            .padding(.leading, onClose == nil ? 0 : 42)
             .padding(.horizontal, 16)
             .padding(.bottom, 19)
 

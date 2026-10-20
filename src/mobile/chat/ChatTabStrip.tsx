@@ -62,7 +62,10 @@ const ChatTabStripImpl: React.FC<{
   /** What sits in the left side, opposite the controls (the Chats screen's
    *  Shared Chat or Together group for the room on screen). */
   leading?: React.ReactNode;
-}> = ({ always = false, trailing, height = CHAT_TAB_STRIP_H, leading }) => {
+  /** What sits at the row's very left edge, outside the centered group (the
+   *  Chats screen's minimize arrow). */
+  edge?: React.ReactNode;
+}> = ({ always = false, trailing, height = CHAT_TAB_STRIP_H, leading, edge }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   // Platform marks only earn their place when the open rooms span platforms;
   // with every tab on Kick (or every tab on Twitch) they say nothing.
@@ -106,11 +109,13 @@ const ChatTabStripImpl: React.FC<{
 
   return (
     <div
-      className="shrink-0 flex items-center justify-center gap-1.5 px-2 border-b border-borderSubtle"
+      className="shrink-0 flex items-center gap-1.5 px-2 border-b border-borderSubtle"
       style={{ height }}
     >
+      {edge}
       {/* One centered group, so a single room never reads lopsided. The
           controls keep their own width when space runs out; the rooms scroll. */}
+      <div className="flex-1 min-w-0 flex items-center justify-center gap-1.5">
       {leading && <div className="min-w-0 flex items-center">{leading}</div>}
       {/* The row of rooms wears the glaze and the open room is the darker pill
           inside it. The rooms scroll inside the glass, so its rim stays put. */}
@@ -199,6 +204,7 @@ const ChatTabStripImpl: React.FC<{
         </div>
       </div>
       {trailing && <div className="shrink-0 flex items-center gap-1.5">{trailing}</div>}
+      </div>
     </div>
   );
 };
