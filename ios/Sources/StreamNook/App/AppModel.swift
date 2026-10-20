@@ -176,6 +176,15 @@ final class AppModel {
         host.start(core: core, cookies: signIn.cookies)
         home.start()
         cosmetics.start(core: core)
+        // Keeps the 7TV session alive, past the boot burst; throttled inside, so most launches
+        // only read the expiry.
+        if let selfID = signIn.user?.id {
+            let core = core
+            Task {
+                try? await Task.sleep(for: .seconds(8))
+                await SevenTvSession.keepAlive(core: core, twitchID: selfID)
+            }
+        }
         kick.start(core: core, toasts: toasts)
         chat.start()
         let mentionCategory = alertTypes.first { $0.id == "mentions" }?.channel

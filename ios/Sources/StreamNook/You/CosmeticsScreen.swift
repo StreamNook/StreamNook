@@ -71,7 +71,7 @@ struct CosmeticsScreen: View {
                 .tapsThroughKeyboard()
         }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
-            SevenTvSignInSheet(core: model.core) { stored in
+            SevenTvSignInSheet(core: model.core, twitchID: model.signIn.user?.id ?? "") { stored in
                 Task { await screen.sevenTvSignInFinished(stored) }
             }
         }
