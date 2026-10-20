@@ -264,16 +264,10 @@ final class AppModel {
         }
     }
 
-    /// Stamped on this app's `patch_settings` writes, as each desktop window stamps its own
-    /// (`settingsBroadcast.SENDER_ID`), so the core's announcement of a write made here is not
-    /// read back a second time.
-    static let settingsSender = UUID().uuidString
-
     /// Writes top-level settings keys through the core, then reads the look back.
     func patchSettings(_ patch: [String: Any?]) async {
         do {
-            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() },
-                                                               "source": Self.settingsSender])
+            _ = try await core.invoke("patch_settings", args: ["patch": patch.mapValues { $0 ?? NSNull() }])
             await loadSettings()
         } catch {
             toasts.show("Failed to save settings")
@@ -514,10 +508,7 @@ final class AppModel {
                 self.lastEvent = event.name
                 switch event.name {
                 case "streamnook-settings-updated":
-                    // A patch_settings write from here already read the look back.
-                    if Self.object(event.payloadJSON)["source"] as? String != Self.settingsSender {
-                        await self.loadSettings()
-                    }
+                    await self.loadSettings()
                     if self.settingsStore.loaded { await self.settingsStore.refresh() }
                 case "sleep-timer://state":
                     if let state = SleepTimerState.parse(event.payloadJSON) { self.sleepTimerChanged(state) }
