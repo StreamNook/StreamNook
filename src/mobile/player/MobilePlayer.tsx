@@ -28,6 +28,7 @@ import { isCastable, useCastState } from '../cast/castState';
 import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { registerReplayClock } from '../../stores/vodReplayStore';
 
 const CONTROLS_HIDE_MS = 3000;
 // Every bottom-bar glyph at one size, so no button out-pulls another.
@@ -122,6 +123,9 @@ export const MobilePlayer: React.FC<{
   // The core's sleep timer: its fade and its stop reach the player from here,
   // and a quiet moon in the header says one is running.
   useEffect(() => listenSleepTimer(), []);
+  // A VOD's chat replay (Rust's, as on desktop and the iPhone) follows this
+  // player's clock.
+  useEffect(() => registerReplayClock(() => videoRef.current?.currentTime ?? null), []);
   const sleepTimer = useSleepTimer((s) => s.state);
   const sleepOn = sleepTimerRunning(sleepTimer);
   // VOD position checkpoints to Rust, as the desktop player sends them: Rust

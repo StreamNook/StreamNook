@@ -46,6 +46,8 @@ import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 import { SwipeModerator } from './SwipeModerator';
 import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type SwipeTarget, type TouchSlider } from './swipeSteps';
 import { invoke } from '@tauri-apps/api/core';
+import { setVodReplayShowing, useVodReplaySnapshot, useVodReplayStore, type ReplayShowing } from '../../stores/vodReplayStore';
+import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -63,6 +65,12 @@ const OTHER_PLATFORM_READ_ONLY_HIDES: FanAction[] = ['reply', 'profile'];
 /** What Hold menu buttons off takes out of the fan (Settings > Moderation); the
  *  user card's Moderate row and the swipe keep them. */
 const MOD_TILES: FanAction[] = ['delete', 'timeout', 'ban'];
+
+/** The desktop's VOD chat switch, word for word. */
+const REPLAY_SEGMENTS: Segment<ReplayShowing>[] = [
+  { value: 'replay', label: 'VOD Chat' },
+  { value: 'live', label: 'Live Chat' },
+];
 
 /** The mention that buzzed last. The watch layer keeps its pane mounted under
  *  the mini player while the Chats screen shows another, so one mention reaches
@@ -112,7 +120,23 @@ export const MobileChatPane: React.FC<{
     [tabs, activeChannel],
   );
 
-  const chat = useChannelChat(paused ? null : activeChannel);
+  // A VOD's recorded chat takes the stream's tab under the player, replayed by
+  // Rust in step with the player (as on desktop and the iPhone), with the
+  // switch back to the channel's live chat. Replay is read-only.
+  const currentMediaType = useAppStore((s) => s.currentMediaType);
+  const replayActive = useVodReplayStore((s) => s.active);
+  const replayShowing = useVodReplayStore((s) => s.showing);
+  const replayError = useVodReplayStore((s) => s.error);
+  const vodHere =
+    surface === 'watch' &&
+    replayActive &&
+    !!activeTab?.pinnedToStream &&
+    (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
+  const replayOn = vodHere && replayShowing === 'replay';
+  const noSend = readOnly || replayOn;
+  const replayChat = useVodReplaySnapshot();
+  const liveChat = useChannelChat(paused ? null : activeChannel);
+  const chat = replayOn ? replayChat : liveChat;
   // The join's history answered with nothing: the room says so until a row arrives.
   const historyLoaded = useChannelChatMeta(activeChannel).historyLoaded;
   const {
@@ -610,7 +634,7 @@ export const MobileChatPane: React.FC<{
   // the read-only overlay.
   const swipeSetting = useAppStore((s) => s.settings.chat_design?.mod_slider ?? true);
   const holdModButtons = useAppStore((s) => s.settings.chat_design?.mod_hold_buttons ?? true);
-  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !readOnly;
+  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !noSend;
   const press = useLongPressDrag({
     resolve: resolveRow,
     onArm: onArmFan,
@@ -729,10 +753,10 @@ export const MobileChatPane: React.FC<{
   // tiles while Hold menu buttons is off.
   const fanHides = useMemo(() => {
     const base = isTwitchRoom
-      ? readOnly
+      ? noSend
         ? READ_ONLY_HIDES
         : undefined
-      : readOnly
+      : noSend
         ? OTHER_PLATFORM_READ_ONLY_HIDES
         : OTHER_PLATFORM_HIDES;
     if (!holdModButtons) return [...(base ?? []), ...MOD_TILES];
@@ -743,7 +767,7 @@ export const MobileChatPane: React.FC<{
       ...(reachCanTimeout(reach) ? [] : (['timeout', 'ban'] as FanAction[])),
     ];
     return refused.length ? [...(base ?? []), ...refused] : base;
-  }, [isTwitchRoom, readOnly, holdModButtons, fanTarget, reachOf]);
+  }, [isTwitchRoom, noSend, holdModButtons, fanTarget, reachOf]);
 
   // Out of sight, nothing of this room stays up: the fan and the sheets draw
   // outside the pane, so hiding the pane would not hide them.
@@ -832,7 +856,7 @@ export const MobileChatPane: React.FC<{
   // the data attribute below) so the gesture is discoverable rather than secret.
   const onListClick = useCallback(
     (e: React.MouseEvent) => {
-      if (readOnly || !isPaused || press.isArmed()) return;
+      if (noSend || !isPaused || press.isArmed()) return;
       const el = e.target as HTMLElement;
       // Usernames and links keep their own behaviour.
       if (el.closest('a,[data-no-drag],button')) return;
@@ -848,7 +872,7 @@ export const MobileChatPane: React.FC<{
         channel: activeChannel ?? '',
       });
     },
-    [readOnly, isPaused, press, describeMessage, activeChannel],
+    [noSend, isPaused, press, describeMessage, activeChannel],
   );
 
 
@@ -893,11 +917,11 @@ export const MobileChatPane: React.FC<{
         onClick={onListClick}
         // While paused, rows are tappable to reply. Signposted by the hint pill
         // below rather than left as a secret gesture.
-        data-tap-reply={isPaused && !readOnly ? 'true' : undefined}
+        data-tap-reply={isPaused && !noSend ? 'true' : undefined}
       >
         <ChatMessageList
           messages={shownMessages}
-          emptyNote={historyLoaded ? 'No recent messages' : null}
+          emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
           renderToken={renderToken}
           isPaused={isPaused}
           onPauseIntent={() => pause(true)}
@@ -930,7 +954,7 @@ export const MobileChatPane: React.FC<{
         )}
         {isPaused && (
           <div className="absolute bottom-2 left-0 right-0 flex flex-col items-center gap-1 z-10 pointer-events-none">
-            {!readOnly && (
+            {!noSend && (
               <span className="glass-badge rounded-full px-2 py-0.5 text-[10.5px] text-textMuted">
                 Tap a message to reply
               </span>
@@ -951,7 +975,23 @@ export const MobileChatPane: React.FC<{
           overlay strip that holds its tray (ChatOverlayChrome, 60 px tall). */}
       <InboxSheet surface={surface} side={readOnly ? 'left' : inboxSide} bottom={readOnly ? 60 : 0} />
       </div>
-      {!readOnly && (
+      {/* The landscape overlay has no room for it and shows whichever is chosen. */}
+      {vodHere && !readOnly && (
+        <div
+          className="px-2.5 pt-1.5"
+          // With no composer under it, the switch clears the gesture bar itself.
+          style={replayOn ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 10px)' } : undefined}
+        >
+          <SegmentedControl
+            label="Chat for this video"
+            segments={REPLAY_SEGMENTS}
+            value={replayShowing}
+            onChange={setVodReplayShowing}
+            fill
+          />
+        </div>
+      )}
+      {!noSend && (
         <MobileChatInput
           inboxSurface={surface}
           channel={activeTab?.login ?? null}

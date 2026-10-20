@@ -1897,7 +1897,6 @@ pub fn run() {
             get_games_by_ids,
             get_videos_by_game,
             get_user_videos,
-            get_vod_comments,
             send_whisper,
             start_whisper_listener,
             get_whisper_history,
