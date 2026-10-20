@@ -85,33 +85,21 @@ pub async fn start_multi_nook(
     let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
     let codecs = variant_codecs(&r.master, &r.url, &r.quality);
 
-    // The link decides this tile's rung from here on ("Auto" only), within
-    // what this machine decodes and never above what the tile's size chose.
-    // Begun before the relay starts, so the origin's first downloads count.
+    // The tile's session ("Auto" only), within what this machine decodes and
+    // never above what the tile's size chose. A tile never moves its own rung:
+    // the grid shares one link, so a tile's share of it says nothing about the
+    // whole, and it starts where its pick puts it.
     crate::services::link_adapt::begin(
         &stream_id,
-        &tr::playable_variants(&r.master),
+        &tr::playable_variants(&r.master, &channel),
         &r.url,
         auto,
         crate::services::multi_nook_server::twitch_tile_route(&stream_id),
     );
-    // Read with no await since `begin`: the session this start owns.
-    let generation = crate::services::link_adapt::generation(&stream_id);
 
     let port = MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None)
         .await
         .map_err(|e| e.to_string())?;
-    // The tile origin's first downloads measured the link: start on a rung it
-    // can carry before the tile's player loads, rather than a reload just after.
-    let codecs = match crate::services::link_adapt::start_check(&stream_id, generation) {
-        Some(rung) => {
-            MultiNookServer::start_proxy(&stream_id, rung.url.clone(), TileProfile::Twitch, None)
-                .await
-                .map_err(|e| e.to_string())?;
-            variant_codecs(&r.master, &rung.url, &rung.name)
-        }
-        None => codecs,
-    };
 
     // Keep what the resolve learned, so this tile can be handed to the solo
     // player later without asking usher again. Costs one clone per tile start.
@@ -247,7 +235,7 @@ pub async fn retier_multi_nook_tile(
     let quality = tile_quality(&quality, cap);
     let was_low_latency = MultiNookServer::is_low_latency(&stream_id).await;
 
-    let (_, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
+    let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
     let codecs = variant_codecs(&r.master, &r.url, &r.quality);
     if !same_codec_family(current.codecs.as_deref(), codecs.as_deref()) {
         debug!("[MultiNook] '{stream_id}' changes codec at its new size; restarting it");
@@ -259,7 +247,7 @@ pub async fn retier_multi_nook_tile(
     // The new size has its own ceiling: the link adapts below it from here.
     crate::services::link_adapt::begin(
         &stream_id,
-        &tr::playable_variants(&r.master),
+        &tr::playable_variants(&r.master, &channel),
         &r.url,
         auto,
         crate::services::multi_nook_server::twitch_tile_route(&stream_id),
@@ -944,7 +932,12 @@ pub async fn report_multi_nook_tile_codec_failure(stream_id: String, mime_type: 
         Some(family) => Some(family),
         None => MultiNookServer::tile_codecs(&stream_id).await,
     };
-    let Some(family) = tr::fail_codec(mime_type.as_deref(), serving.as_deref()) else {
+    // The ban is scoped to the tile's channel, never the whole app.
+    let channel = MultiNookServer::promotion_target(&stream_id)
+        .await
+        .and_then(|(_, p)| p.status.map(|s| s.channel))
+        .unwrap_or_else(|| stream_id.clone());
+    let Some(family) = tr::fail_codec(&channel, mime_type.as_deref(), serving.as_deref()) else {
         return false;
     };
     let restart = MultiNookServer::take_codec_step(&stream_id, family).await;

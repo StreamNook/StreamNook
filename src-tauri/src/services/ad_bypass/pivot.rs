@@ -223,9 +223,9 @@ async fn run(generation: u64) {
     // just failed to hold.
     let serve = crate::services::link_adapt::begin(
         crate::services::link_adapt::SOLO,
-        &crate::services::twitch_resolver::playable_variants(&resolved.master),
+        &crate::services::twitch_resolver::playable_variants(&resolved.master, &resolved.status.channel),
         &resolved.url,
-        resolved.quality == "best",
+        crate::commands::streaming::is_auto_quality(&resolved.quality),
         crate::services::stream_server::solo_twitch_route(),
     )
     .map_or_else(|| resolved.url.clone(), |rung| rung.url);

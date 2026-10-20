@@ -773,7 +773,7 @@ impl YouTubeSource {
             return None;
         }
         // "best" should mean the best there is, not the best HLS can carry.
-        let want = if quality.eq_ignore_ascii_case("best") {
+        let want = if quality.eq_ignore_ascii_case("best") || quality.eq_ignore_ascii_case("auto") {
             highs.first()
         } else {
             highs.iter().find(|r| r.name.eq_ignore_ascii_case(quality))

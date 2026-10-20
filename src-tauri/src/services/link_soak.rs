@@ -204,7 +204,7 @@ async fn link_soak() {
             return;
         }
     };
-    let variants = crate::services::twitch_resolver::playable_variants(&r.master);
+    let variants = crate::services::twitch_resolver::playable_variants(&r.master, &channel);
     let serve = crate::services::link_adapt::begin(
         crate::services::link_adapt::SOLO,
         &variants,
@@ -333,7 +333,13 @@ async fn link_soak() {
                 if let Ok(Some((bytes, took, pdt, dur))) = h.await {
                     transfers.push(bytes as f64 * 8.0 / took / 1e6);
                     if adapt {
-                        crate::services::link_adapt::note_player_segment(crate::services::link_adapt::SOLO, bytes, took);
+                        crate::services::link_adapt::note_player_segment(
+                            crate::services::link_adapt::SOLO,
+                            bytes,
+                            took,
+                            Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS),
+                            None,
+                        );
                     }
                     player.add(dur, pdt, (base_cushion + extra).min(3.0) * 0.6, adapt);
                     next_sn = next_sn.map(|n| n + 1);

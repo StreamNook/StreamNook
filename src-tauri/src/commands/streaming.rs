@@ -359,9 +359,15 @@ async fn start_provider_stream(
     })
 }
 
-/// "Auto": the quality the link decides.
+/// "Auto": the quality the link decides. `auto` on every platform. On the
+/// phones "best" is also Auto, which is what they shipped; on the desktop
+/// "best" and "source" stay the fixed source rendition they always were.
 pub(crate) fn is_auto_quality(quality: &str) -> bool {
-    matches!(quality.trim().to_ascii_lowercase().as_str(), "best" | "source" | "auto")
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "auto" => true,
+        "best" | "source" => crate::services::link_adapt::phone_rules(),
+        _ => false,
+    }
 }
 
 /// The solo player's Kick or YouTube stream as `link_adapt` moves it: the
@@ -757,9 +763,9 @@ async fn start_stream_inner(
     // lower.
     let serve_url = crate::services::link_adapt::begin(
         crate::services::link_adapt::SOLO,
-        &tr::playable_variants(&r.master),
+        &tr::playable_variants(&r.master, &channel),
         &r.url,
-        r.quality == "best",
+        is_auto_quality(&quality),
         crate::services::stream_server::solo_twitch_route(),
     )
     .map_or_else(|| r.url.clone(), |rung| rung.url);
@@ -1176,7 +1182,7 @@ pub fn report_solo_codec_failure(mime_type: Option<String>) -> bool {
         return false;
     };
     let serving = crate::services::link_adapt::playing_family(crate::services::link_adapt::SOLO);
-    let Some(family) = tr::fail_codec(mime_type.as_deref(), serving.as_deref()) else {
+    let Some(family) = tr::fail_codec(&channel, mime_type.as_deref(), serving.as_deref()) else {
         return false;
     };
     let mut steps = SOLO_CODEC_STEPS.lock().unwrap_or_else(|e| e.into_inner());
@@ -1229,13 +1235,19 @@ pub fn report_playback_health(
     bytes: Option<u64>,
     ms: Option<f64>,
     stream_id: Option<String>,
+    cc: Option<u64>,
+    media_ms: Option<f64>,
 ) {
     let id = stream_id.as_deref().unwrap_or(crate::services::link_adapt::SOLO);
     let secs = ms.unwrap_or(0.0).max(0.0) / 1000.0;
     match event.as_str() {
+        // `cc` is the segment's discontinuity counter and `media_ms` how long
+        // it plays: Rust leaves the first segment of a new run out, and times
+        // what the rung's content really needs.
         "frag" => {
             if let Some(bytes) = bytes {
-                crate::services::link_adapt::note_player_segment(id, bytes, secs);
+                let content = media_ms.filter(|m| *m > 0.0).map(|m| m / 1000.0);
+                crate::services::link_adapt::note_player_segment(id, bytes, secs, content, cc);
             }
         }
         "stall" => crate::services::link_adapt::note_stall(id, secs, false),
