@@ -8,7 +8,7 @@ import { inlineEmoteTier } from './emoteService';
 import type { ProviderId } from '../types/providers';
 import type { EmoteTabCandidate } from '../utils/chatInputWord';
 
-export type EmoteMatchProfile = 'cycle' | 'search';
+export type EmoteMatchProfile = 'cycle' | 'search' | 'fill';
 
 export interface EmoteMatchRow {
   id: string;
@@ -94,8 +94,7 @@ export async function matchEmotes(
   profile: EmoteMatchProfile,
   /** `picker`: the emote menu's search, which also lists FFZ subscriber
    *  effects this account cannot send (marked `locked`). `typing`: asked as
-   *  the viewer types (the phone strip, the colon list), not on Tab, so Rust
-   *  answers a one-character word with only an emote of exactly that name. */
+   *  the viewer types, not on Tab (Rust's `MIN_PREFIX_CHARS`, one letter). */
   options: { twitchFirst?: boolean; limit?: number; picker?: boolean; typing?: boolean } = {},
 ): Promise<EmoteMatchResult> {
   if (!target.channel) return EMPTY;
@@ -143,6 +142,17 @@ export async function matchEmotes(
   } catch {
     return EMPTY;
   }
+}
+
+/**
+ * The emote fill menu: the desktop's colon list and both phones' suggestion
+ * strip ask Rust the same question (`profile` "fill": ranked by closeness,
+ * Twitch first, as the viewer types), so one word gets one list on every app.
+ * `word` is what was typed, a desktop colon included (a colon word lists no
+ * chatters after the emotes).
+ */
+export function matchEmoteFill(target: EmoteMatchChannel, word: string): Promise<EmoteMatchResult> {
+  return matchEmotes(target, word, 'fill');
 }
 
 /** The viewer's personal 7TV emote that shows instead of a channel emote of

@@ -11,7 +11,7 @@ import Testing
     }
 
     @Test func everyWordAsksAndTheCoreKeepsShortOnesExact() {
-        // "0" asks too: the core offers only an emote named exactly 0 (Rust `typing`).
+        // "0" asks too: one letter gets the core's full list (Rust `MIN_PREFIX_CHARS`).
         #expect(ComposerText.wantsSuggestions("0"))
         #expect(ComposerText.wantsSuggestions(":0"))
         #expect(ComposerText.wantsSuggestions("00"))
@@ -19,16 +19,34 @@ import Testing
         #expect(!ComposerText.wantsSuggestions(""))
     }
 
-    @Test func theFakeCoreKeepsOneCharacterWordsExactWhileTyping() throws {
+    @Test func theFakeCoreGivesOneLetterTheFullListWhileTyping() throws {
         let emotes = Data(#"{"7tv":[{"id":"a","name":"0","url":"u"},{"id":"b","name":"00","url":"u"},{"id":"c","name":"0head","url":"u"}]}"#.utf8)
         let names = { (query: String, typing: Bool) -> [String] in
             let answer = FakeCore.emoteMatches(emotes, args: ["query": query, "profile": "cycle", "typing": typing])
             return (answer["rows"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
         }
-        #expect(names("0", true) == ["0"])
-        #expect(names(":0", true) == ["0"])
+        #expect(names("0", true) == ["0", "00", "0head"])
+        #expect(names(":0", true) == ["0", "00", "0head"])
         #expect(names("00", true) == ["00"])
         #expect(names("0", false) == ["0", "00", "0head"])
+    }
+
+    @Test func theFillMenuGivesAWordAndItsColonFormOneList() throws {
+        // The fixture Rust's emote_match test and vitest read too.
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../../src/utils/emoteFill.fixture.json").standardized
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let words = try #require(fixture?["words"] as? [String])
+        #expect(!words.isEmpty)
+        let emotes = Data(#"{"twitch":[{"id":"t","name":"LUL","url":"u"}],"7tv":[{"id":"a","name":"lol","url":"u"},{"id":"b","name":"Kappa","url":"u"}]}"#.utf8)
+        let names = { (query: String) -> [String] in
+            let answer = FakeCore.emoteMatches(emotes, args: ["query": query, "profile": EmoteFill.profile])
+            return (answer["rows"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+        }
+        for word in words {
+            #expect(names(word) == names(":" + word), "\(word)")
+        }
+        #expect(EmoteFill.profile == "fill")
     }
 
     @Test func anInsertIsSpacedFromWhatCameBefore() {

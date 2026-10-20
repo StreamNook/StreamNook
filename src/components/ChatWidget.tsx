@@ -109,6 +109,7 @@ import {
   EmoteTabCandidate,
 } from '../utils/chatInputWord';
 import {
+  matchEmoteFill,
   matchEmotes,
   rowsToTabCandidates,
   createRequestSeq,
@@ -1599,11 +1600,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           ? { ...prev, source, query, pending: true }
           : { source, anchor, query, rows: [], total: 0, ready: true, pending: true, selected: 0 },
       );
-      void matchEmotes(emoteMatchTarget, query, 'search', {
-        twitchFirst: source === 'colon',
-        limit: query ? 150 : 200,
-        typing: source === 'colon',
-      }).then((res) => {
+      // The colon list is the emote fill menu the phones' strip shares.
+      const ask =
+        source === 'colon'
+          ? matchEmoteFill(emoteMatchTarget, `:${query}`)
+          : matchEmotes(emoteMatchTarget, query, 'search', { limit: query ? 150 : 200 });
+      void ask.then((res) => {
         if (!emoteListSeq.isCurrent(n)) return;
         setEmoteList((prev) =>
           prev && prev.anchor === anchor

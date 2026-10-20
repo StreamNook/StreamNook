@@ -300,19 +300,18 @@ public final class FakeCore: CoreBridge {
     static func emoteMatches(_ emotesJSON: Data?, args: [String: Any]) -> [String: Any] {
         let set = emotesJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] } ?? [:]
         let typed = args["query"] as? String ?? ""
-        let search = args["profile"] as? String == "search"
-        // As the core does: a colon trigger is set aside, and a one-character word typed in
-        // passing matches only an emote of exactly that name.
+        // The fill menu is the core's search, Twitch first, as the viewer types.
+        let fill = args["profile"] as? String == EmoteFill.profile
+        let search = fill || args["profile"] as? String == "search"
+        // As the core does: a colon trigger is set aside, and one letter gets the full list.
         let bare = typed.hasPrefix(":") ? String(typed.dropFirst()) : typed
-        let exactOnly = args["typing"] as? Bool == true && !bare.isEmpty && bare.count < 2
-        let query = (search || !typed.hasPrefix(":") ? typed : bare).lowercased()
+        let query = (fill ? bare : search || !typed.hasPrefix(":") ? typed : bare).lowercased()
         var rows: [[String: Any]] = []
-        for provider in ["7tv", "bttv", "ffz", "twitch"] {
+        for provider in fill ? ["twitch", "7tv", "bttv", "ffz"] : ["7tv", "bttv", "ffz", "twitch"] {
             for emote in set[provider] ?? [] {
                 guard let name = emote["name"] as? String, let url = emote["url"] as? String else { continue }
                 let lower = name.lowercased()
-                let hit = exactOnly ? name == bare
-                    : query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
+                let hit = query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
                 guard hit else { continue }
                 var row: [String: Any] = [
                     "id": emote["id"] as? String ?? name, "name": name, "url": url, "provider": provider,
@@ -323,7 +322,7 @@ public final class FakeCore: CoreBridge {
                 rows.append(row)
             }
         }
-        let limit = args["limit"] as? Int ?? (search ? 60 : 50)
+        let limit = args["limit"] as? Int ?? (fill ? 150 : search ? 60 : 50)
         // Hits per source before the cap, as the core counts them (the fake has no favorites).
         let counts = Dictionary(grouping: rows) { $0["provider"] as? String ?? "" }.mapValues(\.count)
         return ["rows": Array(rows.prefix(limit)), "total": rows.count, "ready": true, "counts": counts]

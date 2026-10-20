@@ -513,10 +513,12 @@ final class ChatComposerModel {
         let channelID = session.roomID
         let tier = EmotePickerModel.tier(emoteScale: session.style.emoteScale)
         Task { [weak self] in
-            // One answer: the emotes, then the room's recent chatters (provider "user").
+            // The desktop's emote fill menu, asked the same way, so a word lists the same
+            // emotes in the same order on every app. One answer: the emotes, then the
+            // room's recent chatters (provider "user").
             guard let json = try? await core.invoke("match_emote_tokens", args: [
                 "provider": provider, "channel": channel, "channelId": channelID, "query": word,
-                "profile": "cycle", "order": "default", "tier": tier, "limit": nil, "typing": true,
+                "profile": EmoteFill.profile, "tier": tier,
             ]), let result = try? JSONDecoder().decode(EmoteMatchResult.self, from: Data(json.utf8)) else { return }
             guard let self, seq == self.suggestSeq else { return }
             self.suggestions = result.rows

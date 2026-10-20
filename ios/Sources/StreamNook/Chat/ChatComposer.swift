@@ -387,17 +387,20 @@ private struct ComposerBar: View {
 
     /// What the right end of the bar is right now.
     private enum EndMode {
-        case send, keyboard, tray, menu
+        case send, keyboardUp, keyboard, tray, menu
     }
 
     /// The bar's right end, one control with every job it has: Send the moment the field holds a
     /// message, whatever sits here otherwise (the chat menu, or the inbox tray when Settings swaps
-    /// the pair), and the way to put the keyboard away while you type with nothing written (as a
-    /// tap anywhere outside the composer does). One button in one spot: the marks crossfade and the
+    /// the pair), the way to put the keyboard away while you type with nothing written (as a tap
+    /// anywhere outside the composer does), and the way back to it while the emote panel holds its
+    /// place (Send still wins once there is a message). One button in one spot: the marks crossfade and the
     /// accent fill grows in under Send, so nothing slides in or moves. Send is always on the right.
     private func endButton(slowWait: Int, tray: Bool) -> some View {
         let mentions = session.rooms?.mentions
-        let mode: EndMode = model.canSend || model.sending ? .send : focused ? .keyboard : tray ? .tray : .menu
+        let mode: EndMode = model.canSend || model.sending ? .send
+            : model.panel == .emotes ? .keyboardUp
+            : focused ? .keyboard : tray ? .tray : .menu
         let sheetOpen = tray && mentions?.sheetIn == inboxSurface
         let unread = mentions?.unreadTotal ?? 0
         let showsCount = unread > 0 && (mode == .tray ? !sheetOpen : mode == .menu && model.inboxFolded)
@@ -405,6 +408,8 @@ private struct ComposerBar: View {
             switch mode {
             case .send:
                 Task { await model.send() }
+            case .keyboardUp:
+                backToKeyboard()
             case .keyboard:
                 focused = false
             case .tray:
@@ -435,6 +440,13 @@ private struct ComposerBar: View {
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(SN.textSecondary)
                     .opacity(mode == .keyboard ? 1 : 0)
+                // The same keyboard over an up chevron, as Android draws it.
+                VStack(spacing: 1) {
+                    Image(systemName: "keyboard").font(.system(size: 15, weight: .bold))
+                    Image(systemName: "chevron.compact.up").font(.system(size: 9, weight: .bold))
+                }
+                .foregroundStyle(SN.textSecondary)
+                .opacity(mode == .keyboardUp ? 1 : 0)
                 sendMark(slowWait: slowWait)
                     .opacity(mode == .send ? 1 : 0)
             }
@@ -459,6 +471,7 @@ private struct ComposerBar: View {
         .accessibilityLabel(mode == .send
             ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
                 : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
+            : mode == .keyboardUp ? "Show keyboard"
             : mode == .keyboard ? "Hide keyboard"
             : mode == .tray ? (sheetOpen ? "Close the inbox" : unread > 0 ? "Inbox, \(unread) new" : "Inbox")
             : (showsCount ? "Chat options, \(unread) new in the inbox" : "Chat options"))
@@ -535,30 +548,29 @@ private struct ComposerBar: View {
                 withAnimation(.easeInOut(duration: 0.11)) { smileyOut = false }
             }
             if model.panel == .emotes {
-                // Back to the keyboard: it comes up where the panel was.
-                model.panel = .none
-                focused = true
+                backToKeyboard()
             } else {
                 // The keyboard goes and the panel takes its place.
                 focused = false
                 model.panel = .emotes
             }
         } label: {
-            Group {
-                if model.panel == .emotes {
-                    Image(systemName: "keyboard")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(SN.textSecondary)
-                } else {
-                    Text(smiley)
-                        .font(.sn(20))
-                        .opacity(smileyOut ? 0 : 1)
-                        .scaleEffect(smileyOut ? 0.8 : 1)
-                }
-            }
-            .frame(width: 36, height: 36)
+            // Always the emoji button; the way back to the keyboard is the bar's right end while
+            // the panel is open.
+            Text(smiley)
+                .font(.sn(20))
+                .opacity(smileyOut ? 0 : 1)
+                .scaleEffect(smileyOut ? 0.8 : 1)
+                .frame(width: 36, height: 36)
         }
-        .accessibilityLabel(model.panel == .emotes ? "Keyboard" : "Emotes and emoji")
+        .accessibilityLabel("Emotes and emoji")
+        .accessibilityAddTraits(model.panel == .emotes ? .isSelected : [])
+    }
+
+    /// Back to the keyboard: it comes up where the panel was.
+    private func backToKeyboard() {
+        model.panel = .none
+        focused = true
     }
 }
 
