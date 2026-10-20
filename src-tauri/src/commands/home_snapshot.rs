@@ -96,6 +96,8 @@ pub async fn note_app_resumed() -> Result<bool, String> {
     // A whisper socket waiting out a retry (the phone was asleep, or offline)
     // reconnects now rather than at the end of its wait.
     crate::services::whisper_service::resume();
+    // Sockets waiting out the account's socket limit try again too.
+    crate::services::eventsub_budget::wake();
     Ok(home_snapshot::note_app_resumed().await)
 }
 
