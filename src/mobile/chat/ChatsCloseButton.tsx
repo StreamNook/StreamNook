@@ -4,14 +4,14 @@
 import React from 'react';
 import { X } from 'phosphor-react';
 
-export const ChatsCloseButton: React.FC<{ onClose: () => void }> = ({ onClose }) => (
+export const ChatsCloseButton: React.FC<{ onClose: () => void; className?: string }> = ({ onClose, className = '' }) => (
   <button
     onClick={onClose}
-    className="shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70"
+    className={`shrink-0 w-11 h-11 flex items-center justify-center active:opacity-70 ${className}`}
     aria-label="Close chats"
   >
     <span className="w-10 h-10 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
-      <X size={14} weight="bold" />
+      <X size={16} weight="bold" />
     </span>
   </button>
 );

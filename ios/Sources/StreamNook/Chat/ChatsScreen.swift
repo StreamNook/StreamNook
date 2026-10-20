@@ -184,9 +184,11 @@ struct ChatsScreen: View {
                     }
                     .foregroundStyle(SN.textSecondary)
                     .padding(.horizontal, 12)
-                    .frame(height: 40)
+                    // At least the circles' width, so the row keeps its spacing between a live
+                    // room and an offline one; a viewer count still widens it.
+                    .frame(minWidth: 40, minHeight: 40, maxHeight: 40)
                     .snGlass(Capsule())
-                    .frame(height: 44)
+                    .frame(minWidth: 44, minHeight: 44, maxHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -198,7 +200,7 @@ struct ChatsScreen: View {
                     model.startWatching(Self.stream(tab))
                 } label: {
                     Image(systemName: "play.rectangle")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(SN.textSecondary)
                         .frame(width: 40, height: 40)
                         .snGlass(Circle())
@@ -244,7 +246,7 @@ struct ChatsCloseButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: Symbol.close)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(SN.textSecondary)
                 .frame(width: 40, height: 40)
                 .snGlass(Circle())

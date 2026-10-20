@@ -253,7 +253,7 @@ export const ChatPicker: React.FC<{
         />
       </div>
         {/* Chats' way out, beside the search on its center line. */}
-        {onClose && <ChatsCloseButton onClose={onClose} />}
+        {onClose && <ChatsCloseButton onClose={onClose} className="-mr-0.5" />}
       </div>
       <div
         className={`flex flex-col ${scrolls ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}

@@ -311,10 +311,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
       {canWatch && (
         <button
           onClick={watch}
-          className="shrink-0 h-11 flex items-center active:opacity-70"
+          // At least the circles' width, so the row keeps its spacing between a
+          // live room and an offline one; a viewer count still widens it.
+          className="shrink-0 h-11 min-w-11 flex items-center justify-center active:opacity-70"
           aria-label={`Watch ${active?.label ?? ''}`}
         >
-          <span className="h-10 flex items-center gap-1.5 px-3 rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
+          <span className="h-10 min-w-10 flex items-center justify-center gap-1.5 px-3 rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
             <Play size={12} weight="fill" className="translate-x-[0.5px]" />
             {active?.viewerCount != null && (
               <span className="text-[12px] font-medium tabular-nums">{formatViewerCount(active.viewerCount)}</span>
@@ -329,7 +331,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
           aria-label={`Open ${active?.label ?? ''}'s channel`}
         >
           <span className="w-10 h-10 flex items-center justify-center rounded-full chrome-glaze chrome-glaze--flat text-textSecondary">
-            <MonitorPlay size={16} weight="bold" />
+            <MonitorPlay size={14} weight="bold" />
           </span>
         </button>
       )}
@@ -343,7 +345,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
         </span>
       </button>
       {/* The way out, always on show in the corner. */}
-      <ChatsCloseButton onClose={exitChats} />
+      {/* Its 40 px circle meets the edge at the room capsule's margin. */}
+      <ChatsCloseButton onClose={exitChats} className="-mr-0.5" />
     </>
   );
 
