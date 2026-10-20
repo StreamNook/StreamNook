@@ -43,7 +43,8 @@ import {
 import { useChatUserStore, ensureAtmosphereResolved } from '../../stores/chatUserStore';
 import { useAppStore } from '../../stores/AppStore';
 import { parseEmojisSync, getAppleEmojiUrl } from '../../services/emojiService';
-import type { EmoteSet, Emote } from '../../services/emoteService';
+import type { EmoteSet } from '../../services/emoteService';
+import { emoteWordMap, parseTextSegments, useTextEmotes, type EmoteWordMap } from '../../utils/emoteText';
 
 interface ModRoomPaneProps {
   channelId: string;
@@ -108,26 +109,20 @@ type BodySeg =
   | { kind: 'emoji'; alt: string; url: string }
   | { kind: 'link'; url: string };
 
-function findEmote(word: string, emotes?: EmoteSet | null): Emote | undefined {
-  if (!emotes) return undefined;
-  return (
-    emotes['7tv']?.find((e) => e.name === word) ||
-    emotes.bttv?.find((e) => e.name === word) ||
-    emotes.ffz?.find((e) => e.name === word) ||
-    emotes.twitch?.find((e) => e.name === word)
-  );
-}
-
-// Collect the emotes a message used, resolved once at send time against the
-// sender's full emote set, so they travel WITH the message (persistent +
-// consistent for every viewer). Capped so the encrypted payload stays bounded.
-function collectEmoteRefs(text: string, emotes?: EmoteSet | null): EmoteRef[] {
-  if (!emotes) return [];
+// Collect the emotes a message used, resolved once at send time (Rust cuts the
+// text with the channel's table, as it does a chat row) so they travel WITH the
+// message (persistent + consistent for every viewer). Capped so the encrypted
+// payload stays bounded.
+async function collectEmoteRefs(text: string, channelLogin?: string, emotes?: EmoteSet | null): Promise<EmoteRef[]> {
+  if (!emotes || !channelLogin || !text.trim()) return [];
+  const lists = await parseTextSegments(channelLogin.toLowerCase(), [text]);
+  if (!lists) return [];
+  const words = emoteWordMap(lists[0] ?? [], emotes);
   const out: EmoteRef[] = [];
   const seen = new Set<string>();
   for (const word of text.split(/\s+/)) {
     if (!word || seen.has(word)) continue;
-    const e = findEmote(word, emotes);
+    const e = words.get(word);
     if (e) {
       seen.add(word);
       out.push({ n: e.name, id: e.id, p: e.provider, u: e.url });
@@ -137,7 +132,7 @@ function collectEmoteRefs(text: string, emotes?: EmoteSet | null): EmoteRef[] {
   return out;
 }
 
-function tokenizeBody(body: string, emotes?: EmoteSet | null, embedded?: Map<string, EmoteRef>): BodySeg[] {
+function tokenizeBody(body: string, words: EmoteWordMap, embedded?: Map<string, EmoteRef>): BodySeg[] {
   const segs: BodySeg[] = [];
   for (const part of body.split(/(\s+)/)) {
     if (!part) continue;
@@ -152,7 +147,7 @@ function tokenizeBody(body: string, emotes?: EmoteSet | null, embedded?: Map<str
       segs.push({ kind: 'emote', name: ref.n, url: ref.u });
       continue;
     }
-    const emote = findEmote(part, emotes);
+    const emote = words.get(part);
     if (emote) {
       segs.push({ kind: 'emote', name: emote.name, url: emote.url });
       continue;
@@ -237,6 +232,7 @@ const ModRoomMessageRow = ({
   locked,
   canEdit,
   emotes,
+  channelLogin,
   fontSize,
   roomKey,
   pending,
@@ -256,6 +252,7 @@ const ModRoomMessageRow = ({
   locked: LockState;
   canEdit: boolean;
   emotes?: EmoteSet | null;
+  channelLogin?: string;
   fontSize: number;
   roomKey: CryptoKey | null;
   pending?: boolean;
@@ -287,7 +284,12 @@ const ModRoomMessageRow = ({
     () => (emoteRefs && emoteRefs.length ? new Map(emoteRefs.map((r) => [r.n, r])) : undefined),
     [emoteRefs],
   );
-  const segments = useMemo(() => (locked ? [] : tokenizeBody(body, emotes, embedded)), [body, locked, emotes, embedded]);
+  // Words without an embedded emote (a message from before emotes were
+  // embedded, or past the cap) match the channel's table, through Rust.
+  const bodyTexts = useMemo(() => (locked ? [] : [body]), [locked, body]);
+  const bodyEmotes = useTextEmotes({ provider: 'twitch', channel: channelLogin }, bodyTexts, emotes);
+  const words = bodyEmotes(body);
+  const segments = useMemo(() => (locked ? [] : tokenizeBody(body, words, embedded)), [body, locked, words, embedded]);
   const time = useMemo(() => new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), [m.ts]);
   const nameStyle: CSSProperties | undefined = paint
     ? computePaintStyle(paint, storeColor || undefined, paintShadowMode)
@@ -555,9 +557,15 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
   // would exceed the server's body cap (viewers then fall back to their own
   // emote sets). Returns null only if even the ref-less payload is too big.
   const encryptPayload = useCallback(
-    async (text: string, attachment?: string, reply?: ReplyRef, nonce?: string): Promise<string | null> => {
+    async (
+      text: string,
+      attachment?: string,
+      reply?: ReplyRef,
+      nonce?: string,
+      known?: EmoteRef[],
+    ): Promise<string | null> => {
       if (!key) return null;
-      const refs = collectEmoteRefs(text, emotes);
+      const refs = known ?? (await collectEmoteRefs(text, channelLogin, emotes));
       const build = (withRefs: boolean) =>
         JSON.stringify({
           x: text,
@@ -570,7 +578,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
       if (token.length > MAX_TOKEN_CHARS) token = await encryptText(key, build(false));
       return token.length > MAX_TOKEN_CHARS ? null : token;
     },
-    [key, emotes],
+    [key, emotes, channelLogin],
   );
 
   // Encrypt + send a new message optimistically: it renders immediately and
@@ -583,9 +591,9 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
       if (!key) return false;
       const clipped = text.slice(0, MAX_DRAFT); // insertEmote bypasses the textarea maxLength
       const nonce = crypto.randomUUID();
-      const token = await encryptPayload(clipped, attachment, reply ?? undefined, nonce);
+      const refs = await collectEmoteRefs(clipped, channelLogin, emotes);
+      const token = await encryptPayload(clipped, attachment, reply ?? undefined, nonce, refs);
       if (!token) return false;
-      const refs = collectEmoteRefs(clipped, emotes);
       const resolved: ResolvedPayload = {
         text: clipped,
         attachment,
@@ -596,7 +604,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
       sendOptimistic(channelId, token, resolved);
       return true;
     },
-    [key, emotes, channelId, encryptPayload],
+    [key, emotes, channelLogin, channelId, encryptPayload],
   );
 
   const handleSend = useCallback(async () => {
@@ -876,6 +884,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
                     locked={locked}
                     canEdit={canEdit}
                     emotes={emotes}
+                    channelLogin={channelLogin}
                     fontSize={fontSize}
                     roomKey={key}
                     pending={!!pend}

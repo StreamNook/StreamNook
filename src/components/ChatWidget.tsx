@@ -52,7 +52,7 @@ import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } fr
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
-import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
+import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
 import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
@@ -1766,17 +1766,29 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   );
   const seenPinIdRef = useRef<string | null>(null);
 
-  // Name -> emote lookup for pinned-message bodies. GQL pins arrive as plain
-  // text with no emote ranges, so emotes are matched per whitespace word, with
-  // the chat's precedence: a Twitch emote wins a name, then 7TV > BTTV > FFZ.
-  const pinEmoteMap = useMemo(() => buildEmoteNameMap(emotes), [emotes]);
+  // Pinned-message bodies arrive as plain text with no emote ranges, so Rust
+  // cuts each text chunk the pin draws (the parts between links, and the whole
+  // text for the collapsed bar) with the channel's table, as it does a chat row.
+  const pinTexts = useMemo(
+    () =>
+      pinnedMessages.flatMap((pin) => [
+        pin.message_text,
+        ...pin.message_text.split(/(https?:\/\/\S+)/g).filter((part) => !/^https?:\/\//.test(part)),
+      ]),
+    [pinnedMessages],
+  );
+  const pinEmotes = useTextEmotes(
+    { provider, channel: isTwitch ? currentStream?.user_login : channelOverride?.user_login },
+    pinTexts,
+    emotes,
+  );
 
   // Render a plain-text chunk of a pinned message with emote words swapped for
   // inline images. `emoteClass` sets the image size (expanded body vs collapsed bar).
   const renderPinTextWithEmotes = (text: string, keyPrefix: string, emoteClass: string) => (
     <EmoteText
       text={text}
-      emoteMap={pinEmoteMap}
+      emoteMap={pinEmotes(text)}
       keyPrefix={keyPrefix}
       imgClassName={`inline-block align-middle object-contain ${emoteClass}`}
     />
