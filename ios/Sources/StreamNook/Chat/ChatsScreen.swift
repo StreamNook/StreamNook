@@ -254,6 +254,8 @@ struct ChatsCloseButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Pressed while typing it still closes Chats on that tap; the keyboard goes with it.
+        .tapsThroughKeyboard()
         .accessibilityLabel("Close chats")
     }
 }

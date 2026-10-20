@@ -100,6 +100,9 @@ struct WatchLayer: View {
                     .frame(width: band.width, height: band.height)
                     .contentShape(Rectangle())
                     .onTapGesture { mini ? expand() : toggleControls() }
+                    // The mini player opens on the tap that puts a keyboard away; the full video
+                    // only puts it away.
+                    .background { if mini { Color.clear.tapsThroughKeyboard() } }
                     .gesture(mini ? nil : (landscape ? nil : shrinkGesture(screen: screen)))
                     .simultaneousGesture(landscape && full ? dialGesture(band: band) : nil)
                     .overlay {
@@ -171,11 +174,15 @@ struct WatchLayer: View {
                                         withAnimation(SNMotion.run(.easeOut(duration: 0.16))) { stripOpen.toggle() }
                                         stripTouch += 1
                                     })
+                        .outsideTapAnchor("chat-strip")
+                        .tapsThroughKeyboard()
                         .offset(x: edge - 14, y: screen.height / 2 - 40)
                     if !chat.beside, stripOpen {
                         ChatBackgroundStrip(opacity: chat.opacity, onChange: { liveOpacity = $0 },
                                             onHide: hideLandscapeChat, onTouch: { stripTouch += 1 })
                             .frame(width: columnWidth - outer - 24)
+                            .closesOnOutsideTap(Binding(get: { stripOpen }, set: { if !$0 { stripOpen = false } }),
+                                                id: "chat-strip")
                             .offset(x: columnX + (chat.leading ? outer : 0) + 12,
                                     y: screen.height - max(insets.bottom, 8) - 44)
                             .transition(.opacity.combined(with: .offset(y: 8)))

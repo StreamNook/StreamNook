@@ -59,6 +59,8 @@ struct ChatPicker: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // The capsule is the field's own: clearing or tapping its padding keeps the keyboard.
+            .keepsKeyboard()
             .overlay(alignment: .trailing) {
                 // Chats' way out, beside the search, on the field's center line.
                 if let onClose {
@@ -102,6 +104,8 @@ struct ChatPicker: View {
                 .padding(.bottom, bottomPadding)
             }
             .scrollDismissesKeyboard(.never)
+            // A tap on a result puts the keyboard away and opens it.
+            .tapsThroughKeyboard()
             // Rows fade out at both edges instead of being cut.
             .mask {
                 VStack(spacing: 0) {

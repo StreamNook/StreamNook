@@ -71,6 +71,9 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.scrollsToTop = false
         scroll.delaysContentTouches = false
+        // As in Messages: a drag that reaches the keyboard pulls it down with the finger. A scroll
+        // that stays above it leaves it up.
+        scroll.keyboardDismissMode = .interactive
         addSubview(scroll)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
