@@ -59,7 +59,23 @@ private struct ComposerBar: View {
                 warningBox(warning)
             }
             inputRow(slowWait: model.slowWait)
+            // The emote panel in the keyboard's place, at the keyboard's height (the system emoji
+            // keyboard's pattern): the emote button swaps the two and the field stays put, so it
+            // can be watched filling while several emotes are tapped. Kept mounted while closed,
+            // so its tab, search and scroll survive.
+            ChatEmotePicker(model: model) { model.panel = .none }
+                .frame(height: model.panel == .emotes ? KeyboardMetrics.panelHeight : 0, alignment: .top)
+                .clipped()
+                .padding(.top, model.panel == .emotes ? 8 : 0)
+                .opacity(model.panel == .emotes ? 1 : 0)
+                .allowsHitTesting(model.panel == .emotes)
+                .accessibilityHidden(model.panel != .emotes)
+                .closesOnOutsideTap(Binding(get: { model.panel == .emotes },
+                                            set: { if !$0 { model.panel = .none } }), id: "emotes")
         }
+        // The keyboard's own pace, so the panel and the keyboard trade places without a jump.
+        .animation(.easeInOut(duration: 0.25), value: model.panel)
+        .onAppear { KeyboardMetrics.start() }
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
         // The composer is the field's own: its buttons act and the keyboard stays, and its emote
@@ -70,6 +86,7 @@ private struct ComposerBar: View {
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         // The bar is for writing now: an open inbox goes first.
         .onChange(of: focused) { _, now in
+            if now, model.panel == .emotes { model.panel = .none }
             guard now, let mentions = session.rooms?.mentions, mentions.sheetIn != nil else { return }
             withAnimation(SNMotion.run(InboxMotion.spring)) { mentions.sheetIn = nil }
         }
@@ -131,15 +148,6 @@ private struct ComposerBar: View {
                     .transition(.opacity)
             }
             ZStack(alignment: .bottom) {
-                ChatEmotePicker(model: model)
-                    .closesOnOutsideTap(Binding(get: { model.panel == .emotes },
-                                                set: { if !$0 { model.panel = .none } }), id: "emotes")
-                    .floatingSurface()
-                    .opacity(model.panel == .emotes ? 1 : 0)
-                    .offset(y: model.panel == .emotes ? 0 : 10)
-                    .scaleEffect(model.panel == .emotes ? 1 : 0.98, anchor: .bottom)
-                    .allowsHitTesting(model.panel == .emotes)
-                    .accessibilityHidden(model.panel != .emotes)
                 if model.panel == .none, showsStrip {
                     SuggestionStrip(model: model) {
                         if !model.fieldDisabled { focused = true }
@@ -153,7 +161,6 @@ private struct ComposerBar: View {
         }
         .padding(.horizontal, 10)
         .alignmentGuide(.top) { $0[.bottom] + 8 }
-        .animation(.interpolatingSpring(stiffness: 400, damping: 30), value: model.panel)
         .animation(.easeOut(duration: 0.12), value: showsStrip)
     }
 
@@ -532,13 +539,21 @@ private struct ComposerBar: View {
                 smiley = Self.smileys.filter { $0 != smiley }.randomElement() ?? "😀"
                 withAnimation(.easeInOut(duration: 0.11)) { smileyOut = false }
             }
-            model.panel = model.panel == .emotes ? .none : .emotes
+            if model.panel == .emotes {
+                // Back to the keyboard: it comes up where the panel was.
+                model.panel = .none
+                focused = true
+            } else {
+                // The keyboard goes and the panel takes its place.
+                focused = false
+                model.panel = .emotes
+            }
         } label: {
             Group {
                 if model.panel == .emotes {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(SN.accent)
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(SN.textSecondary)
                 } else {
                     Text(smiley)
                         .font(.sn(20))
@@ -548,7 +563,7 @@ private struct ComposerBar: View {
             }
             .frame(width: 36, height: 36)
         }
-        .accessibilityLabel(model.panel == .emotes ? "Close emotes" : "Emotes and emoji")
+        .accessibilityLabel(model.panel == .emotes ? "Keyboard" : "Emotes and emoji")
     }
 }
 

@@ -16,7 +16,8 @@
 import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
+import { DotsThreeVertical, Keyboard, WarningCircle, X } from 'phosphor-react';
+import { useLastKeyboardHeight } from '../ui/keyboardHeight';
 import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
 import { KeyboardHideIcon } from '../ui/KeyboardHideIcon';
 import { useAppStore } from '../../stores/AppStore';
@@ -57,25 +58,11 @@ import { ModerationSheet } from './ModerationSheet';
 import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 
-// Shorter than the desktop's 520px so the panel still clears the soft keyboard,
-// and opaque rather than the panel's own 95%. That 5% reads as solid over a
-// desktop-sized popover but lets a whole screen of chat show through at phone
-// size, which is most of what made the old picker hard to read. `!` is needed
-// because the shared panel sets its background inline.
-//
-// Deliberately NOT solved with a backdrop blur: that gets stripped entirely
-// when Glassiness is off, so it cannot be what keeps text legible, and a large
-// blur is exactly the per-frame cost just removed from chat rows for phone GPUs.
-//
-// The height clamp is keyboard-aware on purpose. `vh` is the whole screen here
-// (edge-to-edge means the soft keyboard does not resize the viewport, the native
-// inset bridge reports it as --sn-kb instead), so a fixed 52vh panel grows
-// straight up past the status bar once the keyboard opens.
-//
-// It sits ON the composer, flat-bottomed: a floating card with a margin left a
-// strip of chat (and its rounded corners) showing between panel and field.
-const PANEL_CLASS =
-  'absolute bottom-full left-0 right-0 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-b-0 border-borderSubtle rounded-t-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
+// The emote menu takes the keyboard's place, at the keyboard's last height,
+// the platform's own emoji-keyboard pattern: the emote button swaps one for
+// the other and the composer stays where it was, so the field can be watched
+// filling while several emotes are tapped. It fills the wrapper that sizes it.
+const PANEL_CLASS = 'h-full w-full border-t border-borderSubtle flex flex-col overflow-hidden !bg-background';
 
 /** About 12 characters of the placeholder at 15 px: the least the field
  *  keeps before the inbox tray leaves a narrow bar. */
@@ -216,6 +203,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const failure = failures[roomKey];
   const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
+  // The panel's height: the keyboard it stands in for.
+  const keyboardHeight = useLastKeyboardHeight();
+  // A swipe down on the panel's top (search and tabs) puts it away.
+  const panelSwipe = useRef<number | null>(null);
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
   // The whole composer: the emote picker's company (typing, sending and the
   // emote button leave it open, as on the iPhone) and the suggestions'.
@@ -491,7 +482,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // name for emotes and the character itself for emoji.
   const insertEmote = (token: string) => {
     setText((t) => (t.length === 0 || t.endsWith(' ') ? `${t}${token} ` : `${t} ${token} `));
-    inputRef.current?.focus();
+    if (!emotesOpen) inputRef.current?.focus();
   };
 
   // Suggestions for the word being typed.
@@ -728,20 +719,27 @@ const MobileChatInputImpl: React.FC<Props> = ({
             <button
               ref={emoteButtonRef}
               onClick={() => {
-                cycleEmoteSmiley();
                 setPointsOpen(false);
-                setEmotesOpen((v) => !v);
+                if (emotesOpen) {
+                  // Back to the keyboard: it comes up where the panel was.
+                  setEmotesOpen(false);
+                  inputRef.current?.focus();
+                  return;
+                }
+                cycleEmoteSmiley();
+                // The keyboard goes and the panel takes its place.
+                inputRef.current?.blur();
+                setEmotesOpen(true);
               }}
               className={`shrink-0 w-9 h-9 flex items-center justify-center text-[20px] leading-none active:opacity-70 ${
                 emotesOpen ? 'text-accent' : ''
               }`}
-              aria-label={emotesOpen ? 'Close emotes' : 'Emotes and emoji'}
+              aria-label={emotesOpen ? 'Keyboard' : 'Emotes and emoji'}
             >
-              {/* Becomes an X while open, so the button that opened the panel is
-                  visibly the one that closes it. Same swap the desktop composer
-                  does. */}
+              {/* Becomes the keyboard while open: it swaps back, as the
+                  emoji key of a phone keyboard does. */}
               {emotesOpen ? (
-                <X size={19} weight="bold" />
+                <Keyboard size={20} weight="regular" />
               ) : (
                 <span
                   className="transition-[opacity,transform] duration-100"
@@ -772,6 +770,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               data-keyboard-hide="own"
               onFocus={() => {
                 setTyping(true);
+                setEmotesOpen(false);
                 // The bar is for writing now: an open inbox goes first.
                 closeInboxSheet();
               }}
@@ -1064,6 +1063,34 @@ const MobileChatInputImpl: React.FC<Props> = ({
           )}
         </button>
 
+        {/* While the message cheers: what Send will spend, live, and a way
+            to take the cheer out. Send is the yes. */}
+        {isTwitch && (
+          <CheerBar channelLogin={channel ?? undefined} channelId={channelId ?? undefined} text={text} onSetText={setText} />
+        )}
+
+      </div>
+
+      {/* The emote menu in the keyboard's place, at its height. */}
+      <div
+        className="overflow-hidden"
+        style={{ height: emotesOpen ? keyboardHeight : 0, marginTop: emotesOpen ? 8 : 0 }}
+        onTouchStart={(e) => {
+          const top = e.currentTarget.getBoundingClientRect().top;
+          const t = e.touches[0];
+          panelSwipe.current = t && t.clientY - top < 96 ? t.clientY : null;
+        }}
+        onTouchMove={(e) => {
+          const t = e.touches[0];
+          if (panelSwipe.current != null && t && t.clientY - panelSwipe.current > 56) {
+            panelSwipe.current = null;
+            setEmotesOpen(false);
+          }
+        }}
+        onTouchEnd={() => {
+          panelSwipe.current = null;
+        }}
+      >
         <EmotePickerPanel
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
@@ -1077,12 +1104,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
           onInsert={insertEmote}
           className={PANEL_CLASS}
         />
-        {/* While the message cheers: what Send will spend, live, and a way
-            to take the cheer out. Send is the yes. */}
-        {isTwitch && (
-          <CheerBar channelLogin={channel ?? undefined} channelId={channelId ?? undefined} text={text} onSetText={setText} />
-        )}
-
       </div>
 
       {/* The rewards, as a sheet: the phone's own surface for a menu like this.

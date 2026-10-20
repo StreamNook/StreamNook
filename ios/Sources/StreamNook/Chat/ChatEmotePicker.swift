@@ -209,6 +209,8 @@ final class EmotePickerModel {
 /// Picking an emote puts it in the draft and keeps the picker open.
 struct ChatEmotePicker: View {
     let model: ChatComposerModel
+    /// A swipe down on the panel's top (search and tabs) puts it away.
+    var onSwipeDown: () -> Void = {}
     private var picker: EmotePickerModel { model.picker }
 
     var body: some View {
@@ -226,18 +228,22 @@ struct ChatEmotePicker: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(SN.surface, in: .rect(cornerRadius: 10))
+            .simultaneousGesture(swipeDown)
             tabRow
+                .simultaneousGesture(swipeDown)
             grid
         }
         .padding(8)
-        .frame(height: min(420, screenHeight * 0.45))
-        .background(SN.background, in: .rect(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(SN.borderSubtle))
-        .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
+        // In the keyboard's place: the composer sizes it; flat, with the hairline a keyboard has.
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(SN.background)
+        .overlay(alignment: .top) { Rectangle().fill(SN.borderSubtle).frame(height: 1) }
     }
 
-    private var screenHeight: CGFloat {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.height ?? 844
+    private var swipeDown: some Gesture {
+        DragGesture(minimumDistance: 12).onEnded { value in
+            if value.translation.height > 56, value.translation.height > abs(value.translation.width) { onSwipeDown() }
+        }
     }
 
     private var tabRow: some View {
