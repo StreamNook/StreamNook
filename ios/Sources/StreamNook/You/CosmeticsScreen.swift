@@ -69,6 +69,7 @@ struct CosmeticsScreen: View {
         }
         .sheet(isPresented: $screen.editingBio) {
             BioEditor(initial: screen.bio ?? "") { text in await screen.saveBio(text) }
+                .tapsThroughKeyboard()
         }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
             SevenTvSignInSheet(core: model.core) { stored in

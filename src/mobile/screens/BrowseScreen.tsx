@@ -285,7 +285,8 @@ export const BrowseScreen: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    // A result tapped while typing a search opens, and the keyboard goes.
+    <div className="flex-1 min-h-0 flex flex-col" data-taps-through-keyboard="">
       <div className="shrink-0">
         {/* The same logo menu Following filters with; switching clears the
             search and any Kick category. The view toggle joins it in the

@@ -43,6 +43,8 @@ struct SettingsDirectory: View {
     var body: some View {
         ScrollViewReader { proxy in
             content
+                // A search hit opens on the tap that puts the keyboard away.
+                .tapsThroughKeyboard()
                 .onChange(of: focused) { _, isFocused in
                     guard isFocused else { return }
                     withAnimation(.snappy) { proxy.scrollTo(Self.fieldID, anchor: .top) }

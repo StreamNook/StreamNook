@@ -160,11 +160,14 @@ struct WatchLayer: View {
                                         withAnimation(SNMotion.run(.easeOut(duration: 0.16))) { stripOpen.toggle() }
                                         stripTouch += 1
                                     })
+                        .outsideTapAnchor("chat-strip")
                         .offset(x: edge - 14, y: screen.height / 2 - 40)
                     if !chat.beside, stripOpen {
                         ChatBackgroundStrip(opacity: chat.opacity, onChange: { liveOpacity = $0 },
                                             onHide: hideLandscapeChat, onTouch: { stripTouch += 1 })
                             .frame(width: columnWidth - outer - 24)
+                            .closesOnOutsideTap(Binding(get: { stripOpen }, set: { if !$0 { stripOpen = false } }),
+                                                id: "chat-strip")
                             .offset(x: columnX + (chat.leading ? outer : 0) + 12,
                                     y: screen.height - max(insets.bottom, 8) - 44)
                             .transition(.opacity.combined(with: .offset(y: 8)))

@@ -143,6 +143,9 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
         <div
           className={`flex-1 min-h-0 overflow-y-auto px-4 pb-4 ${scrolled ? 'sn-fade-top' : ''}`}
           onScroll={onScroll}
+          // A sheet is a form or a list: a button, switch or row pressed while
+          // typing acts, and the keyboard goes.
+          data-taps-through-keyboard=""
         >
           {children}
         </div>

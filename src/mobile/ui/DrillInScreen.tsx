@@ -41,6 +41,9 @@ export const DrillInScreen: React.FC<Props> = ({
       <motion.div
         key={layerKey}
         className={className}
+        // Settings, mentions, a category: a row pressed while typing acts,
+        // and the keyboard goes.
+        data-taps-through-keyboard=""
         style={style}
         initial={{ x: '100%' }}
         animate={{ x: 0 }}

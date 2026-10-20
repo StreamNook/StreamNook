@@ -181,7 +181,8 @@ export const SettingsDirectory: React.FC = () => {
   const searching = focused || !!trimmed;
 
   return (
-    <div>
+    // A hit tapped while typing opens, and the keyboard goes.
+    <div data-taps-through-keyboard="">
       <div ref={fieldRef} className="px-4 mb-2">
         <SearchField
           ref={inputRef}

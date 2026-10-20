@@ -93,6 +93,8 @@ struct ChatPicker: View {
                 .padding(.bottom, bottomPadding)
             }
             .scrollDismissesKeyboard(.never)
+            // A tap on a result puts the keyboard away and opens it.
+            .tapsThroughKeyboard()
             // Rows fade out at both edges instead of being cut.
             .mask {
                 VStack(spacing: 0) {
