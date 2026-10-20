@@ -553,6 +553,7 @@ allow = [
   "whisper_import",
   "whisper_refresh",
   "get_mention_inbox",
+  "get_inbox_view",
   "mark_mentions_read",
   "remove_mention",
   "clear_mention_inbox",

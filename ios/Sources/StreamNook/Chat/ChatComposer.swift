@@ -36,6 +36,7 @@ private struct ComposerBar: View {
     @Bindable var model: ChatComposerModel
     let session: ChatSession
     @FocusState private var focused: Bool
+    @Environment(\.inboxSurface) private var inboxSurface
     @State private var smiley = "😀"
     @State private var smileyOut = false
 
@@ -61,6 +62,16 @@ private struct ComposerBar: View {
         // The home indicator's inset plus 8.
         .padding(.bottom, 8)
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
+        // The bar is for writing now: an open inbox goes first.
+        .onChange(of: focused) { _, now in
+            guard now, let mentions = session.rooms?.mentions, mentions.sheetIn != nil else { return }
+            withAnimation(SNMotion.run(InboxMotion.spring)) { mentions.sheetIn = nil }
+        }
+        // A new mention's card rises into the room just above the bar, which the bar's own risers
+        // use too: the card waits while one is up. A taller draft lifts the card with the bar.
+        .onChange(of: model.panel != .none || showsStrip, initial: true) { _, busy in
+            session.rooms?.mentions?.composerBusy = busy
+        }
         // The wallet reads Rust's channel state for this room and follows its pushes.
         .task { await model.wallet?.start() }
         .onDisappear { model.wallet?.stop() }
@@ -231,102 +242,158 @@ private struct ComposerBar: View {
     }
 
     private func inputRow(slowWait: Int) -> some View {
-        HStack(alignment: .center, spacing: 6) {
-            HStack(spacing: 4) {
-                if !session.style.hideEmoteButton {
-                    emoteButton
-                        // It inserts nothing that could be sent while a mode other than
-                        // emote-only blocks the room, or before a Kick sign-in.
-                        .opacity(model.needsKickSignIn || (model.fieldDisabled && session.modes?.blocked != "emote_only") ? 0.4 : 1)
-                }
-                if model.needsKickSignIn {
-                    kickSignIn
-                } else {
-                    TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
-                        .font(.sn(15))
-                        .foregroundStyle(SN.textPrimary)
-                        .padding(.vertical, 8)
-                        .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
-                        .submitLabel(.send)
-                        .onSubmit { Task { await model.send() } }
-                        .focused($focused)
-                        .disabled(model.fieldDisabled)
-                        .autocorrectionDisabled(!session.style.spellcheck)
-                        .textInputAutocapitalization(.sentences)
-                }
-                if model.needsKickSignIn {
-                    EmptyView()
-                } else if model.draft.count >= ChatComposerModel.counterFrom {
-                    counter
-                } else if let modes = model.shownModes, !model.fieldDisabled {
-                    RoomModeIndicator(modes: modes) {
-                        model.panel = .none
-                        model.menuOpen = true
-                    }
-                }
-                if !session.isKick {
-                    Button {
-                        model.commandsOpen = true
-                    } label: {
-                        Image(systemName: "slash.circle")
-                            .font(ComposerSymbol.font)
-                            .foregroundStyle(SN.textSecondary)
-                            .frame(width: 32, height: 36)
-                    }
-                    .accessibilityLabel("Chat commands")
-                }
-                // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
-                if let wallet = model.wallet { WalletButton(wallet: wallet, session: session) { model.panel = .none } }
-            }
-            .padding(.leading, 4)
-            .padding(.trailing, 5)
-            .frame(minHeight: 40)
-            .glassEffect(.regular, in: .rect(cornerRadius: 12))
-
-            // Send with a draft; with none, the chat menu, except while the keyboard is up: scrolling
-            // the chat never closes it, so this slot is the way down until it goes.
-            Button {
-                if model.canSend {
-                    Task { await model.send() }
-                } else if focused {
-                    focused = false
-                } else {
-                    model.panel = .none
-                    model.menuOpen = true
-                }
-            } label: {
-                Group {
-                    if model.canSend, slowWait > 0 {
-                        // Slow mode: the seconds until the next message can go.
-                        Text("\(slowWait)")
-                            .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(SN.textPrimary)
-                    } else if model.canSend, let gem = model.cheer.draft?.iconURL {
-                        // The message cheers: Send spends, so it wears the gem.
-                        RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
-                    } else {
-                        Image(systemName: model.canSend || model.sending ? "paperplane.fill"
-                            : focused ? "keyboard.chevron.compact.down" : "ellipsis")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
-                            .contentTransition(.symbolEffect(.replace))
-                            // The keyboard coming and going swaps the mark over 0.2 s, as Android crossfades it.
-                            .animation(.easeOut(duration: 0.2), value: focused)
-                    }
-                }
-                // A circle reads smaller than the 40 pt field beside it; 44 matches it.
-                .frame(width: 44, height: 44)
-            }
-            .glassEffect(.regular.interactive(), in: .circle)
-            .disabled(model.sending || (model.canSend && slowWait > 0) || model.cheerBlocked)
-            .opacity(model.sending || model.cheerBlocked ? 0.5 : 1)
-            .accessibilityLabel(model.canSend
-                ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
-                    : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
-                : focused ? "Hide keyboard" : "Chat options")
+        // The inbox tray at the end Settings picks, the chat menu (and Send, which shares its
+        // slot) at the other.
+        let right = session.style.inboxRight
+        return HStack(alignment: .center, spacing: 6) {
+            if right { menuButton(slowWait: slowWait) } else { tray(right: false) }
+            fieldBox(slowWait: slowWait)
+            if right { tray(right: true) } else { menuButton(slowWait: slowWait) }
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
+    }
+
+    /// The inbox tray. While you type it slides out its own side and the field grows into its
+    /// room, in one spring; it comes back the same way. The chat menu stays put. A bar dragged
+    /// narrow (the side chat beside the video) keeps it off the same way, for the field.
+    @ViewBuilder
+    private func tray(right: Bool) -> some View {
+        if let mentions = session.rooms?.mentions {
+            let hidden = focused || model.inboxFolded
+            InboxTray(store: mentions, surface: inboxSurface, right: right)
+                .opacity(hidden ? 0 : 1)
+                .offset(x: hidden ? (right ? 52 : -52) : 0)
+                .frame(width: hidden ? 0 : 44)
+                .padding(right ? Edge.Set.leading : Edge.Set.trailing, hidden ? -6 : 0)
+                .allowsHitTesting(!hidden)
+                .accessibilityHidden(hidden)
+                .animation(SNMotion.run(InboxMotion.spring), value: hidden)
+        }
+    }
+
+    /// About 12 characters of the placeholder at 15 pt: the least the field keeps before the
+    /// tray leaves a narrow bar. Read from the field's real width, so any narrow bar behaves the
+    /// same; the gap between the two thresholds keeps it from flickering at the edge. Typing hides
+    /// the tray anyway, so the call waits for the keyboard to go.
+    private static let fieldMin: CGFloat = 92
+    private static let foldHysteresis: CGFloat = 12
+    private static let trayRoom: CGFloat = 50
+
+    private func foldTray(_ width: CGFloat) {
+        model.inboxSurface = inboxSurface
+        guard !focused, session.rooms?.mentions != nil else { return }
+        let folded = model.inboxFolded
+            ? width - Self.trayRoom < Self.fieldMin + Self.foldHysteresis
+            : width < Self.fieldMin
+        if folded != model.inboxFolded { model.inboxFolded = folded }
+    }
+
+    private func fieldBox(slowWait: Int) -> some View {
+        HStack(spacing: 4) {
+            if !session.style.hideEmoteButton {
+                emoteButton
+                    // It inserts nothing that could be sent while a mode other than
+                    // emote-only blocks the room, or before a Kick sign-in.
+                    .opacity(model.needsKickSignIn || (model.fieldDisabled && session.modes?.blocked != "emote_only") ? 0.4 : 1)
+            }
+            if model.needsKickSignIn {
+                kickSignIn
+            } else {
+                TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in foldTray(width) }
+                    .font(.sn(15))
+                    .foregroundStyle(SN.textPrimary)
+                    .padding(.vertical, 8)
+                    .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
+                    .submitLabel(.send)
+                    .onSubmit { Task { await model.send() } }
+                    .focused($focused)
+                    .disabled(model.fieldDisabled)
+                    .autocorrectionDisabled(!session.style.spellcheck)
+                    .textInputAutocapitalization(.sentences)
+            }
+            if model.needsKickSignIn {
+                EmptyView()
+            } else if model.draft.count >= ChatComposerModel.counterFrom {
+                counter
+            } else if let modes = model.shownModes, !model.fieldDisabled {
+                RoomModeIndicator(modes: modes) {
+                    model.panel = .none
+                    model.menuOpen = true
+                }
+            }
+            if !session.isKick {
+                Button {
+                    model.commandsOpen = true
+                } label: {
+                    Image(systemName: "slash.circle")
+                        .font(ComposerSymbol.font)
+                        .foregroundStyle(SN.textSecondary)
+                        .frame(width: 32, height: 36)
+                }
+                .accessibilityLabel("Chat commands")
+            }
+            // The channel wallet (points and bits): Twitch rooms only, and only with something to spend.
+            if let wallet = model.wallet { WalletButton(wallet: wallet, session: session) { model.panel = .none } }
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 5)
+        .frame(minHeight: 40)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+    }
+
+    private func menuButton(slowWait: Int) -> some View {
+        // Send with a draft; with none, the chat menu, except while the keyboard is up: scrolling
+        // the chat never closes it, so this slot is the way down until it goes.
+        Button {
+            if model.canSend {
+                Task { await model.send() }
+            } else if focused {
+                focused = false
+            } else {
+                model.panel = .none
+                model.menuOpen = true
+            }
+        } label: {
+            Group {
+                if model.canSend, slowWait > 0 {
+                    // Slow mode: the seconds until the next message can go.
+                    Text("\(slowWait)")
+                        .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(SN.textPrimary)
+                } else if model.canSend, let gem = model.cheer.draft?.iconURL {
+                    // The message cheers: Send spends, so it wears the gem.
+                    RewardArt(url: gem, width: 22, height: 22, radius: 0, fit: true, placeholder: nil)
+                } else {
+                    Image(systemName: model.canSend || model.sending ? "paperplane.fill"
+                        : focused ? "keyboard.chevron.compact.down" : "ellipsis")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(model.canSend ? Color.white : SN.textSecondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        // The keyboard coming and going swaps the mark over 0.2 s, as Android crossfades it.
+                        .animation(.easeOut(duration: 0.2), value: focused)
+                }
+            }
+            // A circle reads smaller than the 40 pt field beside it; 44 matches it.
+            .frame(width: 44, height: 44)
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .overlay(alignment: session.style.inboxRight ? .topTrailing : .topLeading) {
+            // A narrow bar has no room for the tray: the inbox's count rides this menu, where its
+            // row is, on the corner beside the field.
+            if model.inboxFolded, !focused, !model.canSend, let unread = session.rooms?.mentions?.unreadTotal, unread > 0 {
+                InboxCount(count: unread)
+                    .offset(x: session.style.inboxRight ? 4 : -4, y: -4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .disabled(model.sending || (model.canSend && slowWait > 0) || model.cheerBlocked)
+        .opacity(model.sending || model.cheerBlocked ? 0.5 : 1)
+        .accessibilityLabel(model.canSend
+            ? (slowWait > 0 ? "Send again in \(slowWait) seconds"
+                : model.cheer.draft.map { "Cheer \($0.total.formatted()) bits" } ?? "Send")
+            : focused ? "Hide keyboard" : "Chat options")
     }
 
     /// A Kick room without a Kick sign-in: one accent button where the text would go, which runs

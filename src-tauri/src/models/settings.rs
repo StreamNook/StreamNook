@@ -1313,6 +1313,10 @@ pub struct ChatInputSettings {
     /// with it set.
     #[serde(default)]
     pub room_modes_prompt_adopted: bool,
+    /// Which end of the phones' message bar the inbox button takes: `left`
+    /// (the default, the chat menu on the right) or `right` (the pair
+    /// mirrored, for a right thumb).
+    pub inbox_button_side: String,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1325,6 +1329,7 @@ impl Default for ChatInputSettings {
             show_room_modes: true,
             room_modes_style: "prompt".into(),
             room_modes_prompt_adopted: true,
+            inbox_button_side: "left".into(),
             extra: HashMap::new(),
         }
     }

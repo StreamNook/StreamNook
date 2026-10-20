@@ -35,7 +35,10 @@ import { MobileEmoteCarousel } from './MobileEmoteCarousel';
 import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
 import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
-import { useMentionsStore } from '../mentions/mentionInbox';
+import { closeInboxSheet, setComposerBusy, toggleInboxSheet, useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
+import { fitCount } from '../../utils/fitNumber';
+import { InboxTray } from '../mentions/InboxTray';
+import { INBOX_SPRING } from '../mentions/inboxText';
 import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutcome } from '../../utils/commandHandler';
@@ -70,6 +73,13 @@ import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 // strip of chat (and its rounded corners) showing between panel and field.
 const PANEL_CLASS =
   'absolute bottom-full left-0 right-0 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-b-0 border-borderSubtle rounded-t-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
+
+/** About 12 characters of the placeholder at 15 px: the least the field
+ *  keeps before the inbox tray leaves a narrow bar. */
+const FIELD_MIN_PX = 92;
+const FOLD_HYSTERESIS_PX = 12;
+/** What the tray takes from the field: its 40 px and the 6 px gap. */
+const TRAY_ROOM = 46;
 
 /** Twitch's message limit; the counter shows from COUNTER_FROM characters. */
 const MESSAGE_LIMIT = 500;
@@ -131,6 +141,8 @@ interface Props {
   onReload: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
+  /** Which chat's inbox sheet the tray opens. */
+  inboxSurface?: InboxSurface;
 }
 
 // Memoized below. The pane re-renders on every arriving chat message and the
@@ -155,6 +167,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   onAddChat,
   onReload,
   onCloseChat,
+  inboxSurface = 'watch',
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
@@ -204,7 +217,17 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
+  // The inbox tray's end of the bar (Settings > Chat > Inbox button); the chat
+  // menu (and Send, which shares its slot) takes the other end.
+  const trayRight = chatInput?.inbox_button_side === 'right';
+  // A message bar dragged narrow (the side chat beside the video) gives the
+  // field priority: the tray stays off the bar while it would leave the field
+  // under about 12 characters, and the chat menu carries the inbox and its
+  // count instead. Read from the field's real width, so any narrow bar
+  // behaves the same; the gap between the two thresholds keeps it from
+  // flickering at the edge.
+  const [trayFolded, setTrayFolded] = useState(false);
+  const inboxUnread = useMentionsStore((s) => s.unreadTotal);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -507,6 +530,34 @@ const MobileChatInputImpl: React.FC<Props> = ({
     !pointsOpen &&
     suggestions.length > 0;
 
+  // A new mention's card rises into the room just above the bar. The bar's own
+  // risers use that room too (the suggestions strip over a draft, the emote
+  // and wallet panels), so the card waits while one is up and shows once it
+  // clears, after the send. A taller draft lifts the card with the bar.
+  useEffect(() => {
+    setComposerBusy(showSuggestions || emotesOpen || pointsOpen);
+  }, [showSuggestions, emotesOpen, pointsOpen]);
+  useEffect(() => () => setComposerBusy(false), []);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const read = () => {
+      // Typing hides the tray anyway, so the bar's resting width is not on
+      // screen to judge by; the call waits for the keyboard to go.
+      if (document.activeElement === el) return;
+      const w = el.clientWidth;
+      setTrayFolded((folded) =>
+        folded ? w - TRAY_ROOM < FIELD_MIN_PX + FOLD_HYSTERESIS_PX : w < FIELD_MIN_PX,
+      );
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const trayHidden = typing || trayFolded;
+
   // Replace the word being typed rather than appending, which is what makes
   // this a completion instead of a second insertion.
   const completeWith = (token: string) => {
@@ -598,6 +649,30 @@ const MobileChatInputImpl: React.FC<Props> = ({
             />
           )}
         </AnimatePresence>
+        {/* The inbox tray, at the end Settings picks. While you type it slides
+            out its own side and the field grows into its room, in one spring
+            (width and transform only); it comes back the same way. The chat
+            menu at the other end stays put. */}
+        <motion.div
+          className="shrink-0 self-end"
+          style={{ order: trayRight ? 3 : -1 }}
+          initial={false}
+          animate={{
+            width: trayHidden ? 0 : 40,
+            [trayRight ? 'marginLeft' : 'marginRight']: trayHidden ? -6 : 0,
+          }}
+          transition={INBOX_SPRING}
+          aria-hidden={trayHidden}
+        >
+          <motion.div
+            initial={false}
+            animate={{ x: trayHidden ? (trayRight ? 48 : -48) : 0, opacity: trayHidden ? 0 : 1 }}
+            transition={INBOX_SPRING}
+            style={{ pointerEvents: trayHidden ? 'none' : undefined }}
+          >
+            <InboxTray surface={inboxSurface} side={trayRight ? 'right' : 'left'} />
+          </motion.div>
+        </motion.div>
         {/* The emote trigger and the points button live INSIDE the field so the
             typing area keeps full width instead of being squeezed by chrome.
             Exactly 40px, the height of the round button beside it. */}
@@ -650,7 +725,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
               onChange={(e) => setText(e.target.value)}
               // Its own hide-keyboard button takes the menu's slot while typing.
               data-keyboard-hide="own"
-              onFocus={() => setTyping(true)}
+              onFocus={() => {
+                setTyping(true);
+                // The bar is for writing now: an open inbox goes first.
+                closeInboxSheet();
+              }}
               onBlur={() => setTyping(false)}
               onKeyDown={(e) => {
                 // An IME's Enter confirms the composed word; it never sends.
@@ -854,7 +933,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
             // Held while slow mode makes you wait (the button counts it down)
             // and while a cheer in the message has a problem.
             disabled={sending || slowWait > 0 || cheerBlocked}
-            className={`chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-white transition-all duration-300 ${
+            style={{ order: trayRight ? -2 : 2 }}
+            className={`chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-textPrimary transition-all duration-300 ${
               sending || cheerBlocked ? 'opacity-50' : ''
             }`}
             aria-label={
@@ -898,24 +978,27 @@ const MobileChatInputImpl: React.FC<Props> = ({
               setPointsOpen(false);
               setMenuOpen(true);
             }}
+            style={{ order: trayRight ? -2 : 2 }}
             className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
             aria-label={
-              typing ? 'Hide keyboard' : mentionsUnread > 0 ? 'Chat options, unread mentions' : 'Chat options'
+              typing ? 'Hide keyboard' : trayFolded && inboxUnread > 0 ? `Chat options, ${inboxUnread} new in the inbox` : 'Chat options'
             }
           >
             {/* Both marks in one place, crossfading, so nothing moves. */}
             <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}>
-              <DotsThreeVertical size={20} weight="bold" />
+              <DotsThreeVertical size={22} weight="bold" />
             </span>
             <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${typing ? 'opacity-100' : 'opacity-0'}`}>
               <KeyboardHideIcon size={20} />
             </span>
-            {/* Unread mentions wait behind this menu's Mentions row; it fades
-                with the menu mark. */}
-            {mentionsUnread > 0 && (
+            {/* A narrow bar has no room for the tray: the inbox's count rides
+                this menu, where its row is. */}
+            {trayFolded && !typing && inboxUnread > 0 && (
               <span
-                className={`absolute top-[7px] right-[7px] w-2 h-2 rounded-full bg-accent pointer-events-none transition-opacity duration-200 ${typing ? 'opacity-0' : 'opacity-100'}`}
-              />
+                className={`sn-inbox-badge absolute -top-1 ${trayRight ? '-right-1' : '-left-1'} min-w-[17px] h-[17px] px-[5px] rounded-full text-[10.5px] font-bold leading-[17px] text-center tabular-nums pointer-events-none`}
+              >
+                {fitCount(inboxUnread)}
+              </span>
             )}
           </button>
         )}
@@ -984,6 +1067,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onModeration={channel && channelId && isTwitch && isModerator ? () => setModerationOpen(true) : undefined}
         onShowPinned={hiddenPinWaiting ? () => pins.setOpen(true) : undefined}
         onCloseChat={onCloseChat}
+        inbox={trayFolded ? { unread: inboxUnread, open: () => toggleInboxSheet(inboxSurface) } : undefined}
       />
       {channel && channelId && isTwitch && isModerator && (
         <ModerationSheet

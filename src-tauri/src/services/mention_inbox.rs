@@ -36,6 +36,19 @@ pub const CHANGED_EVENT: &str = "mention-inbox-changed";
 /// An entry to show as a notification now (the payload is the entry): the
 /// phones' notification and the desktop island's preview.
 pub const NOTIFY_EVENT: &str = "mention-notify";
+/// A live entry just filed unread (its chat is not on screen): the phones'
+/// inbox card over the message bar. Payload `{entry, avatar}`. Not sent for
+/// replay, nor while streamer mode is on.
+pub const ARRIVED_EVENT: &str = "mention-arrived";
+
+/// The `mention-arrived` payload.
+#[derive(Serialize, Clone, Debug)]
+pub struct Arrival {
+    pub entry: MentionEntry,
+    /// The sender's picture when it is cached already; otherwise it is being
+    /// looked up and lands as `channel-avatars`.
+    pub avatar: Option<String>,
+}
 /// One chat notifies at most this often, so a chat that keeps @-ing you is
 /// one notification, not a stack.
 const NOTIFY_COOLDOWN: Duration = Duration::from_secs(20);
@@ -88,6 +101,62 @@ pub struct MentionEntry {
     /// A moderator deleted the message after it was filed.
     #[serde(default)]
     pub removed: bool,
+    /// The message as the chat drew it: words and emotes in order, so the
+    /// inbox shows the same emotes. Empty on entries filed before it (and
+    /// for a message with none): show `text`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MentionPart>,
+}
+
+/// One piece of a filed message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MentionPart {
+    Text { text: String },
+    Emote { name: String, url: String },
+}
+
+/// The chat's segments as inbox parts: emotes (and cheers) as images, the
+/// rest as words. Zero-width emotes are left out; they only decorate the
+/// emote before them. Empty when the message has no emote at all, since its
+/// `text` already says everything. Capped at `MAX_TEXT` characters, like the
+/// text.
+fn parts_for(segments: &[crate::models::chat_layout::MessageSegment]) -> Vec<MentionPart> {
+    use crate::models::chat_layout::MessageSegment as S;
+    let mut out: Vec<MentionPart> = Vec::new();
+    let mut budget = MAX_TEXT;
+    let mut any_emote = false;
+    for seg in segments {
+        if budget == 0 {
+            break;
+        }
+        let (content, image) = match seg {
+            S::Emote { content, emote_url, is_zero_width, .. } => {
+                if is_zero_width.unwrap_or(false) {
+                    continue;
+                }
+                (content, Some(emote_url))
+            }
+            S::Cheermote { content, cheermote_url, .. } => (content, Some(cheermote_url)),
+            S::Text { content } | S::Emoji { content, .. } | S::Link { content, .. } | S::Gif { content, .. } => (content, None),
+        };
+        match image {
+            Some(url) if !url.is_empty() => {
+                any_emote = true;
+                budget = budget.saturating_sub(content.chars().count().max(1));
+                out.push(MentionPart::Emote { name: content.clone(), url: url.clone() });
+            }
+            _ => {
+                let piece: String = content.chars().take(budget).collect();
+                budget -= piece.chars().count();
+                match out.last_mut() {
+                    Some(MentionPart::Text { text }) => text.push_str(&piece),
+                    _ => out.push(MentionPart::Text { text: piece }),
+                }
+            }
+        }
+    }
+    if any_emote { out } else { Vec::new() }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -229,6 +298,167 @@ impl Inbox {
     pub fn get_mut(&mut self, id: &str) -> Option<&mut MentionEntry> {
         self.entries.iter_mut().find(|e| e.id == id)
     }
+
+    /// One page of the phones' inbox timeline: newest first, only what
+    /// `filter` admits, older than `before_ms` when given, and each run of
+    /// identical messages (same chat, same sender, same words, one right after
+    /// the other) folded into its newest row. Returns the rows, whether there
+    /// is more, and the cursor for the next page (the oldest entry consumed,
+    /// so a fold never splits across pages).
+    pub fn view(&self, filter: InboxFilter, before_ms: Option<i64>, limit: usize) -> (Vec<InboxRow>, bool, Option<i64>) {
+        let mut rows: Vec<InboxRow> = Vec::new();
+        let mut cursor = None;
+        let mut iter = self
+            .entries
+            .iter()
+            .rev()
+            .filter(|e| filter.admits(e.kind) && before_ms.is_none_or(|b| e.at_ms < b))
+            .peekable();
+        while let Some(head) = iter.next() {
+            let mut row = InboxRow {
+                entry: head.clone(),
+                folded: Vec::new(),
+                unread: !head.read && !head.removed,
+                avatar: None,
+            };
+            cursor = Some(head.at_ms);
+            while let Some(next) = iter.next_if(|n| same_message(head, n)) {
+                row.unread |= !next.read && !next.removed;
+                row.folded.push(FoldedEntry { id: next.id.clone(), at_ms: next.at_ms, read: next.read });
+                cursor = Some(next.at_ms);
+            }
+            rows.push(row);
+            if rows.len() >= limit {
+                return (rows, iter.peek().is_some(), cursor);
+            }
+        }
+        (rows, false, cursor)
+    }
+
+    /// Unread entries one chip would show.
+    pub fn unread_for(&self, filter: InboxFilter) -> u32 {
+        self.entries
+            .iter()
+            .filter(|e| !e.read && !e.removed && filter.admits(e.kind))
+            .count() as u32
+    }
+}
+
+/// The phones' inbox chips: which entries a view shows. The whispers car adds
+/// its own chip and rows to the view (the command's `chips` lists what exists).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxFilter {
+    #[default]
+    All,
+    /// Mentions and replies.
+    Mentions,
+    /// Highlight phrases.
+    Highlights,
+}
+
+impl InboxFilter {
+    pub const CHIPS: [InboxFilter; 3] = [InboxFilter::All, InboxFilter::Mentions, InboxFilter::Highlights];
+
+    pub fn admits(self, kind: MentionKind) -> bool {
+        match self {
+            InboxFilter::All => true,
+            InboxFilter::Mentions => matches!(kind, MentionKind::Mention | MentionKind::Reply),
+            InboxFilter::Highlights => kind == MentionKind::Word,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            InboxFilter::All => "all",
+            InboxFilter::Mentions => "mentions",
+            InboxFilter::Highlights => "highlights",
+        }
+    }
+}
+
+/// One row of the phones' inbox: the newest entry of a run of identical
+/// messages, with the older ones folded under it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct InboxRow {
+    pub entry: MentionEntry,
+    /// The older identical messages, newest first. Empty for a lone message.
+    pub folded: Vec<FoldedEntry>,
+    /// Any message in the row is unread.
+    pub unread: bool,
+    /// The sender's picture, when it is known yet.
+    pub avatar: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct FoldedEntry {
+    pub id: String,
+    pub at_ms: i64,
+    pub read: bool,
+}
+
+/// Invisible characters chat clients add to slip a repeated message past
+/// Twitch's duplicate check; two messages that differ only by them are the
+/// same message to a reader.
+fn is_padding(c: char) -> bool {
+    matches!(c, '\u{034F}' | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{E0000}' | '\u{2800}')
+}
+
+fn fold_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| !is_padding(*c))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn same_message(a: &MentionEntry, b: &MentionEntry) -> bool {
+    let sender = |e: &MentionEntry| if e.sender_id.is_empty() { e.sender_login.to_lowercase() } else { e.sender_id.clone() };
+    !a.removed
+        && !b.removed
+        && a.kind == b.kind
+        && a.room == b.room
+        && sender(a) == sender(b)
+        && fold_text(&a.text) == fold_text(&b.text)
+}
+
+/// What the picture cache looks a sender up by: the platform's own id space
+/// (Twitch and YouTube ids, Kick slugs).
+pub fn avatar_request(entry: &MentionEntry) -> Option<crate::services::channel_avatars::AvatarRequest> {
+    let id = match entry.platform.as_str() {
+        "kick" => entry.sender_login.clone(),
+        "twitch" | "youtube" => entry.sender_id.clone(),
+        _ => return None,
+    };
+    (!id.trim().is_empty()).then(|| crate::services::channel_avatars::AvatarRequest { provider: entry.platform.clone(), id })
+}
+
+/// The picture cache's key for a request, as `channel_avatars::request` answers it.
+pub fn avatar_key(req: &crate::services::channel_avatars::AvatarRequest) -> String {
+    format!("{}:{}", req.provider, req.id.to_lowercase())
+}
+
+/// Pictures for these entries' senders, keyed by `avatar_key`: whatever is
+/// cached, now. The rest are looked up in the background (batched, kept on
+/// disk) and broadcast as `channel-avatars`.
+pub fn avatars_for<'a>(entries: impl Iterator<Item = &'a MentionEntry>) -> HashMap<String, String> {
+    let Some(app) = crate::services::providers::app_handle() else { return HashMap::new() };
+    let mut seen = HashSet::new();
+    let requests: Vec<_> = entries
+        .filter_map(avatar_request)
+        .filter(|r| seen.insert(avatar_key(r)))
+        .collect();
+    if requests.is_empty() {
+        return HashMap::new();
+    }
+    crate::services::channel_avatars::request(&app, requests)
+}
+
+/// The picture for one entry's sender out of `avatars_for`'s answer.
+pub fn avatar_of(entry: &MentionEntry, known: &HashMap<String, String>) -> Option<String> {
+    avatar_request(entry).and_then(|r| known.get(&avatar_key(&r)).cloned())
 }
 
 /// The key that opens a message's chat: `room_key` without the lowercasing
@@ -294,6 +524,7 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         // The color the chat row shows, so a dark name stays readable.
         sender_color: Some(crate::services::chat_row_view::readable_color(msg.color.as_deref())),
         text: msg.content.chars().take(MAX_TEXT).collect(),
+        parts: parts_for(&msg.segments),
         kind,
         reply_parent_id: msg.tags.get("reply-parent-msg-id").cloned(),
         at_ms: sent_at_ms(msg).unwrap_or(now_ms),
@@ -514,7 +745,17 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     if mentioned || reply {
         crate::services::mention_ping::on_live_message(msg, mentioned, reply);
     }
-    if visible || !cfg.notify || crate::services::streamer_mode::StreamerMode::is_active() {
+    if visible || crate::services::streamer_mode::StreamerMode::is_active() {
+        return;
+    }
+    let fresh = sent_at_ms(msg).is_none_or(|t| now_ms() - t <= NOTIFY_MAX_AGE_MS);
+    if fresh {
+        if let Some(app) = crate::services::providers::app_handle() {
+            let avatar = avatar_of(&entry, &avatars_for(std::iter::once(&entry)));
+            let _ = app.emit(ARRIVED_EVENT, Arrival { entry: entry.clone(), avatar });
+        }
+    }
+    if !cfg.notify {
         return;
     }
     let fire = match NOTIFY_LAST.get_or_init(|| Mutex::new(HashMap::new())).lock() {
@@ -591,6 +832,20 @@ pub fn page(before_ms: Option<i64>, limit: usize) -> Option<(Vec<MentionEntry>, 
     })
 }
 
+/// One page of the phones' inbox timeline (see `Inbox::view`), with the
+/// unread total and each chip's unread count. None when nobody is signed in.
+pub fn view(
+    filter: InboxFilter,
+    before_ms: Option<i64>,
+    limit: usize,
+) -> Option<(Vec<InboxRow>, bool, Option<i64>, u32, Vec<(InboxFilter, u32)>)> {
+    with_inbox(|inbox| {
+        let (rows, more, cursor) = inbox.view(filter, before_ms, limit);
+        let chips = InboxFilter::CHIPS.iter().map(|f| (*f, inbox.unread_for(*f))).collect();
+        ((rows, more, cursor, inbox.unread_total(), chips), false)
+    })
+}
+
 pub fn mark_read(ids: Option<Vec<String>>) {
     let _ = with_inbox(|inbox| ((), inbox.mark_read(ids.as_deref())));
 }
@@ -639,10 +894,47 @@ mod tests {
             at_ms,
             read: false,
             removed: false,
+            parts: Vec::new(),
         }
     }
 
     const NOW: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn parts_keep_emotes_in_place_and_merge_words() {
+        use crate::models::chat_layout::MessageSegment as S;
+        let segs = vec![
+            S::Text { content: "@you ".into() },
+            S::Emote {
+                content: "Kappa".into(),
+                emote_id: Some("25".into()),
+                emote_url: "https://e/25".into(),
+                is_zero_width: None,
+                modifier_flags: None,
+                is_personal: None,
+            },
+            S::Emote {
+                content: "cvHazmat".into(),
+                emote_id: None,
+                emote_url: "https://e/z".into(),
+                is_zero_width: Some(true),
+                modifier_flags: None,
+                is_personal: None,
+            },
+            S::Text { content: " hi ".into() },
+            S::Link { content: "x.com".into(), url: "https://x.com".into(), card: None },
+        ];
+        assert_eq!(
+            parts_for(&segs),
+            vec![
+                MentionPart::Text { text: "@you ".into() },
+                MentionPart::Emote { name: "Kappa".into(), url: "https://e/25".into() },
+                MentionPart::Text { text: " hi x.com".into() },
+            ]
+        );
+        // No emote: the text says it all.
+        assert!(parts_for(&[S::Text { content: "plain".into() }]).is_empty());
+    }
 
     #[test]
     fn a_message_is_filed_once() {
@@ -737,6 +1029,91 @@ mod tests {
         assert!(should_notify("b", None, now_ms, t0 + Duration::from_secs(5), &mut last));
         assert!(should_notify("a", None, now_ms, t0 + NOTIFY_COOLDOWN, &mut last));
         assert!(!should_notify("c", Some(now_ms - NOTIFY_MAX_AGE_MS - 1), now_ms, t0, &mut last));
+    }
+
+    fn said(id: &str, sender: &str, text: &str, at_ms: i64) -> MentionEntry {
+        let mut e = entry(id, "xqc", at_ms);
+        e.sender_id = sender.into();
+        e.text = text.into();
+        e
+    }
+
+    #[test]
+    fn identical_messages_in_a_row_fold_into_the_newest() {
+        let mut inbox = Inbox::default();
+        inbox.file(said("a", "1", "@you hi", NOW), NOW);
+        inbox.file(said("b", "1", "@you  hi\u{E0000}", NOW + 1), NOW);
+        inbox.file(said("c", "1", "@You hi", NOW + 2), NOW);
+        inbox.file(said("d", "2", "@you hi", NOW + 3), NOW);
+        inbox.file(said("e", "1", "@you hi", NOW + 4), NOW);
+        let (rows, more, _) = inbox.view(InboxFilter::All, None, 10);
+        assert!(!more);
+        // e alone (d comes between it and the run), d alone (another sender), c folding b and a.
+        assert_eq!(rows.iter().map(|r| r.entry.id.as_str()).collect::<Vec<_>>(), ["e", "d", "c"]);
+        assert_eq!(rows[2].folded.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        assert!(rows[2].unread);
+    }
+
+    #[test]
+    fn a_removed_message_or_another_chat_never_folds() {
+        let mut inbox = Inbox::default();
+        inbox.file(said("a", "1", "hi", NOW), NOW);
+        let mut other = said("b", "1", "hi", NOW + 1);
+        other.room = "kick:xqc".into();
+        inbox.file(other, NOW);
+        inbox.file(said("c", "1", "hi", NOW + 2), NOW);
+        inbox.mark_removed("c");
+        let (rows, _, _) = inbox.view(InboxFilter::All, None, 10);
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn chips_filter_by_kind_and_count_their_unread() {
+        let mut inbox = Inbox::default();
+        inbox.file(said("a", "1", "one", NOW), NOW);
+        let mut reply = said("b", "2", "two", NOW + 1);
+        reply.kind = MentionKind::Reply;
+        inbox.file(reply, NOW);
+        let mut word = said("c", "3", "three", NOW + 2);
+        word.kind = MentionKind::Word;
+        inbox.file(word, NOW);
+        inbox.mark_read(Some(&["a".to_string()]));
+        let ids = |f| inbox.view(f, None, 10).0.into_iter().map(|r| r.entry.id).collect::<Vec<_>>();
+        assert_eq!(ids(InboxFilter::Mentions), ["b", "a"]);
+        assert_eq!(ids(InboxFilter::Highlights), ["c"]);
+        assert_eq!(inbox.unread_for(InboxFilter::Mentions), 1);
+        assert_eq!(inbox.unread_for(InboxFilter::Highlights), 1);
+        assert_eq!(inbox.unread_for(InboxFilter::All), 2);
+    }
+
+    #[test]
+    fn view_pages_never_split_a_fold() {
+        let mut inbox = Inbox::default();
+        for i in 0..4 {
+            inbox.file(said(&format!("same{i}"), "1", "spam", NOW + i), NOW);
+        }
+        inbox.file(said("x", "2", "other", NOW + 10), NOW);
+        inbox.file(said("y", "3", "older", NOW - 10), NOW);
+        let (first, more, cursor) = inbox.view(InboxFilter::All, None, 2);
+        assert!(more);
+        assert_eq!(first[1].entry.id, "same3");
+        assert_eq!(first[1].folded.len(), 3);
+        assert_eq!(cursor, Some(NOW));
+        let (rest, more, _) = inbox.view(InboxFilter::All, cursor, 2);
+        assert_eq!(rest.iter().map(|r| r.entry.id.as_str()).collect::<Vec<_>>(), ["y"]);
+        assert!(!more);
+    }
+
+    #[test]
+    fn pictures_are_looked_up_in_each_platforms_own_id_space() {
+        let mut e = entry("a", "xqc", NOW);
+        e.sender_id = "123".into();
+        e.sender_login = "Viewer".into();
+        assert_eq!(avatar_request(&e).map(|r| avatar_key(&r)), Some("twitch:123".into()));
+        e.platform = "kick".into();
+        assert_eq!(avatar_request(&e).map(|r| avatar_key(&r)), Some("kick:viewer".into()));
+        e.platform = "tiktok".into();
+        assert!(avatar_request(&e).is_none());
     }
 
     #[test]

@@ -154,6 +154,9 @@ final class AppModel {
         chat.start()
         let mentionCategory = alertTypes.first { $0.id == "mentions" }?.channel
         mentions.onNotify = { entry in Task { await MentionAlerts.post(entry, category: mentionCategory) } }
+        // An inbox row or card opens its message the way a notification does.
+        mentions.onOpen = { [weak self] id in Task { await self?.openMention(id) } }
+        mentions.settings = settingsStore
         mentions.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }

@@ -39,6 +39,11 @@ final class ChatComposerModel {
         didSet { if panel != oldValue { picker.setOpen(panel == .emotes) } }
     }
     var menuOpen = false
+    /// The bar is too narrow for the inbox tray (the field would keep under about 12
+    /// characters): the chat menu carries the inbox and its count instead.
+    var inboxFolded = false
+    /// Which chat's inbox sheet this bar opens.
+    var inboxSurface: InboxSurface = .watch
     var commandsOpen = false
     /// The stream manager sheet ("Manage channel" in the chat menu).
     var manageOpen = false

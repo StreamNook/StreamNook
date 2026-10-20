@@ -91,6 +91,9 @@ public struct ChatStyle: Sendable, Equatable {
     public var spellcheck = true
     public var hidePlaceholder = false
     public var hideEmoteButton = false
+    /// The inbox tray sits at the message bar's right end and the chat menu at its left
+    /// (chat_input.inbox_button_side == "right").
+    public var inboxRight = false
     /// The room-mode prompt and icons in the composer (chat_input.show_room_modes).
     public var showRoomModes = true
     /// The suggestion strip over the composer (chat_input.emote_tab_complete_enabled).
@@ -127,6 +130,7 @@ public struct ChatStyle: Sendable, Equatable {
             spellcheck = i["spellcheck_enabled"] as? Bool ?? spellcheck
             hidePlaceholder = i["hide_placeholder"] as? Bool ?? hidePlaceholder
             hideEmoteButton = i["hide_emote_button"] as? Bool ?? hideEmoteButton
+            if let side = i["inbox_button_side"] as? String { inboxRight = side == "right" }
             showRoomModes = i["show_room_modes"] as? Bool ?? showRoomModes
             suggestionsEnabled = i["emote_tab_complete_enabled"] as? Bool ?? suggestionsEnabled
             hidePointsBalance = i["hide_points_balance"] as? Bool ?? hidePointsBalance

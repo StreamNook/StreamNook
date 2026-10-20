@@ -57,16 +57,23 @@ struct ChatWidthHandle: View {
     }
 }
 
-/// The strip at the foot of the overlay column: how see-through the chat is, and a button to
-/// hide it. Any touch on it keeps it open.
+/// The strip at the foot of the overlay column: the inbox (the column has no message bar to hold
+/// its tray), how see-through the chat is, and a button to hide it. Any touch on it keeps it open.
 struct ChatBackgroundStrip: View {
     let opacity: Double
     let onChange: (Double) -> Void
     let onHide: () -> Void
     let onTouch: () -> Void
+    var inbox: MentionsStore?
 
     var body: some View {
         HStack(spacing: 10) {
+            if let inbox {
+                InboxTray(store: inbox, surface: .watch, plain: true)
+                    .padding(.leading, -8)
+                Rectangle().fill(Color.white.opacity(0.15)).frame(width: 1, height: 20)
+                    .accessibilityHidden(true)
+            }
             Image(systemName: Symbol.chatBackground)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.8))

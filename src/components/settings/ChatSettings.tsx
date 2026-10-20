@@ -85,7 +85,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import { DeletedMessagePreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -2668,6 +2668,28 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+        {/* The phones' inbox tray: which end of the message bar it takes. */}
+        {IS_MOBILE && (
+          <SettingsRow
+            title="Inbox button"
+            onReset={resetFor(['chat_input.inbox_button_side', 'left'])}
+            description="Which end of the message bar the inbox sits at. Right swaps it with the chat menu, for a right thumb."
+            control={
+              <SegmentedSelect<'left' | 'right'>
+                value={settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'}
+                onChange={(inbox_button_side) => setInput({ inbox_button_side })}
+                options={[
+                  { value: 'left', label: 'Left' },
+                  { value: 'right', label: 'Right' },
+                ]}
+              />
+            }
+          >
+            <div className="pt-3">
+              <InboxButtonPreview side={settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'} />
+            </div>
+          </SettingsRow>
+        )}
         <SettingsRow
           title="Wallet balance"
           onReset={resetFor(['chat_input.hide_points_balance', false], ['chat_input.show_points_balance_inline', false])}

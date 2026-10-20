@@ -2354,6 +2354,7 @@ pub fn run() {
             whisper_refresh,
             // Mentions inbox
             get_mention_inbox,
+            get_inbox_view,
             mark_mentions_read,
             remove_mention,
             clear_mention_inbox,

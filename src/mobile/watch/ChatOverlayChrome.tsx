@@ -2,8 +2,8 @@
 // has to leave the video to find them.
 //
 // One handle on the edge that faces the picture: drag it to resize the column,
-// tap it for the strip. The strip carries the see-through slider and a way to
-// hide chat, and puts itself away after a few seconds of being ignored. Both
+// tap it for the strip. The strip carries the inbox (there is no message bar
+// here to hold its tray), the see-through slider and a way to hide chat, and puts itself away after a few seconds of being ignored. Both
 // changes apply live and are saved on release, so a swipe reads as one motion
 // rather than a stutter of settings writes.
 //
@@ -14,6 +14,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Drop, X } from 'phosphor-react';
 import { hapticTick } from '../ui/haptics';
+import { InboxTray } from '../mentions/InboxTray';
+import { useMentionsStore } from '../mentions/mentionInbox';
 
 interface Props {
   /** Which screen edge the overlay sits on; the handle lives on the other. */
@@ -61,10 +63,13 @@ export const ChatOverlayChrome: React.FC<Props> = ({
     if (idle.current) clearTimeout(idle.current);
     idle.current = setTimeout(() => setStripOpen(false), STRIP_IDLE_MS);
   }, []);
+  // The inbox sheet rises from the strip's tray, so the strip stays while
+  // the sheet is open and starts its idle wait again once it closes.
+  const inboxOpen = useMentionsStore((s) => s.sheetIn === 'watch');
   useEffect(() => {
-    if (stripOpen) armIdle();
+    if (stripOpen && !inboxOpen) armIdle();
     else if (idle.current) clearTimeout(idle.current);
-  }, [stripOpen, armIdle]);
+  }, [stripOpen, inboxOpen, armIdle]);
   useEffect(
     () => () => {
       if (idle.current) clearTimeout(idle.current);
@@ -163,7 +168,9 @@ export const ChatOverlayChrome: React.FC<Props> = ({
             transition={{ duration: 0.16 }}
             onPointerDown={armIdle}
           >
-            <div className="chrome-glaze chrome-glaze--flat h-11 px-3 flex items-center gap-2.5 text-white">
+            <div className="chrome-glaze chrome-glaze--flat h-11 pl-1 pr-3 flex items-center gap-2.5 text-textPrimary">
+              <InboxTray surface="watch" plain />
+              <span className="w-px h-5 bg-textPrimary/15 shrink-0" aria-hidden />
               <Drop size={17} weight="fill" className="shrink-0 opacity-80" />
               <input
                 type="range"
@@ -180,7 +187,7 @@ export const ChatOverlayChrome: React.FC<Props> = ({
               <button
                 onClick={strip.onHide}
                 aria-label="Hide chat"
-                className="sn-touch -mr-2 flex items-center justify-center w-9 h-9 rounded-full active:bg-white/10"
+                className="sn-touch -mr-2 flex items-center justify-center w-9 h-9 rounded-full active:bg-textPrimary/10"
               >
                 <X size={17} weight="bold" />
               </button>
