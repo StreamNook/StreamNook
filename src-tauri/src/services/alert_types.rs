@@ -104,11 +104,14 @@ mod tests {
 
     #[test]
     fn each_phone_lists_only_what_it_sends() {
-        // Android polls for go-lives and posts drops, badges and mentions.
-        assert_eq!(ids_on("android"), ["live", "mentions", "drops", "badges"]);
-        // The iPhone posts mentions while it runs; go-lives arrive by push (services/push_alerts.rs).
-        assert_eq!(ids_on("ios"), ["live", "mentions"]);
-        assert!(works_on("mentions", "ios") && works_on("live", "ios"));
+        // Android polls for go-lives and posts drops, badges, mentions and
+        // whispers (whispers from Rust, android_notify.rs, with a reply box).
+        assert_eq!(ids_on("android"), ["live", "mentions", "whispers", "drops", "badges"]);
+        // The iPhone posts mentions and whispers while it runs; go-lives arrive by push
+        // (services/push_alerts.rs).
+        assert_eq!(ids_on("ios"), ["live", "mentions", "whispers"]);
+        assert!(works_on("mentions", "ios") && works_on("live", "ios") && works_on("whispers", "ios"));
+        assert!(works_on("whispers", "android"));
         assert!(!works_on("drops", "ios") && !works_on("badges", "ios"));
         assert!(works_on("favorite_live", "desktop") && !works_on("favorite_live", "android"));
     }
@@ -135,7 +138,7 @@ mod tests {
             ]
         );
         // Desktop-only types stay off both phones.
-        for id in ["whispers", "gift_subs", "twitch_rewards", "channel_points", "predictions", "updates"] {
+        for id in ["gift_subs", "twitch_rewards", "channel_points", "predictions", "updates"] {
             assert!(works_on(id, "desktop") && !works_on(id, "android") && !works_on(id, "ios"), "{id}");
         }
     }

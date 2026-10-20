@@ -54,11 +54,72 @@ enum MentionAlerts {
     }
 }
 
+/// The iPhone's whisper notifications while StreamNook runs. The core decides when a whisper is
+/// worth announcing (the setting, streamer mode, not the conversation on screen) and says so with
+/// `whisper-notify`; this posts it, with a Reply box that sends through `whisper_send`.
+@MainActor
+enum WhisperAlerts {
+    /// The text-input action's identifier.
+    nonisolated static let replyAction = "whisper-reply"
+
+    static func post(_ update: WhisperUpdate, category: String?) async {
+        guard let message = update.message, !message.isSent else { return }
+        let center = UNUserNotificationCenter.current()
+        guard MentionAlerts.allowed(await center.notificationSettings().authorizationStatus) else { return }
+        NotificationRouter.install()
+        let content = UNMutableNotificationContent()
+        content.title = WhisperText.notificationTitle(WhisperText.name(update.meta.userName, update.meta.userLogin))
+        content.body = message.message
+        if let category { content.categoryIdentifier = category }
+        // One stack per conversation; the whisper id as the identifier, so a second delivery
+        // replaces the first.
+        content.threadIdentifier = "whisper:\(update.key)"
+        content.sound = .default
+        if let data = try? JSONEncoder().encode(update), let json = String(data: data, encoding: .utf8) {
+            content.userInfo = [NotificationRouter.whisperKey: json]
+        }
+        do {
+            try await center.add(UNNotificationRequest(identifier: "whisper-\(message.id)", content: content, trigger: nil))
+            log.notice("whisper notification posted")
+        } catch {
+            log.error("whisper notification failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The reply did not go out: a notice says why, in the core's words.
+    static func replyFailed(to name: String, reason: String) async {
+        let content = UNMutableNotificationContent()
+        content.title = WhisperText.replyFailedTitle(name)
+        content.body = reason
+        try? await UNUserNotificationCenter.current()
+            .add(UNNotificationRequest(identifier: "whisper-failed-\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
+    /// The whispers category with its Reply box, registered once the core named the category.
+    static func register(category: String) async {
+        let reply = UNTextInputNotificationAction(identifier: replyAction, title: "Reply", options: [],
+                                                  textInputButtonTitle: "Send", textInputPlaceholder: "Whisper")
+        let whispers = UNNotificationCategory(identifier: category, actions: [reply], intentIdentifiers: [], options: [])
+        let center = UNUserNotificationCenter.current()
+        var all = await center.notificationCategories().filter { $0.identifier != category }
+        all.insert(whispers)
+        center.setNotificationCategories(all)
+    }
+}
+
 /// Shows notifications as banners while StreamNook is in front (a go-live for the channel playing
-/// excepted), and routes a tap: a mention to its chat, a go-live to its stream. Installed at launch
-/// (installing asks nothing), so a tap that opens the app is caught.
+/// excepted), and routes a tap: a mention to its chat, a go-live to its stream, a whisper to its
+/// conversation, and a whisper's typed reply to the send. Installed at launch (installing asks
+/// nothing), so a tap that opens the app is caught.
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     static let mentionKey = "mention_id"
+    static let whisperKey = "whisper_update"
+    /// Opens a conversation by its key; set once the app can open it.
+    @MainActor private static var whisperHandler: ((String) -> Void)?
+    /// A whisper tapped before the app could open it.
+    @MainActor private static var pendingWhisper: String?
+    /// Sends a typed reply; set once the app can send. Answers nil when sent, else the reason.
+    @MainActor static var replyHandler: ((String, WhisperUpdate) async -> String?)?
     @MainActor private static let shared = NotificationRouter()
     /// Opens a mention by its id; set once the app can open chats.
     @MainActor private static var handler: ((String) -> Void)?
@@ -94,6 +155,37 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// The app is ready to open conversations; one tapped while it booted opens now.
+    @MainActor static func handleWhisper(_ open: @escaping (String) -> Void) {
+        whisperHandler = open
+        if let key = pendingWhisper {
+            pendingWhisper = nil
+            open(key)
+        }
+    }
+
+    @MainActor private static func routeWhisper(_ key: String) {
+        if let whisperHandler { whisperHandler(key) } else { pendingWhisper = key }
+    }
+
+    /// A reply typed into a whisper notification. A reply that started the app waits for it to
+    /// be able to send (ten seconds at most), then sends through the same path as the screen.
+    @MainActor private static func reply(_ text: String, to update: WhisperUpdate) async {
+        for _ in 0..<40 where replyHandler == nil {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let name = WhisperText.name(update.meta.userName, update.meta.userLogin)
+        guard let replyHandler else {
+            await WhisperAlerts.replyFailed(to: name, reason: WhisperText.fallbackReason)
+            return
+        }
+        if let reason = await replyHandler(text, update) {
+            await WhisperAlerts.replyFailed(to: name, reason: reason)
+        } else {
+            log.notice("whisper notification reply sent")
+        }
+    }
+
     @MainActor private static func route(_ id: String) {
         if let handler { handler(id) } else { pending = id }
     }
@@ -118,8 +210,17 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
         let info = response.notification.request.content.userInfo
+        if let json = info[Self.whisperKey] as? String, let update = WhisperUpdate.parse(json) {
+            if response.actionIdentifier == WhisperAlerts.replyAction,
+               let typed = (response as? UNTextInputNotificationResponse)?.userText {
+                await Self.reply(typed, to: update)
+            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                await MainActor.run { Self.routeWhisper(update.key) }
+            }
+            return
+        }
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
         if let alert = LivePush.alert(in: info) {
             await MainActor.run { Self.route(alert) }
             // A tapped push is recorded, as a presented one is.

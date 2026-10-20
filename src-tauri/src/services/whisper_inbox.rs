@@ -31,6 +31,12 @@ use tauri::Emitter;
 pub const UPDATED_EVENT: &str = "whisper-conversation-updated";
 /// Many conversations changed at once (an import); reload the archive.
 pub const ARCHIVE_CHANGED_EVENT: &str = "whisper-archive-changed";
+/// An incoming whisper worth a notification now (the payload is its
+/// `WhisperUpdate`). Decided here for every platform: the setting, streamer
+/// mode, and the conversation not being the one open on screen. The desktop's
+/// island and toasts, the Android shade (android_notify.rs) and the iPhone's
+/// local notification all post from it.
+pub const NOTIFY_EVENT: &str = "whisper-notify";
 
 /// Parallel Helix lookups while resolving an import's logins to ids.
 const RESOLVE_CONCURRENCY: usize = 4;
@@ -38,6 +44,32 @@ const RESOLVE_CONCURRENCY: usize = 4;
 /// The conversation open in the Whispers panel, if any. A whisper landing in
 /// it is read as it arrives, so it never counts as unread.
 static ACTIVE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Notifications on, and the Whispers alert type on.
+static NOTIFY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Settings changed: whether an incoming whisper may notify.
+pub fn refresh_settings(settings: &crate::models::settings::Settings) {
+    let n = &settings.live_notifications;
+    NOTIFY.store(n.enabled && n.show_whisper_notifications, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The open conversation, while a window or the phone app is on screen. With
+/// everything minimized, in the tray or the phone app in the background, no
+/// conversation is being read, so a whisper there counts as unread and notifies.
+fn open_conversation() -> Option<String> {
+    if crate::services::window_visibility::all_hidden() {
+        return None;
+    }
+    ACTIVE.lock().ok().and_then(|a| a.clone())
+}
+
+/// Whether a whisper just recorded is announced: notifications and the
+/// Whispers type on, streamer mode off, someone else's whisper, and not one
+/// that landed in the conversation on screen (that one is already read).
+fn announces(notify: bool, streamer_mode: bool, update: &WhisperUpdate, landed_in_open: bool) -> bool {
+    notify && !streamer_mode && !landed_in_open && update.message.as_ref().is_some_and(|m| !m.is_sent)
+}
 
 /// Who whispered last since the app started, for `/r`: (login, display
 /// name, user id).
@@ -275,18 +307,29 @@ pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent,
             return;
         }
     };
-    let active = ACTIVE.lock().ok().and_then(|a| a.clone());
+    let active = open_conversation();
     let result = WhisperStorageService::update_conversations(&app, &owner_id, |convs| {
         match apply_incoming(convs, &ev, received_ms, avatar, active.as_deref()) {
             Some((key, replaced, message)) => {
-                (update_for(convs, &owner_id, key, replaced, Some(message)), true)
+                let open = active.as_deref().is_some_and(|a| a == key || replaced.as_deref() == Some(a));
+                (update_for(convs, &owner_id, key, replaced, Some(message)).map(|u| (u, open)), true)
             }
             None => (None, false),
         }
     });
     match result {
-        Ok(Some(update)) => {
+        Ok(Some((update, open))) => {
             let _ = app.emit(UPDATED_EVENT, &update);
+            let notify = NOTIFY.load(std::sync::atomic::Ordering::Relaxed);
+            let streamer = crate::services::streamer_mode::StreamerMode::is_active();
+            if announces(notify, streamer, &update, open) {
+                log::info!("[WhisperInbox] announcing an incoming whisper");
+                let _ = app.emit(NOTIFY_EVENT, &update);
+            } else {
+                log::debug!(
+                    "[WhisperInbox] whisper filed without a notification (notify {notify}, streamer mode {streamer}, open {open})"
+                );
+            }
         }
         Ok(None) => {}
         Err(e) => log::warn!("[WhisperInbox] failed to record whisper: {e}"),
@@ -414,6 +457,101 @@ pub async fn reply_from_notification(
     let update = send(app, &me.id, target, text).await?;
     let _ = app.emit(UPDATED_EVENT, &update);
     Ok(())
+}
+
+/// Why Twitch did not deliver a whisper, in the words every platform shows
+/// under the message: Twitch's own reason where it gives one. `status` is None
+/// when the request never got an answer.
+pub fn send_failure_reason(status: Option<u16>, body: &str) -> String {
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::trim).map(str::to_string))
+        .filter(|m| !m.is_empty());
+    let sentence = |m: &str| {
+        let mut s = m.to_string();
+        if let Some(first) = s.get(..1) {
+            s = first.to_uppercase() + &s[1..];
+        }
+        if !s.ends_with(['.', '!', '?']) {
+            s.push('.');
+        }
+        s
+    };
+    let lower = message.as_deref().unwrap_or(body).to_ascii_lowercase();
+    if lower.contains("settings prevent") {
+        return "Cannot send: This user's privacy settings prevent them from receiving whispers from you.".into();
+    }
+    match status {
+        None => "Could not reach Twitch. Check your connection and try again.".into(),
+        Some(401) => "Cannot send: Your session has expired. Please sign in again.".into(),
+        Some(429) => "Sending too fast. Please wait a moment before trying again.".into(),
+        Some(404) => "Cannot send: User not found.".into(),
+        Some(_) => match message {
+            Some(m) => format!("Cannot send: {}", sentence(&m)),
+            None => "Failed to send message. Please try again.".into(),
+        },
+    }
+}
+
+/// One conversation as the phones' list draws it: who, the newest message,
+/// and its unread count.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ConversationRow {
+    pub key: String,
+    #[serde(flatten)]
+    pub meta: ConversationMeta,
+    pub last_text: String,
+    pub last_is_sent: bool,
+}
+
+/// The signed-in account's conversations, newest first. `owner_id` is empty
+/// when nobody is signed in (then there are no rows), and is what the writes
+/// (`whisper_send`, `whisper_mark_read`) take back.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WhisperList {
+    pub owner_id: String,
+    pub conversations: Vec<ConversationRow>,
+    pub unread_total: i64,
+}
+
+fn list_of(owner_id: &str, convs: &Conversations) -> WhisperList {
+    let mut rows: Vec<ConversationRow> = convs
+        .iter()
+        .map(|(key, c)| {
+            let last = c.messages.last();
+            ConversationRow {
+                key: key.clone(),
+                meta: meta_of(c),
+                last_text: last.map(|m| m.message.clone()).unwrap_or_default(),
+                last_is_sent: last.is_some_and(|m| m.is_sent),
+            }
+        })
+        .collect();
+    // Newest first; a tie (two imports with the same time) keeps a fixed order.
+    rows.sort_by(|a, b| {
+        b.meta
+            .last_message_timestamp
+            .cmp(&a.meta.last_message_timestamp)
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    let unread_total = rows.iter().map(|r| i64::from(r.meta.unread_count.max(0))).sum();
+    WhisperList { owner_id: owner_id.to_string(), conversations: rows, unread_total }
+}
+
+/// The list for `owner_id` (empty owner: nobody signed in, no rows).
+pub fn list(app: &AppHandle, owner_id: &str) -> Result<WhisperList, String> {
+    if owner_id.trim().is_empty() {
+        return Ok(WhisperList { owner_id: String::new(), conversations: Vec::new(), unread_total: 0 });
+    }
+    WhisperStorageService::update_conversations(app, owner_id, |convs| (list_of(owner_id, convs), false))
+}
+
+/// One conversation with every message, oldest first; None when it is gone.
+pub fn thread(app: &AppHandle, owner_id: &str, key: &str) -> Result<Option<StoredConversation>, String> {
+    if owner_id.trim().is_empty() {
+        return Ok(None);
+    }
+    WhisperStorageService::update_conversations(app, owner_id, |convs| (convs.get(key).cloned(), false))
 }
 
 // ---- Imports --------------------------------------------------------------
@@ -872,6 +1010,67 @@ mod tests {
         assert!(c.messages[0].is_sent);
         assert_eq!(c.messages[0].from_user_name, "Me");
         assert_eq!(c.messages[1].to_user_id, "1");
+    }
+
+    fn update(is_sent: bool) -> WhisperUpdate {
+        let mut convs = Conversations::new();
+        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, None);
+        let mut u = update_for(&convs, "1", "42".into(), None, convs["42"].messages.last().cloned()).unwrap();
+        if let Some(m) = u.message.as_mut() {
+            m.is_sent = is_sent;
+        }
+        u
+    }
+
+    #[test]
+    fn a_whisper_notifies_only_when_nothing_keeps_it_quiet() {
+        assert!(announces(true, false, &update(false), false));
+        // The setting (or the master switch) off, streamer mode on, or the
+        // conversation on screen: filed, not announced.
+        assert!(!announces(false, false, &update(false), false));
+        assert!(!announces(true, true, &update(false), false));
+        assert!(!announces(true, false, &update(false), true));
+        // Your own message never notifies you.
+        assert!(!announces(true, false, &update(true), false));
+    }
+
+    #[test]
+    fn a_failed_send_says_why_in_twitchs_words() {
+        let body = |m: &str| format!(r#"{{"error":"Bad Request","status":400,"message":"{m}"}}"#);
+        assert_eq!(
+            send_failure_reason(Some(403), &body("the sender does not have a verified phone number")),
+            "Cannot send: The sender does not have a verified phone number."
+        );
+        assert_eq!(
+            send_failure_reason(Some(400), &body("The recipient's settings prevent this sender from whispering them")),
+            "Cannot send: This user's privacy settings prevent them from receiving whispers from you."
+        );
+        assert_eq!(send_failure_reason(Some(429), &body("slow")), "Sending too fast. Please wait a moment before trying again.");
+        assert_eq!(send_failure_reason(Some(404), ""), "Cannot send: User not found.");
+        assert_eq!(send_failure_reason(Some(401), ""), "Cannot send: Your session has expired. Please sign in again.");
+        assert_eq!(send_failure_reason(Some(500), "<html>"), "Failed to send message. Please try again.");
+        assert_eq!(send_failure_reason(None, ""), "Could not reach Twitch. Check your connection and try again.");
+    }
+
+    #[test]
+    fn the_list_is_newest_first_with_the_last_message_and_the_unread_total() {
+        let mut convs = Conversations::new();
+        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, None);
+        apply_incoming(&mut convs, &event("43", "amy", "w2"), 300, None, None);
+        apply_incoming(&mut convs, &event("42", "bob", "w3"), 200, None, None);
+        convs.insert("44".into(), conv("44", "cat"));
+        let list = list_of("1", &convs);
+        let keys: Vec<_> = list.conversations.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["43", "42", "44"]);
+        assert_eq!(list.unread_total, 3);
+        assert_eq!(list.conversations[1].meta.unread_count, 2);
+        assert_eq!((list.conversations[1].last_text.as_str(), list.conversations[1].last_is_sent), ("hi", false));
+        // An empty conversation (a new one, nothing sent yet) has no last line.
+        assert_eq!(list.conversations[2].last_text, "");
+        // The row flattens the meta, as the phones read it.
+        let row = serde_json::to_value(&list.conversations[0]).unwrap();
+        assert_eq!(row["user_login"], "amy");
+        assert_eq!(row["key"], "43");
     }
 
     #[test]

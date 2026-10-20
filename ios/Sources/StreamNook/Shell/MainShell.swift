@@ -135,7 +135,7 @@ struct MainShell: View {
     /// Whether the tab's screen keeps the tab bar: a category's streams and Edit profile hide it.
     private func showsTabBar(_ tab: MobileTab) -> Bool {
         switch nav.paths[tab]?.last {
-        case .category, .cosmetics: false
+        case .category, .cosmetics, .whisper: false
         default: true
         }
     }
@@ -151,6 +151,10 @@ struct MainShell: View {
             CosmeticsScreen(model: model)
         case .mentions:
             MentionsScreen(model: model)
+        case .whispers:
+            WhispersScreen(model: model)
+        case .whisper(let key):
+            WhisperConversationScreen(model: model, key: key)
         case .myClips:
             MyClipsScreen(model: model)
         }

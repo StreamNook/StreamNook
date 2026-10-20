@@ -519,24 +519,11 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         } catch (err) {
             Logger.error('Failed to send whisper:', err);
 
-            // Parse the error to provide a more specific message
-            const errorString = String(err);
-            let errorMessage = 'Failed to send message. Please try again.';
-
-            // Check for specific Twitch API errors
-            if (errorString.includes('recipient\'s settings prevent') ||
-                errorString.includes('recipient\\"s settings prevent') ||
-                errorString.includes('settings prevent this sender from whispering')) {
-                errorMessage = 'Cannot send: This user\'s privacy settings prevent them from receiving whispers from you.';
-            } else if (errorString.includes('403') || errorString.includes('Forbidden')) {
-                errorMessage = 'Cannot send: You don\'t have permission to whisper this user.';
-            } else if (errorString.includes('401') || errorString.includes('Unauthorized')) {
-                errorMessage = 'Cannot send: Your session has expired. Please log in again.';
-            } else if (errorString.includes('429') || errorString.includes('Too Many Requests')) {
-                errorMessage = 'Sending too fast. Please wait a moment before trying again.';
-            } else if (errorString.includes('404') || errorString.includes('Not Found')) {
-                errorMessage = 'Cannot send: User not found.';
-            }
+            // Rust words the failure from Twitch's own reason
+            // (whisper_inbox::send_failure_reason), the same sentence the
+            // phones show under the message.
+            const errorMessage =
+                typeof err === 'string' && err.trim() ? err : 'Failed to send message. Please try again.';
 
             setError(errorMessage);
             setMessage(messageToSend);

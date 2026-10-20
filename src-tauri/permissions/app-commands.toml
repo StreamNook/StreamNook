@@ -552,6 +552,8 @@ allow = [
   "whisper_send",
   "whisper_import",
   "whisper_refresh",
+  "whisper_list",
+  "whisper_thread",
   "get_mention_inbox",
   "get_inbox_view",
   "mark_mentions_read",

@@ -36,6 +36,8 @@ import { RewardsScreen } from './screens/RewardsScreen';
 import { CosmeticsScreen } from './screens/CosmeticsScreen';
 import { MentionsScreen } from './screens/MentionsScreen';
 import { installMentionInbox } from './mentions/mentionInbox';
+import { WhispersScreen } from './screens/WhispersScreen';
+import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
@@ -138,6 +140,8 @@ const MobileApp: React.FC = () => {
   useEffect(() => installLifecycle(), []);
   // The mentions unread count (the You row and the chat menu read it).
   useEffect(() => installMentionInbox(), []);
+  // The whisper list and its unread count, kept current by Rust's events.
+  useEffect(() => installWhisperInbox(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
   useEffect(() => installVideoCap(), []);
   useEffect(() => {
@@ -210,6 +214,8 @@ const MobileApp: React.FC = () => {
           <SettingsScreen />
           {/* Over settings and the watch layer: the chat menu opens it too. */}
           <MentionsScreen />
+          {/* Over Mentions too: a whisper notification tap opens it from anywhere. */}
+          <WhispersScreen />
           {/* Consumes the same `clipModal` store field the desktop <ClipModal />
               does. Without a mobile consumer, tapping a clip in chat flipped
               that state and rendered nothing. Portals to z-[9000] via

@@ -76,6 +76,8 @@ import SwiftUI
 ///   `predbet:yes:250`, `predconfirm`, `liveVotesLog`, ...)
 /// - the Kick steps in `KickDrive` (`platform:kick`, `kickplay:INDEX`, `kicklogin:SLUG`, ...)
 /// - the Mentions steps in `MentionsDrive` (`mentions`, `mentions:fake`, `mentionnotify`, `mentioncard`, ...)
+/// - the Whispers steps in `WhispersDrive` (`whispers`, `whispers:fake`, `whisper:KEY`, `whispernotify`,
+///   `whispersend:fail`, ...), every write on a fixture inbox only
 /// - `livecheck` runs the background go-live check now, as a refresh would (the core's live
 ///   check, the go-lives on screen handed over, what it finds posted), and logs the refresh iOS
 ///   has pending; `livecheck:schedule` asks for the next refresh first, as going to the
@@ -289,7 +291,8 @@ enum Drive {
                    !(await CosmeticsDrive.run(name, value, model: model)),
                    !(await RewardsDrive.run(name, value, model: model)),
                    !(await KickDrive.run(name, value, model: model)),
-                   !(await MentionsDrive.run(name, value, model: model)) {
+                   !(await MentionsDrive.run(name, value, model: model)),
+                   !(await WhispersDrive.run(name, value, model: model)) {
                     log.error("drive: unknown step \(name, privacy: .public)")
                 }
             }

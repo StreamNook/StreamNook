@@ -344,6 +344,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Notifications: Bell,
   'Live channels': Radio,
   'Mentions and replies': AtSign,
+  Whispers: MessageCircle,
   Drops: Package,
   'New badges': Medal,
   'Which channels': ListFilter,

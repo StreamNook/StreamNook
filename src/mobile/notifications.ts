@@ -126,6 +126,7 @@ export const NOTIFY_CHANNEL = {
   badges: 'badges',
   points: 'channel-points',
   mentions: 'mentions',
+  whispers: 'whispers',
 } as const;
 
 export type NotifyChannelId = (typeof NOTIFY_CHANNEL)[keyof typeof NOTIFY_CHANNEL];
@@ -165,6 +166,14 @@ const CHANNELS: { id: string; name: string; description: string; importance: num
     id: NOTIFY_CHANNEL.mentions,
     name: 'Mentions and replies',
     description: 'Someone mentioned or replied to you in a chat',
+    importance: 4,
+  },
+  {
+    // Posted from Rust too (android_notify.rs, WhisperNotify.kt), with a reply
+    // box. Same name and rank as NotifyChannels.kt.
+    id: NOTIFY_CHANNEL.whispers,
+    name: 'Whispers',
+    description: 'Someone whispered you on Twitch',
     importance: 4,
   },
 ];

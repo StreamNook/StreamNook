@@ -83,6 +83,12 @@
           android:exported="false"
           android:foregroundServiceType="mediaPlayback" />
 
+        <!-- A reply typed into a whisper notification. Not exported: only the
+             notification's own PendingIntent reaches it. -->
+        <receiver
+          android:name=".WhisperReplyReceiver"
+          android:exported="false" />
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"

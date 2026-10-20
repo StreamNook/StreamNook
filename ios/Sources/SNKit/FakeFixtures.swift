@@ -17,10 +17,13 @@ public final class FakeFixtures: Sendable {
     public let rewards = FakeRewards()
     /// The mentions inbox: canned rows, every change announced.
     public let mentions = FakeMentions()
+    /// The whisper inbox: canned conversations, sends recorded and never sent anywhere.
+    public let whispers: FakeWhispers
     /// The stream manager on the fixture account's own channel: writes change only the fake.
     public let streamManager = FakeStreamManager()
 
-    public init(signedIn: Bool) {
+    public init(signedIn: Bool, whispers: FakeWhispers = FakeWhispers()) {
+        self.whispers = whispers
         state = Mutex(State(signedIn: signedIn, settings: [
             "theme": #""winters-glass""#,
             "glass_transparency": "100",
@@ -201,6 +204,7 @@ public final class FakeFixtures: Sendable {
         default:
             if let answer = try rewards.answer(cmd, args) { return answer }
             if let answer = try mentions.answer(cmd, args) { return answer }
+            if let answer = try whispers.answer(cmd, args) { return answer }
             if let answer = try streamManager.answer(cmd, args) { return answer }
             return try cosmetics.answer(cmd, args, userID: Self.user.id)
         }

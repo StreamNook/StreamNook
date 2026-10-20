@@ -91,6 +91,10 @@ class MainActivity : TauriActivity() {
   // for the shell the same way, for the same cold-start reason.
   @Volatile private var pendingMention: String? = null
 
+  // Conversation key from a tapped whisper notification (WhisperNotifier),
+  // waiting for the shell the same way.
+  @Volatile private var pendingWhisper: String? = null
+
   // Fired by the PiP window's mute action. Private to the app; the receiver is
   // registered in code and explicitly NOT exported.
   private val muteReceiver = object : BroadcastReceiver() {
@@ -670,6 +674,15 @@ class MainActivity : TauriActivity() {
       pendingMention = null
       return id ?: ""
     }
+
+    /** Conversation key from a tapped whisper notification, or "". Reading
+     *  clears it, like consumePendingChannel. */
+    @JavascriptInterface
+    fun consumePendingWhisper(): String {
+      val key = pendingWhisper
+      pendingWhisper = null
+      return key ?: ""
+    }
   }
 
   /**
@@ -689,6 +702,18 @@ class MainActivity : TauriActivity() {
       runOnUiThread {
         webView?.evaluateJavascript(
           "window.__SN_OPEN_MENTION__ && window.__SN_OPEN_MENTION__(${JSONObject.quote(mention)})",
+          null,
+        )
+      }
+      return
+    }
+    // A whisper opens its conversation.
+    val whisper = intent.getStringExtra(WhisperNotifier.EXTRA_WHISPER)
+    if (!whisper.isNullOrEmpty()) {
+      pendingWhisper = whisper
+      runOnUiThread {
+        webView?.evaluateJavascript(
+          "window.__SN_OPEN_WHISPER__ && window.__SN_OPEN_WHISPER__(${JSONObject.quote(whisper)})",
           null,
         )
       }
@@ -741,6 +766,9 @@ class MainActivity : TauriActivity() {
     }
     intent?.getStringExtra(MentionNotifier.EXTRA_MENTION)?.takeIf { it.isNotEmpty() }?.let {
       pendingMention = it
+    }
+    intent?.getStringExtra(WhisperNotifier.EXTRA_WHISPER)?.takeIf { it.isNotEmpty() }?.let {
+      pendingWhisper = it
     }
 
     // Push token, fetched once per launch so `push_register` always has the
