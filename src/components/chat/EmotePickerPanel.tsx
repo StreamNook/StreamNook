@@ -663,6 +663,9 @@ export function EmotePickerPanel({
   const [gifStatusFor, setGifStatusFor] = useState<{ key: string; status: GifPickerStatus } | null>(null);
   const [gifResults, setGifResults] = useState<{ key: string; items: GifItem[] } | null>(null);
   const [gifNotice, setGifNotice] = useState('');
+  // The query key whose GIF load failed, and a retry count the load follows.
+  const [gifFailedKey, setGifFailedKey] = useState<string | null>(null);
+  const [gifAttempt, setGifAttempt] = useState(0);
   const [sendingGifId, setSendingGifId] = useState<string | null>(null);
 
   const gifStatus = gifsSection && gifStatusFor && gifStatusFor.key === channelId ? gifStatusFor.status : null;
@@ -692,11 +695,17 @@ export function EmotePickerPanel({
         .catch(() => {
           if (cancelled) return;
           setGifResults({ key: gifQueryKey, items: [] });
-          setGifNotice('GIF search is unavailable right now.');
+          setGifFailedKey(gifQueryKey);
         });
     }, searchQuery ? 250 : 0);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [selectedProvider, searchQuery, channelId, gifQueryKey, gifStatus?.can_use]);
+  }, [selectedProvider, searchQuery, channelId, gifQueryKey, gifStatus?.can_use, gifAttempt]);
+  const gifLoadFailed = gifFailedKey === gifQueryKey;
+  const retryGifs = () => {
+    setGifFailedKey(null);
+    setGifResults(null);
+    setGifAttempt((n) => n + 1);
+  };
 
   const onPickGif = useCallback(
     async (gif: GifItem) => {
@@ -999,14 +1008,13 @@ export function EmotePickerPanel({
       setSelectedProvider(lastEmoteTab === 'gifs' ? 'emoji' : lastEmoteTab);
     }
   };
-  // GIFs shows whenever Twitch ANSWERED the eligibility query, not only when
-  // the answer is yes. Hiding it on a no made "this channel has GIFs off" and
-  // "the feature is broken" look identical, with no tab, no error and nothing
-  // to check. The pane below names which it is. A failed query (signed out,
-  // offline) still hides it, because then we genuinely do not know.
+  // GIFs shows where the channel has them on. Off for the room, or a question
+  // Twitch did not answer (signed out, offline), shows nothing: nothing is
+  // ever announced as off. On but out of reach (Tier 2/3) shows, with the one
+  // thing that gets you in.
   const sections: MenuSwitcherTab<Section>[] = [
     { key: 'emotes', label: 'Emotes', icon: <Smile size={15} className="flex-shrink-0" aria-hidden /> },
-    ...(gifStatus
+    ...(gifStatus?.is_enabled
       ? [{
           key: 'gifs' as const,
           label: 'GIFs',
@@ -1015,13 +1023,8 @@ export function EmotePickerPanel({
               GIF
             </span>
           ),
-          // Only GIFs has more to say than its label: whether the channel
-          // turned them off or they need Tier 2 or 3.
-          hint: gifStatus.can_use
-            ? undefined
-            : !gifStatus.is_enabled
-              ? 'GIFs (turned off in this channel)'
-              : 'GIFs (Tier 2 or Tier 3 subscribers)',
+          // Only GIFs has more to say than its label: they need Tier 2 or 3.
+          hint: gifStatus.can_use ? undefined : 'GIFs (Tier 2 or Tier 3 subscribers)',
         }]
       : []),
     ...(commands
@@ -1325,13 +1328,10 @@ export function EmotePickerPanel({
           renderSearchResults()
         ) : selectedProvider === 'gifs' ? (
           !gifStatus?.can_use ? (
-            // Three distinct answers, so an empty pane is never ambiguous:
-            // the channel turned GIFs off, or you are not eligible to send here.
+            // On here, but out of reach: the one thing that gets you in.
             <div className="flex flex-col items-center justify-center h-40 px-6 gap-1.5 text-center">
               <p className="text-xs text-textSecondary leading-relaxed">
-                {gifStatus && !gifStatus.is_enabled
-                  ? 'This channel has GIFs turned off.'
-                  : 'Tier 2 and Tier 3 subscribers can post GIFs in this channel.'}
+                Tier 2 and Tier 3 subscribers can post GIFs in this channel.
               </p>
               <p className="text-[11px] text-textSecondary opacity-70 leading-relaxed">
                 GIFs other people post still show in your chat.
@@ -1342,7 +1342,14 @@ export function EmotePickerPanel({
               {gifNotice && (
                 <p className="text-[11px] text-warning px-1 pb-2 leading-relaxed">{gifNotice}</p>
               )}
-              {!gifs ? (
+              {gifLoadFailed ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2">
+                  <p className="text-[13px] text-textMuted">Couldn&apos;t load GIFs.</p>
+                  <button onClick={retryGifs} className="text-[13px] font-semibold text-accent active:opacity-70">
+                    Try again
+                  </button>
+                </div>
+              ) : !gifs ? (
                 <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">Loading GIFs...</p></div>
               ) : gifs.length === 0 ? (
                 <div className="flex items-center justify-center h-32"><p className="text-xs text-textSecondary">No GIFs found</p></div>

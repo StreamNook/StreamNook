@@ -280,7 +280,7 @@ export function ChatterTools({
             </p>
           )}
           {history.status !== 'available' ? (
-            <p className="text-[12.5px] text-textMuted">{history.note ?? "History isn't available right now."}</p>
+            <p className="text-[12.5px] text-textMuted">{history.note ?? 'Twitch did not answer. Try again in a moment.'}</p>
           ) : history.entries.length === 0 ? (
             <p className="text-[12.5px] text-textMuted">Nothing on record here.</p>
           ) : (

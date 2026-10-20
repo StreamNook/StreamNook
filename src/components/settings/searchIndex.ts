@@ -199,7 +199,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Streaming',
     sectionId: 'settings-section-streaming',
     title: 'Retry delay',
-    description: 'How long to wait between attempts while a stream is not available yet (0 means a single attempt). Previously "Pause between attempts".'
+    description: 'How long to wait between attempts while a stream has not started yet (0 means a single attempt). Previously "Pause between attempts".'
   },
   {
     tab: 'Player',

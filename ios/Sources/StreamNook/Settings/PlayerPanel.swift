@@ -38,7 +38,7 @@ struct PlayerPanel: View {
                       detail: "How long StreamNook keeps trying to open a stream before giving up, which helps when a channel has only just gone live.",
                       accessibility: "Start timeout")
             SliderRow(title: { "Retry delay: \(Int($0))s" }, path: "streamlink.retry_streams", range: 0...5, step: 1, fallback: 3,
-                      detail: "How long to wait between attempts while a stream is not available yet (0 means a single attempt).",
+                      detail: "How long to wait between attempts while a stream has not started yet (0 means a single attempt).",
                       accessibility: "Retry delay")
         }
 

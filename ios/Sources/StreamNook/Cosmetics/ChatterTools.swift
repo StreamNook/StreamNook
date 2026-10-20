@@ -225,7 +225,7 @@ struct ChatterToolsSections: View {
                     .foregroundStyle(SN.error)
             }
             if !history.isAvailable {
-                Text(history.note ?? "History isn't available right now.")
+                Text(history.note ?? "Twitch did not answer. Try again in a moment.")
                     .font(.snRowDetail)
                     .foregroundStyle(SN.textMuted)
             } else if history.entries.isEmpty {

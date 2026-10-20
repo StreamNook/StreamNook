@@ -54,8 +54,10 @@ final class EmotePickerModel {
     /// The results for `gifsKey`; nil while they load.
     private(set) var gifs: [GifItem]?
     private var gifsKey = ""
-    /// Why a search or a send did not work, under the search.
+    /// Why a send did not go through, under the search.
     private(set) var gifNotice = ""
+    /// The search for `gifsKey` failed: the pane offers to try again.
+    private(set) var gifLoadFailed = false
     /// The GIF being sent; the others dim until it answers.
     private(set) var sendingGif: String?
     private var gifTask: Task<Void, Never>?
@@ -158,13 +160,21 @@ final class EmotePickerModel {
                 guard let self, !Task.isCancelled else { return }
                 self.gifs = items
                 self.gifsKey = key
+                self.gifLoadFailed = false
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.gifs = []
                 self.gifsKey = key
-                self.gifNotice = "GIF search is unavailable right now."
+                self.gifLoadFailed = true
             }
         }
+    }
+
+    /// Try again after a failed GIF load.
+    func retryGifs() {
+        gifLoadFailed = false
+        gifsKey = ""
+        searchGifs(debounce: false)
     }
 
     /// The results for what is typed now; nil while they load.
@@ -328,8 +338,8 @@ struct ChatEmotePicker: View {
                     .simultaneousGesture(swipeDown)
             }
             if picker.section == .gifs { gifGrid } else { grid }
-            // Emotes and GIFs, as Android's bar: once Twitch has answered about GIFs here.
-            if picker.gifStatus != nil { sectionBar }
+            // Emotes and GIFs, as Android's bar: only where the channel has GIFs on.
+            if picker.gifStatus?.showsSection == true { sectionBar }
         }
         .padding(8)
         // In the keyboard's place: the composer sizes it; flat, with the hairline a keyboard has.
@@ -443,9 +453,10 @@ struct ChatEmotePicker: View {
         .accessibilityAddTraits(active ? .isSelected : [])
     }
 
-    /// GIFs: why they cannot be posted here, or two columns of GIPHY results that send on a tap.
+    /// GIFs: the Tier 2/3 line where they are out of reach, or two columns of GIPHY results
+    /// that send on a tap.
     @ViewBuilder private var gifGrid: some View {
-        if let line = picker.gifStatus?.unavailableLine {
+        if let line = picker.gifStatus?.tierLine {
             VStack(spacing: 6) {
                 Text(line).font(.sn(12)).foregroundStyle(SN.textSecondary)
                 Text("GIFs other people post still show in your chat.").font(.sn(11)).foregroundStyle(ComposerInk.quiet)
@@ -453,6 +464,14 @@ struct ChatEmotePicker: View {
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)
             .frame(maxWidth: .infinity, minHeight: 160)
+            .frame(maxHeight: .infinity, alignment: .top)
+        } else if picker.gifLoadFailed, picker.shownGifs != nil {
+            VStack(spacing: 8) {
+                Text("Couldn't load GIFs.").font(.sn(13)).foregroundStyle(SN.textMuted)
+                Button("Try again") { picker.retryGifs() }
+                    .font(.sn(13, 600))
+            }
+            .frame(maxWidth: .infinity, minHeight: 128)
             .frame(maxHeight: .infinity, alignment: .top)
         } else if let gifs = picker.shownGifs {
             ScrollViewReader { reader in

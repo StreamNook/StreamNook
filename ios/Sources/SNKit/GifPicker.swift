@@ -23,11 +23,13 @@ public struct GifPickerStatus: Decodable, Sendable, Equatable {
         self.canUse = canUse
     }
 
-    /// Why the section cannot be used here, as Android's pane says it.
-    public var unavailableLine: String? {
-        if canUse { return nil }
-        return isEnabled ? "Tier 2 and Tier 3 subscribers can post GIFs in this channel."
-            : "This channel has GIFs turned off."
+    /// The GIFs section shows only where the channel has GIFs on; off, it shows nothing (nothing
+    /// is ever announced as off).
+    public var showsSection: Bool { isEnabled }
+
+    /// On here but out of reach: the one thing that gets you in, as Android's pane says it.
+    public var tierLine: String? {
+        isEnabled && !canUse ? "Tier 2 and Tier 3 subscribers can post GIFs in this channel." : nil
     }
 }
 
@@ -80,7 +82,7 @@ public struct SendGifOutcome: Decodable, Sendable, Equatable {
     /// Why a send was refused, in Android's words (`gifSendMessage`); empty when it went out.
     public var notSentLine: String {
         if sent { return "" }
-        if error == "TEMPORARILY_UNAVAILABLE" { return "GIFs are temporarily unavailable. Try again in a moment." }
+        if error == "TEMPORARILY_UNAVAILABLE" { return "GIFs didn't go through. Try again in a moment." }
         if secondsUntilCanSend > 0 { return "Slow down a moment, you can send another GIF in \(secondsUntilCanSend)s." }
         return "That GIF could not be sent."
     }

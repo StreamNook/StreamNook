@@ -737,9 +737,9 @@ final class Watch {
                 error = "\(stream.userName) is offline. Chat keeps running."
                 status = "Offline"
             } else {
-                error = "Playback unavailable. Chat keeps running."
+                error = "Couldn't play this stream. Chat keeps running."
                 status = "Failed"
-                onToast?("Playback unavailable - showing chat only")
+                onToast?("Couldn't play this stream, showing chat only")
             }
             return
         }
@@ -756,10 +756,10 @@ final class Watch {
             openRoom(stream, core: core)
             return
         }
-        error = "Playback unavailable. Chat keeps running."
+        error = "Couldn't play this stream. Chat keeps running."
         status = "Failed"
         pip.eligible = false
-        onToast?("Playback unavailable - showing chat only")
+        onToast?("Couldn't play this stream, showing chat only")
     }
 
     /// Puts a new item for `url` on `route` in the player and plays it.

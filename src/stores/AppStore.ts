@@ -876,7 +876,7 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     const { type, status, error } = event.payload;
     Logger.error(`[EventSub] Subscription failed: ${type} (HTTP ${status}): ${error}`);
     if (type === 'channel.moderate') {
-      get().addToast(`Mod logs unavailable: ${error || 'subscription failed'} (HTTP ${status})`, 'warning');
+      get().addToast(`Couldn't start mod logs: ${error || 'subscription failed'} (HTTP ${status})`, 'warning');
     }
   });
 }
@@ -1180,10 +1180,10 @@ async function startProviderStream(
     const shown = get().currentStream as TwitchStream;
     const name = shown.user_name || shown.user_login || channel;
     const offline = seed?.is_live === false;
-    if (!offline && !signInOffered) get().addToast('Playback unavailable - showing chat only', 'error');
+    if (!offline && !signInOffered) get().addToast("Couldn't play this stream, showing chat only", 'error');
     await keepProviderChat(
       shown,
-      offline ? `${name} is offline. Chat keeps running.` : 'Playback unavailable. Chat keeps running.',
+      offline ? `${name} is offline. Chat keeps running.` : "Couldn't play this stream. Chat keeps running.",
       set,
     );
     if (superseded()) return true;
@@ -2767,7 +2767,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().addToast(`Quality changed to ${result.quality}`, 'success');
       } else {
         Logger.info(`[Stream] Quality fallback: ${quality} -> ${result.quality}`);
-        get().addToast(`Quality "${quality}" unavailable, switched to "${result.quality}"`, 'info');
+        get().addToast(`Switched to "${result.quality}": this stream has no "${quality}"`, 'info');
       }
       Logger.debug('[Quality] Stream URL updated:', result.url);
       Logger.debug('[Quality] Settings updated with new quality preference:', quality);
@@ -2900,7 +2900,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         live = true;
       }
       // Offline needs no toast: the room's own screen says so.
-      if (live) get().addToast('Playback unavailable - showing chat only', 'error');
+      if (live) get().addToast("Couldn't play this stream, showing chat only", 'error');
       try {
         await get().startOfflineChat(channel, providedStreamInfo, { chatOnly: live });
       } catch (fallbackErr) {

@@ -362,7 +362,7 @@ final class AppModel {
             if vod != nil { watch.seekVod(to: resumeAt) }
             await patchSettings(["quality": quality])
             toasts.show(quality == start.quality ? "Quality changed to \(start.quality)"
-                                                 : "Quality \"\(quality)\" unavailable, switched to \"\(start.quality)\"",
+                                                 : "Switched to \"\(start.quality)\": this stream has no \"\(quality)\"",
                         quality == start.quality ? .success : .info)
         } catch {
             log.error("change_stream_quality failed: \(String(describing: error), privacy: .public)")

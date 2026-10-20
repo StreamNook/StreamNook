@@ -315,7 +315,7 @@ const PlayerSettings = () => {
         <SettingsRow
           title={`Retry delay: ${streamlink.retry_streams}s`}
           onReset={resetFor(['streamlink.retry_streams', 3])}
-          description="How long to wait between attempts while a stream is not available yet (0 means a single attempt)."
+          description="How long to wait between attempts while a stream has not started yet (0 means a single attempt)."
         >
           <input
             type="range"
