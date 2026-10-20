@@ -878,6 +878,8 @@ pub fn watch_unread() -> tokio::sync::watch::Receiver<Arc<HashMap<String, u32>>>
 }
 
 pub fn set_visible_rooms(rooms: Vec<String>) {
+    // Opening a chat keeps it watched while offline (mentions while you're away).
+    crate::services::mention_watch::client::lease_rooms(&rooms);
     let _ = with_inbox(|inbox| {
         let changed = inbox.set_visible(rooms);
         ((), changed)

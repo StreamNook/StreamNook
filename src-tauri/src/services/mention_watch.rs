@@ -14,6 +14,13 @@
 //! Turning it off deletes the server's rows for the account at once. A server
 //! that no longer knows the account (14 days without a pull) answers
 //! `enrolled: false`, and the next pull opts back in on its own.
+//!
+//! Offline chats: the watcher reads a followed channel while it is live, and an
+//! offline one only while the viewer holds a lease on it. Opening a Twitch chat
+//! (any app reports the chats on screen through `mention_inbox::set_visible_rooms`)
+//! takes or renews that chat's 14-day lease (`lease_rooms`), at most once per
+//! channel per `LEASE_EVERY`, so an offline chat the viewer keeps visiting stays
+//! watched.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -83,6 +90,33 @@ impl Inputs {
             muted_logins: sorted(muted),
         }
     }
+}
+
+/// How often one channel's lease is renewed from here; the server takes it no
+/// more often either.
+pub const LEASE_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// The on-screen rooms whose lease is due: Twitch chats only (a bare login),
+/// each once, none renewed within `LEASE_EVERY`. Stamps the ones it returns.
+pub fn due_leases(
+    rooms: &[String],
+    stamps: &mut std::collections::HashMap<String, std::time::Instant>,
+    now: std::time::Instant,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for room in rooms {
+        let login = room.trim().trim_start_matches('#').to_lowercase();
+        let twitch = !login.is_empty() && login.len() <= 25 && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !twitch || out.contains(&login) {
+            continue;
+        }
+        if stamps.get(&login).is_some_and(|at| now.duration_since(*at) < LEASE_EVERY) {
+            continue;
+        }
+        stamps.insert(login.clone(), now);
+        out.push(login);
+    }
+    out
 }
 
 /// The `/mentions/optin` body, the lists already resolved to Twitch ids.
@@ -236,6 +270,8 @@ pub mod client {
     static LAST_PULL: Mutex<Option<Instant>> = Mutex::new(None);
     /// Twitch logins already resolved to ids.
     static IDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    /// When each chat's lease was last taken from here.
+    static LEASED: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
 
     fn inputs() -> Inputs {
         INPUTS.lock().ok().and_then(|i| i.clone()).unwrap_or_default()
@@ -457,6 +493,38 @@ pub mod client {
         Ok(filed)
     }
 
+    /// The chats on screen now (room keys, from every app): each Twitch one takes
+    /// or renews its lease, so it stays watched while offline. Only with the
+    /// switch on; a failed call forgets its stamp, so the next open tries again.
+    pub fn lease_rooms(rooms: &[String]) {
+        if !inputs().away_alerts {
+            return;
+        }
+        let due = match LEASED.lock() {
+            Ok(mut stamps) => due_leases(rooms, stamps.get_or_insert_with(HashMap::new), Instant::now()),
+            Err(_) => return,
+        };
+        if due.is_empty() {
+            return;
+        }
+        tauri::async_runtime::spawn(async move {
+            for login in due {
+                let result = match ids_for(std::slice::from_ref(&login)).await.into_iter().next() {
+                    Some(id) => post("/mentions/lease", &json!({ "channel_id": id, "login": login })).await.map(|_| ()),
+                    None => Err("no Twitch id".to_string()),
+                };
+                if let Err(e) = result {
+                    log::debug!("[MentionWatch] lease for {login} failed: {e}");
+                    if let Ok(mut stamps) = LEASED.lock() {
+                        if let Some(map) = stamps.as_mut() {
+                            map.remove(&login);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// A push arrived while this app runs: pull it (and anything else) in.
     pub fn on_push_arrived() {
         if crate::services::providers::app_handle().is_some() {
@@ -572,6 +640,24 @@ mod tests {
         assert_eq!(e.sender_login, "viewer");
         assert!(!e.read && !e.removed && e.parts.is_empty());
         assert!(e.watch_url.contains("bigstreamer"));
+    }
+
+    #[test]
+    fn a_lease_is_taken_for_twitch_chats_only_once_per_six_hours() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+        let mut stamps = HashMap::new();
+        let t0 = Instant::now();
+        let rooms: Vec<String> = ["Hamlin", "#hamlin", "kick:someone", "youtube:@x", "", "other_one"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(due_leases(&rooms, &mut stamps, t0), vec!["hamlin".to_string(), "other_one".to_string()]);
+        assert!(due_leases(&rooms, &mut stamps, t0 + Duration::from_secs(60 * 60)).is_empty());
+        assert_eq!(
+            due_leases(&["hamlin".to_string()], &mut stamps, t0 + LEASE_EVERY + Duration::from_secs(1)),
+            vec!["hamlin".to_string()]
+        );
     }
 
     #[test]
