@@ -37,13 +37,18 @@ enum KeyboardMetrics {
         UserDefaults.standard.set(Double(frame.height), forKey: key)
     }
 
+    /// The emote panel never opens shorter than this, Android's floor (`EMOTE_PANEL_MIN_PX`):
+    /// under the search, the tabs, a section title and the Emotes/GIFs bar it leaves three full
+    /// rows of emotes above the bottom fade.
+    static let minimumPanelHeight: CGFloat = 340
+
     /// The emote panel's height under the input row: the keyboard's, less what the chat already
     /// keeps below the composer with the keyboard down (the home-indicator strip the watch layer
     /// and Chats leave, less the 24 pt they reach into it) and the 8 pt gap above the panel, so the
-    /// input row stays exactly where the keyboard put it.
+    /// input row stays exactly where the keyboard put it; never less than `minimumPanelHeight`.
     static var panelHeight: CGFloat {
         let inset = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom ?? 0
-        return max(200, lastHeight - max(0, inset - 24) - 8)
+        return max(minimumPanelHeight, lastHeight - max(0, inset - 24) - 8)
     }
 }
