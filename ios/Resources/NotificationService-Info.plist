@@ -14,6 +14,11 @@
          it from the app's profile); false draws the picture as the banner's thumbnail. -->
     <key>SNCommunicationStyle</key>
     <false/>
+    <!-- App Store Connect refuses a 64-bit extension without this (ITMS-90502). -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionAttributes</key>
