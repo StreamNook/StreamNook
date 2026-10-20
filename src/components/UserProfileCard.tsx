@@ -59,7 +59,7 @@ import {
   subscribeIdentityVersion,
   getIdentityVersion,
 } from '../services/identityService';
-import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
+import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { historyKey } from '../utils/chatterIdentity';
 import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
@@ -1026,15 +1026,19 @@ const UserProfileCard = ({
   // Channel emote set (Twitch native + FFZ/BTTV/7TV), reused from the shared
   // cache the chat renderer fills. In the popout window that cache starts empty,
   // so the hook lazily fetches and re-renders when it lands — emotes pop in.
-  // buildEmoteNameMap gives the name -> emote lookup EmoteText needs to swap
-  // emote words for images in the message timeline.
+  // useTextEmotes has Rust cut each timeline message with the channel's table,
+  // as it does a chat row, for EmoteText to swap emote words for images.
   const { channelId: emoteChannelId, channelName: emoteChannelName } = getChannelContext();
   // The provider travels with the channel: `getChannelContext` falls back to the
   // current stream, which on YouTube/Kick yields that platform's id, and the hook
   // would otherwise default to Twitch and look it up on Helix.
   const emoteProvider = streamProvider(useAppStore.getState().currentStream);
   const channelEmotes = useChannelEmotes(emoteChannelName, emoteChannelId, emoteProvider);
-  const emoteNameMap = useMemo(() => buildEmoteNameMap(channelEmotes), [channelEmotes]);
+  const timelineTexts = useMemo(
+    () => [...historicalMessages, ...messageHistory, ...liveMessages].map((m) => m.content ?? ''),
+    [historicalMessages, messageHistory, liveMessages],
+  );
+  const timelineEmotes = useTextEmotes({ provider: emoteProvider, channel: emoteChannelName }, timelineTexts, channelEmotes);
 
   // Load cached cosmetics INSTANTLY (synchronous), then fetch fresh data
   useEffect(() => {
@@ -2299,7 +2303,7 @@ const UserProfileCard = ({
                                     <span className="text-[13px] text-textPrimary break-words leading-snug min-w-0">
                                       <EmoteText
                                         text={e.content}
-                                        emoteMap={emoteNameMap}
+                                        emoteMap={timelineEmotes(e.content)}
                                         keyPrefix={`hist-${g.key}-${idx}`}
                                         imgClassName="inline-block align-middle object-contain h-[18px] max-h-[18px]"
                                       />

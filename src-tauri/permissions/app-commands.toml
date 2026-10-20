@@ -616,6 +616,7 @@ allow = [
   "match_emote_tokens",
   "emote_credit",
   "personal_emote_overrides",
+  "parse_text_segments",
   "emote_picker",
   "clear_emote_cache",
   "get_gif_picker_status",

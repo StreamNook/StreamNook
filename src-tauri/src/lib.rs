@@ -51,7 +51,7 @@ use commands::{
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
-    twitch::*,
+    text_segments::*, twitch::*,
     universal_cache::*,
     user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
 };
@@ -2439,6 +2439,7 @@ pub fn run() {
             match_emote_tokens,
             emote_credit,
             personal_emote_overrides,
+            parse_text_segments,
             emote_picker,
             clear_emote_cache,
             get_gif_picker_status,
