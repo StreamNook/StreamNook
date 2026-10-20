@@ -346,19 +346,22 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       {slider.style === 'rail' ? (
         // Solid: the rail covers the message, and a see-through one let its text clash with the
         // step names.
-        <div className="absolute inset-x-1 inset-y-1 rounded-[10px] border border-borderSubtle" style={SOLID_RAISED}>
+        // The legend: each name in its own box, the first and last the same distance from their
+        // ends and equal gaps between, so "Delete" and "Ban" sit evenly; the lit pill marks the
+        // step under the finger.
+        <div
+          className="absolute inset-x-1 inset-y-1 flex items-center justify-between rounded-[10px] border border-borderSubtle px-1"
+          style={SOLID_RAISED}
+        >
           {slider.steps.map((s, i) => {
-            // A legend spread evenly along the rail, so short zones never crowd
-            // their labels together; the lit pill marks the step under the finger.
-            const center = `${((i + 0.5) / slider.steps.length) * 100}%`;
             const on = lit && i === step;
             // glass-exempt: the lit step's tint over the rail, a color cue that must stay translucent.
             const pill = on ? `color-mix(in srgb, ${tint} 22%, transparent)` : undefined;
             return (
               <span
                 key={`${s.action}-${s.seconds ?? i}`}
-                className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[9px] px-2 py-0.5 text-[12px] font-semibold"
-                style={{ left: center, color: railInk(s), background: pill }}
+                className="rounded-[9px] px-2 py-0.5 text-[12px] font-semibold"
+                style={{ color: railInk(s), background: pill }}
               >
                 {s.label}
               </span>
