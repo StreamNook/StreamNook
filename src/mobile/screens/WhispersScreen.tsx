@@ -262,8 +262,8 @@ const ConversationView: React.FC<{ conversationKey: string }> = ({ conversationK
 
   const name = row ? shownName(row) : '';
   return (
-    // Edge to edge inside the sheet's padding.
-    <div className="-mx-4 -mb-4 h-[calc(100%+16px)] flex flex-col">
+    // The sheet is `flush`: this lays out and scrolls the thread itself.
+    <div className="flex-1 min-h-0 flex flex-col">
       <div className="flex items-center gap-2 px-4 pb-2 shrink-0 border-b border-borderSubtle">
         {row && <Picture id={row.user_id} url={row.profile_image_url} size={30} name={name} />}
         <span className="flex-1 min-w-0 flex flex-col">
@@ -423,7 +423,7 @@ export const WhispersScreen: React.FC = () => {
         </PullToRefresh>
       </DrillInScreen>
       {/* `fill`: the thread arrives after it opens, so it never grows under the finger. */}
-      <MobileSheet open={!!openKey} onClose={closeWhisper} maxHeightFraction={0.85} fill>
+      <MobileSheet open={!!openKey} onClose={closeWhisper} maxHeightFraction={0.85} fill flush>
         {openKey && <ConversationView key={openKey} conversationKey={openKey} />}
       </MobileSheet>
     </>

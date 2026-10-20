@@ -1,7 +1,7 @@
 // The inbox: one timeline, newest first, of every mention, reply and
 // highlight (and whispers, once their store joins), with chips across the top
-// to narrow it. One component, two ways in: the sheet that grows out of the
-// message bar's tray, and You > Mentions.
+// to narrow it. One component, two ways in: the bottom sheet the message bar's
+// tray opens, and You > Mentions.
 //
 // Rust builds the view (`get_inbox_view`): it filters by chip, folds identical
 // messages in a row into one, and attaches the senders' pictures it has. This
@@ -11,6 +11,7 @@ import { ArrowLeft, BellSlash, Bell, Trash } from 'phosphor-react';
 import { CheckCheck, ChevronDown } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { MobileSheet } from '../ui/MobileSheet';
+import { SegmentedControl } from '../ui/SegmentedControl';
 import { EmptyNote } from '../ui/EmptyNote';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { Logger } from '../../utils/logger';
@@ -269,7 +270,7 @@ export const InboxPanel: React.FC<{
   const empty = emptyWords(filter);
 
   return (
-    <div className="flex flex-col min-h-0 h-full">
+    <div className="flex flex-col min-h-0 flex-1 h-full">
       {/* The screen's header: back, the title and count, mark all read. The
           sheet's grabber and title are MobileSheet's. */}
       {variant === 'screen' && (
@@ -297,37 +298,22 @@ export const InboxPanel: React.FC<{
           )}
         </div>
       )}
-      <div className="shrink-0 flex items-center gap-1.5 px-3 pb-2" role="radiogroup" aria-label="Show">
-        {chips.map((c) => {
-          const on = c.id === filter;
-          return (
-            <button
-              key={c.id}
-              role="radio"
-              aria-checked={on}
-              onClick={() => pick(c.id)}
-              className={`sn-inbox-chip relative h-[26px] px-2.5 rounded-full flex items-center text-[11.5px] whitespace-nowrap ${
-                on ? 'sn-inbox-chip--on font-semibold text-textPrimary' : 'text-textSecondary'
-              }`}
-            >
-              {/* The bold label drawn invisibly underneath, so a chip keeps one
-                  width chosen or not and the row never shifts. */}
-              <span className="grid">
-                <span aria-hidden className="invisible col-start-1 row-start-1 font-semibold">
-                  {CHIP_LABEL[c.id] ?? c.id}
-                </span>
-                <span className="col-start-1 row-start-1 text-center">{CHIP_LABEL[c.id] ?? c.id}</span>
-              </span>
-              {c.unread > 0 && !on && c.id !== 'all' && (
-                <span className="sn-inbox-notch absolute top-0 right-0.5 w-1.5 h-1.5 rounded-full bg-accent" aria-label="Unread" />
-              )}
-            </button>
-          );
-        })}
+      {/* The categories as the app's segmented control, each with its unread
+          count in its label (no corner dot). */}
+      <div className="shrink-0 flex items-center gap-1 px-3 pb-2">
+        <div className="flex-1 min-w-0">
+          <SegmentedControl<InboxFilterId>
+            label="Show"
+            fill
+            value={filter}
+            onChange={pick}
+            segments={chips.map((c) => ({ value: c.id, label: CHIP_LABEL[c.id] ?? c.id, count: c.unread }))}
+          />
+        </div>
         {variant === 'sheet' && unread > 0 && (
           <button
             onClick={() => void markAllMentionsRead()}
-            className="ml-auto -my-[5px] -mr-1.5 w-9 h-9 flex items-center justify-center text-textMuted active:text-textPrimary"
+            className="shrink-0 -mr-1.5 w-9 h-9 flex items-center justify-center text-textMuted active:text-textPrimary"
             aria-label={`Mark all read, ${unread} new`}
           >
             <CheckCheck size={18} strokeWidth={2.1} />

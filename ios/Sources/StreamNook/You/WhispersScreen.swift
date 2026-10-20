@@ -137,6 +137,8 @@ struct WhisperSheet: View {
         }
         .snSheetLight()
         .presentationDetents([.medium, .large])
+        // At medium a drag scrolls the thread rather than growing the sheet.
+        .presentationContentInteraction(.scrolls)
         .presentationDragIndicator(.visible)
     }
 }

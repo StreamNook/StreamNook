@@ -10,6 +10,14 @@ import { motion } from 'framer-motion';
 export interface Segment<T extends string> {
   value: T;
   label: string;
+  /** A small count after the label (unread, say); none at 0. */
+  count?: number;
+}
+
+/** A segment's count, a step quieter than its label and never a corner dot. */
+function segmentCount(count: number | undefined) {
+  if (!count) return null;
+  return <span className="ml-1 text-[0.85em] font-medium tabular-nums opacity-75">{count > 99 ? '99+' : count}</span>;
 }
 
 export function SegmentedControl<T extends string>({
@@ -62,6 +70,7 @@ export function SegmentedControl<T extends string>({
             >
               <span aria-hidden className="invisible col-start-1 row-start-1 font-semibold">
                 {s.label}
+                {segmentCount(s.count)}
               </span>
               <span
                 className={`col-start-1 row-start-1 text-center transition-colors ${
@@ -69,6 +78,7 @@ export function SegmentedControl<T extends string>({
                 }`}
               >
                 {s.label}
+                {segmentCount(s.count)}
               </span>
             </span>
           </button>

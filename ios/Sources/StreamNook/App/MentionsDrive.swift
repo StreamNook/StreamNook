@@ -6,6 +6,7 @@ import SNKit
 /// FakeCore of its own, `mentions:fake`), never the signed-in account's:
 ///
 /// - `mentions` pushes Mentions on the You tab; `mentions:sheet` opens it as the chat menu does
+/// - `mentions:fake:long` adds 70 older fixture mentions behind them, for scrolling and paging
 /// - `mentions:fake` points Mentions at the fixture inbox (unread, read, removed, a long message,
 ///   a Kick room); `mentions:empty` at an empty one
 /// - `mentions:readall`, `mentions:read:ID`, `mentions:remove:ID`, `mentions:clearask` (the Clear
@@ -30,7 +31,12 @@ enum MentionsDrive {
             switch what {
             case "": model.nav.tab = .you; model.nav.push(.mentions)
             case "sheet": model.chat.mentionsOpen = true
-            case "fake": await useFixtures(model, empty: false)
+            case "fake":
+                await useFixtures(model, empty: false)
+                // `mentions:fake:long`: 70 more, so the list has to scroll and page.
+                if rest == "long", let fake = fixtureCore {
+                    for entry in FakeMentions.backlog(count: 70) { fake.fileMention(entry) }
+                }
             case "empty": await useFixtures(model, empty: true)
             case "readall": await model.mentions.markRead(nil)
             case "read": await model.mentions.markRead([rest])

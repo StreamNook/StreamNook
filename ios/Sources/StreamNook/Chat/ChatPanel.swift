@@ -225,6 +225,9 @@ struct ChatPanel: View {
                 InboxPanel(store: mentions, variant: .sheet)
                     .snSheetLight()
                     .presentationDetents([.medium, .large])
+                    // At medium a drag scrolls the list rather than growing the sheet; the
+                    // grabber still grows and shrinks it.
+                    .presentationContentInteraction(.scrolls)
                     .presentationDragIndicator(.visible)
             }
         }

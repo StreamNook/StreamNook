@@ -11,11 +11,9 @@ export const InboxSheet: React.FC<{ surface: InboxSurface }> = ({ surface }) => 
   const close = useCallback(() => closeInboxSheet(), []);
   return (
     // `fill`: the rows arrive after it opens, so it never grows under the finger.
-    <MobileSheet open={open} onClose={close} title="Inbox" fill>
-      {/* Edge to edge inside the sheet's padding: the panel lays out its own rows. */}
-      <div className="-mx-4 -mb-4 h-[calc(100%+16px)]">
-        <InboxPanel variant="sheet" onClose={close} />
-      </div>
+    // `flush`: the panel is the scroller, so the list scrolls and pages.
+    <MobileSheet open={open} onClose={close} title="Inbox" fill flush>
+      <InboxPanel variant="sheet" onClose={close} />
     </MobileSheet>
   );
 };
