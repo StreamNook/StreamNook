@@ -234,13 +234,17 @@ final class ChatComposerModel {
         var message = text
         // Twitch refuses the same message twice in a row; an invisible tag makes the repeat new.
         if session.style.bypassDuplicate, message == lastSent { message += " \u{E0000}" }
+        // The sender, as Android and desktop name it: with it the core sends through Helix and
+        // answers with Twitch's message id (without it every line went over IRC, which has none).
+        let sender = try? await session.core.invoke("get_user_info", "{}")
+        let senderID = sender.flatMap { try? JSONDecoder().decode(TwitchUser.self, from: Data($0.utf8)) }?.id
         do {
             let json = try await session.core.invoke("send_chat_message", args: [
                 "message": message,
                 "replyParentMsgId": replyID ?? reply?.id,
                 "targetChannel": session.channel,
                 "broadcasterId": session.roomID,
-                "senderId": nil,
+                "senderId": senderID,
                 "senderAccountId": nil,
                 "pinAfterSend": pin ? true : nil,
             ])
