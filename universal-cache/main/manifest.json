@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1792409612,
+  "last_sync": 1792492724,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -7630,10 +7630,10 @@
             }
           ]
         },
-        "cached_at": 1792409610
+        "cached_at": 1792492720
       },
       "metadata": {
-        "timestamp": 1792409610,
+        "timestamp": 1792492720,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -15920,7 +15920,7 @@
         "more_info": "DayZ Yellow King is a limited-time global chat badge dedicated to the launch of DayZ Badlands expansion. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the DayZ category. Event duration: 2026-10-08T11:00:00Z – 2026-10-19T08:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1791813191,
+        "timestamp": 1792492721,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15933,10 +15933,10 @@
       "data": {
         "date_added": "5 October 2026",
         "usage_stats": null,
-        "more_info": "Vaultbreakers is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to watch 60 minutes of any livestream in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-11-05T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: Vaultbreakers Golden"
+        "more_info": "Vaultbreakers is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to watch 60 minutes of any livestream in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: Vaultbreakers Golden"
       },
       "metadata": {
-        "timestamp": 1791813193,
+        "timestamp": 1792492722,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15949,10 +15949,10 @@
       "data": {
         "date_added": "5 October 2026",
         "usage_stats": null,
-        "more_info": "Vaultbreakers Golden is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-11-05T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: Vaultbreakers"
+        "more_info": "Vaultbreakers Golden is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: Vaultbreakers"
       },
       "metadata": {
-        "timestamp": 1791813195,
+        "timestamp": 1792492724,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
