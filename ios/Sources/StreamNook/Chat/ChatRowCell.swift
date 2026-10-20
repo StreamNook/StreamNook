@@ -122,11 +122,20 @@ final class ChatRowCell: UIView {
                 // FFZ GrowX and BetterTTV wide stretch the target to their box.
                 if i == 0, attachment.effects & (Modifier.growX | Modifier.wide) != 0 { image.contentsGravity = .resize }
                 if attachment.kind == .preview { image.contentsGravity = .resizeAspectFill }
+                // A paint image fills the name's box as the renderer stretches it.
+                if attachment.kind == .paint { image.contentsGravity = .resize }
                 group.addSublayer(image)
                 imageLayers.append(image)
                 load(url, into: image, attachment: attachment, isBase: i == 0)
             }
             applyEffects(attachment.effects, to: group)
+            if let outline = attachment.mask {
+                // Only the name's letters show the moving paint.
+                let mask = CAShapeLayer()
+                mask.frame = group.bounds
+                mask.path = outline
+                group.mask = mask
+            }
             if attachment.kind == .preview {
                 group.cornerRadius = attachment.radius
                 group.cornerCurve = .continuous
@@ -148,9 +157,15 @@ final class ChatRowCell: UIView {
     }
 
     /// Whether an attachment moves: emotes follow the chat's animate setting, badges always do
-    /// (as on desktop). The shared clock stills both under Reduce Motion.
+    /// (as on desktop), and a paint follows the app's Motion setting, like a row's Atmosphere.
+    /// The shared clock stills them all under Reduce Motion.
     private func moves(_ attachment: RowAttachment) -> Bool {
-        attachment.animate && (animateImages || attachment.kind == .badge)
+        guard attachment.animate else { return false }
+        switch attachment.kind {
+        case .badge: return true
+        case .paint: return Look.shared.motion == .full
+        default: return animateImages
+        }
     }
 
     private func load(_ url: String, into image: AnimatedImageLayer, attachment: RowAttachment, isBase: Bool) {
