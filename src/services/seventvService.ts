@@ -51,6 +51,9 @@ interface UserCosmeticsResponse {
 export interface UserCosmeticsResult {
   data: UserCosmeticsResponse;
   hardFail: boolean;
+  /** With hardFail: `data` is the chatter's last real answer, kept on disk by
+   *  Rust, standing in while 7TV fails. Draw it, and ask again later. */
+  stale?: boolean;
 }
 
 // Cache for cosmetic file paths (id -> localPath) to avoid repeated IPC calls

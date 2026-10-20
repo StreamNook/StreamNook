@@ -47,6 +47,8 @@ vi.mock('../services/cosmeticsCache', () => ({
   getCosmeticsFromMemoryCache: () => null,
   getCosmeticsWithFallback: async () => null,
   isUserCosmeticsHardFailed: () => false,
+  isUserCosmeticsUsable: () => true,
+  isUserCosmeticsRecheckDue: () => false,
   subscribeToCosmetics: () => () => {},
 }));
 vi.mock('../services/identityService', () => ({
