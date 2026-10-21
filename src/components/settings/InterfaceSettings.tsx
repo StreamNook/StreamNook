@@ -436,7 +436,7 @@ const InterfaceSettings = () => {
             <SettingsSection
                 id="settings-section-window"
                 label="Window"
-                description="What the close button does, how settings open, and what full screen hides."
+                description="What the close button does, how settings open, and what Theater mode hides."
             >
                 <SettingsRow
                     title="Close button"
@@ -468,10 +468,10 @@ const InterfaceSettings = () => {
                 />
 
                 <SettingsRow
-                    title="Full screen"
+                    title="Theater mode"
                     onReset={resetFor(['fullscreen_stream_only', true])}
-                    description={`Shows only the stream and chat in full screen (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'}): the title bar and sidebar tuck away while you watch. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar.`}
-                    help="Home keeps its title bar in full screen, since its tabs and search live there."
+                    description={`Theater mode (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'}, or the title bar's full screen button) fills the screen with the app. With this on, only the stream and its docked chat show while you watch: the title bar and sidebar tuck away. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar.`}
+                    help="Off, Theater mode keeps the title bar and sidebar on screen. Home keeps its title bar either way, since its tabs and search live there. This is not the player's own full screen (its button, F, or a double-click on the video), which shows only the video; bring chat up over that one with the chat button or C."
                     control={
                         <Toggle
                             enabled={fullscreenStreamOnly}

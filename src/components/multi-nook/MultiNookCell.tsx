@@ -41,6 +41,7 @@ import {
   resolveAudioBoost,
 } from '../../utils/audioBoost';
 import { injectPlyrControl } from '../../utils/plyrControls';
+import { mountFullscreenChatButton } from '../../utils/fullscreenChatButton';
 import { AudioBoostControls } from '../AudioBoostFaders';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
 import { SevenTvAvatar } from '../SevenTvAvatar';
@@ -419,6 +420,16 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     });
     // isPlaying/streamUrl re-trigger after the player (re)initialises
   }, [audioBoostOn, isPlaying, streamUrl, playerRef]);
+
+  // The chat button, the same one the solo player has: shown only while this
+  // tile is full screen, it brings the grid's chat up over the video.
+  useEffect(() => {
+    const container = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements
+      ?.container;
+    if (!container) return;
+    return mountFullscreenChatButton(container);
+    // isPlaying/streamUrl re-trigger after the player (re)initialises
+  }, [isPlaying, streamUrl, playerRef]);
 
   // Close the panel on Escape or a press outside it (the button itself toggles).
   // Capture phase so it runs before the tile's own pointer handlers.

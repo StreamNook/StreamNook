@@ -74,7 +74,8 @@ export function Dropdown<T extends string | number>({
             top: Math.round(r.bottom + 6),
             left: Math.round(left),
             width: Math.round(width),
-            zIndex: 9999,
+            // Lifted over the player's full screen (globals.css --sn-z-over-player-lift).
+            zIndex: 'calc(var(--sn-z-over-player-lift, 0) + 9999)',
         });
     };
 

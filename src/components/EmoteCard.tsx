@@ -95,7 +95,7 @@ function Card({ emote, onClose }: { emote: EmoteCardTarget; onClose: () => void 
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 backdrop-blur-2xl">
+    <div className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_300)] flex items-center justify-center bg-black/40 backdrop-blur-2xl">
       <div className="absolute inset-0" onClick={onClose} />
       <motion.div
         role="dialog"

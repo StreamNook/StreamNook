@@ -32,7 +32,7 @@ export default function ChatHeaderMenu({ items }: { items: ChatHeaderMenuItem[] 
     const r = triggerRef.current?.getBoundingClientRect();
     if (!r) return;
     const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
-    setStyle({ position: 'fixed', top: Math.round(r.bottom + 6), left: Math.round(left), width: MENU_WIDTH, zIndex: 9999 });
+    setStyle({ position: 'fixed', top: Math.round(r.bottom + 6), left: Math.round(left), width: MENU_WIDTH, zIndex: 'calc(var(--sn-z-over-player-lift, 0) + 9999)' });
   };
 
   useLayoutEffect(() => {

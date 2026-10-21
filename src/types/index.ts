@@ -1262,15 +1262,16 @@ export interface ChatOverlaySettings {
 }
 
 export interface FullscreenChatSettings {
-  // 'overlay' (default) shows chat over fullscreen video; 'hidden' keeps the
-  // pre-existing behaviour (video covers everything).
+  // No longer read. The player's full screen always opens as video only and
+  // the chat button (or C) brings chat up; older settings files may still
+  // carry this, so it stays typed.
   mode?: 'overlay' | 'hidden';
   // Background opacity of the overlay column, 0-100. Default 55.
   opacity?: number;
   // Column width in px, 240-640. Default 340.
   width?: number;
   // Fade the column out with the player controls; hover or focus keeps it.
-  // Default true.
+  // Default false: chat brought up stays up until it is put away.
   auto_hide?: boolean;
   // Which edge; 'auto' follows chat_placement (bottom docks to the right).
   side?: 'auto' | 'left' | 'right';
@@ -1286,9 +1287,9 @@ export interface Settings {
   // When chat_placement is 'left' or 'right', hide the docked chat and reveal it
   // on hover toward that edge (it slides in and the player flexes to make room).
   chat_auto_hide?: boolean;
-  // Chat laid over the video while the player is fullscreen. Same WebView, no
-  // second window: the docked chat panel is lifted above Plyr's fullscreen
-  // layer as a translucent column.
+  // Chat brought up over the video in the player's full screen (the chat
+  // button or C). Same WebView, no second window: the docked chat panel is
+  // lifted above Plyr's fullscreen layer as a translucent column.
   fullscreen_chat?: FullscreenChatSettings;
   // Transparent always-on-top chat overlay window (#/chat-overlay). Its
   // opacity; the window itself is opened by the user and placed by Rust.

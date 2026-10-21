@@ -546,7 +546,7 @@ export const CommandBrowser = ({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-[200] flex items-center justify-center bg-black/45 p-6"
+        className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_200)] flex items-center justify-center bg-black/45 p-6"
       >
         <motion.div
           ref={panelRef}

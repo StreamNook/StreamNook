@@ -3091,13 +3091,20 @@ html[data-blur="off"] .atm-frost {
   --sn-z-player-fs-osd: 10000001;      /* volume readout */
   --sn-z-player-fs-chat: 10000002;     /* the full-screen chat column */
   --sn-z-player-fs-popover: 10000003;  /* player panels opened in full screen (Audio Boost, chapters, stats), over the chat column */
-  --sn-z-player-fs-tile: 2147483000;   /* a full-screen MultiNook cell over its siblings */
   --sn-z-player-fs-title: 2147483000;  /* stream title overlay */
   --sn-z-player-fs-badge: 2147483001;  /* subscribe overlay */
   --sn-z-titlebar-over-player: 2147483100; /* the title bar lifted over the player: its full screen, or the tucking layout */
   --sn-z-titlebar-menu: 2147483200;    /* menus and popovers the bar opens */
   --sn-z-tooltip: 2147483300;          /* tooltips, over the menus they explain */
   --sn-z-titlebar-edge: 2147483400;    /* the reveal strip at the top edge */
+  /* Added to the z-index of the menus and cards chat opens at page level
+     (header menu, dropdowns, emote card, commands, blend sources). Zero in
+     the window; in the player's full screen it lifts them over the video and
+     the chat column, keeping their order among themselves. */
+  --sn-z-over-player-lift: 0;
+}
+html[data-player-fullscreen] {
+  --sn-z-over-player-lift: 10000010;
 }
 
 /* ===== Motion preferences (Interface > Motion) =====
@@ -4758,6 +4765,27 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
   color: var(--color-accent);
 }
 
+/* The chat button (utils/fullscreenChatButton.ts): only in the player's own
+   full screen, and only when there is a chat to bring up. The window and
+   Theater mode have chat docked already. Lit like Audio Boost while chat is
+   up. */
+.video-player-container .plyr__control[data-streamnook-fschat] {
+  display: none;
+}
+html[data-fs-chat-available] .video-player-container .plyr--fullscreen-fallback .plyr__control[data-streamnook-fschat] {
+  display: inline-flex;
+}
+.video-player-container .plyr__control[data-streamnook-fschat].is-active {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 55%, transparent);
+  border-radius: 6px;
+}
+.video-player-container .plyr__control[data-streamnook-fschat].is-active:hover {
+  background: color-mix(in srgb, var(--color-accent) 38%, transparent);
+  color: var(--color-accent);
+}
+
 /* Time display */
 .video-player-container .plyr__time {
   color: var(--color-text-primary);
@@ -5012,17 +5040,16 @@ html[data-watching] .drops-progress-inline {
 
 .video-player-container:has(.plyr--fullscreen-fallback) {
   transform: none !important;
-  /* Lift the whole fullscreen cell above every sibling tile. Each MultiNook cell
-     is its own stacking context (position: relative + z-index: 1), so the
-     fullscreen .plyr's z-index: 10000000 is trapped inside this cell and only
-     competes at the cell's level (1) against the other tiles. With every tile
-     tied at 1, DOM order breaks the tie, so any tile ordered after this one in
-     the DOM paints on top and "shows through" the fullscreen (and they pile up
-     as you fullscreen more tiles). Raising the cell itself puts its entire
-     subtree — the fixed .plyr plus the title/subscribe overlays — above all
-     other tiles regardless of DOM order. Only applies while a tile is fullscreen;
-     harmless for the single player, which has no sibling tiles. */
-  z-index: var(--sn-z-player-fs-tile) !important;
+  /* The box that holds a full-screen player must not be a stacking context.
+     If it were (any z-index on this positioned box), the fixed .plyr and
+     everything inside would compete at the box's level, and lifting the box
+     high enough to beat sibling MultiNook tiles also buried the full-screen
+     chat column under the video. With z-index auto the .plyr's own
+     --sn-z-player-fs competes at the page level: above every tile (they sit at
+     30 or less), under the chat column and the player's panels, as the
+     full-screen layer scale intends. The inline z-index a maximized tile
+     carries is overridden here too. */
+  z-index: auto !important;
 }
 
 /* The wheel/middle-click volume readout. It normally sits inside the player box,
@@ -7729,38 +7756,84 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   z-index: 3;
 }
 
-/* Fullscreen chat overlay (App.tsx). While Plyr is in CSS fullscreen (its
-   .plyr sits fixed at z-index 10000000), the docked chat panel is lifted
-   above it as a translucent fixed column: same node, no remount, no second
-   window. Width and opacity are user settings passed as custom properties.
-   Never animate backdrop-filter here (see MultiChat glass artifacts note). */
+/* Full-screen chat column (App.tsx). Brought up over the player's CSS full
+   screen with the chat button or C, the docked chat panel is lifted above
+   the fixed .plyr as a translucent column: same node, no remount, no second
+   window. Width and background are user settings passed as custom
+   properties.
+
+   The column itself carries no backdrop-filter, filter, transform or
+   opacity. Any of those would make it the containing block for its fixed
+   children, and a user card opened from chat would be laid out inside the
+   column, off to the side and clipped, instead of beside the click. So the
+   frost, tint and edge live on ::before, and auto-hide fades ::before and the
+   content rather than the column. Never animate backdrop-filter here (see
+   MultiChat glass artifacts note).
+
+   The column ends just above the player's control bar (--fs-chat-bottom,
+   measured from the bar in App.tsx) instead of the bar ending at the column:
+   the bar keeps its full width, so the chat button and the rest of the
+   player's buttons never move when chat comes up or goes away. */
 .chat-fullscreen-overlay {
   position: fixed !important;
   top: 0 !important;
-  bottom: 0 !important;
-  height: 100vh !important;
+  bottom: var(--fs-chat-bottom, 0px) !important;
+  height: auto !important;
   width: var(--fs-chat-width, 340px) !important;
   z-index: var(--sn-z-player-fs-chat) !important;
-  background: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity, 55%), transparent) !important;
-  transition: opacity 0.2s ease, transform 0.25s ease;
+  background: transparent !important;
+}
+.chat-fullscreen-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity, 55%), transparent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 25%);
+  /* One hairline on the video edge, never a border plus a bevel. */
+  box-shadow:
+    inset 1px 0 0 0 rgba(255, 255, 255, 0.10),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
+  backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
 }
 .chat-fullscreen-overlay--right {
   right: 0;
-  border-left: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
 }
 .chat-fullscreen-overlay--left {
   left: 0;
-  border-right: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+.chat-fullscreen-overlay--left::before {
+  box-shadow:
+    inset -1px 0 0 0 rgba(255, 255, 255, 0.10),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+}
+.chat-fullscreen-overlay::before,
+.chat-fullscreen-overlay > * {
+  transition: opacity 0.2s ease, transform 0.25s ease;
 }
 .chat-fullscreen-overlay[data-fs-hidden="true"] {
-  opacity: 0;
   pointer-events: none;
 }
-.chat-fullscreen-overlay--right[data-fs-hidden="true"] {
+.chat-fullscreen-overlay[data-fs-hidden="true"]::before,
+.chat-fullscreen-overlay[data-fs-hidden="true"] > * {
+  opacity: 0;
+}
+.chat-fullscreen-overlay--right[data-fs-hidden="true"]::before,
+.chat-fullscreen-overlay--right[data-fs-hidden="true"] > * {
   transform: translateX(12px);
 }
-.chat-fullscreen-overlay--left[data-fs-hidden="true"] {
+.chat-fullscreen-overlay--left[data-fs-hidden="true"]::before,
+.chat-fullscreen-overlay--left[data-fs-hidden="true"] > * {
   transform: translateX(-12px);
+}
+/* The chat's own ground is see-through in the column, so Background is what
+   decides how much video shows. Rows stay legible over any picture with the
+   overlay window's text shadow. */
+.chat-fullscreen-overlay [data-chat-surface] {
+  background-color: transparent;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
 }
 
 /* ---------------------------------------------------------------------------
@@ -7854,22 +7927,6 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
    window's edges; a radius would show the window's own ground at the corners. */
 html[data-os="linux"] .sn-chat-overlay-frame {
   border-radius: 0;
-}
-
-/* Fullscreen chat overlay column: same glass grammar as the overlay window,
-   plus a light frost since the video really is behind it in this WebView. */
-.chat-fullscreen-overlay {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 25%) !important;
-  box-shadow:
-    inset 1px 0 0 0 rgba(255, 255, 255, 0.10),
-    0 0 40px -10px rgba(0, 0, 0, 0.6);
-  -webkit-backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
-  backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
-}
-.chat-fullscreen-overlay--left {
-  box-shadow:
-    inset -1px 0 0 0 rgba(255, 255, 255, 0.10),
-    0 0 40px -10px rgba(0, 0, 0, 0.6);
 }
 
 /* Split-pane strip (MultiChat custom splits): a glass tile, not a bar. The

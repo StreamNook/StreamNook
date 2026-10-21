@@ -146,10 +146,10 @@ function build(): BindableCommand[] {
     },
     {
       id: 'window.toggleFullscreen',
-      label: 'Toggle full screen',
+      label: 'Theater mode',
       description: IS_MAC
-        ? 'Fill the whole screen with the app. While you watch, only the stream and chat show.'
-        : 'Fill the whole screen (over the taskbar) with the app. While you watch, only the stream and chat show.',
+        ? 'Fill the whole screen with the app. While you watch, only the stream and its docked chat show.'
+        : 'Fill the whole screen (over the taskbar) with the app. While you watch, only the stream and its docked chat show.',
       category: 'Application',
       context: 'global',
       // F11 is taken on macOS: the system binds it to Show Desktop / Mission
@@ -157,7 +157,7 @@ function build(): BindableCommand[] {
       // convention for full screen. `Meta` is this registry's canonical name for
       // Cmd (see chord.ts), and modifier order is Ctrl, Alt, Shift, Meta.
       defaultBindings: IS_MAC ? ['Ctrl+Meta+F'] : ['F11'],
-      keywords: 'fullscreen full screen borderless taskbar immersive window maximize theater theatre cinema',
+      keywords: 'theater theatre mode fullscreen full screen borderless taskbar immersive window maximize cinema f11',
       // In the player's own full screen the window is full screen through the
       // player, so leave through the player and the two stay in step.
       run: () => (app().isPlayerFullscreen ? exitPlayerFullscreen() : app().toggleWindowFullscreen()),
@@ -281,13 +281,29 @@ function build(): BindableCommand[] {
     },
     {
       id: 'player.fullscreen',
-      label: 'Toggle fullscreen',
+      label: 'Full screen',
+      description: 'The video fills the screen. Bring chat up over it with the chat button or C.',
       category: 'Player',
       context: 'player',
       defaultBindings: ['F'],
-      keywords: 'fullscreen full screen',
+      keywords: 'fullscreen full screen video player',
       isAvailable: isPlayerControllable,
       run: () => pc()?.toggleFullscreen(),
+    },
+    {
+      id: 'player.fullscreenChat',
+      label: 'Full screen chat',
+      description: "Bring chat up over the player's full screen, or put it away, without leaving full screen.",
+      category: 'Player',
+      // Global rather than player, like Esc below: a MultiNook tile's full
+      // screen has no single player behind the player context.
+      context: 'global',
+      defaultBindings: ['C'],
+      keywords: 'chat full screen fullscreen overlay show hide column',
+      // App.tsx marks the page while the player is full screen and there is a
+      // chat to bring up (the same mark that shows the chat button).
+      isAvailable: () => app().isPlayerFullscreen && document.documentElement.hasAttribute('data-fs-chat-available'),
+      run: () => app().toggleFsChat(),
     },
     {
       id: 'player.exitFullscreen',
@@ -308,12 +324,12 @@ function build(): BindableCommand[] {
     },
     {
       id: 'cs.toggleTheatre',
-      label: 'Toggle theatre mode',
-      description: 'Hide the sidebar and chat for a full-window video.',
+      label: 'Compact View',
+      description: 'Shrink the window to the small player at your Compact View size, without chat.',
       category: 'Player',
       context: 'player',
       defaultBindings: ['T'],
-      keywords: 'theatre theater immersive hide chat sidebar',
+      keywords: 'compact view mini small player shrink window hide chat sidebar',
       isAvailable: watching,
       run: () => app().toggleTheaterMode(),
     },

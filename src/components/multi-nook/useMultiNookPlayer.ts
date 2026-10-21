@@ -11,7 +11,7 @@ import Plyr from 'plyr';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
-import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
+import { claimPlayerFullscreen, handOffPlayerFullscreen, PLYR_FULLSCREEN_I18N, syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { createLiveEdgeTracker } from '../../utils/liveEdge';
 import { injectPlyrControl } from '../../utils/plyrControls';
@@ -23,6 +23,19 @@ import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
 
 /** Shown when a codec failure leaves nothing better to switch to. */
 export const CODEC_UNPLAYABLE = "Can't play this quality here";
+
+// A full-screen tile reports when its controls show and hide, as the solo
+// player does, so the full-screen chat column's Auto-hide fades with them.
+// Only the tile that is full screen speaks; the others' timers are ignored.
+const mirrorTileControls = (player: Plyr) => {
+  const mirror = (shown: boolean) => {
+    if (player.fullscreen.active && useAppStore.getState().isPlayerFullscreen) {
+      useAppStore.setState({ playerOverlayVisible: shown });
+    }
+  };
+  player.on('controlsshown', () => mirror(true));
+  player.on('controlshidden', () => mirror(false));
+};
 
 interface UseMultiNookPlayerProps {
   streamUrl?: string; // Proxy URL
@@ -351,11 +364,13 @@ export const useMultiNookPlayer = ({
             // true OS fullscreen (see syncTauriWindowFullscreen). Without this a
             // tile's fullscreen only fills the borderless window up to the taskbar.
             fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+            i18n: PLYR_FULLSCREEN_I18N,
             storage: { enabled: false }
           });
 
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+          mirrorTileControls(playerRef.current);
           claimPlayerFullscreen(playerRef.current);
           attachLiveButton();
 
@@ -596,11 +611,13 @@ export const useMultiNookPlayer = ({
             // true OS fullscreen (see syncTauriWindowFullscreen). Without this a
             // tile's fullscreen only fills the borderless window up to the taskbar.
             fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+            i18n: PLYR_FULLSCREEN_I18N,
             storage: { enabled: false }
           });
 
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+          mirrorTileControls(playerRef.current);
           claimPlayerFullscreen(playerRef.current);
           attachLiveButton();
 

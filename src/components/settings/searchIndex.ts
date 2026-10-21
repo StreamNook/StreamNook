@@ -920,12 +920,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
-    section: 'Fullscreen Chat',
-    title: 'Overlay',
-    description: 'Float the chat panel over the video while the player is fullscreen, as a translucent column. Opacity, width, side, and hide-with-controls options. Previously "Chat over fullscreen video".'
-  },
-  {
-    tab: 'Chat',
     section: 'Hidden Messages',
     sectionId: 'settings-section-chat-filters',
     title: 'Ignored phrases',
@@ -1196,41 +1190,37 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Chat Placement',
     title: 'Hover reveal',
     parent: 'Position',
-    description: 'Keep chat tucked against its left or right edge and slide it out when you move toward that side. Reveal on hover, auto hide chat, peek, slide out.'
+    description: 'Keep chat tucked against its left or right edge and slide it out when you move toward that side, in the window and in Theater mode. Reveal on hover, auto hide chat, peek, slide out.'
   },
   {
     tab: 'Chat',
-    section: 'Fullscreen Chat',
-    title: 'Fullscreen Chat',
-    description: 'Keep chatting while the stream fills the screen: chat floats over fullscreen video as a translucent column.'
+    section: 'Full Screen Chat',
+    title: 'Full Screen Chat',
+    description: 'Bring chat up over the player\'s full screen without leaving it: the chat button in the player\'s controls, or C. Chat floats over the video as a translucent column. Previously "Fullscreen Chat", "Overlay", "Chat over fullscreen video".'
   },
   {
     tab: 'Chat',
-    section: 'Fullscreen Chat',
-    title: 'Auto-hide',
-    parent: 'Overlay',
-    description: 'The fullscreen chat column fades out with the player controls and comes back when you move the mouse. Hide with the player controls.'
+    section: 'Full Screen Chat',
+    title: 'Background',
+    description: 'How solid the full screen chat column is behind the messages; lower lets more video show through. Previously "Opacity". Overlay opacity, transparency, see-through.'
   },
   {
     tab: 'Chat',
-    section: 'Fullscreen Chat',
-    title: 'Opacity',
-    parent: 'Overlay',
-    description: 'How solid the fullscreen chat column is; lower lets more video show through. Overlay opacity, transparency, see-through.'
-  },
-  {
-    tab: 'Chat',
-    section: 'Fullscreen Chat',
+    section: 'Full Screen Chat',
     title: 'Width',
-    parent: 'Overlay',
-    description: 'Fullscreen chat column width, 240 to 640 pixels. Overlay width.'
+    description: 'Full screen chat column width, 240 to 640 pixels. Overlay width.'
   },
   {
     tab: 'Chat',
-    section: 'Fullscreen Chat',
+    section: 'Full Screen Chat',
     title: 'Side',
-    parent: 'Overlay',
-    description: 'Which side the fullscreen chat column floats on; Auto follows the chat placement. Overlay side, left, right.'
+    description: 'Which edge the full screen chat column comes up on; Auto follows Chat Placement. Overlay side, left, right.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Full Screen Chat',
+    title: 'Auto-hide',
+    description: 'The full screen chat column fades out with the player controls and comes back when you move the mouse. Off, it stays up until you put it away. Hide with the player controls.'
   },
   {
     tab: 'Chat',
@@ -1928,6 +1918,48 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Text',
+    title: 'Text',
+    parent: 'Shadow',
+    description: 'The overlay shadow behind message and event text. Text shadow.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
+    title: 'Names',
+    parent: 'Shadow',
+    description: 'The overlay shadow behind usernames, 7TV paints included. Name shadow, username shadow.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
+    title: 'Badges',
+    parent: 'Shadow',
+    description: 'The overlay shadow behind badges, in each badge\'s own shape. Badge shadow.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
+    title: 'Dark',
+    parent: 'Text',
+    description: 'A heavier, darker overlay shadow behind message text. Thick shadow, outline, bold.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
+    title: 'Dark',
+    parent: 'Names',
+    description: 'A heavier, darker overlay shadow behind usernames. Thick shadow, outline, bold.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
+    title: 'Dark',
+    parent: 'Badges',
+    description: 'A heavier, darker overlay shadow behind badges. Thick shadow, outline, bold.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Text',
     title: 'Emoji style',
     description: 'One consistent emoji set across every platform on the overlay, or your system emoji.'
   },
@@ -2363,8 +2395,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Interface',
     section: 'Window',
     sectionId: 'settings-section-window',
-    title: 'Full screen',
-    description: 'The title bar and sidebar tuck away while you watch in full screen. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar. Previously "Show only the stream and chat".'
+    title: 'Theater mode',
+    description: 'Theater mode (F11) fills the screen with the app; with this on, the title bar and sidebar tuck away while you watch, leaving the stream and its docked chat. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar. Previously "Full screen", "Show only the stream and chat". Theatre.'
   },
   {
     tab: 'Interface',
