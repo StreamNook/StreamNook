@@ -60,6 +60,14 @@ let lastNotifyKick = 0;
 // needs to be sure.
 const CHAT_REBUILD_AFTER_HIDDEN_MS = 90_000;
 
+// One run per transition. Two signals can report the same one: a lock with
+// audio playing raises sn:screen-off while the page may never turn hidden
+// (MainActivity resumes the WebView while the media service runs), and a lock
+// without it raises both. Seeded by installLifecycle. pipAway marks a hide
+// that only went into PiP, so the return from it still runs onVisible.
+let hiddenNow = false;
+let pipAway = false;
+
 // Ask the activity directly. The dataset mirror is written by an async
 // evaluateJavascript from onPictureInPictureModeChanged, and `visibilitychange`
 // fires independently as the activity pauses, so the flag frequently has not
@@ -81,7 +89,12 @@ function reportForeground(foreground: boolean): void {
 }
 
 async function onHidden(): Promise<void> {
-  if (inPictureInPicture()) return;
+  if (inPictureInPicture()) {
+    pipAway = true;
+    return;
+  }
+  if (hiddenNow) return;
+  hiddenNow = true;
   hiddenSince = Date.now();
   // The polls read this and skip their tick. Set before the await so a poll
   // firing in the same turn already sees it.
@@ -94,6 +107,9 @@ async function onHidden(): Promise<void> {
 }
 
 async function onVisible(): Promise<void> {
+  if (!hiddenNow && !pipAway) return;
+  hiddenNow = false;
+  pipAway = false;
   setBackgrounded(false);
   reportForeground(true);
   void resumePresence();
@@ -146,12 +162,26 @@ export function installLifecycle(): () => void {
   const onPipClosed = () => {
     if (document.visibilityState === 'hidden') void onHidden();
   };
+  // A lock with audio playing may never turn the page hidden (see hiddenNow),
+  // and locked with audio is the main background case, so the screen itself
+  // counts. PiP with the screen off is still PiP.
+  const onScreenOff = () => {
+    if (isInPip() !== true) void onHidden();
+  };
+  const onScreenOn = () => {
+    if (document.visibilityState === 'visible') void onVisible();
+  };
+  hiddenNow = document.visibilityState === 'hidden';
   document.addEventListener('visibilitychange', handler);
   window.addEventListener('sn:pip-closed', onPipClosed);
+  window.addEventListener('sn:screen-off', onScreenOff);
+  window.addEventListener('sn:screen-on', onScreenOn);
   reportForeground(document.visibilityState === 'visible');
   return () => {
     document.removeEventListener('visibilitychange', handler);
     window.removeEventListener('sn:pip-closed', onPipClosed);
+    window.removeEventListener('sn:screen-off', onScreenOff);
+    window.removeEventListener('sn:screen-on', onScreenOn);
     installed = false;
   };
 }
