@@ -141,12 +141,15 @@ public enum ImageCacheKey {
 public struct FrameTimeline: Sendable, Equatable {
     public let durations: [Double]
     public let total: Double
+    /// The shortest frame, for the rate that shows every frame (`ClockRate`).
+    public let shortest: Double
     private let ends: [Double]
 
     /// Browsers draw frames shorter than 20 ms at 100 ms; so does this.
     public init(durations: [Double]) {
         let clean = durations.map { $0 < 0.02 ? 0.1 : $0 }
         self.durations = clean
+        shortest = clean.min() ?? 0.1
         var running = 0.0
         ends = clean.map { running += $0; return running }
         total = running
