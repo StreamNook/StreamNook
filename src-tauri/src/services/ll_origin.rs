@@ -377,6 +377,11 @@ pub struct LlOrigin {
     /// PART-TARGET of the Apple playlist, fixed by the first one served for
     /// this stream (see `APPLE_PART_TARGET_HEADROOM`).
     apple_part_target: Mutex<Option<f64>>,
+    /// The upstream playlist the reader follows, so a parked origin can restart it.
+    upstream: Mutex<Option<String>>,
+    /// The player paused past earning_gate::PARK_AFTER: the reader is stopped and
+    /// the edge held until the player plays or asks for it again (`unpark`).
+    parked: AtomicBool,
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -978,6 +983,8 @@ impl LlOrigin {
             cmaf_video: Mutex::new(None),
             retired: Mutex::new(VecDeque::new()),
             apple_part_target: Mutex::new(None),
+            upstream: Mutex::new(None),
+            parked: AtomicBool::new(false),
         })
     }
 
@@ -1055,7 +1062,52 @@ impl LlOrigin {
         *self.cmaf_video.lock().unwrap() = None;
         self.retired.lock().unwrap().clear();
         *self.apple_part_target.lock().unwrap() = None;
+        self.parked.store(false, Ordering::SeqCst);
+        *self.upstream.lock().unwrap() = None;
         self.wake_serves();
+    }
+
+    /// The player paused past earning_gate::PARK_AFTER: stop downloading. The reader
+    /// ends and the edge is held exactly as last served, so the playlist never
+    /// shrinks under a client that already read it; a paused player's blocking
+    /// reloads time out and get that same playlist back (serve_playlist_apple).
+    /// `unpark` restarts the reader, whose catch-up rebuilds at the live edge
+    /// (plan_catch_up).
+    pub fn park(&self) -> bool {
+        if !self.is_active() || self.parked.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(h) = self.reader_task.lock().unwrap().take() {
+            h.abort();
+        }
+        if let Some(t) = self.transmux.lock().unwrap().as_mut() {
+            t.reset_assembly();
+        }
+        self.wake_serves();
+        info!("[LLOrigin] parked (player paused)");
+        true
+    }
+
+    /// Restart a parked reader. The held edge keeps serving until the reader's first
+    /// catch-up replaces it, so the player never sees the origin go inactive.
+    pub fn unpark(self: &Arc<Self>) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if !self.parked.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.parked.store(false, Ordering::SeqCst);
+        let Some(url) = self.upstream.lock().unwrap().clone().filter(|_| self.is_active()) else {
+            return false;
+        };
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen)));
+        info!("[LLOrigin] unparked; reader back at the live edge");
+        true
+    }
+
+    pub fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::SeqCst)
     }
 
     /// Probe the upstream and, if it's a low-latency broadcast we can serve, build the
@@ -1235,6 +1287,7 @@ impl LlOrigin {
             upstream_playlist_url.split('?').next().unwrap_or("")
         );
 
+        *self.upstream.lock().unwrap() = Some(upstream_playlist_url.clone());
         let handle = tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen));
         *self.reader_task.lock().unwrap() = Some(handle);
         StartOutcome {
@@ -2656,7 +2709,11 @@ impl LlOrigin {
                     }
                 })
                 .await;
-            if !held {
+            // Parked: nothing new will arrive until the player plays, so the
+            // paused player gets the held playlist back after the hold (one
+            // loopback request per hold, no network) instead of a fall-through
+            // to the upstream relay path.
+            if !held && !self.is_parked() {
                 return None;
             }
         }
@@ -2810,6 +2867,19 @@ pub fn engine_disabled() -> bool {
 
 pub fn stop() {
     SOLO.stop()
+}
+
+/// The main player paused past earning_gate::PARK_AFTER (see `LlOrigin::park`).
+pub fn park() -> bool {
+    SOLO.park()
+}
+
+pub fn unpark() -> bool {
+    SOLO.unpark()
+}
+
+pub fn is_parked() -> bool {
+    SOLO.is_parked()
 }
 
 pub async fn start(upstream_playlist_url: String) -> StartOutcome {
@@ -3667,6 +3737,59 @@ mod tests {
         assert!(served.is_none());
         // The change was published so any blocked reload wakes.
         assert!(origin.edge_version.load(Ordering::SeqCst) > before);
+    }
+
+    fn held_sns(origin: &LlOrigin) -> Vec<u64> {
+        origin.live_edge.lock().unwrap().as_ref().unwrap().segments.iter().map(|s| s.sn).collect()
+    }
+
+    #[test]
+    fn park_holds_the_edge_as_served() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let before = held_sns(&origin);
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(origin.park());
+        assert!(origin.is_active());
+        assert!(origin.is_parked());
+        assert!(origin.generation.load(Ordering::SeqCst) > generation);
+        assert_eq!(held_sns(&origin), before);
+        assert!(!origin.park(), "a second park is a no-op");
+    }
+
+    #[test]
+    fn unpark_without_an_upstream_clears_the_park_and_starts_nothing() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        assert!(!origin.unpark());
+        assert!(!origin.is_parked());
+        assert!(origin.reader_task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn stop_clears_a_park() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        origin.stop();
+        assert!(!origin.is_parked());
+        assert!(!origin.is_active());
+    }
+
+    #[test]
+    fn a_parked_origin_answers_a_timed_out_apple_reload() {
+        // A paused AVPlayer keeps making blocking reloads. Unparked, a reload the
+        // edge never satisfies times out to None (the relay falls through); parked,
+        // it gets the held playlist back so the relay never goes upstream.
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let unparked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
+        assert!(unparked.is_none());
+        assert!(origin.park());
+        let parked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
+        assert!(parked.is_some());
     }
 
     #[test]
