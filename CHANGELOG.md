@@ -1,3 +1,20 @@
+## [8.8.14] - 2026-10-20
+
+### ✨ Features
+- Full screen now opens as just the video. The new chat button in the player (or C) brings chat in over it without leaving full screen, on the main player and on MultiNook tiles. The F11 window mode is now called Theater mode.
+- Click the category under a stream's title to browse other streams in it, on Twitch and Kick.
+- Chat tabs in MultiChat and MultiNook show a red dot on channels that are live.
+- The OBS chat overlay has sharper badges, one Shadow setting with switches for text, names and badges, and slider values you can type. Emotes and badges keep loading while 7TV or another provider is down.
+
+### 🐛 Bug Fixes
+- When an emote provider is slow or briefly down, chat fills in the missing emotes on its own, and a channel's own emote wins over a global one with the same name. Kick, YouTube and Shared Chat emotes recover from a failed load too.
+- 7TV paints and badges stay on chatters while 7TV is down.
+- Names with spaces (like Call of Duty) show correctly and light up as one mention, and short links like test.fr are clickable.
+- Resume in a popped-out MultiChat glides down to the newest messages instead of jumping.
+- The Notifications Test button always plays your chosen sound, and the Volume setting now applies to go-live and whisper sounds.
+- Mod tools show in chat tabs you aren't looking at.
+- Channel point rewards that need a live stream unlock as soon as the stream starts, and closing a stream and quickly reopening it no longer leaves chat empty.
+
 ## [8.8.13] - 2026-10-20
 
 ## 🎉 New: Run your channel from chat
