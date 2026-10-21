@@ -74,7 +74,9 @@ static MANIFEST_MEMORY: Lazy<StdRwLock<UniversalCacheManifest>> =
 // failed so the next tick retries.
 static MANIFEST_DIRTY: AtomicBool = AtomicBool::new(false);
 /// Seconds between debounced manifest flushes. See ensure_flush_task.
-const MANIFEST_FLUSH_DEBOUNCE_SECS: u64 = 30;
+// The phones flush on the way to the background (app_presence::set_foreground),
+// so they can write this large file far less often while the app is open.
+const MANIFEST_FLUSH_DEBOUNCE_SECS: u64 = if cfg!(mobile) { 300 } else { 30 };
 
 // Background flush task is started lazily on first write so we don't spawn
 // anything if the app never modifies the manifest (read-only sessions). The
