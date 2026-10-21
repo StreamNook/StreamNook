@@ -45,7 +45,7 @@ import { features } from '../features';
 import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
-import { staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
+import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
 import { flashTitle } from '../utils/titleFlasher';
 import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
@@ -1464,7 +1464,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // srcSet would be meaningless and could re-pull from the network).
       let srcSet: string | undefined = undefined;
       if (!giant && !cachedEmoteUrl && is7TVEmote && segment.emoteId) {
-        srcSet = `https://cdn.7tv.app/emote/${segment.emoteId}/1x.avif 1x, https://cdn.7tv.app/emote/${segment.emoteId}/2x.avif 2x, https://cdn.7tv.app/emote/${segment.emoteId}/3x.avif 3x, https://cdn.7tv.app/emote/${segment.emoteId}/4x.avif 4x`;
+        srcSet = sevenTvSrcSet(segment.emoteId, 'avif');
       }
 
       const displaySrc = wantStatic ? staticEmoteUrl(displayUrl) : cachedEmoteUrl || displayUrl;
@@ -1540,11 +1540,35 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           if (cachedEmoteUrl && !t.dataset.cdnFallback) {
             t.dataset.cdnFallback = '1';
             if (is7TVEmote && segment.emoteId) {
-              t.srcset = `https://cdn.7tv.app/emote/${segment.emoteId}/1x.avif 1x, https://cdn.7tv.app/emote/${segment.emoteId}/2x.avif 2x, https://cdn.7tv.app/emote/${segment.emoteId}/3x.avif 3x, https://cdn.7tv.app/emote/${segment.emoteId}/4x.avif 4x`;
+              t.srcset = sevenTvSrcSet(segment.emoteId, 'avif');
               t.src = `https://cdn.7tv.app/emote/${segment.emoteId}/${emoteTier}.avif`;
             } else {
               t.src = emoteUrl;
             }
+            return;
+          }
+          // 7TV serves every emote as WebP too, and an older WebView (some
+          // Android phones) cannot decode AVIF at all.
+          if (is7TVEmote && segment.emoteId && !t.dataset.webpFallback) {
+            t.dataset.webpFallback = '1';
+            const still = wantStatic ? '_static' : '';
+            t.srcset = sevenTvSrcSet(segment.emoteId, 'webp', wantStatic);
+            t.src = `https://cdn.7tv.app/emote/${segment.emoteId}/${emoteTier}${still}.webp`;
+            return;
+          }
+          // A phone waking its radio fails a good image once. One late retry
+          // before the emote becomes its name for good.
+          if (!t.dataset.lateRetry) {
+            t.dataset.lateRetry = '1';
+            const src = t.currentSrc || t.src;
+            const set = t.srcset;
+            t.removeAttribute('srcset');
+            t.removeAttribute('src');
+            window.setTimeout(() => {
+              if (!t.isConnected) return;
+              if (set) t.srcset = set;
+              t.src = src;
+            }, 2500);
             return;
           }
           t.style.display = 'none';

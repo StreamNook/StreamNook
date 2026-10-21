@@ -619,6 +619,29 @@ fn known_cosmetics(msg: &ChatMessage) -> Option<WornView> {
     None
 }
 
+/// A chatter's 7TV paint or badge changed live (the EventAPI said so): look
+/// them up again and repaint their rows in every room. The web renderers
+/// re-resolve on their own (`7tv://cosmetic-update`); this is the same for
+/// the native shell, which draws rows from these frames.
+pub async fn repaint_changed_author(twitch_id: &str) {
+    if !enabled() {
+        return;
+    }
+    let Some(id) = crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", twitch_id) else {
+        return;
+    };
+    crate::services::seventv_cosmetics_resolver::invalidate(&id);
+    let lookup = crate::services::seventv_cosmetics_resolver::resolve(id).await;
+    if lookup.hard_fail {
+        return; // 7TV did not answer; what is drawn stays until it does
+    }
+    let worn = worn_view(&lookup.data.paints, &lookup.data.badges);
+    // No room named: every open room repaints the author (a removed paint
+    // included, which is why an empty answer is sent too).
+    let frame = cosmetics_frame("", "twitch", twitch_id, &worn);
+    crate::services::irc_service::post_frame_to_all(frame).await;
+}
+
 /// The frame that paints rows already on screen once a chatter's cosmetics
 /// arrive.
 pub fn cosmetics_frame(channel: &str, provider: &str, user_id: &str, worn: &WornView) -> String {

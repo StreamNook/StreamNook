@@ -693,6 +693,15 @@ impl<'a> Collector<'a> {
             .filter(|h| h.is_personal())
             .map(|h| (h.name.clone(), h.seed.id.clone()))
             .collect();
+        // Chat draws a channel's own emote over a global of the same name
+        // whatever the provider (the 7TV extension's order), so the menu
+        // offers that one too rather than previewing art that never appears.
+        let channel_names: HashSet<String> = hits
+            .iter()
+            .flatten()
+            .filter(|h| h.shadowable() && !h.is_personal() && !h.seed.global)
+            .map(|h| h.name.clone())
+            .collect();
         let mut replaced: HashSet<String> = HashSet::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut merged: Vec<Ranked> = Vec::new();
@@ -711,6 +720,9 @@ impl<'a> Collector<'a> {
                         if *mine != hit.seed.id {
                             replaced.insert(hit.name);
                         }
+                        continue;
+                    }
+                    if hit.seed.global && channel_names.contains(&hit.name) {
                         continue;
                     }
                 }
@@ -1104,6 +1116,24 @@ mod tests {
         // emotes, each beside the 7TV name it differs from only by case; the
         // variant typed in the same case ("lo") leads its pair.
         assert_eq!(names(&rows), vec!["Loading", "LOADING", "lol", "LoL"]);
+    }
+
+    #[test]
+    fn a_channel_emote_beats_a_global_of_the_same_name() {
+        // Chat draws the channel's BetterTTV EZ over 7TV's global EZ (the 7TV
+        // extension's order), so the menu offers that one.
+        let mut s = EmoteSet::new();
+        s.seven_tv = vec![emote(EmoteProvider::SevenTV, "g-EZ", "EZ", Some(GLOBAL_EMOTE_TYPE), None)];
+        s.bttv = vec![emote(EmoteProvider::BTTV, "b-EZ", "EZ", None, None)];
+        let favorites = HashSet::new();
+        let globals: HashSet<String> = ["g-EZ".to_string()].into_iter().collect();
+        let mut c = Collector::new(
+            Spec { query: "EZ", profile: Profile::Search, order: Order::Default, contains: false, limit: 50 },
+            Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        );
+        c.offer_set(&s);
+        let rows = c.finish().0;
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["b-EZ"]);
     }
 
     fn case_pair(extra_7tv: &[&str]) -> EmoteSet {

@@ -65,6 +65,46 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const MAINTENANCE_DELAY: Duration = Duration::from_secs(300);
 const RATE_LIMITED_DELAY: Duration = Duration::from_secs(60);
 
+/// When the socket last heard a frame (unix ms; 0 while not connected), and
+/// the heartbeat interval its HELLO named, for the check after a phone comes
+/// back to the foreground.
+static LAST_HEARD_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static HEARTBEAT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(48_000);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn heard_now() {
+    LAST_HEARD_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Ends the current session at once (it then reconnects and resumes).
+fn reconnect_now() -> &'static tokio::sync::Notify {
+    static NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
+    NOTIFY.get_or_init(tokio::sync::Notify::new)
+}
+
+/// The app is back in front after a long absence (a phone's chat rebuild).
+/// A frozen process misses heartbeats and 7TV drops the socket, but the read
+/// timeout only notices a few minutes later; meanwhile every live emote
+/// change is lost. A socket that heard nothing for over a heartbeat cycle is
+/// reconnected now (it resumes, or resyncs every channel's set).
+pub fn check_after_resume() {
+    let last = LAST_HEARD_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if last == 0 {
+        return; // not connected; the connect loop is already on it
+    }
+    let quiet = now_ms().saturating_sub(last);
+    if quiet > HEARTBEAT_MS.load(std::sync::atomic::Ordering::Relaxed) + 10_000 {
+        info!("[7TV EventAPI] quiet for {}s after resume, reconnecting", quiet / 1000);
+        reconnect_now().notify_waiters();
+    }
+}
+
 type WsSink = futures_util::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Message,
@@ -177,7 +217,13 @@ pub async fn subscribe_channel_on(channel_name: &str, channel_id: &str, platform
         return; // already subscribed (e.g. IRC reconnect re-running the hook)
     }
 
-    let ids = resolve_ids(&svc.http, channel_id, platform).await;
+    let Some(ids) = resolve_ids(&svc.http, channel_id, platform).await else {
+        schedule_subscribe_retry(channel_name, channel_id, platform);
+        return;
+    };
+    if let Ok(mut retries) = subscribe_retries().lock() {
+        retries.remove(&key);
+    }
     if ids.emote_set_id.is_none() && ids.user_id.is_none() {
         debug!(
             "[7TV EventAPI] {} not on 7TV, skipping subscription",
@@ -222,6 +268,9 @@ pub async fn unsubscribe_channel_on(channel_name: &str, platform: &str) {
         return;
     };
     let key = sub_key(channel_name, platform);
+    if let Ok(mut retries) = subscribe_retries().lock() {
+        retries.remove(&key);
+    }
     if let Some(sub) = svc.subs.write().await.remove(&key) {
         let _ = svc.cmd_tx.send(Cmd::Unsubscribe(sub));
         debug!("[7TV EventAPI] unsubscribed channel {}", key);
@@ -240,8 +289,10 @@ pub async fn clear_all() {
     for sub in drained {
         let _ = svc.cmd_tx.send(Cmd::Unsubscribe(sub));
     }
-    // Personal emotes are keyed by user, not channel; a full teardown clears them.
-    IrcService::clear_all_personal_emotes().await;
+    // Personal emotes are keyed by user and bounded by their LRU. A chat
+    // rebuild (a phone back from the background) must not drop them: the
+    // entitlements are not re-delivered for chatters already seen, so their
+    // emotes would read as words until each sender's set came round again.
 }
 
 /// Resolve the channel's active emote set id and 7TV user id.
@@ -251,16 +302,26 @@ pub async fn clear_all() {
 /// the whole channel document, 14 MB on a large channel, inline on the join
 /// path, and then read the PLATFORM id off its root as the 7TV user id, which
 /// made every presence POST a silent 400.
-async fn resolve_ids(http: &reqwest::Client, channel_id: &str, platform: &str) -> SeventvIds {
+///
+/// None when the lookup failed (an error answer, a dropped request, GraphQL
+/// errors with no data), which says nothing about the channel; `Some` of empty
+/// ids is 7TV's answer that the channel is not there.
+async fn resolve_ids(http: &reqwest::Client, channel_id: &str, platform: &str) -> Option<SeventvIds> {
     if let Some(ids) = emote_service::seventv_ids_cached(channel_id).await {
-        return ids;
+        return Some(ids);
     }
 
     let body = json!({
         "query": "query($platform: Platform!, $id: String!) { users { userByConnection(platform: $platform, platformId: $id) { id style { activeEmoteSet { id } } } } }",
         "variables": { "platform": seventv_platform(platform), "id": channel_id }
     });
-    let resp = match http.post(SEVENTV_GQL_URL).json(&body).send().await {
+    let resp = match http
+        .post(SEVENTV_GQL_URL)
+        .json(&body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => resp,
         Ok(resp) => {
             warn!(
@@ -268,22 +329,25 @@ async fn resolve_ids(http: &reqwest::Client, channel_id: &str, platform: &str) -
                 channel_id,
                 resp.status()
             );
-            return SeventvIds::default();
+            return None;
         }
         Err(e) => {
             warn!("[7TV EventAPI] id lookup failed for {}: {}", channel_id, e);
-            return SeventvIds::default();
+            return None;
         }
     };
     let v: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
             warn!("[7TV EventAPI] id lookup for {} did not parse: {}", channel_id, e);
-            return SeventvIds::default();
+            return None;
         }
     };
     if let Some(errs) = v.get("errors") {
         warn!("[7TV EventAPI] id lookup GraphQL errors for {}: {}", channel_id, errs);
+        if v.pointer("/data/users").map_or(true, Value::is_null) {
+            return None;
+        }
     }
     let user = v.pointer("/data/users/userByConnection");
     let ids = SeventvIds {
@@ -299,7 +363,46 @@ async fn resolve_ids(http: &reqwest::Client, channel_id: &str, platform: &str) -
     if ids.user_id.is_some() || ids.emote_set_id.is_some() {
         emote_service::seventv_ids_store(channel_id, ids.clone()).await;
     }
-    ids
+    Some(ids)
+}
+
+/// Subscriptions waiting to try their id lookup again, by sub key, with the
+/// attempts made. Leaving the channel cancels the wait.
+fn subscribe_retries() -> &'static std::sync::Mutex<HashMap<String, u8>> {
+    static RETRIES: OnceLock<std::sync::Mutex<HashMap<String, u8>>> = OnceLock::new();
+    RETRIES.get_or_init(Default::default)
+}
+
+/// Try a subscription whose id lookup failed again, 30 s and then 120 s
+/// later. A failed lookup used to read as "not on 7TV", so the channel got no
+/// live emote updates for the rest of the session.
+fn schedule_subscribe_retry(channel_name: &str, channel_id: &str, platform: &str) {
+    let key = sub_key(channel_name, platform);
+    let attempt = {
+        let Ok(mut retries) = subscribe_retries().lock() else { return };
+        let n = retries.entry(key.clone()).or_insert(0);
+        *n += 1;
+        *n
+    };
+    let wait = match attempt {
+        1 => 30,
+        2 => 120,
+        _ => {
+            if let Ok(mut retries) = subscribe_retries().lock() {
+                retries.remove(&key);
+            }
+            warn!("[7TV EventAPI] {} id lookup still failing; live updates wait for the next join", key);
+            return;
+        }
+    };
+    let (name, id, platform) = (channel_name.to_string(), channel_id.to_string(), platform.to_string());
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(wait)).await;
+        let still_wanted = subscribe_retries().lock().map(|r| r.contains_key(&key)).unwrap_or(false);
+        if still_wanted {
+            subscribe_channel_on(&name, &id, &platform).await;
+        }
+    });
 }
 
 /// Our provider id translated to 7TV's platform name.
@@ -576,7 +679,9 @@ async fn connect_and_run(
                         .filter(|ms| *ms > 0)
                     {
                         read_timeout = Duration::from_millis(ms.saturating_mul(HEARTBEAT_MISSES));
+                        HEARTBEAT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
                     }
+                    heard_now();
                     break;
                 }
             }
@@ -705,6 +810,9 @@ async fn connect_and_run(
     loop {
         tokio::select! {
             read_res = timeout(read_timeout, read.next()) => {
+                if let Ok(Some(Ok(_))) = &read_res {
+                    heard_now();
+                }
                 match read_res {
                     Err(_) => {
                         warn!(
@@ -736,6 +844,9 @@ async fn connect_and_run(
                     Some(cmd) => apply_cmd(&mut write, http, cmd, session_id.as_deref()).await?,
                     None => return Ok(report), // sender dropped (never, SERVICE holds it)
                 }
+            }
+            _ = reconnect_now().notified() => {
+                return Ok(report);
             }
         }
     }
@@ -1218,6 +1329,11 @@ fn handle_entitlement(d: &Value, dispatch_type: &str, app_handle: &AppHandle) {
         "7tv://cosmetic-update",
         json!({ "twitch_id": twitch_id, "action": action }),
     );
+    // The native shell hears no page events; its rows repaint from a frame.
+    let tid = twitch_id.to_string();
+    tokio::spawn(async move {
+        crate::services::chat_row_view::repaint_changed_author(&tid).await;
+    });
 }
 
 // Entitlement fetch lane. A reconnect / presence rebootstrap re-delivers the
@@ -1259,6 +1375,44 @@ fn slow_entitlement_log_due() -> bool {
     due
 }
 
+/// Tries made for each personal set that failed to load, so a set 7TV keeps
+/// refusing is asked for twice more, not forever.
+fn personal_retries() -> &'static std::sync::Mutex<HashMap<(String, String), u8>> {
+    static TRIES: std::sync::OnceLock<std::sync::Mutex<HashMap<(String, String), u8>>> = std::sync::OnceLock::new();
+    TRIES.get_or_init(Default::default)
+}
+
+/// Ask for a personal set that failed to load again, 10 s and then 60 s later.
+fn schedule_personal_retry(twitch_id: String, set_id: String) {
+    let attempt = {
+        let Ok(mut tries) = personal_retries().lock() else { return };
+        if tries.len() > 2000 {
+            tries.clear();
+        }
+        let n = tries.entry((twitch_id.clone(), set_id.clone())).or_insert(0);
+        *n += 1;
+        *n
+    };
+    let wait = match attempt {
+        1 => 10,
+        2 => 60,
+        _ => {
+            log::warn!("[7TV] personal set {} still failing; left for its next delivery", set_id);
+            return;
+        }
+    };
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        enqueue_entitlement_fetch(twitch_id, set_id);
+    });
+}
+
+fn personal_retry_done(twitch_id: &str, set_id: &str) {
+    if let Ok(mut tries) = personal_retries().lock() {
+        tries.remove(&(twitch_id.to_string(), set_id.to_string()));
+    }
+}
+
 /// A chatter 7TV lists as an active subscriber holding this personal set, found
 /// outside the EventAPI (the cosmetics resolver). Same lane, dedup and repaint
 /// as an EMOTE_SET entitlement.
@@ -1297,7 +1451,17 @@ fn enqueue_entitlement_fetch(twitch_id: String, set_id: String) {
                         // release. Reported only when slow, and at most once every
                         // 5s, so a busy channel cannot turn it into a firehose.
                         let started = std::time::Instant::now();
-                        let emotes = emote_service::fetch_personal_emote_set(&set_id).await;
+                        let Some(emotes) = emote_service::fetch_personal_emote_set(&set_id).await else {
+                            // Not recorded, so nothing claims the set is loaded;
+                            // asked for again shortly instead of waiting for a
+                            // delivery that may never repeat.
+                            if let Ok(mut inflight) = entitlement_inflight().lock() {
+                                inflight.remove(&(tid.clone(), set_id.clone()));
+                            }
+                            schedule_personal_retry(tid, set_id);
+                            return;
+                        };
+                        personal_retry_done(&tid, &set_id);
                         let took = started.elapsed();
                         if took >= std::time::Duration::from_secs(1) && slow_entitlement_log_due() {
                             log::info!(

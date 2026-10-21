@@ -1021,8 +1021,9 @@ fn unescape_irc_tag(value: &str) -> String {
 /// here: they are per-sender (a separate map consulted first in the word
 /// tier). Nothing in here ever replaces a span Twitch tagged as an emote.
 pub(crate) struct EmoteLookup {
-    /// name -> emote, inserted bttv, ffz, seven_tv in order (later insert
-    /// wins), preserving the word tier's 7TV > FFZ > BTTV priority.
+    /// name -> emote: every global first, then the channel's own rows, each
+    /// pass in bttv, ffz, seven_tv order (later insert wins). A channel emote
+    /// beats any global; inside each group 7TV > FFZ > BTTV.
     by_name: HashMap<String, Emote>,
     /// The channel's own Twitch emotes. A live message never reads these (its
     /// Twitch emotes come from the IRC tag's positions, and matching names
@@ -1035,7 +1036,18 @@ impl EmoteLookup {
     pub(crate) fn build(set: &EmoteSet) -> Arc<Self> {
         let mut by_name =
             HashMap::with_capacity(set.bttv.len() + set.ffz.len() + set.seven_tv.len());
-        for e in set.bttv.iter().chain(&set.ffz).chain(&set.seven_tv) {
+        // The 7TV extension's order: a channel's own emote beats every global
+        // of the same name, whatever the provider (a 7TV global `EZ` must not
+        // cover the channel's BetterTTV `EZ`), and inside each group 7TV beats
+        // FFZ beats BetterTTV. Globals go in first; channel rows overwrite them.
+        let is_global = |e: &&Emote| {
+            e.emote_type.as_deref() == Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE)
+        };
+        let all = || set.bttv.iter().chain(&set.ffz).chain(&set.seven_tv);
+        for e in all().filter(is_global) {
+            by_name.insert(e.name.clone(), e.clone());
+        }
+        for e in all().filter(|e| !is_global(e)) {
             by_name.insert(e.name.clone(), e.clone());
         }
         Arc::new(Self { by_name, natives: set.twitch.clone() })
@@ -1085,9 +1097,12 @@ fn merge_space_runs(segments: &mut Vec<MessageSegment>) {
 
 fn rebuild_parse_lookup(key: &str, set: &EmoteSet) {
     let lookup = EmoteLookup::build(set);
-    if let Ok(mut guard) = channel_parse_lookup().write() {
-        guard.insert(key.to_string(), lookup);
-    }
+    let old = channel_parse_lookup()
+        .write()
+        .ok()
+        .and_then(|mut guard| guard.insert(key.to_string(), lookup.clone()));
+    // Rows already drawn without an emote this table now names are repaired.
+    crate::services::emote_restamp::table_changed(key, old, lookup);
 }
 
 fn drop_parse_lookup(key: &str) {
@@ -1239,17 +1254,26 @@ impl IrcService {
 }
 
 /// An emote's size at 1x in CSS pixels, where it is known before the image
-/// loads: Twitch emotes are square at 28; a 7TV emote's 1x file size is in
-/// the room's table.
+/// loads, so a wide emote takes its room at once instead of drawing square
+/// first: Twitch emotes are square at 28; 7TV, FFZ and BetterTTV name their
+/// 1x size in the room's table, BetterTTV only when it is not the square 28.
 pub(crate) fn emote_size_hint(channel: &str, code: &str, url: &str) -> Option<(u32, u32)> {
+    use crate::services::emote_service::EmoteProvider;
     if url.contains("static-cdn.jtvnw.net/emoticons/") {
         return Some((28, 28));
     }
     let lookup = channel_parse_lookup().read().ok()?.get(channel).cloned()?;
     let emote = lookup.get(code)?;
-    let width = emote.width?;
-    match emote.provider {
-        crate::services::emote_service::EmoteProvider::SevenTV => Some((width, emote.height.unwrap_or(32))),
+    // The row's emote may be another one of the same name (the sender's
+    // personal emote, a Shared Chat partner's): only this one's size is known.
+    if !url.contains(emote.id.as_str()) {
+        return None;
+    }
+    match (&emote.provider, emote.width) {
+        (EmoteProvider::SevenTV, Some(w)) => Some((w, emote.height.unwrap_or(32))),
+        (EmoteProvider::FFZ, Some(w)) => Some((w, emote.height.unwrap_or(32))),
+        (EmoteProvider::BTTV, Some(w)) => Some((w, emote.height.unwrap_or(28))),
+        (EmoteProvider::BTTV, None) => Some((28, 28)),
         _ => None,
     }
 }
@@ -1262,13 +1286,6 @@ pub(crate) async fn post_channel_frame(channel: &str, frame: String) {
 /// A non-row frame for every room (a member's look changing everywhere at once).
 pub(crate) async fn post_frame_to_all(frame: String) {
     send_to_bridge(BridgeFrame::all(frame), false).await;
-}
-
-fn clear_parse_lookups() {
-    if let Ok(mut guard) = channel_parse_lookup().write() {
-        guard.clear();
-    }
-    crate::services::shared_chat_emotes::release_all();
 }
 
 /// The message body of a `:prefix COMMAND #channel :text` line, or "". The
@@ -1945,8 +1962,11 @@ impl IrcService {
         get_room_state_cache().lock().await.clear();
         crate::services::channel_rewards::forget_all_rooms();
         get_pending_messages().lock().await.clear();
-        get_channel_emotes().lock().await.clear();
-        clear_parse_lookups();
+        // Emote tables are NOT cleared here: `stop` already trimmed them to the
+        // rooms that were open, and those rooms are about to be rejoined (a
+        // phone back from the background). Clearing them made every rejoined
+        // room parse its first lines with no emotes at all.
+        crate::services::shared_chat_emotes::release_all();
         if let Ok(mut g) = get_channel_cheermotes().write() { g.clear(); }
         // Seed the consumer claims: this is the first window to ask for the
         // initial channel; the IRC JOIN is performed implicitly by
@@ -2366,8 +2386,18 @@ impl IrcService {
                 {
                     return;
                 }
-                let initial_channel_id =
+                let mut initial_channel_id =
                     Self::fetch_and_store_emotes(&init_channel, emote_svc).await;
+                if initial_channel_id.is_none() {
+                    // The emote table follows on its own (`spawn_late_emote_seed`);
+                    // the live-update subscriptions wait here for the id.
+                    let key = init_channel.to_lowercase();
+                    let wanted = {
+                        let k = key.clone();
+                        move || get_current_channels().try_lock().map(|c| c.contains(&k)).unwrap_or(true)
+                    };
+                    initial_channel_id = crate::services::channel_ids::resolve_patiently(&key, wanted).await;
+                }
 
                 // Idempotent, so a reconnect re-calling this is a no-op for an
                 // already-subscribed channel.
@@ -2653,6 +2683,9 @@ impl IrcService {
 
             // Parse and layout
             if let Some(mut chat_msg) = Self::parse_privmsg(&enhanced_message) {
+                if let Some(room) = extract_channel_from_irc_line(&enhanced_message) {
+                    crate::services::emote_restamp::remember(&room, &enhanced_message);
+                }
                 debug!(
                     "[IRC Chat DEBUG] Parsed message from {}: content='{}', {} segments",
                     chat_msg.username,
@@ -2733,6 +2766,9 @@ impl IrcService {
             }
             // Parse USERNOTICE messages - layout will be measured by frontend
             if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
+                if let Some(room) = extract_channel_from_irc_line(trimmed) {
+                    crate::services::emote_restamp::remember(&room, trimmed);
+                }
                 // Skip USERNOTICE messages with no visible content
                 // These render as blank/ghost messages (e.g., "onetapgiftredeemed" with no text)
                 if !usernotice_has_visible_content(&chat_msg) {
@@ -2829,6 +2865,14 @@ impl IrcService {
             // on later PRIVMSGs) and ROOMSTATE fires on every setting change,
             // so it must never sit on the read loop.
             if let Some(room_id) = Self::extract_tag_value(trimmed, "room-id") {
+                // IRC names the room's id: the source a failed or slow Helix
+                // lookup waits for, and the check on an id saved for the login.
+                if let Some(login) = channel_name.clone() {
+                    if crate::services::channel_ids::note(&login, &room_id) {
+                        let id = room_id.clone();
+                        tokio::spawn(async move { Self::redo_room_with_id(login, id).await });
+                    }
+                }
                 tokio::spawn(async move {
                     Self::check_shared_chat_status(&room_id).await;
                 });
@@ -3644,16 +3688,22 @@ impl IrcService {
         if newly_desired {
             let key = key.to_string();
             tokio::spawn(async move {
-                let Ok(broadcaster_info) = TwitchService::get_user_by_login(&key).await else {
+                // Patient: a failed lookup used to leave the room without 7TV
+                // live updates, Shared Chat and the mod view for the session.
+                let wanted = {
+                    let k = key.clone();
+                    move || get_current_channels().try_lock().map(|c| c.contains(&k)).unwrap_or(true)
+                };
+                let Some(broadcaster_id) = crate::services::channel_ids::resolve_patiently(&key, wanted).await else {
                     return;
                 };
                 if !get_current_channels().lock().await.contains(&key) {
                     return; // parted before the lookup came back
                 }
-                Self::check_shared_chat_status(&broadcaster_info.id).await;
-                crate::services::seventv_eventapi::subscribe_channel(&key, &broadcaster_info.id)
+                Self::check_shared_chat_status(&broadcaster_id).await;
+                crate::services::seventv_eventapi::subscribe_channel(&key, &broadcaster_id)
                     .await;
-                crate::services::eventsub_moderation::subscribe_channel(&key, &broadcaster_info.id)
+                crate::services::eventsub_moderation::subscribe_channel(&key, &broadcaster_id)
                     .await;
             });
         }
@@ -3848,104 +3898,208 @@ impl IrcService {
         // EmoteService cache containing only the 15 hardcoded globals — which
         // a freshly-opened MultiChat popout then reads and displays.
         let access_token = TwitchService::get_token().await.ok();
+        let key = channel_name.to_lowercase();
 
-        // Get broadcaster ID from channel name
-        match TwitchService::get_user_by_login(channel_name).await {
-            Ok(user) => {
-                let key = channel_name.to_lowercase();
+        // The broadcaster id, without ever sleeping: IRC's own room id, the
+        // saved one, else one Helix call. When none answers (a phone waking
+        // its radio, a token mid-refresh) the room still gets its emotes: a
+        // background search finishes the job as soon as IRC names the room.
+        let Some(user_id) = crate::services::channel_ids::resolve(&key).await else {
+            warn!("[IRC Chat] No id yet for {}; its emotes follow once the room is named", channel_name);
+            Self::spawn_late_emote_seed(channel_name.to_string(), emote_service);
+            return None;
+        };
+        Self::seed_with_id(channel_name, &key, &user_id, access_token, emote_service, defer_refresh).await;
+        Some(user_id)
+    }
 
-                // Cheermotes ride the same join: Helix `bits/cheermotes` with
-                // this broadcaster id is the only source of the channel's own
-                // custom prefixes. Spawned so a slow Helix call can't delay the
-                // emote path; the fetch no-ops if the channel is already cached.
-                {
-                    let cheer_key = key.clone();
-                    let broadcaster_id = user.id.clone();
-                    tokio::spawn(async move {
-                        Self::fetch_and_store_cheermotes(cheer_key, broadcaster_id).await;
-                    });
-                }
+    /// The id saved for `login` turned out to belong to another channel (the
+    /// login changed hands since this device last saw it): rebuild the room's
+    /// emote table and 7TV live updates with the id IRC named.
+    async fn redo_room_with_id(login: String, id: String) {
+        warn!("[IRC Chat] {}: saved id was stale, rebuilding the room with {}", login, id);
+        get_channel_emotes().lock().await.remove(&login);
+        let svc = Arc::new(tokio::sync::RwLock::new(EmoteService::new()));
+        let access_token = TwitchService::get_token().await.ok();
+        Self::seed_with_id(&login, &login, &id, access_token, svc, true).await;
+        crate::services::seventv_eventapi::unsubscribe_channel(&login).await;
+        crate::services::seventv_eventapi::subscribe_channel(&login, &id).await;
+    }
 
-                // Seed from the saved per-channel dictionary so emotes resolve with no
-                // network round-trip, even when a provider is slow or down. Seed only when
-                // nothing is in memory: an in-memory set was fetched or delta-patched this
-                // session and is at least as fresh, so a second window joining the same
-                // channel must not replace it.
-                let mut seeded = false;
-                if let Some(disk_set) = crate::services::emote_set_cache::load(&user.id) {
-                    let mut map = get_channel_emotes().lock().await;
-                    if !map.contains_key(&key) {
-                        debug!(
-                            "[IRC Chat] Seeded {} from disk dictionary (7TV: {})",
-                            channel_name,
-                            disk_set.seven_tv.len()
-                        );
-                        rebuild_parse_lookup(&key, &disk_set);
-                        map.insert(key.clone(), disk_set);
-                        note_emote_table_installed(&key);
-                        seeded = true;
-                    }
-                }
-
-                // A caller that asked to wait still gets the disk-seeded map back
-                // at once when one landed: the channel document budget is 25 s
-                // now (large channels need it) and nothing that can already parse
-                // should sit on that. Only a channel with no dictionary at all is
-                // worth waiting for.
-                if defer_refresh || seeded {
-                    // The chat socket does NOT wait for emote providers. See
-                    // `refresh_channel_emotes` for why, and for the measurement.
-                    //
-                    // Gated, because deferring removed the start lock that used to
-                    // serialize this. See `try_begin_emote_refresh`.
-                    if let Some(gate) = try_begin_emote_refresh(&key) {
-                        let name = channel_name.to_string();
-                        let k = key.clone();
-                        let uid = user.id.clone();
-                        let svc = emote_service.clone();
-                        tokio::spawn(async move {
-                            let _gate = gate;
-                            let _permit = emote_refresh_permits().acquire_owned().await.ok();
-                            Self::refresh_channel_emotes(name, k, uid, access_token, svc).await;
-                        });
-                    }
-                } else {
-                    Self::refresh_channel_emotes(
-                        channel_name.to_string(),
-                        key.clone(),
-                        user.id.clone(),
-                        access_token,
-                        emote_service.clone(),
-                    )
-                    .await;
-                }
-                Some(user.id)
+    /// Finds a room's id in the background when the join could not, then
+    /// seeds and refreshes its emote table. One search per room.
+    fn spawn_late_emote_seed(channel_name: String, emote_service: Arc<tokio::sync::RwLock<EmoteService>>) {
+        let key = channel_name.to_lowercase();
+        if !late_emote_seeds().lock().map(|mut s| s.insert(key.clone())).unwrap_or(false) {
+            return;
+        }
+        tokio::spawn(async move {
+            let wanted = {
+                let k = key.clone();
+                move || get_current_channels().try_lock().map(|c| c.contains(&k)).unwrap_or(true)
+            };
+            let id = crate::services::channel_ids::resolve_patiently(&key, wanted).await;
+            if let Ok(mut s) = late_emote_seeds().lock() {
+                s.remove(&key);
             }
-            Err(e) => {
-                error!(
-                    "[IRC Chat] Failed to get user info for {}: {}",
-                    channel_name, e
-                );
-                None
+            let Some(id) = id else {
+                warn!("[IRC Chat] {}: no id after the background search; emotes wait for the next join", key);
+                return;
+            };
+            let access_token = TwitchService::get_token().await.ok();
+            Self::seed_with_id(&channel_name, &key, &id, access_token, emote_service, true).await;
+        });
+    }
+
+    /// Seed `key`'s table from what is held (memory, else the saved
+    /// dictionary) and refresh it from the providers: in the background when
+    /// `defer_refresh` or anything could be seeded, else awaited.
+    async fn seed_with_id(
+        channel_name: &str,
+        key: &str,
+        user_id: &str,
+        access_token: Option<String>,
+        emote_service: Arc<tokio::sync::RwLock<EmoteService>>,
+        defer_refresh: bool,
+    ) {
+        let key = key.to_string();
+
+        // Cheermotes ride the same join: Helix `bits/cheermotes` with
+        // this broadcaster id is the only source of the channel's own
+        // custom prefixes. Spawned so a slow Helix call can't delay the
+        // emote path; the fetch no-ops if the channel is already cached.
+        {
+            let cheer_key = key.clone();
+            let broadcaster_id = user_id.to_string();
+            tokio::spawn(async move {
+                Self::fetch_and_store_cheermotes(cheer_key, broadcaster_id).await;
+            });
+        }
+
+        // A table already in memory (kept through a chat rebuild, or fetched
+        // and delta-patched this session) is ready and at least as fresh as
+        // the saved dictionary, so a second window joining the same channel
+        // must not replace it. Otherwise seed from the saved dictionary so
+        // emotes resolve with no network round-trip, even when a provider is
+        // slow or down.
+        let mut seeded = get_channel_emotes().lock().await.contains_key(&key);
+        if !seeded {
+            if let Some(disk_set) = crate::services::emote_set_cache::load(user_id) {
+                let mut map = get_channel_emotes().lock().await;
+                if !map.contains_key(&key) {
+                    debug!(
+                        "[IRC Chat] Seeded {} from disk dictionary (7TV: {})",
+                        channel_name,
+                        disk_set.seven_tv.len()
+                    );
+                    rebuild_parse_lookup(&key, &disk_set);
+                    map.insert(key.clone(), disk_set);
+                    note_emote_table_installed(&key);
+                }
+                seeded = true;
+            }
+        }
+
+        // A caller that asked to wait still gets the seeded map back at once
+        // when one is there: the channel document budget is 25 s (large
+        // channels need it) and nothing that can already parse should sit on
+        // that. Only a channel with no table at all is worth waiting for.
+        if defer_refresh || seeded {
+            // The chat socket does NOT wait for emote providers. See
+            // `refresh_channel_emotes` for why, and for the measurement.
+            //
+            // Gated, because deferring removed the start lock that used to
+            // serialize this. See `try_begin_emote_refresh`.
+            if let Some(gate) = try_begin_emote_refresh(&key) {
+                let name = channel_name.to_string();
+                let k = key.clone();
+                let uid = user_id.to_string();
+                let svc = emote_service.clone();
+                tokio::spawn(async move {
+                    let whole = {
+                        let _gate = gate;
+                        let _permit = emote_refresh_permits().acquire_owned().await.ok();
+                        Self::refresh_channel_emotes(name.clone(), k.clone(), uid.clone(), access_token, svc.clone()).await
+                    };
+                    if !whole {
+                        Self::spawn_emote_retry(name, k, uid, svc);
+                    }
+                });
+            }
+        } else {
+            let whole = Self::refresh_channel_emotes(
+                channel_name.to_string(),
+                key.clone(),
+                user_id.to_string(),
+                access_token,
+                emote_service.clone(),
+            )
+            .await;
+            if !whole {
+                Self::spawn_emote_retry(channel_name.to_string(), key, user_id.to_string(), emote_service);
             }
         }
     }
 
+    /// Keeps refreshing a room whose table came back partial (a provider
+    /// down or slow) until it is whole, while the room is still joined. One
+    /// loop per room however many windows show it; each try drops the short
+    /// cached copy of the failed answer first so it really asks again.
+    fn spawn_emote_retry(
+        channel_name: String,
+        key: String,
+        user_id: String,
+        emote_service: Arc<tokio::sync::RwLock<EmoteService>>,
+    ) {
+        if !emote_retries().lock().map(|mut s| s.insert(key.clone())).unwrap_or(false) {
+            return;
+        }
+        tokio::spawn(async move {
+            for wait in EMOTE_RETRY_WAITS {
+                tokio::time::sleep(wait).await;
+                if !get_current_channels().lock().await.contains(&key) {
+                    break;
+                }
+                // A refresh already running for the room lands the same answer.
+                let Some(_gate) = try_begin_emote_refresh(&key) else { continue };
+                let _permit = emote_refresh_permits().acquire_owned().await.ok();
+                emote_service.read().await.invalidate_channel(&user_id).await;
+                let access_token = TwitchService::get_token().await.ok();
+                if Self::refresh_channel_emotes(
+                    channel_name.clone(),
+                    key.clone(),
+                    user_id.clone(),
+                    access_token,
+                    emote_service.clone(),
+                )
+                .await
+                {
+                    log::info!("[IRC Chat] {}: emote table whole again after a retry", key);
+                    break;
+                }
+            }
+            if let Ok(mut s) = emote_retries().lock() {
+                s.remove(&key);
+            }
+        });
+    }
+
     /// Pulls the live third-party set and installs it as the channel's parse
-    /// map.
+    /// map. True when the answer was whole (see `emote_service::fetch_was_whole`).
     ///
-    /// Installs only when the 7TV channel fetch definitively succeeded. A
-    /// partial result, such as globals-only from a tripped circuit breaker or a
-    /// timed-out channel set, leaves the disk-seeded set in place. An
-    /// authoritative result is written through to disk so the next join is
-    /// disk-first and removals persist.
+    /// A whole answer is installed and written through to disk, so the next
+    /// join is disk-first and removals persist. A partial one (a provider
+    /// down, a timed-out 7TV set) is installed only when the room has no table
+    /// at all, since globals plus whatever answered beat plain words, and is
+    /// never saved; otherwise the held table stays. Either way the caller
+    /// retries a partial answer.
     async fn refresh_channel_emotes(
         channel_name: String,
         key: String,
         user_id: String,
         access_token: Option<String>,
         emote_service: Arc<tokio::sync::RwLock<EmoteService>>,
-    ) {
+    ) -> bool {
         // Snapshot the service out of the RwLock (guard drops at end of
         // statement) so the lock is never held across the network fetch; a
         // future writer would otherwise convoy every reader behind an
@@ -3972,21 +4126,32 @@ impl IrcService {
                     emote_set.ffz.len(),
                     seven_tv_ok
                 );
-                if seven_tv_ok {
-                    crate::services::emote_set_cache::save_force(&user_id, &emote_set);
+                let whole = seven_tv_ok && crate::services::emote_service::fetch_was_whole(&user_id);
+                let held = get_channel_emotes().lock().await.contains_key(&key);
+                if seven_tv_ok || !held {
+                    if whole {
+                        crate::services::emote_set_cache::save_force(&user_id, &emote_set);
+                    } else {
+                        debug!(
+                            "[IRC Chat] {}: partial emote table installed, not saved (7TV channel ok: {})",
+                            channel_name, seven_tv_ok
+                        );
+                    }
                     rebuild_parse_lookup(&key, &emote_set);
                     get_channel_emotes().lock().await.insert(key.clone(), emote_set);
                     note_emote_table_installed(&key);
                 } else {
                     debug!(
-                        "[IRC Chat] Keeping disk-seeded set for {}; 7TV channel fetch was deficient (7TV {})",
+                        "[IRC Chat] Keeping held set for {}; 7TV channel fetch was deficient (7TV {})",
                         channel_name,
                         emote_set.seven_tv.len()
                     );
                 }
+                whole
             }
             Err(e) => {
                 error!("[IRC Chat] Failed to fetch channel emotes: {}", e);
+                false
             }
         }
     }
@@ -4038,14 +4203,19 @@ impl IrcService {
             svc.invalidate_channel(user_id).await;
         }
         let access_token = TwitchService::get_token().await.ok();
-        Self::refresh_channel_emotes(
+        let whole = Self::refresh_channel_emotes(
             channel_name.to_string(),
-            key,
+            key.clone(),
             user_id.to_string(),
             access_token,
-            emote_service,
+            emote_service.clone(),
         )
         .await;
+        drop(_permit);
+        drop(_gate);
+        if !whole {
+            Self::spawn_emote_retry(channel_name.to_string(), key, user_id.to_string(), emote_service);
+        }
     }
 
     /// Ensure the channel's third-party emote set is in the parse cache for a
@@ -4249,14 +4419,6 @@ impl IrcService {
             g.iter().any(|(_, (_, m))| !m.is_empty()),
             std::sync::atomic::Ordering::Relaxed,
         );
-    }
-
-    /// Wipe all personal emotes (full chat teardown).
-    pub async fn clear_all_personal_emotes() {
-        if let Ok(mut g) = get_personal_emotes().write() {
-            g.clear();
-        }
-        PERSONAL_EMOTES_PRESENT.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Everything per-message parsing reads, snapshotted once per message with
@@ -5380,6 +5542,39 @@ impl IrcService {
         rebuild_parse_lookup(key, set);
     }
 
+    /// Live rows that now wear an emote their first parse missed (the table
+    /// was late, or the channel added the emote since), parsed again and
+    /// patched in place in every window showing the channel through the same
+    /// `HISTORY_SEGMENTS` frame the backlog re-stamp uses.
+    pub(crate) async fn restamp_live_rows(channel: &str, lines: Vec<String>, oldest: std::time::Duration) {
+        let mut rows = Vec::new();
+        for raw in lines {
+            let Some(mut msg) = Self::parse_live_line(&raw) else { continue };
+            crate::services::chat_row_view::stamp(&mut msg);
+            let mut row = json!({
+                "id": msg.id,
+                "segments": msg.segments,
+                "parent_segments": msg.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()),
+            });
+            if let Some(view) = &msg.metadata.view {
+                row["view"] = json!(view);
+            }
+            rows.push(row);
+        }
+        if rows.is_empty() {
+            return;
+        }
+        // Info, not debug: a phone's support log has to show whether rows
+        // still arrive without their emotes, and how late they were fixed.
+        log::info!(
+            "[EmoteRestamp] {channel}: {} rows now wear their emotes, oldest {:.1}s",
+            rows.len(),
+            oldest.as_secs_f32()
+        );
+        let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": channel, "rows": rows });
+        send_to_bridge(BridgeFrame::channel(channel, frame.to_string()), false).await;
+    }
+
     pub fn spawn_history_restamp(channel: &str, raw: Vec<String>, first: &[ChatMessage]) {
         if raw.is_empty() || first.is_empty() {
             return;
@@ -5426,7 +5621,7 @@ impl IrcService {
         get_message_queue().lock().await.clear();
 
         // Clear channels + their JOIN-ack state
-        get_current_channels().lock().await.clear();
+        let held: HashSet<String> = std::mem::take(&mut *get_current_channels().lock().await);
         tracker_clear().await;
 
         // Clear shared chat rooms
@@ -5434,8 +5629,7 @@ impl IrcService {
         SHARED_CHAT_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Clear all per-channel caches
-        get_channel_emotes().lock().await.clear();
-        clear_parse_lookups();
+        Self::keep_emote_tables_for(&held).await;
         if let Ok(mut g) = get_channel_cheermotes().write() { g.clear(); }
         get_user_badges_cache().lock().await.clear();
         get_room_state_cache().lock().await.clear();
@@ -5460,6 +5654,20 @@ impl IrcService {
         Ok(())
     }
 
+    /// Emote tables outlive the connection. A phone back from the background
+    /// rebuilds chat, and the rooms it rejoins must parse emotes from their
+    /// first line instead of waiting on a lookup and the providers again; the
+    /// rejoin refreshes them in the background. Only the rooms held at the
+    /// stop keep theirs, so memory stays the size of what was open. Shared
+    /// Chat partner tables are dropped with their rooms.
+    async fn keep_emote_tables_for(held: &HashSet<String>) {
+        get_channel_emotes().lock().await.retain(|k, _| held.contains(k));
+        if let Ok(mut guard) = channel_parse_lookup().write() {
+            guard.retain(|k, _| held.contains(k));
+        }
+        crate::services::shared_chat_emotes::release_all();
+    }
+
     /// Public form of `stop_irc_only`, for callers outside this module that have
     /// already established a provider is holding the bridge (see
     /// `ChatService::stop`).
@@ -5477,12 +5685,11 @@ impl IrcService {
         }
         abort_keepalive_tasks().await;
         *get_irc_writer().lock().await = None;
-        get_current_channels().lock().await.clear();
+        let held: HashSet<String> = std::mem::take(&mut *get_current_channels().lock().await);
         tracker_clear().await;
         get_shared_chat_rooms().lock().await.clear();
         SHARED_CHAT_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
-        get_channel_emotes().lock().await.clear();
-        clear_parse_lookups();
+        Self::keep_emote_tables_for(&held).await;
         if let Ok(mut g) = get_channel_cheermotes().write() { g.clear(); }
         get_user_badges_cache().lock().await.clear();
         get_room_state_cache().lock().await.clear();
@@ -7011,6 +7218,28 @@ fn try_begin_emote_refresh(channel: &str) -> Option<EmoteRefreshGuard> {
         return None;
     }
     Some(EmoteRefreshGuard(channel.to_string()))
+}
+
+/// The waits between background refreshes of a room whose table came back
+/// partial. The first is past the ~10 s a degraded answer stays cached.
+const EMOTE_RETRY_WAITS: [std::time::Duration; 4] = [
+    std::time::Duration::from_secs(15),
+    std::time::Duration::from_secs(45),
+    std::time::Duration::from_secs(120),
+    std::time::Duration::from_secs(300),
+];
+
+/// Rooms with a background retry running (`spawn_emote_retry`).
+fn emote_retries() -> &'static std::sync::Mutex<HashSet<String>> {
+    static SET: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// Rooms whose id is being searched for in the background
+/// (`spawn_late_emote_seed`).
+fn late_emote_seeds() -> &'static std::sync::Mutex<HashSet<String>> {
+    static SET: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
 }
 
 struct EmoteRefreshGuard(String);
