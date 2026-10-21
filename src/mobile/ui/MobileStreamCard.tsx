@@ -19,6 +19,7 @@ import { groupFor } from '../../utils/sharedViewers';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { useChannelHold } from './ChannelHold';
+import { observeOffscreen } from '../../utils/offscreenPause';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -88,6 +89,10 @@ export const MobileStreamCard: React.FC<{
   const hasDrops = isTwitch && !!stream.drops_earnable;
   // A tap watches; a hold offers the chat on its own.
   const hold = useChannelHold(stream, onPress);
+  // The row's live-dot ping rests while the row is scrolled out of view
+  // (utils/offscreenPause, mobile.css).
+  const pingRef = React.useRef<HTMLSpanElement>(null);
+  React.useEffect(() => (pingRef.current ? observeOffscreen(pingRef.current) : undefined), [variant]);
 
   if (variant === 'row') {
     return (
@@ -107,7 +112,7 @@ export const MobileStreamCard: React.FC<{
           />
           {/* Bare live dot instead of the pill: rows are too small for chrome.
               A ping halo keeps it visible without adding chrome. */}
-          <span className="absolute top-1.5 left-1.5 flex w-2 h-2">
+          <span ref={pingRef} className="absolute top-1.5 left-1.5 flex w-2 h-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-live opacity-60" />
             <span className="relative inline-flex w-2 h-2 rounded-full bg-live ring-1 ring-black/40" />
           </span>

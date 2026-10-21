@@ -224,9 +224,16 @@ body:has(.sn-mobile) .glass-input:focus {
    thousands of nodes would add style-recalc cost of its own and trade one
    compositor bill for another. */
 [data-sn-covered='true'] .animate-ping,
+[data-sn-covered='true'] .card-chip-shine > span,
 [data-sn-covered='true'] .hype-train-badge-glass::after,
 [data-sn-covered='true'] .hype-train-badge-glass-golden::after {
   animation: none !important;
+}
+
+/* A stream row's live-dot ping scrolled out of view (MobileStreamCard,
+   utils/offscreenPause): no halo nobody can see. */
+.sn-mobile [data-sn-off] > .animate-ping {
+  animation: none;
 }
 
 /* The in-band loading mark. Width first as a plain fallback for a WebView

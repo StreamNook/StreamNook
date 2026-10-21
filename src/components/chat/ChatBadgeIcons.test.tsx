@@ -56,6 +56,9 @@ const routes = vi.hoisted(() => ({
   openBadgesWithTargetInMain: vi.fn(),
 }));
 vi.mock('../../utils/openBadgesInMain', () => routes);
+// Called as a plain function below, outside a React render: its Battery Saver
+// hook stands in as off.
+vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false }));
 
 import { ChatBadgeIcons, type ResolvedTwitchBadge } from './ChatBadgeIcons';
 import { BadgeHoverCard } from './BadgeHoverCard';

@@ -87,7 +87,7 @@ export const MobileEmoteCarousel: React.FC<Props> = ({ candidates, onSelect }) =
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
       transition={{ duration: 0.12, ease: 'easeOut' }}
-      className="sn-popover absolute z-[60] left-0 right-0 mb-2 !bg-background"
+      className="sn-popover sn-popover--static absolute z-[60] left-0 right-0 mb-2 !bg-background"
       style={{ bottom: '100%' }}
     >
       <div
