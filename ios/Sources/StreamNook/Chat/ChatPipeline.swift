@@ -415,12 +415,12 @@ final class ChatPipeline: @unchecked Sendable {
     /// past `readyCap` untaken batches collapse into one reset.
     private func publish(_ batch: Batch) {
         let overflow = ready.withLock { batches -> Bool in
-            var batch = batch
-            if batch.reset != nil {
-                if batches.contains(where: \.forceLive) { batch.forceLive = true }
+            var queued = batch
+            if queued.reset != nil {
+                if batches.contains(where: \.forceLive) { queued.forceLive = true }
                 batches.removeAll(keepingCapacity: true)
             }
-            batches.append(batch)
+            batches.append(queued)
             return batches.count > Self.readyCap
         }
         if overflow {
