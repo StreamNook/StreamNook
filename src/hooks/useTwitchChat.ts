@@ -16,7 +16,7 @@
 // New code (MultiChat tabs, etc.) should call the store directly via
 // `useChannelChat(channel)` + `acquireChannel` / `releaseChannel`.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   acquireChannel,
   releaseChannel,
@@ -56,51 +56,96 @@ export interface UseTwitchChatReturn {
   userBadges: string | null;
 }
 
+/**
+ * The channel one chat surface holds, and the release that balances it.
+ *
+ * The channel is owned BEFORE its acquire is awaited. It used to be recorded
+ * only once the acquire resolved, so an unmount while the first connect was
+ * still in flight (closing a stream or an offline room right after opening
+ * it) released nothing: the slice leaked at one reference, and the next open
+ * of that channel took the store's "+1 ref" path and never connected.
+ *
+ * Owning it early means the unmount of StrictMode's replayed mount (setup,
+ * cleanup, setup on the same instance, in dev) now really lets go, and the
+ * widget never asks for the channel a second time. `resume` takes back what
+ * that cleanup let go.
+ */
+export function createChannelOwner() {
+  let current: string | null = null;
+  let currentRoomId: string | null = null;
+  let parked: { channel: string; roomId: string | null } | null = null;
+  const owner = {
+    current: (): string | null => current,
+    async connect(channel: string, roomId?: string): Promise<void> {
+      const target = channel.toLowerCase();
+      parked = null;
+      const previous = current;
+      if (previous === target) {
+        // Same channel: refresh the room id only if a new one was provided.
+        // Acquiring again is idempotent (just bumps the ref count) but also
+        // updates the channelId if it was null before. Pair it with a release
+        // so the ref count stays balanced.
+        if (roomId) {
+          currentRoomId = roomId;
+          await acquireChannel(target, roomId);
+          await releaseChannel(target);
+        }
+        return;
+      }
+      // Switching channels: acquire the new one first (so the bridge stays up
+      // if it's the same Rust connection), then release the previous.
+      current = target;
+      currentRoomId = roomId ?? null;
+      try {
+        await acquireChannel(target, roomId ?? null);
+      } finally {
+        if (previous) await releaseChannel(previous);
+      }
+    },
+    dispose(): void {
+      const channel = current;
+      current = null;
+      if (!channel) return;
+      parked = { channel, roomId: currentRoomId };
+      Logger.debug(`[useTwitchChat] Unmount: releasing ${channel}`);
+      void releaseChannel(channel);
+    },
+    resume(): Promise<void> | null {
+      const held = parked;
+      parked = null;
+      if (!held || current) return null;
+      return owner.connect(held.channel, held.roomId ?? undefined);
+    },
+  };
+  return owner;
+}
+
 export const useTwitchChat = (): UseTwitchChatReturn => {
-  // Track which channel this hook instance currently owns. The shim acquires
-  // on connectChat() and releases on unmount or on switching channels — same
-  // lifecycle the prior single-instance hook had, but now routed through the
+  // Which channel this hook instance owns. The shim acquires on connectChat()
+  // and releases on unmount or on switching channels, routed through the
   // ref-counted store so multiple consumers (MultiChat + main app) share one
   // underlying IRC connection.
-  const currentChannelRef = useRef<string | null>(null);
-  // Render-side mirror of the ref: the meta selector needs the channel during
-  // render, and a ref must not be read there. Set alongside the ref on every
-  // successful switch.
+  const [owner] = useState(createChannelOwner);
+  // Render-side mirror of the owned channel: the meta selector needs it during
+  // render. Set as soon as a switch starts, so a connect that fails shows its
+  // error on the channel it was for.
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
 
   const meta = useChannelChatMeta(activeChannel);
 
-  const connectChat = useCallback(async (channel: string, roomId?: string) => {
-    const targetKey = channel.toLowerCase();
-    const previous = currentChannelRef.current;
-
-    if (previous === targetKey) {
-      // Same channel — refresh room-id only if a new one was provided.
-      if (roomId) {
-        // Acquiring again is idempotent (just bumps the ref count) but also
-        // updates the channelId if it was null before. Pair it with a release
-        // so the ref count stays balanced.
-        await acquireChannel(targetKey, roomId);
-        await releaseChannel(targetKey);
+  const connectChat = useCallback(
+    async (channel: string, roomId?: string) => {
+      const targetKey = channel.toLowerCase();
+      if (owner.current() !== targetKey) setActiveChannel(targetKey);
+      try {
+        await owner.connect(targetKey, roomId);
+      } catch (err) {
+        Logger.error('[useTwitchChat] connectChat failed:', err);
+        throw err;
       }
-      return;
-    }
-
-    // Switching channels: acquire the new one first (so the bridge stays up
-    // if it's the same Rust connection) then release the previous.
-    try {
-      await acquireChannel(targetKey, roomId ?? null);
-      currentChannelRef.current = targetKey;
-      setActiveChannel(targetKey);
-      if (previous) {
-        await releaseChannel(previous);
-      }
-    } catch (err) {
-      Logger.error('[useTwitchChat] connectChat failed:', err);
-      // If acquire failed, don't leak the previous reference.
-      throw err;
-    }
-  }, []);
+    },
+    [owner],
+  );
 
   const sendMessage = useCallback(
     async (
@@ -109,7 +154,7 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
       replyParentMsgId?: string,
       senderAccount?: SendAsAccount | null,
     ) => {
-      const channel = currentChannelRef.current;
+      const channel = owner.current();
       if (!channel) {
         Logger.warn('[useTwitchChat] sendMessage called with no active channel');
         return;
@@ -122,26 +167,25 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
       }
       await sendChannelMessage(channel, messageText, userInfo, replyParentMsgId, senderAccount);
     },
-    [],
+    [owner],
   );
 
-  const setPaused = useCallback((paused: boolean) => {
-    const channel = currentChannelRef.current;
-    if (!channel) return;
-    setChannelPaused(channel, paused);
-  }, []);
+  const setPaused = useCallback(
+    (paused: boolean) => {
+      const channel = owner.current();
+      if (!channel) return;
+      setChannelPaused(channel, paused);
+    },
+    [owner],
+  );
 
-  // Release on unmount so the store's ref count drops cleanly.
+  // Release on unmount so the store's ref count drops cleanly. StrictMode
+  // replays a mount on this same instance: the replayed setup takes back what
+  // its cleanup let go, since the widget will not ask for the channel again.
   useEffect(() => {
-    return () => {
-      const channel = currentChannelRef.current;
-      if (channel) {
-        Logger.debug(`[useTwitchChat] Unmount: releasing ${channel}`);
-        void releaseChannel(channel);
-        currentChannelRef.current = null;
-      }
-    };
-  }, []);
+    void owner.resume()?.catch((err: unknown) => Logger.error('[useTwitchChat] resume failed:', err));
+    return () => owner.dispose();
+  }, [owner]);
 
   return {
     connectChat,

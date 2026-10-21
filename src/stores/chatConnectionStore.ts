@@ -60,6 +60,8 @@ const CHAT_MAX_WITH_BUFFER = CHAT_HISTORY_MAX + CHAT_BUFFER_SIZE;
 // early attempts name the delay, later ones just say we are still trying.
 const RECONNECT_QUIET_ATTEMPTS = 3;
 const WS_OPEN_RETRY_ATTEMPTS = 5;
+/** How often a socket retry's wait checks whether anyone still wants it. */
+const WS_RETRY_STEP_MS = 100;
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const STALE_WARNING_MS = 2 * 60_000;
 const STALE_RECONNECT_MS = 3 * 60_000;
@@ -1452,15 +1454,24 @@ function extractChannelFromIrc(line: string): string | null {
 
 // --- WebSocket lifecycle ----------------------------------------------------
 
-async function openWebSocketWithRetry(port: number): Promise<WebSocket> {
+/** Opens the bridge socket, retrying. Resolves null once `isStale` says
+ *  nobody wants this connect any more. */
+async function openWebSocketWithRetry(port: number, isStale: () => boolean): Promise<WebSocket | null> {
   for (let attempt = 0; attempt < WS_OPEN_RETRY_ATTEMPTS; attempt++) {
     if (attempt > 0) {
       const delay = 500 + attempt * 500;
       Logger.debug(
         `[ChatStore] Waiting ${delay}ms before WS connection attempt ${attempt + 1}/${WS_OPEN_RETRY_ATTEMPTS}`,
       );
-      await new Promise((r) => setTimeout(r, delay));
+      // In short steps, so a connect nobody wants stops within one.
+      for (let waited = 0; waited < delay && !isStale(); waited += WS_RETRY_STEP_MS) {
+        await new Promise((r) => setTimeout(r, Math.min(WS_RETRY_STEP_MS, delay - waited)));
+      }
     }
+    // The window let go of its last channel meanwhile: stop before another
+    // attempt, so a channel opened right after never waits out retries
+    // against a bridge a stop already took down.
+    if (isStale()) return null;
     let socket: WebSocket | null = null;
     try {
       socket = new WebSocket(`ws://localhost:${port}`);
@@ -1915,17 +1926,19 @@ async function connectBridgeInner(
     useChatConnectionStore.setState({ wsPort: port });
 
     const tBeforeWs = performance.now();
-    const socket = await openWebSocketWithRetry(port);
-    Logger.info(`[ChatPerf] WS bridge open took ${Math.round(performance.now() - tBeforeWs)}ms (connect total ${Math.round(performance.now() - chatConnectStartedAt)}ms)`);
+    const socket = await openWebSocketWithRetry(port, () => gen !== connectGeneration);
+    if (socket) {
+      Logger.info(`[ChatPerf] WS bridge open took ${Math.round(performance.now() - tBeforeWs)}ms (connect total ${Math.round(performance.now() - chatConnectStartedAt)}ms)`);
+    }
     // The teardown may have run while this connect was still awaiting. Installing
     // anyway re-armed the 30s watchdog with zero channels and left an unowned
     // socket open for good; the next acquire would then overwrite `ws` and the
     // abandoned one kept feeding duplicate frames (and kept the stale-timer clock
     // fresh) with its handlers still attached.
-    if (gen !== connectGeneration || useChatConnectionStore.getState().channels.size === 0) {
-      Logger.debug('[ChatStore] Discarding a bridge connect that is no longer wanted');
+    if (!socket || gen !== connectGeneration || useChatConnectionStore.getState().channels.size === 0) {
+      Logger.info(`[ChatStore] dropped a bridge connect for ${channel} that nobody wants any more`);
       try {
-        socket.close(1000, 'Superseded');
+        socket?.close(1000, 'Superseded');
       } catch {
         // ignore
       }
@@ -3580,6 +3593,10 @@ async function finishRelease(key: string, channel: string, provider: ProviderId)
   // sibling MultiChat popouts) may still be using it. Tearing down here
   // would kill chat for every other consumer in the process.
   removeSlice(key);
+  // The window's last channel: a first connect still in flight is for nobody
+  // now. Retired here rather than after the PART below, so a channel opened
+  // meanwhile never queues behind a connect retrying a bridge that is gone.
+  if (useChatConnectionStore.getState().channels.size === 0) connectGeneration += 1;
   sendRoute(`UNSUB:${key}`);
   clearChannelRetry(key);
   // Free per-channel state the slice didn't own: the pending flush queue and the

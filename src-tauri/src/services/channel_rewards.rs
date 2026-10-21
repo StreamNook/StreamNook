@@ -266,8 +266,18 @@ pub fn note_live_changed(login: &str) {
 pub fn note_stream_seen(login: &str, started_at: &str) {
     let login = login.to_lowercase();
     let previous = stream_starts().insert(login.clone(), started_at.to_string());
-    if previous.as_deref().is_some_and(|p| p != started_at) {
+    if previous.as_deref().is_some_and(|p| !same_stream_start(p, started_at)) {
         new_stream(&login);
+    }
+}
+
+/// Two reads of one stream's start name the same stream. The watch session's
+/// (public GQL) and the poll's (Helix) may word the same instant differently,
+/// and a mismatch must not reset the per-stream counts mid-stream.
+fn same_stream_start(a: &str, b: &str) -> bool {
+    match (chrono::DateTime::parse_from_rfc3339(a), chrono::DateTime::parse_from_rfc3339(b)) {
+        (Ok(x), Ok(y)) => (x - y).num_seconds().abs() <= 60,
+        _ => a == b,
     }
 }
 
@@ -1368,6 +1378,15 @@ mod tests {
         assert!(reward_availability(&r, &live, NOW_MS).redeemable);
         // An unlimited reward works offline.
         assert!(reward_availability(&reward(), &offline, NOW_MS).redeemable);
+    }
+
+    #[test]
+    fn a_start_restated_in_another_format_is_the_same_stream() {
+        assert!(same_stream_start("2026-10-20T18:00:03Z", "2026-10-20T18:00:03Z"));
+        assert!(same_stream_start("2026-10-20T18:00:03Z", "2026-10-20T18:00:03.000Z"));
+        assert!(same_stream_start("2026-10-20T18:00:03Z", "2026-10-20T11:00:03-07:00"));
+        assert!(!same_stream_start("2026-10-20T18:00:03Z", "2026-10-20T18:30:00Z"), "a restart is a new stream");
+        assert!(!same_stream_start("garbled", "2026-10-20T18:00:03Z"));
     }
 
     #[test]

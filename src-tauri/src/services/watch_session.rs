@@ -819,6 +819,9 @@ fn announce_live(app: &AppHandle, seq: u64, row: TwitchStream) {
     if !first {
         return;
     }
+    // Rewards that need a live stream open now, not when Helix lists it.
+    let seen = row.clone();
+    tauri::async_runtime::spawn(async move { crate::services::channel_state::note_live(&seen).await });
     let _ = app.emit(WENT_LIVE_EVENT, json!({ "stream": row }));
 }
 
@@ -896,6 +899,7 @@ async fn poll_provider_live(app: AppHandle, seq: u64) {
                             "viewer_count": row.viewer_count,
                             "title": row.title,
                             "game_name": row.game_name,
+                            "game_id": row.game_id,
                         }),
                     );
                 }
