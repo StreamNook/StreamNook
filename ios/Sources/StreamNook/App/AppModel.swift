@@ -85,7 +85,7 @@ final class AppModel {
         mentions = MentionsStore(core: core)
         whispers = WhispersStore(core: core)
         let watch = watch
-        watch.nowPlaying.onPlay = { watch.player.play() }
+        watch.nowPlaying.onPlay = { watch.resume() }
         watch.nowPlaying.onPause = { watch.player.pause() }
         watch.nowPlaying.onStop = { [weak self] in self?.stopWatching() }
         watch.nowPlaying.onSeek = { watch.seekVod(to: $0) }
@@ -95,7 +95,7 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
-        watch.pip.onCloseToAudio = { watch.player.play() }
+        watch.pip.onCloseToAudio = { watch.resume() }
         watch.onRow = { [weak self] row in
             guard let self else { return }
             self.nav.refresh(row)
