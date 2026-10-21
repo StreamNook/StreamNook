@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bandRadius, miniLayerTransform } from './miniLayer';
+import { miniLayerTransform } from './miniLayer';
 
 /** Where a point of the layer lands on screen under a transform built by
  *  miniLayerTransform (origin top-left: scale first, then translate). */
@@ -37,15 +37,5 @@ describe('miniLayerTransform', () => {
       expect(k).toBeLessThan(last);
       last = k ?? 1;
     }
-  });
-});
-
-describe('bandRadius', () => {
-  it('reads as the given radius once the box has landed', () => {
-    expect(bandRadius(1, SCALE, 12) * SCALE).toBeCloseTo(12, 6);
-  });
-
-  it('is square on the full player', () => {
-    expect(bandRadius(0, SCALE, 12)).toBe(0);
   });
 });

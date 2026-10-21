@@ -12,9 +12,3 @@ export function miniLayerTransform(p: number, scale: number, boxX: number, boxY:
   if (p <= 0) return 'none';
   return `translate(${p * boxX}px, ${p * (boxY - bandTop * scale)}px) scale(${1 - p * (1 - scale)})`;
 }
-
-/** The band's corner radius in its own pixels, so it reads as `radius` on
- *  screen once the layer has reached `scale`. */
-export function bandRadius(p: number, scale: number, radius: number): number {
-  return (p * radius) / scale;
-}

@@ -44,7 +44,7 @@ import { castOwnsStream, isCastable, useCastState } from '../cast/castState';
 import { useTvScreenState } from '../cast/tvScreenState';
 import { MobileOfflineChin } from '../player/MobileOfflineRoom';
 import { toggleLiveMute, useLiveVideoMuted, useLiveVideoPaused } from '../player/liveVideo';
-import { bandRadius, miniLayerTransform } from '../watch/miniLayer';
+import { miniLayerTransform } from '../watch/miniLayer';
 import { keepsAudioAfterPip } from '../player/lockScreenAudio';
 import { MobileChatPane } from '../chat/MobileChatPane';
 import {
@@ -150,6 +150,8 @@ const COMMIT_FRACTION = 0.45;
 // A downward flick commits regardless of distance. CSS pixels per millisecond.
 const FLING_VY = 0.6;
 const SPRING = { type: 'spring', stiffness: 420, damping: 36, mass: 0.7 } as const;
+// The phone mini player's move (scale model): Xtra's 250 ms, eased at both ends.
+const TWEEN = { duration: 0.25, ease: 'easeInOut' } as const;
 // Backstop for the layer coming to rest. The spring lands in about 450 ms; an
 // update with nothing to animate never reports completion, so this clears the
 // growing state and the chat hold after it instead.
@@ -546,6 +548,14 @@ export const WatchScreen: React.FC = () => {
     setModelJump(true);
   }
   const miniScale = MINI_W / viewport.w;
+  // The box's own 200 px, laid out inside the full-width band and scaled back
+  // up to fill it, for the few things drawn for the box itself.
+  const miniFace: React.CSSProperties = {
+    width: MINI_W,
+    height: (MINI_W * 9) / 16,
+    transform: `scale(${1 / miniScale})`,
+    transformOrigin: '0 0',
+  };
   // 0 is the full player, 1 the mini box. Driven by the drag and by one spring,
   // with no React render per frame.
   const prog = useMotionValue(mini ? 1 : 0);
@@ -556,31 +566,14 @@ export const WatchScreen: React.FC = () => {
   const layerTransform = useTransform(() =>
     miniLayerTransform(prog.get(), fitScale.get(), boxX.get(), boxY.get(), bandTop.get()),
   );
-  const bandRound = useTransform(() => `${bandRadius(prog.get(), fitScale.get(), 12)}px`);
-  // Chat, the offline strip and the background fade out over the first part of
-  // the shrink and back in over the last part of a grow.
-  const fadeOut = useTransform(prog, [0, 0.6], [1, 0]);
   // The Motion setting (Interface > Motion) reaches framer's own animations
   // through MotionConfig, but not an animate() run by hand: read it here.
   const reduceMotion = useReducedMotionConfig();
-  // Chat and the offline strip stop being drawn once the box has landed, and
-  // are back from the frame an expand starts.
-  const [miniRest, setMiniRest] = useState(mini);
-  if (!mini && miniRest) setMiniRest(false);
-  const landed = useCallback(
-    (target: number) => {
-      if (target === 1) setMiniRest(true);
-      settle();
-    },
-    [settle],
-  );
+  const landed = useCallback(() => settle(), [settle]);
   // While the layer is moving or small, it gets its own compositor layer so the
   // scale never redraws its contents. Only then: on the full player at rest it
   // would make the layer the containing block of chat's fixed menus.
   const inMotion = scaleModel && (mini || dragging || landing);
-  // The offline strip under the band stays laid out while the box shrinks (it
-  // fades with chat) and goes once the box has landed.
-  const chinShown = offlineChin || (scaleModel && mini && !miniRest);
   // The mini box's mute corner follows the full bar's rule: only a stream
   // playing on this phone, and never a VOD.
   const vodPlayback = useAppStore((s) => s.vodPlayback);
@@ -601,15 +594,15 @@ export const WatchScreen: React.FC = () => {
       return;
     }
     if (gesture.current?.kind === 'move') return;
-    const ax = animate(boxX, miniClamped.x, SPRING);
-    const ay = animate(boxY, miniClamped.y, SPRING);
+    const ax = animate(boxX, miniClamped.x, TWEEN);
+    const ay = animate(boxY, miniClamped.y, TWEEN);
     return () => {
       ax.stop();
       ay.stop();
     };
   }, [scaleModel, mini, reduceMotion, miniClamped.x, miniClamped.y, boxX, boxY]);
 
-  // One spring for every mode change, and for the spring back after a drag:
+  // One 250 ms move for every mode change, and for the return after a drag:
   // releasing sets `dragging` false and this carries on from wherever the
   // finger left the layer.
   useLayoutEffect(() => {
@@ -623,12 +616,12 @@ export const WatchScreen: React.FC = () => {
     // without the viewport changing.
     bandTop.set(bandRef.current?.offsetTop ?? bandTop.get());
     if (reduceMotion || prog.get() === target) {
-      // Nothing to animate: land on the next frame, as a spring would.
+      // Nothing to animate: land on the next frame, as an animation would.
       prog.jump(target);
-      const id = requestAnimationFrame(() => landed(target));
+      const id = requestAnimationFrame(landed);
       return () => cancelAnimationFrame(id);
     }
-    const a = animate(prog, target, { ...SPRING, onComplete: () => landed(target) });
+    const a = animate(prog, target, { ...TWEEN, onComplete: landed });
     return () => a.stop();
   }, [scaleModel, reduceMotion, mini, dragging, prog, bandTop, landed]);
 
@@ -993,8 +986,8 @@ export const WatchScreen: React.FC = () => {
             boxX.jump(to.x);
             boxY.jump(to.y);
           } else {
-            animate(boxX, to.x, SPRING);
-            animate(boxY, to.y, SPRING);
+            animate(boxX, to.x, TWEEN);
+            animate(boxY, to.y, TWEEN);
           }
           return;
         }
@@ -1182,10 +1175,11 @@ export const WatchScreen: React.FC = () => {
             }`
           : 'hidden'
       : scaleModel
-        ? // Never resized here: it fades with the shrink (fadeOut) and, once the
-          // box has landed, skips rendering while KEEPING its layout, so the
-          // next expand shows it again without laying the rows out again.
-          `flex-1 min-h-0 relative flex flex-col${mini && miniRest ? ' [content-visibility:hidden]' : ''}`
+        ? // Never resized here. As Xtra does, it goes the moment a minimize
+          // starts and is back the moment an expand starts; while the box is
+          // up it skips rendering but KEEPS its layout, so the expand does not
+          // lay the rows out again.
+          `flex-1 min-h-0 relative flex flex-col${mini ? ' [content-visibility:hidden]' : ''}`
         : // Rect geometry: hidden while the box grows back too, then faded in
           // once the layer lands (sn-chat-reveal), so the spring never lays chat out.
           mini || landing
@@ -1240,13 +1234,9 @@ export const WatchScreen: React.FC = () => {
         if (!dragging) settle();
       }}
     >
-      {scaleModel && (
-        <motion.div
-          aria-hidden
-          className="absolute inset-0 bg-background"
-          style={{ opacity: fadeOut, willChange: inMotion ? 'opacity' : undefined }}
-        />
-      )}
+      {/* The layer's background: gone the moment a minimize starts, so only
+          the band shrinks, and back the moment an expand starts. */}
+      {scaleModel && !mini && <div aria-hidden className="absolute inset-0 bg-background" />}
       <div
         // relative: the landscape chat overlay positions against this box.
         // A phone's beside column honours the overlay's side preference; the
@@ -1262,18 +1252,17 @@ export const WatchScreen: React.FC = () => {
           paddingTop: (mini && !scaleModel) || pip || sideBySide ? 0 : 'var(--sn-safe-t, 0px)',
         }}
       >
-        {/* The box's shadow, as its own element: fixed shape and blur, so only
-            its opacity moves with the shrink and nothing is repainted. */}
-        {scaleModel && (
-          <motion.div
+        {/* The box's shadow, in the band's own pixels so it reads as the old
+            box's shadow once scaled. Fixed for the whole move: nothing about it
+            changes while the layer moves, so nothing is repainted. */}
+        {scaleModel && mini && (
+          <div
             aria-hidden
             className="absolute left-0 right-0 aspect-video pointer-events-none"
             style={{
               top: 'var(--sn-safe-t, 0px)',
-              opacity: prog,
               borderRadius: 12 / miniScale,
               boxShadow: `0 ${12 / miniScale}px ${32 / miniScale}px -${8 / miniScale}px rgba(0,0,0,0.65)`,
-              willChange: inMotion ? 'opacity' : undefined,
             }}
           />
         )}
@@ -1303,10 +1292,10 @@ export const WatchScreen: React.FC = () => {
               : (resizable || tabletop) && shrink === 0
                 ? { height: playerMain }
                 : null),
-            // Scale model: the corners round off with the shrink, and in the box
-            // the band is the one thing that takes touches (the layer passes the
-            // rest through to Home).
-            ...(scaleModel ? { borderRadius: bandRound, overflow: 'hidden' } : null),
+            // Scale model: the box's corners (fixed for the whole move, in the
+            // band's own pixels), and in the box the band is the one thing that
+            // takes touches (the layer passes the rest through to Home).
+            ...(scaleModel ? { borderRadius: mini ? 12 / miniScale : 0, overflow: 'hidden' } : null),
             pointerEvents: scaleModel && mini ? 'auto' : undefined,
             touchAction: 'none',
           }}
@@ -1324,20 +1313,15 @@ export const WatchScreen: React.FC = () => {
           }}
         >
           {/* Everything the band shows, in one wrapper that is there in every
-              mode (the video keeps its tree position). In the scale model's box
-              it lays its contents out at the box's own 200 px and scales them
-              back up, so the scaled band shows the mini box exactly as designed:
-              the compact cards, the offline face and the corner controls. */}
+              mode (the video keeps its tree position). The player is never laid
+              out again for the box, it is just scaled with the layer, as Xtra
+              does; only a compact cast or TV card, which has nothing to lay
+              out, is drawn at the box's own 200 px (miniFace). */}
           <div
             className="absolute left-0 top-0"
             style={
-              scaleModel && mini
-                ? {
-                    width: MINI_W,
-                    height: (MINI_W * 9) / 16,
-                    transform: `scale(${1 / miniScale})`,
-                    transformOrigin: '0 0',
-                  }
+              scaleModel && mini && (castOwns || tvOwns || castEnded)
+                ? miniFace
                 : { width: '100%', height: '100%' }
             }
           >
@@ -1388,13 +1372,21 @@ export const WatchScreen: React.FC = () => {
               }
             />
           )}
+          </div>
           {/* IN-APP mini only. In system PiP the OS draws its own close and
               expand buttons over the window, so rendering ours too gave two
               exit buttons; and taps inside a PiP window go to the OS chrome,
               never to this content, so the swallower has nothing to catch. PiP
-              carries no web chrome at all - mute is a native RemoteAction. */}
+              carries no web chrome at all - mute is a native RemoteAction.
+              In the scale model the band is the full-width band scaled down, so
+              these few controls are laid out at the box's own 200 px and scaled
+              back up: the box's corners look exactly as designed, and the
+              player itself is never laid out again. */}
           {mini && !pip && (
-            <>
+            <div
+              className="absolute left-0 top-0 z-10"
+              style={scaleModel ? miniFace : { width: '100%', height: '100%' }}
+            >
               {/* Swallow player taps so the whole box reads as one control. */}
               <div className="absolute inset-0 z-10" />
               {/* Two corner controls, the ENTIRE corner each: the top-right
@@ -1451,38 +1443,25 @@ export const WatchScreen: React.FC = () => {
                   </span>
                 </button>
               )}
-            </>
+            </div>
           )}
-          </div>
           <DialIndicator dial={dial} />
           {/* The box's hairline edge, so it reads over any thumbnail under it.
-              Fixed shape and width in the band's own pixels (1 px on screen in
-              the box); only its opacity follows the shrink. */}
-          {scaleModel && (
-            <motion.div
+              In the band's own pixels, so it is 1 px on screen in the box. */}
+          {scaleModel && mini && (
+            <div
               aria-hidden
               className="absolute inset-0 z-[35] pointer-events-none"
               style={{
-                opacity: prog,
                 borderRadius: 12 / miniScale,
                 boxShadow: `inset 0 0 0 ${1 / miniScale}px rgba(255, 255, 255, 0.12)`,
-                willChange: inMotion ? 'opacity' : undefined,
               }}
             />
           )}
         </motion.div>
 
-        {/* The offline room's card sits under the band, never over the art. In
-            the scale model it stays laid out while the box shrinks, fading with
-            chat. */}
-        {chinShown &&
-          (scaleModel ? (
-            <motion.div style={{ opacity: fadeOut, willChange: inMotion ? 'opacity' : undefined }}>
-              <MobileOfflineChin />
-            </motion.div>
-          ) : (
-            <MobileOfflineChin />
-          ))}
+        {/* The offline room's card sits under the band, never over the art. */}
+        {offlineChin && <MobileOfflineChin />}
 
         {/* Between the panes, so its parent rect is the container the drag
             measures against. Hidden in mini/PiP and on phones. */}
@@ -1532,8 +1511,7 @@ export const WatchScreen: React.FC = () => {
                       `var(--sn-safe-${overlaySide === 'left' ? 'l' : 'r'}, 0px)`,
                   } as React.CSSProperties)
                 : scaleModel
-                  ? // Fades with the shrink instead of being resized by it.
-                    { opacity: fadeOut, willChange: inMotion ? 'opacity' : undefined }
+                  ? undefined
                   : chatFreeze
                     ? // A shrink drag: chat keeps its full-size box and the layer's
                       // overflow crops it (see chatFreeze).

@@ -784,9 +784,9 @@ export const MobilePlayer: React.FC<{
           category, viewers, uptime) so nothing has to sit between the player
           and chat, matching how the Twitch app does it. */}
       <div
-        // No fade into the mini box: there the player is laid out at the box's
-        // 200 px from the first frame of the shrink, and a fade would play the
-        // bar out crammed into that width.
+        // No fade into the mini box: the controls go the moment a minimize
+        // starts (as Xtra hides its controller), rather than fading out while
+        // the player shrinks under them.
         className={`absolute inset-0 ${compact ? '' : 'transition-opacity duration-200'} ${
           controlsVisible && !compact && !offline ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
