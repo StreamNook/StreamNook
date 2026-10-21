@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { staticEmoteUrl, static7tvSrcSet } from './staticEmoteUrl';
+import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from './staticEmoteUrl';
 
 describe('staticEmoteUrl', () => {
   it('rewrites each provider to its static variant', () => {
@@ -24,5 +24,13 @@ describe('staticEmoteUrl', () => {
 
   it('builds a static 7tv srcSet', () => {
     expect(static7tvSrcSet('id')).toContain('https://cdn.7tv.app/emote/id/2x_static.avif 2x');
+  });
+
+  it('builds the WebP srcSet a WebView without AVIF falls back to', () => {
+    expect(sevenTvSrcSet('id', 'webp')).toBe(
+      'https://cdn.7tv.app/emote/id/1x.webp 1x, https://cdn.7tv.app/emote/id/2x.webp 2x, https://cdn.7tv.app/emote/id/3x.webp 3x, https://cdn.7tv.app/emote/id/4x.webp 4x',
+    );
+    expect(sevenTvSrcSet('id', 'webp', true)).toContain('https://cdn.7tv.app/emote/id/1x_static.webp 1x');
+    expect(sevenTvSrcSet('id', 'avif')).toContain('https://cdn.7tv.app/emote/id/4x.avif 4x');
   });
 });

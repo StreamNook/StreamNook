@@ -50,6 +50,31 @@ fn open_seventv_circuit() {
 /// that guards the small calls.
 const SEVENTV_DOCUMENT_TIMEOUT: Duration = Duration::from_secs(25);
 
+/// A channel document's body may keep arriving this long after 7TV started
+/// answering; it fails only when no bytes come for [`SEVENTV_DOCUMENT_IDLE`].
+const SEVENTV_DOCUMENT_CAP: Duration = Duration::from_secs(120);
+const SEVENTV_DOCUMENT_IDLE: Duration = Duration::from_secs(10);
+
+/// Read a 7TV document body as JSON, giving up only when no bytes arrive for
+/// [`SEVENTV_DOCUMENT_IDLE`]. A whole-document deadline failed large sets on
+/// slow phone links that were still downloading.
+async fn read_seventv_json(mut resp: reqwest::Response) -> Result<serde_json::Value> {
+    let mut body: Vec<u8> = Vec::new();
+    loop {
+        match tokio::time::timeout(SEVENTV_DOCUMENT_IDLE, resp.chunk()).await {
+            Ok(Ok(Some(chunk))) => body.extend_from_slice(&chunk),
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => anyhow::bail!(
+                "no bytes for {}s after {} bytes",
+                SEVENTV_DOCUMENT_IDLE.as_secs(),
+                body.len()
+            ),
+        }
+    }
+    Ok(serde_json::from_slice(&body)?)
+}
+
 // Channel-independent 7TV data (the global set) cached process-wide, so a
 // channel join or a prefetch-scan worker does not re-fetch it.
 // Serve-stale-on-error: when 7TV is down an expired copy still beats an empty
@@ -154,19 +179,25 @@ pub(crate) async fn seventv_ids_store(channel_id: &str, ids: SeventvIds) {
 /// personal-use only when its `data.state` carries "PERSONAL" (others are still
 /// pending approval), so we filter on that exactly as the official client does.
 /// One direct REST read by set id, parsed once into ready-to-render emotes.
-pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
+///
+/// None when the read failed, so the caller does not record a set it never
+/// saw; an answer with no personal-use emotes is `Some` of an empty list.
+pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
     let mut out = Vec::new();
     let url = format!("https://7tv.io/v3/emote-sets/{}", set_id);
-    let resp = match crate::services::http::client().get(&url).send().await {
+    let resp = match crate::services::http::client()
+        .get(&url)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+    {
         Ok(r) if r.status().is_success() => r,
-        _ => return out,
+        _ => return None,
     };
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(_) => return out,
-    };
+    let json: serde_json::Value = resp.json().await.ok()?;
     let Some(arr) = json.get("emotes").and_then(|v| v.as_array()) else {
-        return out;
+        // A set with no emotes yet answers with no list at all.
+        return Some(out);
     };
     for active in arr {
         let data = active.get("data").unwrap_or(active);
@@ -226,7 +257,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
             });
         }
     }
-    out
+    Some(out)
 }
 
 /// Active emote-set id from a `/v3/users/:platform/:id` payload. Reads the
@@ -620,12 +651,35 @@ impl EmoteSet {
 /// Outcome of fetching one 7TV document. See `get_seventv_document`.
 enum DocFetch {
     Ok(reqwest::Response),
-    /// A definitive "does not exist" (4xx other than 429): the channel is not
-    /// on 7TV, or the set was deleted. Globals-only is the correct answer.
+    /// A definitive "does not exist" (404): the channel is not on 7TV, or the
+    /// set was deleted. Globals-only is the correct answer.
     NotFound,
-    /// Timeout, connect failure, 5xx, 429, or an open circuit. The result must
-    /// not be treated as this channel's set.
+    /// Timeout, connect failure, 5xx, any other 4xx, or an open circuit. The
+    /// result must not be treated as this channel's set.
     Failed,
+}
+
+/// What a 7TV answer that is not a success means.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SeventvAnswer {
+    /// 404: the thing does not exist.
+    NotFound,
+    /// Any other 4xx (a 400, 403 or 429 says nothing about the channel).
+    Failed,
+    /// 5xx: 7TV itself is down.
+    Outage,
+}
+
+/// Only a 404 says a channel or set does not exist. Reading every other 4xx
+/// that way overwrote a good saved set with globals only.
+pub(crate) fn classify_seventv_status(s: reqwest::StatusCode) -> SeventvAnswer {
+    if s.is_server_error() {
+        SeventvAnswer::Outage
+    } else if s == reqwest::StatusCode::NOT_FOUND {
+        SeventvAnswer::NotFound
+    } else {
+        SeventvAnswer::Failed
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -697,6 +751,35 @@ fn keep_held_rows(set: &mut EmoteSet, held: EmoteSet, bttv_ok: bool, ffz_ok: boo
         set.twitch = held.twitch;
     }
     covered
+}
+
+/// Whether the last provider fetch for each channel id came back whole: the
+/// 7TV channel set answered and every failed BTTV/FFZ fetch was covered by
+/// rows held before. Only a whole answer may be saved as the channel's
+/// dictionary or end a background retry.
+fn fetch_whole_map() -> &'static std::sync::Mutex<HashMap<String, bool>> {
+    static MAP: OnceLock<std::sync::Mutex<HashMap<String, bool>>> = OnceLock::new();
+    MAP.get_or_init(Default::default)
+}
+
+fn note_fetch_whole(channel_id: &str, whole: bool) {
+    if let Ok(mut map) = fetch_whole_map().lock() {
+        // One bool per channel ever fetched; bounded like the set cache.
+        if map.len() > 4096 {
+            map.clear();
+        }
+        map.insert(channel_id.to_string(), whole);
+    }
+}
+
+/// See [`fetch_whole_map`]. A channel never fetched counts as whole, so a
+/// caller that read a cached set keeps today's behavior.
+pub(crate) fn fetch_was_whole(channel_id: &str) -> bool {
+    fetch_whole_map()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(channel_id).copied())
+        .unwrap_or(true)
 }
 
 impl EmoteService {
@@ -944,6 +1027,7 @@ impl EmoteService {
                 || emote_set.seven_tv.is_empty()
                 || !seven_tv_ok
                 || !held_covers_failures;
+            note_fetch_whole(&cache_key, seven_tv_ok && held_covers_failures);
             let timestamp = if degraded {
                 SystemTime::now()
                     .checked_sub(Duration::from_secs(290))
@@ -1001,28 +1085,34 @@ impl EmoteService {
         if seventv_circuit_open() {
             return DocFetch::Failed;
         }
-        match self
-            .client
-            .get(url)
-            .timeout(SEVENTV_DOCUMENT_TIMEOUT)
-            .send()
-            .await
-        {
+        // The budget covers 7TV starting to answer. The body is read with
+        // `read_seventv_json`, which only gives up when bytes stop arriving,
+        // under the outer cap: a large set over a slow phone link is slow, not
+        // failed.
+        let send = self.client.get(url).timeout(SEVENTV_DOCUMENT_CAP).send();
+        let sent = match tokio::time::timeout(SEVENTV_DOCUMENT_TIMEOUT, send).await {
+            Ok(sent) => sent,
+            Err(_) => {
+                warn!("[EmoteService] 7TV document {} did not start answering in {}s", url, SEVENTV_DOCUMENT_TIMEOUT.as_secs());
+                return DocFetch::Failed;
+            }
+        };
+        match sent {
             Ok(resp) if resp.status().is_success() => {
                 SEVENTV_CIRCUIT_OPEN_UNTIL.store(0, Ordering::Relaxed);
                 DocFetch::Ok(resp)
             }
-            Ok(resp) => {
-                let s = resp.status();
-                if s.is_server_error() {
+            Ok(resp) => match classify_seventv_status(resp.status()) {
+                SeventvAnswer::Outage => {
                     open_seventv_circuit();
                     DocFetch::Failed
-                } else if s == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    DocFetch::Failed
-                } else {
-                    DocFetch::NotFound
                 }
-            }
+                SeventvAnswer::Failed => {
+                    warn!("[EmoteService] 7TV document {} answered {}", url, resp.status());
+                    DocFetch::Failed
+                }
+                SeventvAnswer::NotFound => DocFetch::NotFound,
+            },
             Err(e) => {
                 if e.is_connect() {
                     open_seventv_circuit();
@@ -1350,6 +1440,10 @@ impl EmoteService {
         // Their BetterTTV id (for `betterttv.com/users/{id}`) and Twitch id.
         let owner_ref = item.pointer("/user/id").and_then(|v| v.as_str()).map(str::to_string);
         let owner_id = item.pointer("/user/providerId").and_then(|v| v.as_str()).map(str::to_string);
+        // BetterTTV names the 1x size only when it is not the square 28, so a
+        // wide emote can take its room before the image loads.
+        let width = item.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let height = item.get("height").and_then(|v| v.as_u64()).map(|v| v as u32);
 
         Some(Emote {
             id: id.to_string(),
@@ -1364,8 +1458,8 @@ impl EmoteService {
             local_url: None,
             emote_type: None,
             owner_id,
-            width: None,
-            height: None,
+            width,
+            height,
             owner_name,
             original_name: None,
             owner_ref,
@@ -1507,7 +1601,15 @@ impl EmoteService {
                     Some(response) => {
                         if let Ok(json) = response.json::<serde_json::Value>().await {
                             if let Some(items) = json.get("emotes").and_then(|v| v.as_array()) {
-                                globals = parse_seventv_active_emotes(items);
+                                // Marked global like BetterTTV's and FFZ's, so a
+                                // channel's own emote of the same name wins in chat.
+                                globals = parse_seventv_active_emotes(items)
+                                    .into_iter()
+                                    .map(|mut e| {
+                                        e.emote_type = Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
+                                        e
+                                    })
+                                    .collect();
                             }
                         }
                     }
@@ -1538,7 +1640,7 @@ impl EmoteService {
                     // before parsing wrote a globals-only set to disk as the
                     // authoritative dictionary (2026-09-05, ohnepixel: 295 cached
                     // of 950 live, every channel emote rendered as text).
-                    let parsed = response.json::<serde_json::Value>().await;
+                    let parsed = read_seventv_json(response).await;
                     if let Err(e) = &parsed {
                         warn!(
                             "[EmoteService] 7TV user payload for {} did not parse: {}",
@@ -1572,7 +1674,7 @@ impl EmoteService {
                                 .await
                             {
                                 DocFetch::Ok(set_resp) => {
-                                    match set_resp.json::<serde_json::Value>().await {
+                                    match read_seventv_json(set_resp).await {
                                         Ok(set_json) => {
                                             if let Some(items) =
                                                 set_json.get("emotes").and_then(|v| v.as_array())
@@ -1659,8 +1761,9 @@ impl EmoteService {
             local_url: None,
             emote_type: None,
             owner_id: None,
-            width: None,
-            height: None,
+            // FFZ always names the 1x size.
+            width: item.get("width").and_then(|v| v.as_u64()).map(|v| v as u32),
+            height: item.get("height").and_then(|v| v.as_u64()).map(|v| v as u32),
             owner_name: item
                 .pointer("/owner/display_name")
                 .or_else(|| item.pointer("/owner/name"))
@@ -2101,6 +2204,43 @@ impl Default for EmoteService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a 404 says a channel is not on 7TV; a refused or rate-limited
+    /// request must never overwrite a good saved set with globals only.
+    #[test]
+    fn seventv_status_classes() {
+        use reqwest::StatusCode;
+        assert_eq!(classify_seventv_status(StatusCode::NOT_FOUND), SeventvAnswer::NotFound);
+        for s in [StatusCode::BAD_REQUEST, StatusCode::FORBIDDEN, StatusCode::TOO_MANY_REQUESTS, StatusCode::GONE] {
+            assert_eq!(classify_seventv_status(s), SeventvAnswer::Failed, "{s}");
+        }
+        for s in [StatusCode::INTERNAL_SERVER_ERROR, StatusCode::SERVICE_UNAVAILABLE] {
+            assert_eq!(classify_seventv_status(s), SeventvAnswer::Outage, "{s}");
+        }
+    }
+
+    /// Wide BetterTTV and FFZ emotes carry their 1x size, so they take their
+    /// room before the image loads.
+    #[test]
+    fn bttv_and_ffz_carry_their_size() {
+        let wide = EmoteService::parse_bttv_emote(&serde_json::json!({ "id": "w", "code": "eShrug", "width": 77, "height": 28 })).unwrap();
+        assert_eq!((wide.width, wide.height), (Some(77), Some(28)));
+        let square = EmoteService::parse_bttv_emote(&serde_json::json!({ "id": "s", "code": "LUL" })).unwrap();
+        assert_eq!((square.width, square.height), (None, None));
+        let ffz = EmoteService::parse_ffz_emoticon(&serde_json::json!({ "id": 3, "name": "WideHard", "width": 50, "height": 20, "urls": { "1": "a" } }), false).unwrap();
+        assert_eq!((ffz.width, ffz.height), (Some(50), Some(20)));
+    }
+
+    /// A fetch never made counts as whole, so callers that read a cached set
+    /// keep saving it; one recorded partial does not.
+    #[test]
+    fn fetch_was_whole_defaults_true() {
+        assert!(fetch_was_whole("never-fetched-channel"));
+        note_fetch_whole("partial-channel", false);
+        assert!(!fetch_was_whole("partial-channel"));
+        note_fetch_whole("partial-channel", true);
+        assert!(fetch_was_whole("partial-channel"));
+    }
 
     /// The emote menu draws animated emotes as their first frame while it
     /// scrolls, and lets known-still ones keep their disk copy. Each provider

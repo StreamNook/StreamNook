@@ -71,6 +71,9 @@ pub async fn rebuild(state: &AppState, window: &str, force: bool, reason: &str) 
     // Warn, not debug: debug logging is off on a phone and this is what a
     // support log needs to show.
     log::warn!("[ChatRecovery] cycling {} room(s) for {}: {}", channels.len(), window, reason);
+    // The 7TV live-update socket went through the same absence; a dead one
+    // is reconnected now rather than minutes from now.
+    crate::services::seventv_eventapi::check_after_resume();
     // Kick, YouTube and TikTok ride the same bridge: with any of them on it,
     // only the Twitch side goes down.
     if crate::services::providers::has_active_bridge_users() {

@@ -98,6 +98,9 @@ pub mod emote_credit;
 pub mod emote_match;
 pub mod emote_picker;
 pub mod emote_prefetch_service;
+#[cfg(test)]
+mod emote_golden;
+pub mod emote_restamp;
 pub mod emote_service;
 pub mod emote_set_cache;
 pub mod eventsub_moderation;
@@ -212,6 +215,7 @@ pub mod twitch_profile_edit;
 pub mod universal_cache_service;
 pub mod update_watch;
 pub mod user_message_history_service;
+pub(crate) mod channel_ids;
 pub mod channel_link_service;
 pub mod channel_points_summary;
 pub mod channel_relationship;
