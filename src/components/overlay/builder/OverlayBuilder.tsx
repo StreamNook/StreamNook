@@ -810,6 +810,7 @@ const OverlayEditor = () => {
   const [sources, setSources] = useState<OverlaySource[]>(initial.profiles[initial.active].sources);
   const [sceneBg, setSceneBg] = useState<SceneBg>('scene');
   const [previewMode, setPreviewMode] = useState<'sample' | 'live'>('sample');
+  const liveNote = previewMode === 'live' ? (host.livePreviewNote?.(sources) ?? null) : null;
   const [addProvider, setAddProvider] = useState<ProviderId>('twitch');
   const [addChannel, setAddChannel] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
@@ -2266,7 +2267,7 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('maxMessageAgeSec')} title="Lifetime" description="Removes a message from the overlay once it has been up this long, so a quiet stream never shows stale chat.">
             <Slider value={style.maxMessageAgeSec} min={OVERLAY_LIMITS.maxMessageAgeSec.min} max={OVERLAY_LIMITS.maxMessageAgeSec.max} step={5} onChange={(v) => set('maxMessageAgeSec', Math.round(v))} format={(v) => (v === 0 ? 'Never' : `${v}s`)} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('restoreOnReload')} title="Restore on reload" description="Bring back the last chat messages when the OBS source reloads." help="Off means the overlay comes back cleared when you reopen OBS or start a stream." control={<Toggle enabled={style.restoreOnReload} onChange={() => set('restoreOnReload', !style.restoreOnReload)} />} />
+          <SettingsRow onReset={resetFor('restoreOnReload')} title="Restore on reload" description="Bring back the last chat messages when the OBS source reloads." help="Off clears the overlay when you reopen OBS or start a stream. A reload in the middle of a stream (a refresh or scene switch within 2 minutes) still keeps the last messages." control={<Toggle enabled={style.restoreOnReload} onChange={() => set('restoreOnReload', !style.restoreOnReload)} />} />
           <SettingsRow onReset={resetFor('loadRecentChat')} title="Recent chat" titleBadge={<SourceScope sources={['twitch']} />} description="Open with the channel's last messages when the overlay starts." help="When the overlay starts, it fills with up to 40 recent Twitch messages instead of waiting for new ones. Deleted messages stay gone." control={<Toggle enabled={style.loadRecentChat} onChange={() => set('loadRecentChat', !style.loadRecentChat)} />} />
           <SettingsRow onReset={resetFor('modCommands')} title="Mod commands" titleBadge={<SourceScope sources={['twitch']} />} description="Mods can reload or clear the overlay from chat." help="The broadcaster and moderators type !refreshoverlay to reload it or !clearoverlay to empty it. The command itself never shows on the overlay." control={<Toggle enabled={style.modCommands} onChange={() => set('modCommands', !style.modCommands)} />} />
           <SettingsRow onReset={resetFor('direction')} title="Direction" description="Where new messages appear.">
@@ -2514,6 +2515,27 @@ const OverlayEditor = () => {
           >
             {style.width} × {style.height}
           </span>
+          {/* What the live preview can't show here and why, in the corner
+              opposite the size: outside the scaled canvas, so it stays
+              readable at any canvas size. */}
+          {liveNote &&
+            (liveNote.action ? (
+              <button
+                type="button"
+                onClick={liveNote.action}
+                className="absolute top-2 left-2.5 max-w-[calc(100%-1.25rem)] rounded-md px-1.5 py-0.5 text-left text-[11px] leading-snug text-white/75 transition-colors hover:text-white"
+                style={{ background: 'rgba(0,0,0,0.38)' }}
+              >
+                {liveNote.text}
+              </button>
+            ) : (
+              <span
+                className="pointer-events-none absolute top-2 left-2.5 max-w-[calc(100%-1.25rem)] rounded-md px-1.5 py-0.5 text-[11px] leading-snug"
+                style={{ background: 'rgba(0,0,0,0.38)', color: 'rgba(255,255,255,0.72)' }}
+              >
+                {liveNote.text}
+              </span>
+            ))}
         </div>
 
         <p className="px-1 text-[12px] leading-relaxed text-textMuted">

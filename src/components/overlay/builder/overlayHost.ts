@@ -17,6 +17,11 @@ export interface OverlaySourceRef {
   channel: string;
 }
 
+export interface LivePreviewNote {
+  text: string;
+  action?: () => void;
+}
+
 export interface OverlayApiResponse {
   ok: boolean;
   status: number;
@@ -48,6 +53,10 @@ export interface OverlayHost {
   /** Open a shared overlay file, its settings already checked. Null when the
    *  streamer cancelled. Absent: the builder uses the browser's file picker. */
   importOverlayFile?(): Promise<ImportedOverlayFile | null>;
+  /** A short line for the preview stage's corner while Live chat shows, or
+   *  null. The site uses it for sources it can't preview signed out; its
+   *  action (signing in) makes the line a button. Absent: no line. */
+  livePreviewNote?(sources: OverlaySourceRef[]): LivePreviewNote | null;
   /** The live-chat preview feed. `overlayId` is the published overlay being
    *  edited, when there is one (the site's relay feed is keyed by it). */
   LivePreview: ComponentType<{
