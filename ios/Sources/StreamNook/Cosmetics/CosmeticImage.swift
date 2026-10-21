@@ -36,6 +36,8 @@ struct CosmeticImage: UIViewRepresentable {
 
     func updateUIView(_ view: CosmeticImageView, context: Context) {
         view.onFailure = onFailure
+        // Under the full player nobody sees the shell's pictures: they hold their frame.
+        view.covered = context.environment.shellCovered
         view.configure(urls: urls, animate: animate, alwaysMove: alwaysMove, fill: fill, stretch: stretch, pointHeight: pointHeight)
     }
 }
@@ -48,8 +50,9 @@ final class CosmeticImageView: UIView {
     private var alwaysMove = false
     private var pointHeight: CGFloat?
     private var generation = 0
-    private var link: CADisplayLink?
-    private var started = CACurrentMediaTime()
+    var covered = false {
+        didSet { if covered != oldValue, let image = imageLayer.image { show(image) } }
+    }
     var onFailure: (() -> Void)?
 
     override init(frame: CGRect) {
@@ -72,7 +75,6 @@ final class CosmeticImageView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
-            stopLink()
             imageLayer.stopAnimating()
         } else if let image = imageLayer.image {
             show(image)
@@ -115,41 +117,6 @@ final class CosmeticImageView: UIView {
     }
 
     private func show(_ image: DecodedImage) {
-        if alwaysMove, animate, image.isAnimated {
-            imageLayer.show(image, animate: false)
-            startLink()
-        } else {
-            stopLink()
-            imageLayer.show(image, animate: animate && window != nil)
-        }
-    }
-
-    // A clock of its own for pictures that move whatever Reduce Motion says.
-    private func startLink() {
-        guard link == nil, window != nil else { return }
-        started = CACurrentMediaTime()
-        let target = LinkTarget(self)
-        let link = CADisplayLink(target: target, selector: #selector(LinkTarget.tick))
-        link.add(to: .main, forMode: .common)
-        self.link = link
-    }
-
-    private func stopLink() {
-        link?.invalidate()
-        link = nil
-    }
-
-    fileprivate func tick() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        imageLayer.advance(to: CACurrentMediaTime() - started)
-        CATransaction.commit()
-    }
-
-    @MainActor
-    private final class LinkTarget: NSObject {
-        weak var view: CosmeticImageView?
-        init(_ view: CosmeticImageView) { self.view = view }
-        @objc func tick() { view?.tick() }
+        imageLayer.show(image, animate: animate && window != nil && !covered, always: alwaysMove)
     }
 }
