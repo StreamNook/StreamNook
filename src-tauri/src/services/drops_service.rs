@@ -2111,7 +2111,10 @@ impl DropsService {
 
                 // Get current channel info
                 let channel_info = current_channel.read().await.clone();
-                if channel_info.is_some() {
+                // A phone in the background with nothing playing earns nothing to
+                // read back; behind a stream playing in the background it keeps
+                // claiming finished drops.
+                if channel_info.is_some() && !crate::services::app_presence::phone_quiet(&app_handle) {
                     // The watched channel's bonus chest is claimed by
                     // services::watched_chest (`auto_claim_points_watching`),
                     // whichever chat is on screen. The background multi-channel

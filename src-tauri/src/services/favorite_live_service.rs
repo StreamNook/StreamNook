@@ -379,7 +379,7 @@ async fn poll(app: AppHandle, state: AppState, source: &'static str) {
     // happens to be live at launch would fire a "went live" toast.
     let mut primed = false;
     loop {
-        if let Some(plan) = plan(&state) {
+        if let Some(plan) = plan(&state).filter(|_| !crate::services::window_visibility::phone_idle()) {
             // Against the FULL favourites list: a source down to no favourites
             // is never checked again, so its last rows would otherwise linger.
             prune_absent(&app, &plan, source).await;

@@ -257,6 +257,9 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(VIEWERS_PERIOD).await;
+            if crate::services::window_visibility::phone_idle() {
+                continue;
+            }
             refresh_viewers(&viewers).await;
         }
     });
@@ -264,6 +267,11 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(POINTS_PERIOD).await;
+            // Keeps going behind a stream playing in the background: this is the
+            // chest-claim fallback (watched_chest::offer).
+            if crate::services::app_presence::phone_quiet(&points.app) {
+                continue;
+            }
             for login in fully_watched_logins(&points).await {
                 refresh_points(&points, &login).await;
             }
@@ -273,6 +281,9 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(PINNED_PERIOD).await;
+            if crate::services::window_visibility::phone_idle() {
+                continue;
+            }
             for login in fully_watched_logins(&pinned).await {
                 refresh_pinned(&pinned, &login).await;
             }
@@ -282,6 +293,9 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(RELATIONSHIP_PERIOD).await;
+            if crate::services::window_visibility::phone_idle() {
+                continue;
+            }
             for login in fully_watched_logins(&relationships).await {
                 refresh_relationship(&relationships, &login, true).await;
             }

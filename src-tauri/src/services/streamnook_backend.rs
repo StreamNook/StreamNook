@@ -205,6 +205,12 @@ pub fn start_realtime() {
         let mut joined_before = false;
         let mut pause = Duration::from_secs(2);
         loop {
+            // A phone in the background holds no socket; the rejoin on return
+            // re-reads the registries (Change::Rejoined).
+            if crate::services::window_visibility::phone_idle() {
+                crate::services::window_visibility::until_shown().await;
+                pause = Duration::from_secs(2);
+            }
             match run_socket(&ws, key, &mut joined_before).await {
                 Ok(()) => pause = Duration::from_secs(2),
                 Err(e) => log::debug!("[StreamNookBackend] realtime: {e}"),
@@ -223,6 +229,9 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool) -> Result<(),
     loop {
         tokio::select! {
             _ = beat.tick() => {
+                if crate::services::window_visibility::phone_idle() {
+                    return Ok(());
+                }
                 let msg = json!({ "topic": "phoenix", "event": "heartbeat", "payload": {}, "ref": next_ref() }).to_string();
                 socket.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
             }

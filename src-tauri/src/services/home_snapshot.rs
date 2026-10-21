@@ -505,7 +505,12 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(5)).await;
         loop {
-            refresh_followed(&followed).await;
+            // A phone in the background rests: its live alerts come from the push
+            // server and the phones' own background checks, not this poll, and the
+            // resume refresh (note_app_resumed) catches Home up.
+            if !crate::services::window_visibility::phone_idle() {
+                refresh_followed(&followed).await;
+            }
             tokio::time::sleep(FOLLOWED_PERIOD).await;
         }
     });
@@ -524,7 +529,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
                 let s = offline.snap.read().await;
                 (s.followed_live_at.is_some(), is_stale(s.offline_at, OFFLINE_PERIOD))
             };
-            if signed && stale {
+            if signed && stale && !crate::services::window_visibility::phone_idle() {
                 refresh_offline(&offline).await;
             }
             tokio::time::sleep(if signed { OFFLINE_PERIOD } else { Duration::from_secs(15) }).await;
@@ -536,7 +541,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(10)).await;
         loop {
-            if recommended.home_mounted() {
+            if recommended.home_mounted() && !crate::services::window_visibility::phone_idle() {
                 refresh_recommended(&recommended).await;
             }
             tokio::time::sleep(RECOMMENDED_PERIOD).await;
@@ -759,9 +764,10 @@ pub fn note_discover_inputs_changed() {
 /// tray nor minimized, with its Home still mounted and nobody looking at it.
 /// A destroyed main window is not up either.
 fn main_window_shown(app: &AppHandle) -> bool {
-    app.get_webview_window("main").is_some_and(|window| {
-        window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false)
-    })
+    !crate::services::window_visibility::phone_idle()
+        && app.get_webview_window("main").is_some_and(|window| {
+            window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false)
+        })
 }
 
 /// `Settings.favorite_streamers`, copied out from under the lock.

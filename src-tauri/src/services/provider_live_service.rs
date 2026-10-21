@@ -183,8 +183,11 @@ struct Poller {
 async fn poll(app: AppHandle, state: AppState, provider: &'static str, src: Arc<dyn StreamSource>) {
     let mut poller = Poller::default();
     loop {
-        if let Some((from, rows)) = look(&state, provider, src.as_ref(), &mut poller).await {
-            apply(&app, provider, from, rows, true).await;
+        // Its announcements are in-app only: a phone in the background rests.
+        if !crate::services::window_visibility::phone_idle() {
+            if let Some((from, rows)) = look(&state, provider, src.as_ref(), &mut poller).await {
+                apply(&app, provider, from, rows, true).await;
+            }
         }
         let cadence = cadence_for(provider, src.caps().native_follows);
         tokio::time::sleep(rest_after(cadence, poller.failures)).await;

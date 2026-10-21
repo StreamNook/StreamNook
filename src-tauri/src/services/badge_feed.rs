@@ -118,6 +118,11 @@ async fn run_socket(app: &AppHandle) -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = ping.tick() => {
+                // A phone in the background drops the socket; the catch-up poll
+                // on return picks up whatever landed meanwhile.
+                if crate::services::window_visibility::phone_idle() {
+                    return Ok(());
+                }
                 if last_inbound.elapsed() > LIVENESS_TIMEOUT {
                     anyhow::bail!("relay went quiet for {}s", LIVENESS_TIMEOUT.as_secs());
                 }
@@ -155,13 +160,20 @@ pub fn start(app: AppHandle) {
         loop {
             let up = SOCKET_UP.load(Ordering::Relaxed);
             sleep(if up { POLL_INTERVAL } else { OFFLINE_POLL_INTERVAL }).await;
-            poll_once(&poll_app).await;
+            if !crate::services::window_visibility::phone_idle() {
+                poll_once(&poll_app).await;
+            }
         }
     });
     tauri::async_runtime::spawn(async move {
         sleep(STARTUP_DELAY).await;
         let mut attempt = 0usize;
         loop {
+            if crate::services::window_visibility::phone_idle() {
+                crate::services::window_visibility::until_shown().await;
+                attempt = 0;
+                poll_once(&app).await;
+            }
             let started = Instant::now();
             match run_socket(&app).await {
                 Ok(()) => {}
