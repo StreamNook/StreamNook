@@ -315,11 +315,18 @@ class MainActivity : TauriActivity() {
       // while the activity is already pausing.
       try {
         ContextCompat.startForegroundService(this@MainActivity, i)
+        // A start from the background (a raid or auto-switch after
+        // mediaSessionPark handed the WebView its pause back): onPause will not
+        // run again to undo that pause, so undo it here, as onPause would have.
+        runOnUiThread {
+          if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) webView?.onResume()
+        }
       } catch (e: Exception) {
         // Android 12+ throws ForegroundServiceStartNotAllowedException for a
         // start from the background (a play after the 10-minute stand-down,
-        // say). No card then, rather than a crash.
-        MediaPlaybackService.webWanted = false
+        // say). No card then, rather than a crash. A service already running
+        // (an update that failed) stays wanted.
+        if (!MediaPlaybackService.isRunning) MediaPlaybackService.webWanted = false
         android.util.Log.w(NotifyRenderer.TAG, "media card not shown: $e")
       }
     }
@@ -496,10 +503,18 @@ class MainActivity : TauriActivity() {
       applyRefreshRate()
     }
 
-    /** System Battery Saver, for the page's boot read; flips arrive as sn:low-power. */
+    /** System Battery Saver, for the page's boot read; flips arrive as sn:low-power.
+     *  A read that finds a flip the receiver missed (the process was cached)
+     *  takes it, so the window's rate follows too. */
     @JavascriptInterface
-    fun isPowerSaveMode(): Boolean =
-      (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+    fun isPowerSaveMode(): Boolean {
+      val on = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+      if (on != powerSave) {
+        powerSave = on
+        applyRefreshRate()
+      }
+      return on
+    }
 
     /** Mark whether leaving the app should enter system picture-in-picture.
      *  Pushes params too, since that is what carries autoEnterEnabled. */
@@ -1188,6 +1203,8 @@ class MainActivity : TauriActivity() {
         if (mode.physicalWidth == lastModeW && mode.physicalHeight == lastModeH) return
         lastModeW = mode.physicalWidth
         lastModeH = mode.physicalHeight
+        // A held rate names a mode id of the OLD size; pick this size's one.
+        applyRefreshRate()
         webView.post {
           webView.evaluateJavascript(
             "window.dispatchEvent(new Event('sn:display-changed'))",
