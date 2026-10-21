@@ -756,38 +756,6 @@ pub fn link_label(raw: &str) -> String {
     if trimmed.is_empty() { host } else { trimmed }
 }
 
-/// Splits `@name` mentions out of text: an `@` and 1 to 25 word characters
-/// followed by the end, whitespace or closing punctuation.
-fn split_mentions(text: &str, out: &mut Vec<Item>) {
-    let chars: Vec<char> = text.chars().collect();
-    let mut plain = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '@' {
-            let mut j = i + 1;
-            while j < chars.len() && j - i <= 25 && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
-                j += 1;
-            }
-            let len = j - i - 1;
-            let ends = j == chars.len() || chars[j].is_whitespace() || ".,!?:;'\")]}>-".contains(chars[j]);
-            if (1..=25).contains(&len) && ends {
-                if !plain.is_empty() {
-                    out.push(Item::Text(std::mem::take(&mut plain)));
-                }
-                let name: String = chars[i + 1..j].iter().collect();
-                out.push(Item::Mention(name));
-                i = j;
-                continue;
-            }
-        }
-        plain.push(chars[i]);
-        i += 1;
-    }
-    if !plain.is_empty() {
-        out.push(Item::Text(plain));
-    }
-}
-
 #[derive(Clone, Debug)]
 struct EmoteItem {
     view: ViewEmote,
@@ -798,7 +766,7 @@ struct EmoteItem {
 #[derive(Clone, Debug)]
 enum Item {
     Text(String),
-    Mention(String),
+    Mention { text: String, login: String },
     Link { label: String, url: String },
     Emoji { text: String, url: String },
     Emote(EmoteItem),
@@ -921,9 +889,9 @@ fn push_text(out: &mut Vec<ViewSpan>, text: &str) {
 fn single(item: Item, out: &mut Vec<ViewSpan>) {
     match item {
         Item::Text(t) => push_text(out, &t),
-        Item::Mention(login) => {
+        Item::Mention { text, login } => {
             let color = seen_color(&login);
-            out.push(ViewSpan::Mention { text: format!("@{login}"), login: login.to_lowercase(), color });
+            out.push(ViewSpan::Mention { text, login: login.to_lowercase(), color });
         }
         Item::Link { label, url } => out.push(ViewSpan::Link { label, url }),
         Item::Emoji { text, url } => out.push(ViewSpan::Emoji { text, url }),
@@ -996,8 +964,16 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
                 if content.trim().is_empty() {
                     items.push(Item::Text(content.clone()));
                 } else {
-                    split_mentions(content, &mut items);
+                    for piece in crate::services::text_spans::split_text(content) {
+                        items.push(match piece {
+                            crate::services::text_spans::Piece::Text(t) => Item::Text(t),
+                            crate::services::text_spans::Piece::Mention { text, login } => Item::Mention { text, login },
+                        });
+                    }
                 }
+            }
+            MessageSegment::Mention { content, login } => {
+                items.push(Item::Mention { text: content.clone(), login: login.clone() })
             }
             MessageSegment::Emote { content, emote_url, is_zero_width, modifier_flags, is_personal, .. } => {
                 let (width, height) = crate::services::irc_service::emote_size_hint(channel, content, emote_url)

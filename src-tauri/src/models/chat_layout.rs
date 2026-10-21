@@ -371,6 +371,10 @@ pub enum MessageSegment {
         /// other links, so none flashes a placeholder and vanishes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card: Option<String>,
+        /// The short label a row prints when `chat_design.shorten_links` is on
+        /// (`chat_row_view::link_label`). Empty on rows from before it existed.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        label: String,
     },
     /// Cheermote segment for animated bits (e.g., Cheer500)
     Cheermote {
@@ -390,6 +394,12 @@ pub enum MessageSegment {
         content: String,
         gif_id: String,
         gif_url: String,
+    },
+    /// An `@name` mention cut out of the text (services/text_spans.rs).
+    /// `content` is what was typed ("@Call of Duty"), `login` who it names.
+    Mention {
+        content: String,
+        login: String,
     },
 }
 

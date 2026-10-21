@@ -96,6 +96,9 @@ impl LayoutService {
                 MessageSegment::Text { content } => {
                     text.push_str(content);
                 }
+                MessageSegment::Mention { content, .. } => {
+                    text.push_str(content);
+                }
                 MessageSegment::Link { content, .. } => {
                     has_links = true;
                     // URLs are long strings without spaces that browsers break mid-character

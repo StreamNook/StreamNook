@@ -530,7 +530,7 @@ fn history_key_for(msg: &ChatMessage) -> String {
     }
 }
 
-fn get_start_lock() -> &'static Mutex<()> {
+pub(crate) fn get_start_lock() -> &'static Mutex<()> {
     START_LOCK.get_or_init(|| Mutex::new(()))
 }
 
@@ -818,7 +818,7 @@ pub(crate) async fn reship_room_state(channel: &str) {
     frame.extend(fields);
     let frame = serde_json::Value::Object(frame).to_string();
     get_room_state_cache().lock().await.insert(channel.to_string(), frame.clone());
-    send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
+    send_to_bridge(BridgeFrame::channel(channel, frame).as_state(), false).await;
 }
 
 /// Send one chat-stream frame to `channel`'s rooms (a held AutoMod message,
@@ -906,15 +906,27 @@ pub async fn cache_provider_room_state(channel_key: &str, frame: String) {
         .insert(channel_key.to_lowercase(), frame);
 }
 
-/// Hand a window that claims an already-JOINed channel the room as last known.
-/// Twitch sends ROOMSTATE only on the JOIN itself and on a change, so a chat
-/// opened on a channel the connection already holds (another window's, or one
-/// kept joined) would otherwise never learn its modes. A fresh JOIN has
-/// nothing cached yet; its ROOMSTATE comes from the server.
-async fn replay_room_state(key: &str) {
-    let frame = get_room_state_cache().lock().await.get(key).cloned();
-    if let Some(frame) = frame {
-        send_to_bridge(BridgeFrame::channel(key, frame), false).await;
+/// Hand a window that claims an already-JOINed channel the room as last known:
+/// its modes, and the account's own badges and color there. Twitch sends
+/// ROOMSTATE and USERSTATE only on the JOIN itself (and on a change or an own
+/// send), so a chat opened on a channel the connection already holds (another
+/// window's, or one kept joined) would otherwise never learn its modes, nor
+/// that the account moderates it. A fresh JOIN has nothing cached yet; its
+/// frames come from the server.
+async fn replay_channel_state(key: &str) {
+    let room = get_room_state_cache().lock().await.get(key).cloned();
+    let badges = get_user_badges_cache().lock().await.get(key).cloned();
+    let color = get_user_color_cache().lock().await.get(key).cloned();
+    if let Some(frame) = room {
+        send_to_bridge(BridgeFrame::channel(key, frame).as_state(), false).await;
+    }
+    if let Some(badges) = badges {
+        let frame = format!("USER_BADGES:#{}:{}", key, badges);
+        send_to_bridge(BridgeFrame::channel(key, frame).as_state(), false).await;
+    }
+    if let Some(color) = color {
+        let frame = format!("USER_COLOR:#{}:{}", key, color);
+        send_to_bridge(BridgeFrame::channel(key, frame).as_state(), false).await;
     }
 }
 
@@ -2858,7 +2870,7 @@ impl IrcService {
                 confirm_join(ch).await;
             }
 
-            send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), room_state_str), false).await;
+            send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), room_state_str).as_state(), false).await;
 
             // Check for shared chat information. Spawned: this is a Helix HTTP
             // round-trip (pure cache refresh — enhance_message reads the cache
@@ -2922,7 +2934,7 @@ impl IrcService {
                 // only open channel and repainted the user's own rows without
                 // their channel badges, so it is not forwarded at all.
                 if let Some(ch) = &channel_name {
-                    send_to_bridge(BridgeFrame::channel(ch, format!("USER_BADGES:#{}:{}", ch, badges)), false).await;
+                    send_to_bridge(BridgeFrame::channel(ch, format!("USER_BADGES:#{}:{}", ch, badges)).as_state(), false).await;
                 }
             }
 
@@ -2941,7 +2953,7 @@ impl IrcService {
                         Some(ch) => format!("USER_COLOR:#{}:{}", ch, color),
                         None => format!("USER_COLOR:{}", color),
                     };
-                    send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), color_message), false).await;
+                    send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), color_message).as_state(), false).await;
                 }
             }
 
@@ -3594,7 +3606,7 @@ impl IrcService {
             // dropped it re-issues the JOIN — which is what turns the user's
             // refresh into a real recovery instead of an IRC no-op.
             Self::ensure_joined(&key).await?;
-            replay_room_state(&key).await;
+            replay_channel_state(&key).await;
             return Ok(());
         }
 
@@ -3605,7 +3617,7 @@ impl IrcService {
             release_channel_claim(&mut *get_channel_consumers().lock().await, &key, window);
             return Err(e);
         }
-        replay_room_state(&key).await;
+        replay_channel_state(&key).await;
 
         Ok(())
     }
@@ -4569,6 +4581,9 @@ impl IrcService {
             });
         }
 
+        // Mentions are cut here, in the one builder every Twitch row and every
+        // re-parse (backlog re-stamp, Shared Chat partner rows) goes through.
+        crate::services::text_spans::apply(&mut segments, true);
         segments
     }
 
@@ -4602,13 +4617,7 @@ impl IrcService {
             // the link becomes its own text run, so "see test.fr." does not
             // put the full stop inside the href.
             if let Some((link, trailing)) = link_detect::split_link(word) {
-                let url = link_detect::link_url(link);
-                let card = crate::commands::link_preview::expected_card(&url).map(String::from);
-                segments.push(MessageSegment::Link {
-                    content: link.to_string(),
-                    url,
-                    card,
-                });
+                segments.push(crate::services::text_spans::link_segment(link));
                 if !trailing.is_empty() {
                     segments.push(MessageSegment::Text {
                         content: trailing.to_string(),
@@ -4839,7 +4848,7 @@ impl IrcService {
         // field below. A PRIVMSG carries the login in its prefix.
         let username = Self::privmsg_prefix_login(raw)
             .or_else(|| tag_map.get("login").map(|s| s.to_string()))
-            .or_else(|| tag_map.get("display-name").map(|s| s.to_lowercase()))
+            .or_else(|| tag_map.get("display-name").map(|s| unescape_irc_tag(s).to_lowercase()))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -4874,13 +4883,13 @@ impl IrcService {
 
         let mut tags_owned: HashMap<String, String> = tag_map
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_string(), unescape_irc_tag(v)))
             .collect();
         stamp_reward_name(&mut tags_owned, raw);
 
         let display_name = tag_map
             .get("display-name")
-            .map(|s| s.to_string())
+            .map(|s| unescape_irc_tag(s))
             .unwrap_or_else(|| username.clone());
 
         let user_id = tag_map
@@ -4990,11 +4999,11 @@ impl IrcService {
                 parent_msg_id: parent_id.to_string(),
                 parent_display_name: tag_map
                     .get("reply-parent-display-name")
-                    .map(|s| s.to_string())
+                    .map(|s| unescape_irc_tag(s))
                     .unwrap_or_default(),
                 parent_msg_body: tag_map
                     .get("reply-parent-msg-body")
-                    .map(|s| s.replace("\\s", " "))
+                    .map(|s| unescape_irc_tag(s))
                     .unwrap_or_default(),
                 parent_user_id: tag_map
                     .get("reply-parent-user-id")
@@ -5013,7 +5022,7 @@ impl IrcService {
         // before display name, matching the old alternation order.
         let reply_parent_display_name = tag_map
             .get("reply-parent-display-name")
-            .map(|s| s.to_string());
+            .map(|s| unescape_irc_tag(s));
         // Emote positions are CODEPOINT indices (see char_to_byte in
         // parse_message_segments), so the strip reports how many codepoints it
         // took from the front.
@@ -5061,6 +5070,12 @@ impl IrcService {
         // copy before the echo) is plain text.
         let mut ctx = snapshots.ctx();
         ctx.no_cheermotes = !tag_map.get("bits").and_then(|b| b.parse::<u32>().ok()).is_some_and(|b| b > 0);
+        // A display name with spaces is learned before the text is cut, so the
+        // next row that mentions it (and a reply naming it here) reads as one.
+        crate::services::chatter_name::note_spaced(&username, &display_name);
+        if let Some(reply) = reply_info.as_ref() {
+            crate::services::chatter_name::note_spaced(&reply.parent_user_login, &reply.parent_display_name);
+        }
         let segments = Self::parse_message_segments(&content_for_segments, &emotes_adjusted, &ctx);
         let reply_info = reply_info.map(|mut reply| {
             if !reply.parent_msg_body.is_empty() {
@@ -5089,7 +5104,7 @@ impl IrcService {
         let msg_type = tag_map.get("msg-id").map(|s| s.to_string());
 
         // System message (for subscriptions, etc.)
-        let system_message = tag_map.get("system-msg").map(|s| s.replace("\\s", " "));
+        let system_message = tag_map.get("system-msg").map(|s| unescape_irc_tag(s));
 
         // Build metadata (THE ENDGAME - all computation done here)
         let metadata = MessageMetadata {
@@ -5165,7 +5180,7 @@ impl IrcService {
         let username = tag_map
             .get("login")
             .or_else(|| tag_map.get("display-name"))
-            .map(|s| s.to_string())
+            .map(|s| unescape_irc_tag(s))
             .unwrap_or_else(|| "unknown".to_string());
 
         // Content - extract optional user message after USERNOTICE
@@ -5196,12 +5211,12 @@ impl IrcService {
 
         let tags_owned: HashMap<String, String> = tag_map
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_string(), unescape_irc_tag(v)))
             .collect();
 
         let display_name = tag_map
             .get("display-name")
-            .map(|s| s.to_string())
+            .map(|s| unescape_irc_tag(s))
             .unwrap_or_else(|| username.clone());
 
         let user_id = tag_map
@@ -5302,6 +5317,18 @@ impl IrcService {
         // correct per-channel emote set.
         let usernotice_channel = extract_channel_from_irc_line(raw).unwrap_or_default();
 
+        // Display names with spaces, learned before the text is cut: the
+        // author's, a gift's recipient and a raid's raider.
+        crate::services::chatter_name::note_spaced(&username, &display_name);
+        if let (Some(login), Some(name)) =
+            (tags_owned.get("msg-param-recipient-user-name"), tags_owned.get("msg-param-recipient-display-name"))
+        {
+            crate::services::chatter_name::note_spaced(login, name);
+        }
+        if let (Some(login), Some(name)) = (tags_owned.get("msg-param-login"), tags_owned.get("msg-param-displayName")) {
+            crate::services::chatter_name::note_spaced(login, name);
+        }
+
         // Parse message content into segments (if there's user content)
         let segments = if !content.is_empty() {
             let partner = crate::services::shared_chat_emotes::partner_room(
@@ -5330,7 +5357,7 @@ impl IrcService {
             .map(|s| s.to_string());
 
         // System message (the auto-generated subscription message)
-        let system_message = tag_map.get("system-msg").map(|s| s.replace("\\s", " "));
+        let system_message = tag_map.get("system-msg").map(|s| unescape_irc_tag(s));
 
         // Build metadata
         let metadata = MessageMetadata {
@@ -6429,6 +6456,51 @@ mod own_message_tests {
         assert!(!unknown.tags.contains_key("sn-redeemed-title"));
         let plain = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
         assert!(!plain.tags.contains_key("sn-redeemed-title"));
+    }
+
+    // Call of Duty's account carries spaces in its display name; IRC escapes
+    // them as \s in the tag.
+    const SPACED_PRIVMSG: &str = "@badges=;color=#00FF00;display-name=Spaced\\sName\\sTest;emotes=;id=sp1;room-id=1;tmi-sent-ts=1000;user-id=800800 :spacednametest!spacednametest@spacednametest.tmi.twitch.tv PRIVMSG #chan :hello chat";
+
+    #[test]
+    fn a_display_name_with_spaces_is_decoded_everywhere() {
+        let msg = IrcService::parse_privmsg(SPACED_PRIVMSG).expect("parses");
+        assert_eq!(msg.display_name, "Spaced Name Test");
+        assert_eq!(msg.tags["display-name"], "Spaced Name Test");
+        assert_eq!(
+            crate::services::chatter_name::shown_name("twitch", &msg.username, &msg.display_name),
+            "Spaced Name Test"
+        );
+    }
+
+    #[test]
+    fn a_mention_of_a_spaced_name_is_one_mention_and_a_reply_strips_it() {
+        IrcService::parse_privmsg(SPACED_PRIVMSG).expect("parses");
+        let other = "@badges=;color=;display-name=Fan;emotes=;id=sp2;room-id=1;tmi-sent-ts=1001;user-id=2 :fan!fan@fan.tmi.twitch.tv PRIVMSG #chan :gg @Spaced Name Test!";
+        let msg = IrcService::parse_privmsg(other).expect("parses");
+        let mention = msg.segments.iter().find_map(|s| match s {
+            MessageSegment::Mention { content, login } => Some((content.clone(), login.clone())),
+            _ => None,
+        });
+        assert_eq!(mention, Some(("@Spaced Name Test".to_string(), "spacednametest".to_string())));
+
+        let reply = "@badges=;color=;display-name=Fan;emotes=;id=sp3;reply-parent-display-name=Spaced\\sName\\sTest;reply-parent-msg-body=hello\\schat;reply-parent-msg-id=sp1;reply-parent-user-id=800800;reply-parent-user-login=spacednametest;room-id=1;tmi-sent-ts=1002;user-id=2 :fan!fan@fan.tmi.twitch.tv PRIVMSG #chan :@Spaced Name Test agreed";
+        let msg = IrcService::parse_privmsg(reply).expect("parses");
+        assert_eq!(msg.content, "agreed");
+        let parent = msg.metadata.reply_info.as_ref().expect("reply");
+        assert_eq!(parent.parent_display_name, "Spaced Name Test");
+        assert_eq!(parent.parent_msg_body, "hello chat");
+    }
+
+    #[test]
+    fn a_gift_to_a_spaced_name_decodes_the_recipient() {
+        let gift = "@badges=;color=;display-name=Gifter;emotes=;id=sp4;login=gifter;msg-id=subgift;msg-param-recipient-display-name=Gift\\sTo\\sSpaced;msg-param-recipient-user-name=gifttospaced;room-id=1;system-msg=Gifter\\sgifted\\sa\\sTier\\s1\\ssub\\sto\\sGift\\sTo\\sSpaced!;tmi-sent-ts=1003;user-id=3 :tmi.twitch.tv USERNOTICE #chan";
+        let msg = IrcService::parse_usernotice(gift).expect("parses");
+        assert_eq!(msg.tags["msg-param-recipient-display-name"], "Gift To Spaced");
+        assert_eq!(
+            crate::services::chatter_name::spaced_name_at("gift to spaced hi").map(|(_, login)| login),
+            Some("gifttospaced".to_string())
+        );
     }
 
     #[test]

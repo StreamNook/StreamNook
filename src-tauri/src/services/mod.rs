@@ -47,6 +47,7 @@ pub mod chat_send_limiter;
 pub mod recent_emotes;
 pub mod room_modes;
 pub mod chatter_name;
+pub mod text_spans;
 pub mod chat_burst;
 pub mod chat_service;
 pub mod client_config;

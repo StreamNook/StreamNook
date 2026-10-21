@@ -2895,6 +2895,11 @@ impl TwitchService {
                 "message_id": node.pointer("/pinnedMessage/id").and_then(|v| v.as_str()).unwrap_or(""),
                 "type": node.get("type").and_then(|v| v.as_str()).unwrap_or("MOD"),
                 "message_text": node.pointer("/pinnedMessage/content/text").and_then(|v| v.as_str()).unwrap_or(""),
+                // The same text split into text and links as a chat row is, so the
+                // page runs no link pattern of its own.
+                "segments": crate::services::text_spans::pin_segments(
+                    node.pointer("/pinnedMessage/content/text").and_then(|v| v.as_str()).unwrap_or(""),
+                ),
                 "sender_id": sender_id,
                 "sender_name": sender_name,
                 "sender_login": sender_login,

@@ -24,8 +24,12 @@ export type MessageSegment =
   | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean }
   | { type: 'emoji'; content: string; emoji_url: string }
   // `card`: the preview card kind this link's shape all but always gets; absent
-  // when it may have none.
-  | { type: 'link'; content: string; url: string; card?: LinkCardShape }
+  // when it may have none. `label`: the short form a row prints when links are
+  // shortened (absent on rows from before Rust stamped it).
+  | { type: 'link'; content: string; url: string; card?: LinkCardShape; label?: string }
+  // `@name`, cut out of the text in Rust: `content` as typed ("@Call of Duty"),
+  // `login` the chatter it names.
+  | { type: 'mention'; content: string; login: string }
   // Cheermote segment for animated bits (e.g., Cheer500)
   | { type: 'cheermote'; content: string; prefix: string; bits: number; tier: string; color: string; cheermote_url: string }
   // Twitch chat GIF (GIPHY-backed). `content` is the bracketed description the

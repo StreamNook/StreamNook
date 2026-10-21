@@ -61,7 +61,7 @@ import { renderEventTemplate } from './overlay/overlayConfig';
 import { convert as convertMoney, formatMoney, preloadRates, symbolToCode } from '../services/currencyService';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
-import { extractPreviewUrls, prettyUrlLabel } from '../services/linkPreviewService';
+import { previewUrlsFromLinks, type RowLink } from '../services/linkPreviewService';
 import {
   MOD_HIDDEN,
   MOD_GROW_X,
@@ -103,8 +103,13 @@ type SevenTVBadgeWithSelection = any;
 
 // EmoteSegment type definition (migrated from emoteParser.ts)
 interface EmoteSegment {
-  type: 'text' | 'emote' | 'emoji' | 'cheermote' | 'gif';
+  type: 'text' | 'emote' | 'emoji' | 'cheermote' | 'gif' | 'link' | 'mention';
   content: string;
+  // Link: the href and the short label Rust stamped (empty on older rows).
+  linkUrl?: string;
+  linkLabel?: string;
+  // Mention: the login the `@name` names.
+  login?: string;
   emoteId?: string;
   emoteUrl?: string;
   emojiUrl?: string;
@@ -287,11 +292,14 @@ const fromRustSegments = (segments: MessageSegment[], isProvider: boolean): Emot
         emojiUrl: seg.emoji_url,
       }];
     } else if (seg.type === 'link') {
-      // Links are handled in parseTextWithLinks
       return [{
-        type: 'text' as const,
+        type: 'link' as const,
         content: seg.content,
+        linkUrl: seg.url,
+        linkLabel: seg.label,
       }];
+    } else if (seg.type === 'mention') {
+      return [{ type: 'mention' as const, content: seg.content, login: seg.login }];
     } else if (seg.type === 'cheermote') {
       // Cheermote segment with animated GIF and bits amount
       return [{
@@ -507,8 +515,11 @@ const MentionSpan: React.FC<{
    *  Twitch chat means the Twitch bob, and a Kick chatter of the same name is a
    *  different person with different cosmetics. */
   provider?: ProviderId;
+  /** What was typed ("@Call of Duty"); defaults to "@" and the username. */
+  label?: string;
   onUsernameClick?: ChatMessageProps['onUsernameClick'];
-}> = ({ username, provider, onUsernameClick }) => {
+}> = ({ username, provider, label, onUsernameClick }) => {
+  const shown = label ?? `@${username}`;
   // Subscribe to the specific user from the store (reactive updates)
   const cachedUser = useChatUserStore((state) => state.getUserByUsername(username, provider));
   
@@ -618,13 +629,13 @@ const MentionSpan: React.FC<{
   // are the viewer's choice (chat/mentionStyle). The pill tint sits on the
   // outer box because a paint draws the text through background-clip.
   return (
-    <Tooltip content={`View ${username}'s profile`} side="top">
+    <Tooltip content={`View ${shown.slice(1)}'s profile`} side="top">
       <span
         className={`${mentionBoxClass(look)} cursor-pointer transition-colors`}
         style={mentionBoxStyle(look, userColor)}
         onClick={handleClick}
       >
-        <span style={mentionTextStyle(look, nameStyle)}>@{username}</span>
+        <span style={mentionTextStyle(look, nameStyle)}>{shown}</span>
       </span>
     </Tooltip>
   );
@@ -1040,10 +1051,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // Hosts the user has explicitly opted to trust, on top of the built-in
   // allowlist. Passed into extraction so those links auto-expand too.
   const userTrustedDomains = chatDesign?.link_preview_trusted_domains;
-  const linkPreviewItems = useMemo(
-    () => (linkPreviewsEnabled ? extractPreviewUrls(parsed.content, 2, userTrustedDomains) : []),
-    [linkPreviewsEnabled, parsed.content, userTrustedDomains],
-  );
+  const linkPreviewItems = useMemo(() => {
+    if (!linkPreviewsEnabled) return [];
+    const links: RowLink[] = [];
+    for (const s of parsed.segments ?? []) if (s.type === 'link') links.push(s);
+    return previewUrlsFromLinks(links, 2, userTrustedDomains);
+  }, [linkPreviewsEnabled, parsed.segments, userTrustedDomains]);
   // Only trusted links suppress their inline URL in clean mode (their card is
   // the link). Untrusted links keep the inline link and add a load-on-click chip.
   const trustedPreviewUrls = useMemo(
@@ -1822,13 +1835,35 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       );
     }
 
+    if (segment.type === 'mention') {
+      return (
+        <span key={key} style={gridStyle}>
+          <MentionSpan
+            username={segment.login ?? segment.content.slice(1)}
+            label={segment.content}
+            provider={parsed.provider}
+            onUsernameClick={onUsernameClick}
+          />
+        </span>
+      );
+    }
+
+    if (segment.type === 'link') {
+      const link = renderLink(segment);
+      return link ? (
+        <span key={key} style={gridStyle}>
+          {link}
+        </span>
+      ) : null;
+    }
+
     return (
       // Text stays on the baseline (no align-middle): middle-aligned text sits
       // a few px lower than the baseline-aligned username, which read as the
       // name floating above the message. Emote/emoji images keep their own
       // align-middle against this baseline.
       <span key={key} style={gridStyle}>
-        {parseTextWithLinks(segment.content)}
+        {segment.content}
       </span>
     );
   };
@@ -2042,80 +2077,54 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     };
   };
 
-  // Helper function to detect URLs and @mentions, making them styled and clickable
-  const parseTextWithLinks = (text: string) => {
-    // Combined regex: URLs and @mentions
-    // @mentions: @username (alphanumeric + underscores, 1-25 chars per Twitch rules)
-    const combinedRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|@[a-zA-Z0-9_]{1,25})(?=\s|$|[.,!?:;'")\]}>-])/g;
-    const parts = text.split(combinedRegex);
+  // A link Rust found in the text (`link_detect`, every platform): its href, and
+  // the short label Rust stamped when links are shortened. Mentions arrive as
+  // their own segments too, so the page runs no pattern over chat text.
+  const renderLink = (segment: EmoteSegment) => {
+    const url = segment.linkUrl || segment.content;
 
-    return parts.map((part, index) => {
-      // Check if this part is a URL
-      if (part.match(/^(https?:\/\/|www\.)/)) {
-        const url = part.startsWith('http') ? part : `https://${part}`;
+    // In clean mode a preview card represents this link below the message,
+    // so the inline URL is dropped rather than shown twice. Only trusted links
+    // auto-card, so only they are suppressed; untrusted links keep their inline
+    // URL (their preview is click-to-load). Keep-link mode renders both.
+    if (!keepInlineLink && trustedPreviewUrls.includes(url)) return null;
 
-        // In clean mode a preview card represents this link below the message —
-        // drop the inline URL so it isn't duplicated above its own card. Only
-        // trusted links auto-card, so only they are suppressed; untrusted links
-        // keep their inline URL (their preview is click-to-load). In keep-link
-        // mode we fall through and render the inline link too.
-        if (!keepInlineLink && trustedPreviewUrls.includes(url)) return null;
+    const shorten = chatDesign?.shorten_links ?? true;
+    const label = shorten && segment.linkLabel ? segment.linkLabel : segment.content;
+    const linkColor = (chatDesign?.link_color || '').trim();
+    const linkUnderline = chatDesign?.link_underline !== false;
 
-        const shorten = chatDesign?.shorten_links ?? true;
-        const label = shorten ? prettyUrlLabel(part) : part;
-        const linkColor = (chatDesign?.link_color || '').trim();
-        const linkUnderline = chatDesign?.link_underline !== false;
+    const anchor = (
+      <a
+        href={url}
+        // No target="_blank": the webview opens _blank links externally on
+        // its own, which would stack a second tab on top of the open() below.
+        className={`text-info hover:text-info/80 cursor-pointer${linkUnderline ? ' underline' : ''}`}
+        style={linkColor ? { color: linkColor } : undefined}
+        onClick={(e) => {
+          // preventDefault runs BEFORE the open attempt, so if the open
+          // fails there is no fallback navigation left - which is why this
+          // has to route through a helper that actually works on both
+          // platforms. The shell plugin's `open` rejects on Android (no
+          // xdg-open), and the rejection used to be swallowed by a catch
+          // that only logged: a dead tap on every chat link on the phone.
+          e.preventDefault();
+          void openExternal(url);
+        }}
+      >
+        {label}
+      </a>
+    );
 
-        const anchor = (
-          <a
-            key={index}
-            href={url}
-            // No target="_blank": the webview opens _blank links externally on
-            // its own, which would stack a second tab on top of the open() below.
-            className={`text-info hover:text-info/80 cursor-pointer${linkUnderline ? ' underline' : ''}`}
-            style={linkColor ? { color: linkColor } : undefined}
-            onClick={(e) => {
-              // preventDefault runs BEFORE the open attempt, so if the open
-              // fails there is no fallback navigation left - which is why this
-              // has to route through a helper that actually works on both
-              // platforms. The shell plugin's `open` rejects on Android (no
-              // xdg-open), and the rejection used to be swallowed by a catch
-              // that only logged: a dead tap on every chat link on the phone.
-              e.preventDefault();
-              void openExternal(url);
-            }}
-          >
-            {label}
-          </a>
-        );
-
-        // When shortened, surface the full URL on hover so the real destination
-        // is always one hover away before clicking.
-        return shorten && label !== url ? (
-          <Tooltip key={index} content={url} side="top">
-            {anchor}
-          </Tooltip>
-        ) : (
-          anchor
-        );
-      }
-      
-      // Check if this part is an @mention
-      if (part.match(/^@[a-zA-Z0-9_]{1,25}$/)) {
-        const mentionedUsername = part.slice(1); // Remove @
-        
-        return (
-          <MentionSpan
-            key={index}
-            username={mentionedUsername}
-            provider={parsed.provider}
-            onUsernameClick={onUsernameClick}
-          />
-        );
-      }
-      
-      return part;
-    });
+    // When shortened, surface the full URL on hover so the real destination
+    // is always one hover away before clicking.
+    return shorten && label !== url ? (
+      <Tooltip content={url} side="top">
+        {anchor}
+      </Tooltip>
+    ) : (
+      anchor
+    );
   };
 
   // Check if this is a subscription message

@@ -58,7 +58,7 @@ import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNa
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { PinnedChatter } from './chat/PinnedChatter';
 import { SevenTvAvatar } from './SevenTvAvatar';
-import { extractPreviewUrls } from '../services/linkPreviewService';
+import { previewUrlsFromLinks, type RowLink } from '../services/linkPreviewService';
 import UserProfileCard from './UserProfileCard';
 import ErrorBoundary from './ErrorBoundary';
 import PredictionOverlay from './PredictionOverlay';
@@ -127,7 +127,7 @@ import { applySlashOutcome, handleSlashCommand, runSlashCommand } from '../utils
 import ChatBurstStatus from './chat/ChatBurstStatus';
 import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/reminderEngine';
 
-import { BackendChatMessage } from '../services/twitchChat';
+import { BackendChatMessage, type MessageSegment } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
@@ -291,6 +291,8 @@ interface ChatMessagesPanelProps {
   headerInset?: number;
   /** This channel's pinned message ids, for the scrollbar's pinned marks. */
   pinnedIds?: ReadonlySet<string>;
+  /** Filled with the list's own glide to the live bottom (ChatMessageList). */
+  scrollToBottomRef?: React.RefObject<(() => void) | null>;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -333,6 +335,7 @@ const ChatMessagesPanel = ({
   headerSpaceReserved,
   headerInset,
   pinnedIds,
+  scrollToBottomRef,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -624,6 +627,7 @@ const ChatMessagesPanel = ({
             headerSpaceReserved={headerSpaceReserved}
             headerInset={headerInset}
             pinnedIds={pinnedIds}
+            scrollToBottomRef={scrollToBottomRef}
           />
         </ErrorBoundary>
       )}
@@ -1308,6 +1312,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   //     non-repeating transitions (channel switch, message navigation, the
   //     Resume button).
   const isPausedRef = useRef(isPaused);
+  // This pane's own list glide; a window-wide slot used to belong to whichever
+  // list mounted last, so Resume in one MultiChat pane glided another.
+  const listScrollToBottomRef = useRef<(() => void) | null>(null);
   const lastPauseToggleRef = useRef(0);
   // Filled by an effect further down, where the blend is wired. A ref because
   // `setChatPaused` is declared above that point and must not be re-created when
@@ -1334,8 +1341,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
       if (!next && opts?.scrollToBottom) {
         lastResumeTimeRef.current = now;
-        (window as Window & typeof globalThis & { __chatScrollToBottom?: () => void })
-          .__chatScrollToBottom?.();
+        listScrollToBottomRef.current?.();
       }
     },
     [setBufferPaused],
@@ -1754,6 +1760,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     pinned_by_id: string;
     pinned_by_avatar: string;
     started_at: string;
+    /** The text as text and link segments, split in Rust (`text_spans::pin_segments`). */
+    segments?: MessageSegment[];
   }
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   // The scrollbar's pinned marks find their rows by these ids.
@@ -1767,13 +1775,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const seenPinIdRef = useRef<string | null>(null);
 
   // Pinned-message bodies arrive as plain text with no emote ranges, so Rust
-  // cuts each text chunk the pin draws (the parts between links, and the whole
+  // cuts each text chunk the pin draws (its non-link segments, and the whole
   // text for the collapsed bar) with the channel's table, as it does a chat row.
+  // The chunks must be the very ones the card renders, or the lookup misses.
   const pinTexts = useMemo(
     () =>
       pinnedMessages.flatMap((pin) => [
         pin.message_text,
-        ...pin.message_text.split(/(https?:\/\/\S+)/g).filter((part) => !/^https?:\/\//.test(part)),
+        ...(pin.segments ?? [{ type: 'text' as const, content: pin.message_text }]).flatMap((seg) =>
+          seg.type === 'link' ? [] : [seg.content],
+        ),
       ]),
     [pinnedMessages],
   );
@@ -4702,7 +4713,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   return (
     <>
-      <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
+      <div ref={setChatContainerEl} data-chat-surface="" className="h-full bg-secondary overflow-hidden flex flex-col relative">
         {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column, laid out by Rust:
@@ -5195,25 +5206,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   // pinned message.
                   const previewsOn = settings.chat_design?.link_previews ?? true;
                   const keepLink = settings.chat_design?.link_preview_keep_link ?? false;
+                  const shortenLinks = settings.chat_design?.shorten_links ?? true;
+                  // Rust split the text into text and links, as it does a chat row.
+                  const pinParts: MessageSegment[] = pin.segments ?? [{ type: 'text', content: pin.message_text }];
+                  const pinLinks: RowLink[] = [];
+                  for (const seg of pinParts) if (seg.type === 'link') pinLinks.push(seg);
                   const previewItems = previewsOn
-                    ? extractPreviewUrls(
-                        pin.message_text,
-                        2,
-                        settings.chat_design?.link_preview_trusted_domains,
-                      )
+                    ? previewUrlsFromLinks(pinLinks, 2, settings.chat_design?.link_preview_trusted_domains)
                     : [];
                   // In "clean" mode the inline link is suppressed for any trusted
                   // (auto-carded) URL so the card is the sole representation,
                   // matching chat. Untrusted links keep their inline link.
-                  const stripTrail = (s: string) => s.replace(/[.,!?:;'")\]}>]+$/, '');
                   const suppressed = !keepLink
                     ? new Set(previewItems.filter((it) => it.trusted).map((it) => it.url))
                     : null;
-                  const textParts = pin.message_text.split(/(https?:\/\/\S+)/g);
-                  const hasVisibleBody = textParts.some((part) =>
-                    /^https?:\/\//.test(part)
-                      ? !suppressed?.has(stripTrail(part))
-                      : part.trim().length > 0,
+                  const hasVisibleBody = pinParts.some((seg) =>
+                    seg.type === 'link' ? !suppressed?.has(seg.url) : seg.content.trim().length > 0,
                   );
                   return (
                   <div
@@ -5288,22 +5296,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             visible remains (e.g. a pin that's only a link). */}
                         {hasVisibleBody && (
                           <p className="text-[13.5px] text-textPrimary/95 mt-1.5 break-words font-medium" style={{ lineHeight: '1.5' }}>
-                            {textParts.map((part, index) =>
-                              /^https?:\/\//.test(part) ? (
-                                suppressed?.has(stripTrail(part)) ? null : (
+                            {pinParts.map((seg, index) =>
+                              seg.type === 'link' ? (
+                                suppressed?.has(seg.url) ? null : (
                                   <a
                                     key={index}
                                     className="text-accent/90 hover:text-accent hover:underline pointer-events-auto cursor-pointer transition-colors"
                                     onClick={() => {
-                                      import('@tauri-apps/plugin-shell').then(({ open }) => open(part));
+                                      import('@tauri-apps/plugin-shell').then(({ open }) => open(seg.url));
                                     }}
                                   >
-                                    {part.length > 50 ? part.slice(0, 50) + '…' : part}
+                                    {shortenLinks && seg.label ? seg.label : seg.content}
                                   </a>
                                 )
                               ) : (
                                 <span key={index}>
-                                  {renderPinTextWithEmotes(part, `pin-${pin.id}-${index}`, 'h-6 max-w-[112px] -my-1')}
+                                  {renderPinTextWithEmotes(seg.content, `pin-${pin.id}-${index}`, 'h-6 max-w-[112px] -my-1')}
                                 </span>
                               )
                             )}
@@ -5542,6 +5550,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             headerSpaceReserved={blendEnabled}
             headerInset={chromeHeight}
             pinnedIds={pinnedIds}
+            scrollToBottomRef={listScrollToBottomRef}
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the

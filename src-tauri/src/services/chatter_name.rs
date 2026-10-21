@@ -6,7 +6,8 @@
 //! commands resolve) and the display name, which may differ from the login only
 //! by case ("Mochi_Panda") or be localized entirely ("もちパンダ"). The rule:
 //!
-//! - a display name that differs from the login only by case is shown as is;
+//! - a display name that differs from the login only by case or spaces is shown
+//!   as is ("Mochi_Panda", and "Call of Duty" for `callofduty`);
 //! - a localized display name is shown as `display (login)`, so the name people
 //!   type to reach that chatter is always visible;
 //! - a missing display name falls back to the login.
@@ -18,6 +19,10 @@
 //! login in `display-name` even for a chatter whose PRIVMSGs carry a localized
 //! one. Rows are therefore taught the localized name seen on the chatter's own
 //! messages, keyed by user id: an id is the only stable identity, a name never is.
+//!
+//! A few Twitch accounts carry spaces in their display name ("Call of Duty").
+//! Those names are kept too, keyed by the name (what people type), so
+//! `@Call of Duty` in chat reads as one mention (`text_spans`).
 
 use crate::models::chat_layout::ChatMessage;
 use once_cell::sync::Lazy;
@@ -35,6 +40,66 @@ fn same_ignoring_case(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 
+/// Same name apart from capital letters and spaces. Twitch logins carry
+/// neither, so "Call of Duty" is simply how `callofduty` is written.
+fn same_name(display: &str, login: &str) -> bool {
+    let squash = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect() };
+    squash(display) == squash(login)
+}
+
+/// Upper bound on remembered spaced display names. Only a handful of Twitch
+/// accounts carry one; past it the map starts over.
+const MAX_SPACED: usize = 2_000;
+
+/// Twitch display names with spaces in them, lowercased, to the login.
+static KNOWN_SPACED: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Remember a Twitch display name that carries spaces. Called as rows are
+/// parsed, before their text is cut into segments, so a name is known by the
+/// time the next row mentions it.
+pub(crate) fn note_spaced(login: &str, display: &str) {
+    let display = display.trim();
+    let login = login.trim();
+    if login.is_empty() || !display.contains(char::is_whitespace) {
+        return;
+    }
+    if let Ok(mut known) = KNOWN_SPACED.lock() {
+        let key = display.to_lowercase();
+        if known.len() >= MAX_SPACED && !known.contains_key(&key) {
+            known.clear();
+        }
+        known.insert(key, login.to_lowercase());
+    }
+}
+
+/// The longest known spaced name `text` starts with (ignoring case) that ends
+/// where a mention may end: its byte length in `text`, and the login.
+pub fn spaced_name_at(text: &str) -> Option<(usize, String)> {
+    let known = KNOWN_SPACED.lock().ok()?;
+    let mut best: Option<(usize, String)> = None;
+    for (name, login) in known.iter() {
+        let Some(len) = prefix_len_ignoring_case(text, name) else { continue };
+        if !crate::services::text_spans::ends_mention(text[len..].chars().next()) {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(b, _)| len > *b) {
+            best = Some((len, login.clone()));
+        }
+    }
+    best
+}
+
+fn prefix_len_ignoring_case(text: &str, name: &str) -> Option<usize> {
+    let mut chars = text.char_indices();
+    for nc in name.chars() {
+        let (_, tc) = chars.next()?;
+        if !tc.to_lowercase().eq(nc.to_lowercase()) {
+            return None;
+        }
+    }
+    Some(chars.next().map(|(i, _)| i).unwrap_or(text.len()))
+}
+
 /// The shown name for a chatter. `login` and `display` as the platform sent
 /// them; the `(login)` suffix applies to Twitch only, where the login is the
 /// handle people type. Other platforms show their display name.
@@ -44,7 +109,7 @@ pub fn shown_name(provider: &str, login: &str, display: &str) -> String {
     if display.is_empty() {
         return login.to_string();
     }
-    if provider != "twitch" || login.is_empty() || same_ignoring_case(display, login) {
+    if provider != "twitch" || login.is_empty() || same_name(display, login) {
         return display.to_string();
     }
     format!("{display} ({login})")
@@ -70,9 +135,13 @@ fn known(user_id: &str) -> Option<String> {
 }
 
 /// Settle a row's author names: fill a Twitch display name the row lacks from
-/// what the chatter's own messages showed, then stamp the shown name on the
-/// row and on its reply parent. Idempotent.
+/// what the chatter's own messages showed, stamp the shown name on the row and
+/// on its reply parent, then cut the row's mentions (and links off Twitch) out
+/// of its text. Idempotent.
 pub fn stamp(msg: &mut ChatMessage) {
+    if msg.provider == "twitch" {
+        note_spaced(&msg.username, &msg.display_name);
+    }
     if msg.provider == "twitch" && !msg.user_id.is_empty() {
         let login = msg.username.as_str();
         let display = msg.display_name.trim();
@@ -95,6 +164,9 @@ pub fn stamp(msg: &mut ChatMessage) {
     msg.metadata.shown_name = shown_name(&msg.provider, &msg.username, &msg.display_name);
 
     if let Some(reply) = msg.metadata.reply_info.as_mut() {
+        if msg.provider == "twitch" {
+            note_spaced(&reply.parent_user_login, &reply.parent_display_name);
+        }
         let parent_display = if reply.parent_display_name.trim().is_empty()
             || same_ignoring_case(&reply.parent_display_name, &reply.parent_user_login)
         {
@@ -107,6 +179,8 @@ pub fn stamp(msg: &mut ChatMessage) {
         reply.parent_shown_name =
             shown_name(&msg.provider, &reply.parent_user_login, &parent_display);
     }
+
+    crate::services::text_spans::apply_row(msg);
 }
 
 #[cfg(test)]
@@ -145,6 +219,20 @@ mod tests {
     fn case_only_difference_shows_display_name() {
         assert_eq!(shown_name("twitch", "mochi", "Mochi"), "Mochi");
         assert_eq!(shown_name("twitch", "mochi", "mochi"), "mochi");
+    }
+
+    #[test]
+    fn a_name_that_differs_only_by_spaces_shows_as_is() {
+        assert_eq!(shown_name("twitch", "callofduty", "Call of Duty"), "Call of Duty");
+        assert_eq!(shown_name("twitch", "callofduty", "Call of Duty "), "Call of Duty");
+        assert_eq!(shown_name("twitch", "mochi_panda", "もち パンダ"), "もち パンダ (mochi_panda)");
+    }
+
+    #[test]
+    fn a_spaced_name_is_found_at_the_start_of_text() {
+        note_spaced("spacedlookup", "Spaced Look Up");
+        assert_eq!(spaced_name_at("spaced LOOK up! hi"), Some((14, "spacedlookup".to_string())));
+        assert_eq!(spaced_name_at("Spaced Look Upper"), None);
     }
 
     #[test]

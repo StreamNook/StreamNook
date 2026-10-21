@@ -207,12 +207,8 @@ export function BlendedChatPane({
   useEffect(() => {
     mountTimeRef.current = Date.now();
   }, []);
-  const scrollPaneToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      const c = paneRef.current?.querySelector('.overflow-y-auto') as HTMLElement | null;
-      if (c) c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
-    });
-  }, []);
+  // The merged list's own glide to the live bottom (ChatMessageList fills it).
+  const listScrollToBottomRef = useRef<(() => void) | null>(null);
   const setChatPaused = useCallback(
     (next: boolean, opts?: { force?: boolean; scrollToBottom?: boolean }) => {
       if (pausedRef.current === next) return;
@@ -224,13 +220,16 @@ export function BlendedChatPane({
       setPaused(next);
       if (!next && opts?.scrollToBottom) {
         lastResumeTimeRef.current = now;
-        scrollPaneToBottom();
+        // Same tick as the unpause: the glide must be running before the
+        // re-render's bottom pin, or that pin snaps first and leaves nothing
+        // to glide.
+        listScrollToBottomRef.current?.();
       }
     },
     // seqRef is a ref, so its identity never changes; listing it satisfies the
     // exhaustive-deps rule without affecting the callback's own stability, which
     // is what keeps the row memo intact.
-    [scrollPaneToBottom, seqRef],
+    [seqRef],
   );
 
   // Reply jump. Normal panes get this from ChatWidget; the blended pane wires its
@@ -565,6 +564,7 @@ export function BlendedChatPane({
           emotes={null}
           getMessageId={getMessageId}
           showSource={channels.length > 1}
+          scrollToBottomRef={listScrollToBottomRef}
         />
         {/* Identical to the core app's paused indicator (ChatWidget) so the resume
             affordance reads the same everywhere. */}
