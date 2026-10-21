@@ -48,6 +48,7 @@ import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type 
 import { invoke } from '@tauri-apps/api/core';
 import { setVodReplayShowing, useVodReplaySnapshot, useVodReplayStore, type ReplayShowing } from '../../stores/vodReplayStore';
 import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
+import { HoldWhile } from '../ui/HoldWhile';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -104,9 +105,13 @@ export const MobileChatPane: React.FC<{
   readOnly?: boolean;
   strip?: boolean;
   paused?: boolean;
+  /** Out of sight for now (under the mini player, in PiP, the app in the
+   *  background): the room stays joined and sheets stay open, the list holds
+   *  still and catches up in one render when seen again. */
+  idle?: boolean;
   top?: React.ReactNode;
   surface?: InboxSurface;
-}> = ({ readOnly = false, strip = true, paused = false, top, surface = 'watch' }) => {
+}> = ({ readOnly = false, strip = true, paused = false, idle = false, top, surface = 'watch' }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -884,7 +889,7 @@ export const MobileChatPane: React.FC<{
   // card rises only where the chat is on screen.
   const navTab = useMobileNavStore((s) => s.activeTab);
   const playerFull = useMobileNavStore((s) => s.playerMode === 'full');
-  const onScreen = surface === 'chats' ? !paused : navTab !== 'chats' && playerFull;
+  const onScreen = !paused && !idle && (surface === 'chats' || (navTab !== 'chats' && playerFull));
   const inboxSide = useAppStore((s) => (s.settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'));
   const cardHere = useMentionsStore((s) => !!s.arrival && !s.composerBusy && !s.sheetIn) && onScreen && !readOnly;
   // Rows under the card fade out above it instead of showing as slivers; the
@@ -921,27 +926,29 @@ export const MobileChatPane: React.FC<{
         // below rather than left as a secret gesture.
         data-tap-reply={isPaused && !noSend ? 'true' : undefined}
       >
-        <ChatMessageList
-          messages={shownMessages}
-          emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
-          renderToken={renderToken}
-          isPaused={isPaused}
-          onPauseIntent={() => pause(true)}
-          onScroll={onScroll}
-          onUsernameClick={onUsernameClick}
-          onReplyClick={handleReplyClick}
-          onEmoteRightClick={() => {}}
-          onUsernameRightClick={() => {}}
-          onBadgeClick={() => {}}
-          highlightedMessageId={null}
-          deletedMessageIds={deletedMessageIds}
-          clearedUserContexts={clearedUserContexts}
-          emotes={emotes}
-          // The room's own platform: rows from it carry no platform mark, which
-          // is only for telling sources apart in a combined chat.
-          homeProvider={activeProvider}
-          getMessageId={getMessageId}
-        />
+        <HoldWhile hold={idle}>
+          <ChatMessageList
+            messages={shownMessages}
+            emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
+            renderToken={renderToken}
+            isPaused={isPaused}
+            onPauseIntent={() => pause(true)}
+            onScroll={onScroll}
+            onUsernameClick={onUsernameClick}
+            onReplyClick={handleReplyClick}
+            onEmoteRightClick={() => {}}
+            onUsernameRightClick={() => {}}
+            onBadgeClick={() => {}}
+            highlightedMessageId={null}
+            deletedMessageIds={deletedMessageIds}
+            clearedUserContexts={clearedUserContexts}
+            emotes={emotes}
+            // The room's own platform: rows from it carry no platform mark, which
+            // is only for telling sources apart in a combined chat.
+            homeProvider={activeProvider}
+            getMessageId={getMessageId}
+          />
+        </HoldWhile>
         {swipeOn && !hintLearned && (
           <div className="pointer-events-none absolute left-0 right-0 top-2 z-10 flex justify-center">
             {/* Only the X takes a touch: a swipe on the row under the pill still starts. */}
