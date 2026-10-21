@@ -5,7 +5,7 @@
 // webview APIs, and kept out of components so the React Compiler can compile
 // them (it refuses components with try/finally).
 
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { IS_MOBILE } from '../utils/platform';
 import { useAppStore } from '../stores/AppStore';
@@ -105,6 +105,41 @@ export async function uploadWithConsent(
   } catch (err) {
     return { status: 'failed', error: typeof err === 'string' ? err : 'Image upload failed.' };
   }
+}
+
+export type ItemOutcome = { status: 'done'; image: UploadedImage } | { status: 'failed'; error: string };
+
+const failed = (err: unknown, fallback: string) => ({
+  status: 'failed' as const,
+  error: typeof err === 'string' ? err : fallback,
+});
+
+/** Sends a kept copy again for a fresh link (it replaces the old entry). */
+export function reuploadImage(url: string): Promise<ItemOutcome> {
+  return invoke<UploadedImage>('reupload_image', { url }).then(
+    (image) => ({ status: 'done' as const, image }),
+    (err) => failed(err, 'Sending it again failed.'),
+  );
+}
+
+/** Removes an upload from the list, deleting it on the host where it can. */
+export function deleteUpload(url: string): Promise<{ status: 'done' } | { status: 'failed'; error: string }> {
+  return invoke('delete_image_upload', { url }).then(
+    () => ({ status: 'done' as const }),
+    (err) => failed(err, 'Deleting it failed.'),
+  );
+}
+
+/** Where the next upload goes: the same setting as Settings > Image Uploads. */
+export function setUploadHost(id: string): Promise<void> {
+  const { settings, updateSettings } = useAppStore.getState();
+  const up = settings.chat_input?.image_uploader ?? {};
+  return updateSettings({ ...settings, chat_input: { ...settings.chat_input, image_uploader: { ...up, preset: id } } });
+}
+
+/** A kept copy as an image source. */
+export function copySrc(path: string): string {
+  return convertFileSrc(path);
 }
 
 /** Paste and drop: upload, then put the link where the caret is. */

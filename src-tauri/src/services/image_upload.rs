@@ -28,6 +28,8 @@ const MAX_PIXELS: u64 = 50_000_000;
 pub struct Preset {
     pub id: &'static str,
     pub label: &'static str,
+    /// The name on the Images tab's host tabs.
+    pub short: &'static str,
     pub note: &'static str,
     pub url: &'static str,
     pub form_field: &'static str,
@@ -36,6 +38,9 @@ pub struct Preset {
     /// otherwise a template over the JSON reply, such as `{url}` or
     /// `{link}{ext}` (`link_from_reply`).
     pub reply: &'static str,
+    /// How to delete an upload: a template over the reply (the URL to POST),
+    /// empty where the host has no anonymous delete.
+    pub delete: &'static str,
     pub max_mb: u32,
     /// Hours until the host deletes the file; None = kept (or no fixed time).
     pub lifetime_hours: Option<u32>,
@@ -47,66 +52,78 @@ pub const PRESETS: &[Preset] = &[
     Preset {
         id: "nuuls",
         label: "i.nuuls.com",
+        short: "nuuls",
         note: "A long-running community image host. Public links, kept indefinitely.",
         url: "https://i.nuuls.com/upload",
         form_field: "attachment",
         extra_fields: &[],
         reply: "",
+        delete: "",
         max_mb: 10,
         lifetime_hours: None,
     },
     Preset {
         id: "kappa",
         label: "kappa.lol",
+        short: "kappa.lol",
         note: "Free, no account, no ads. Public links, kept, files up to 100 MB.",
         url: "https://kappa.lol/api/upload",
         form_field: "file",
         extra_fields: &[],
         reply: "{link}{ext}",
+        delete: "https://kappa.lol/api/delete?key={key}",
         max_mb: 100,
         lifetime_hours: None,
     },
     Preset {
         id: "imgdrip",
         label: "imgdrip.com",
+        short: "imgdrip",
         note: "Anonymous, no account. Links expire after a while; files up to 20 MB.",
         url: "https://imgdrip.com/api/upload",
         form_field: "file",
         extra_fields: &[],
         reply: "{url}",
+        delete: "",
         max_mb: 20,
         lifetime_hours: None,
     },
     Preset {
         id: "catbox",
         label: "catbox.moe",
+        short: "catbox",
         note: "Popular, permanent, no account. Public links.",
         url: "https://catbox.moe/user/api.php",
         form_field: "fileToUpload",
         extra_fields: &[("reqtype", "fileupload")],
         reply: "",
+        delete: "",
         max_mb: 200,
         lifetime_hours: None,
     },
     Preset {
         id: "litterbox",
         label: "Litterbox (72 h)",
+        short: "Litterbox",
         note: "catbox's temporary sibling: the link dies after 72 hours.",
         url: "https://litterbox.catbox.moe/resources/internals/api.php",
         form_field: "fileToUpload",
         extra_fields: &[("reqtype", "fileupload"), ("time", "72h")],
         reply: "",
+        delete: "",
         max_mb: 1000,
         lifetime_hours: Some(72),
     },
     Preset {
         id: "uguu",
         label: "uguu.se (3 h)",
+        short: "uguu",
         note: "Throwaway host: files vanish after about three hours.",
         url: "https://uguu.se/upload?output=text",
         form_field: "files[]",
         extra_fields: &[],
         reply: "",
+        delete: "",
         max_mb: 128,
         lifetime_hours: Some(3),
     },
@@ -115,12 +132,22 @@ pub const PRESETS: &[Preset] = &[
 pub const DEFAULT_PRESET: &str = "nuuls";
 pub const CUSTOM_ID: &str = "custom";
 
+/// Hosts whose links stop working after a while, so the app keeps a copy of
+/// each picture sent there and can send it again.
+const EXPIRING: &[&str] = &["imgdrip", "litterbox", "uguu"];
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct UploadHost {
     pub id: String,
     pub label: String,
+    /// The name on the Images tab's host tabs.
+    pub short: String,
     pub note: String,
     pub max_mb: u32,
+    /// Deleting an upload deletes the file there, not only the list entry.
+    pub deletes_from_host: bool,
+    /// Its links stop working after a while.
+    pub expires: bool,
 }
 
 /// The request one upload makes.
@@ -130,10 +157,13 @@ pub struct Target {
     /// `custom:<host>` so a changed custom address asks again.
     pub key: String,
     pub label: String,
+    pub short: String,
     pub url: String,
     pub form_field: String,
     pub extra_fields: Vec<(String, String)>,
     pub response_path: String,
+    /// `Preset::delete` (empty: no delete on the host).
+    pub delete_template: String,
     pub max_bytes: usize,
     pub lifetime_hours: Option<u32>,
 }
@@ -143,6 +173,7 @@ impl Target {
         UploadHost {
             id: self.key.clone(),
             label: self.label.clone(),
+            short: self.short.clone(),
             note: PRESETS
                 .iter()
                 .find(|p| p.id == self.key)
@@ -150,15 +181,60 @@ impl Target {
                 .unwrap_or("Your own host.")
                 .to_string(),
             max_mb: (self.max_bytes / (1024 * 1024)) as u32,
+            deletes_from_host: !self.delete_template.is_empty(),
+            expires: self.expires(),
         }
+    }
+
+    pub fn expires(&self) -> bool {
+        self.lifetime_hours.is_some() || EXPIRING.contains(&self.key.as_str())
+    }
+}
+
+fn preset_host(p: &Preset) -> UploadHost {
+    UploadHost {
+        id: p.id.into(),
+        label: p.label.into(),
+        short: p.short.into(),
+        note: p.note.into(),
+        max_mb: p.max_mb,
+        deletes_from_host: !p.delete.is_empty(),
+        expires: p.lifetime_hours.is_some() || EXPIRING.contains(&p.id),
     }
 }
 
 pub fn hosts() -> Vec<UploadHost> {
-    PRESETS
-        .iter()
-        .map(|p| UploadHost { id: p.id.into(), label: p.label.into(), note: p.note.into(), max_mb: p.max_mb })
-        .collect()
+    PRESETS.iter().map(preset_host).collect()
+}
+
+/// The host an upload went to, by its key: a preset, or a custom host
+/// (`custom:<host>`), shown by its host name.
+pub fn host_for_key(key: &str) -> UploadHost {
+    if let Some(p) = PRESETS.iter().find(|p| p.id == key) {
+        return preset_host(p);
+    }
+    let name = key.strip_prefix("custom:").filter(|h| !h.is_empty()).unwrap_or("your host").to_string();
+    UploadHost {
+        id: key.into(),
+        label: name.clone(),
+        short: name,
+        note: "Your own host.".into(),
+        max_mb: (MAX_INPUT_BYTES / (1024 * 1024)) as u32,
+        deletes_from_host: false,
+        expires: false,
+    }
+}
+
+/// The request for the host an upload went to, for sending it again there.
+/// None for a custom host that is no longer the one in Settings.
+pub fn target_for_key(key: &str, up: &ImageUploaderSettings) -> Option<Target> {
+    if PRESETS.iter().any(|p| p.id == key) {
+        let mut forced = up.clone();
+        forced.preset = Some(key.to_string());
+        return Some(target(&forced));
+    }
+    let current = target(up);
+    (current.key == key).then_some(current)
 }
 
 /// The host the settings name. An old file with only `url` set (from before
@@ -172,23 +248,28 @@ pub fn target(up: &ImageUploaderSettings) -> Target {
         return Target {
             key: p.id.into(),
             label: p.label.into(),
+            short: p.short.into(),
             url: p.url.into(),
             form_field: p.form_field.into(),
             extra_fields: p.extra_fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             response_path: p.reply.into(),
+            delete_template: p.delete.into(),
             max_bytes: p.max_mb as usize * 1024 * 1024,
             lifetime_hours: p.lifetime_hours,
         };
     }
     let url = up.url.clone().unwrap_or_default();
     let host = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_default();
+    let label = if host.is_empty() { "your host".to_string() } else { host.clone() };
     Target {
         key: format!("custom:{host}"),
-        label: if host.is_empty() { "your host".into() } else { host },
+        short: label.clone(),
+        label,
         url,
         form_field: up.form_field.clone().filter(|f| !f.is_empty()).unwrap_or_else(|| "file".into()),
         extra_fields: parse_extra_fields(up.extra_fields.as_deref().unwrap_or("")),
         response_path: up.response_path.clone().unwrap_or_default(),
+        delete_template: String::new(),
         max_bytes: MAX_INPUT_BYTES,
         lifetime_hours: None,
     }
@@ -320,6 +401,14 @@ pub fn prepare(bytes: Vec<u8>, target: &Target) -> Result<Prepared, String> {
         _ if bytes.len() > target.max_bytes => over_limit(bytes.len()),
         _ => Ok(Prepared { bytes, ext, mime, width: w, height: h }),
     }
+}
+
+/// A kept copy (already cleaned when it was first sent), ready to send again
+/// as it is: no second re-encode.
+pub fn prepared_copy(bytes: Vec<u8>) -> Result<Prepared, String> {
+    let (ext, mime) = kind(&bytes)?;
+    let size = imagesize::blob_size(&bytes).map_err(|_| unreadable())?;
+    Ok(Prepared { bytes, ext, mime, width: size.width as u32, height: size.height as u32 })
 }
 
 /// At most `MAX_EDGE` on the long edge. A big step down uses the cheaper
@@ -482,8 +571,18 @@ fn strip_jpeg_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// Posts `prepared` to `target` and returns the link.
-pub async fn post(prepared: Prepared, target: &Target) -> Result<String, String> {
+/// What a host gave back for one upload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Posted {
+    pub link: String,
+    /// The URL that deletes it (POST), where the host offers one.
+    pub delete_url: Option<String>,
+    /// When the host said the link stops working, in ms since the epoch.
+    pub expires_ms: Option<i64>,
+}
+
+/// Posts `prepared` to `target`: the link, how to delete it, when it expires.
+pub async fn post(prepared: Prepared, target: &Target) -> Result<Posted, String> {
     if !target.url.starts_with("https://") {
         return Err("The upload address in Settings must start with https://.".into());
     }
@@ -513,7 +612,66 @@ pub async fn post(prepared: Prepared, target: &Target) -> Result<String, String>
             status.as_u16()
         ));
     }
-    link_from_reply(&text, &target.response_path).ok_or_else(|| format!("{} did not send back a link.", target.label))
+    let link =
+        link_from_reply(&text, &target.response_path).ok_or_else(|| format!("{} did not send back a link.", target.label))?;
+    let json = serde_json::from_str::<serde_json::Value>(&text).ok();
+    let delete_url = json
+        .as_ref()
+        .filter(|_| !target.delete_template.is_empty())
+        .and_then(|j| fill(j, &target.delete_template, true))
+        .filter(|u| u.starts_with("https://"));
+    let expires_ms = json.as_ref().and_then(expiry_from_reply);
+    Ok(Posted { link, delete_url, expires_ms })
+}
+
+/// Asks the host to delete an upload (its `Posted::delete_url`). A file that
+/// is already gone counts as deleted.
+pub async fn delete_on_host(delete_url: &str, label: &str) -> Result<(), String> {
+    let resp = crate::services::http::client()
+        .post(delete_url)
+        .header("User-Agent", format!("StreamNook/{}", crate::services::client_identity::build_version()))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| format!("Couldn't reach {label}. Try again."))?;
+    let status = resp.status();
+    if status.is_success() || status.as_u16() == 404 || status.as_u16() == 410 {
+        Ok(())
+    } else {
+        Err(format!("{label} did not delete it ({}). Try again.", status.as_u16()))
+    }
+}
+
+/// A template's `{field}`s filled from dotted paths into `json`; None when a
+/// field is missing. `encode` percent-encodes the values (for a URL's query).
+fn fill(json: &serde_json::Value, template: &str, encode: bool) -> Option<String> {
+    let at = |path: &str| -> Option<String> {
+        let pointer = format!("/{}", path.trim().trim_matches('.').replace('.', "/"));
+        match json.pointer(&pointer)? {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    };
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let close = rest[open..].find('}')? + open;
+        let field = &rest[open + 1..close];
+        let value = at(field)?;
+        if field == "ext" && !value.is_empty() && !value.starts_with('.') {
+            out.push('.');
+        }
+        if encode {
+            out.push_str(&urlencoding::encode(&value));
+        } else {
+            out.push_str(&value);
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// The link in a host's reply. `how` is empty (the body is the link), a
@@ -527,35 +685,43 @@ pub fn link_from_reply(text: &str, how: &str) -> Option<String> {
         text.trim().to_string()
     } else {
         let json: serde_json::Value = serde_json::from_str(text).ok()?;
-        let at = |path: &str| -> Option<String> {
-            let pointer = format!("/{}", path.trim().trim_matches('.').replace('.', "/"));
-            match json.pointer(&pointer)? {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Number(n) => Some(n.to_string()),
-                _ => None,
-            }
-        };
-        if !how.contains('{') {
-            at(how)?
-        } else {
-            let mut out = String::new();
-            let mut rest = how;
-            while let Some(open) = rest.find('{') {
-                out.push_str(&rest[..open]);
-                let close = rest[open..].find('}')? + open;
-                let field = &rest[open + 1..close];
-                let value = at(field)?;
-                if field == "ext" && !value.is_empty() && !value.starts_with('.') {
-                    out.push('.');
-                }
-                out.push_str(&value);
-                rest = &rest[close + 1..];
-            }
-            out.push_str(rest);
-            out
-        }
+        let template = if how.contains('{') { how.to_string() } else { format!("{{{how}}}") };
+        fill(&json, &template, false)?
     };
     (link.starts_with("https://") || link.starts_with("http://")).then_some(link)
+}
+
+/// When a host's JSON reply says the link expires: an epoch number (seconds
+/// or milliseconds) or an RFC 3339 time, under the names hosts use.
+fn expiry_from_reply(json: &serde_json::Value) -> Option<i64> {
+    let keys = ["expires_at", "expiresAt", "expires", "expiry", "expire", "expiration"];
+    let value = keys.iter().find_map(|k| json.get(*k).or_else(|| json.pointer(&format!("/data/{k}"))))?;
+    match value {
+        serde_json::Value::Number(n) => {
+            let n = n.as_i64()?;
+            Some(if n > 100_000_000_000 { n } else { n * 1000 })
+        }
+        serde_json::Value::String(s) => chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp_millis()),
+        _ => None,
+    }
+}
+
+/// How long a link has left, in words: "2 days left", "5 hours left",
+/// "40 minutes left", or "Expired".
+pub fn time_left_label(expires_ms: i64, now_ms: i64) -> String {
+    let left = expires_ms - now_ms;
+    if left <= 0 {
+        return "Expired".into();
+    }
+    let minutes = left / 60_000;
+    let (n, unit) = if minutes >= 48 * 60 {
+        (minutes / (24 * 60), "day")
+    } else if minutes >= 120 {
+        (minutes / 60, "hour")
+    } else {
+        (minutes.max(1), "minute")
+    };
+    format!("{n} {unit}{} left", if n == 1 { "" } else { "s" })
 }
 
 /// A 1x1 transparent PNG, enough to prove a host's round trip.
@@ -600,6 +766,52 @@ mod tests {
         assert_eq!(t.form_field, "fileToUpload");
         assert_eq!(t.extra_fields, vec![("reqtype".to_string(), "fileupload".to_string())]);
         assert_eq!(target(&settings(Some("litterbox"), None)).lifetime_hours, Some(72));
+    }
+
+    #[test]
+    fn kappa_reply_gives_its_delete_url() {
+        // The reply kappa.lol gave a real test upload (the file was deleted).
+        let reply = r#"{"id":"1lumEe","ext":".png","type":"image/png","checksum":"b357a19c87624c7c4d131aeeb4ae677f","key":"xIGhwZxJlogcMROT","link":"https://kappa.lol/1lumEe","delete":"https://kappa.lol/delete?xIGhwZxJlogcMROT"}"#;
+        let t = target(&settings(Some("kappa"), None));
+        assert_eq!(link_from_reply(reply, &t.response_path).as_deref(), Some("https://kappa.lol/1lumEe.png"));
+        let json: serde_json::Value = serde_json::from_str(reply).unwrap();
+        assert_eq!(
+            fill(&json, &t.delete_template, true).as_deref(),
+            Some("https://kappa.lol/api/delete?key=xIGhwZxJlogcMROT")
+        );
+        assert!(t.host().deletes_from_host);
+        assert!(!target(&settings(Some("nuuls"), None)).host().deletes_from_host);
+    }
+
+    #[test]
+    fn expiring_hosts_and_reply_expiry() {
+        assert!(target(&settings(Some("uguu"), None)).host().expires);
+        assert!(target(&settings(Some("imgdrip"), None)).host().expires);
+        assert!(!target(&settings(Some("kappa"), None)).host().expires);
+        let secs = serde_json::json!({ "url": "x", "expires_at": 1_800_000_000 });
+        assert_eq!(expiry_from_reply(&secs), Some(1_800_000_000_000));
+        let iso = serde_json::json!({ "data": { "expires": "2026-11-20T00:00:00Z" } });
+        assert_eq!(expiry_from_reply(&iso), Some(1_795_132_800_000));
+        assert_eq!(expiry_from_reply(&serde_json::json!({ "url": "x" })), None);
+    }
+
+    #[test]
+    fn time_left_reads_in_words() {
+        let h = 3_600_000;
+        assert_eq!(time_left_label(3 * 24 * h, 0), "3 days left");
+        assert_eq!(time_left_label(47 * h, 0), "47 hours left");
+        assert_eq!(time_left_label(90 * 60_000, 0), "90 minutes left");
+        assert_eq!(time_left_label(30_000, 0), "1 minute left");
+        assert_eq!(time_left_label(0, 5), "Expired");
+    }
+
+    #[test]
+    fn hosts_by_key() {
+        assert_eq!(host_for_key("litterbox").short, "Litterbox");
+        assert_eq!(host_for_key("custom:up.example.org").label, "up.example.org");
+        let up = settings(Some("nuuls"), None);
+        assert_eq!(target_for_key("uguu", &up).map(|t| t.key).as_deref(), Some("uguu"));
+        assert!(target_for_key("custom:gone.example", &up).is_none());
     }
 
     #[test]

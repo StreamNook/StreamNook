@@ -765,26 +765,52 @@ export interface ImageUploaderSettings {
   response_path?: string;
 }
 
-/** `upload_chat_image`'s answer. */
+/** One upload (`upload_chat_image`, `reupload_image`, the panel's groups). */
 export interface UploadedImage {
   url: string;
   width: number;
   height: number;
+  /** The host key it went to. */
+  host: string;
+  /** When its link stops working (ms since the epoch), if it does. */
+  expires_ms?: number;
+  /** "2 days left", "Expired"; absent for a link that lasts. */
+  time_left?: string;
+  expired: boolean;
+  /** A kept copy can be sent again for a fresh link. */
+  can_reupload: boolean;
+  /** The kept copy on disk, drawn in place of a dead link. */
+  copy_path?: string;
 }
 
 /** One image host StreamNook can upload to (`image_upload_hosts`). */
 export interface UploadHost {
   id: string;
   label: string;
+  /** The name on the Images tab's host tabs. */
+  short: string;
   note: string;
   max_mb: number;
+  /** Deleting an upload deletes the file there too. */
+  deletes_from_host: boolean;
+  /** Its links stop working after a while. */
+  expires: boolean;
+}
+
+/** The uploads to one host, newest first. */
+export interface UploadGroup {
+  host: UploadHost;
+  items: UploadedImage[];
 }
 
 /** The emote menu's Images section (`image_upload_panel`). */
 export interface ImageUploadPanel {
+  /** Where the next upload goes. */
   host: UploadHost;
+  hosts: UploadHost[];
   needs_consent: boolean;
-  recents: UploadedImage[];
+  /** Uploads by host, the host used most recently first. */
+  groups: UploadGroup[];
 }
 
 export interface ChatInputSettings {

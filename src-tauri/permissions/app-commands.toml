@@ -244,6 +244,8 @@ allow = [
   "accept_image_upload_host",
   "image_upload_hosts",
   "test_image_upload",
+  "reupload_image",
+  "delete_image_upload",
   "start_multi_chat",
   "provider_chat_connect",
   "chat_bridge_port",
