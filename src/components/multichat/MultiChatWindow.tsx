@@ -65,8 +65,9 @@ import ErrorBoundary from '../ErrorBoundary';
 import ChatOnlySettingsModal from './ChatOnlySettingsModal';
 import MultiChatToasts from './MultiChatToasts';
 import ViewerCounter from './ViewerCounter';
-import { useMultiChatLive } from './useMultiChatLive';
-import { liveWord, type SourceLive } from './multiChatLive';
+import { useTabLive } from '../../hooks/useTabLive';
+import { liveWord, type SourceLive } from '../../utils/tabLive';
+import { TabLiveLabel } from '../chat/TabLiveLabel';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import CommandPalette from '../CommandPalette';
@@ -547,7 +548,7 @@ export default function MultiChatWindow() {
   const [channels, setChannels] = useState<ChannelEntry[]>(initial.channels);
   // Live state per open source, read from Rust: the title bar's viewer total
   // and the tab strip's live dots share this one reader.
-  const sourceLive = useMultiChatLive(channels);
+  const sourceLive = useTabLive('multichat', channels);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(initial.layoutMode);
   const [isBlendedMode, setIsBlendedMode] = useState(initial.isBlendedMode);
   const [isMentionsMode, setIsMentionsMode] = useState(initial.isMentionsMode);
@@ -1874,7 +1875,7 @@ export default function MultiChatWindow() {
     const login = currentUser?.login?.toLowerCase();
     if (login) {
       setChannels([
-        { channel: login, channelId: null, channelName: currentUser?.display_name || login, provider: 'twitch' },
+        { channel: login, channelId: currentUser?.user_id || null, channelName: currentUser?.display_name || login, provider: 'twitch' },
       ]);
       setActiveKey(makeKey('twitch', login));
     }
@@ -3075,7 +3076,7 @@ function LayoutIcon({ mode }: { mode: LayoutMode }) {
 
 interface TabStripProps {
   channels: ChannelEntry[];
-  /** Each tab's live state by its key, from useMultiChatLive. */
+  /** Each tab's live state by its key, from useTabLive. */
   liveByKey: Map<string, SourceLive>;
   active: string | null;
   visibleSet: Set<string>;
@@ -3409,12 +3410,7 @@ function TabButton({
         />
         {/* The dot hangs off the label's top-right corner inside the tab's
             padding, so a channel going live or offline never moves its name. */}
-        <span className="relative min-w-0">
-          <span className="block truncate text-center">{label}</span>
-          {isLive && (
-            <span className="blend-live-dot pointer-events-none absolute -right-1.5 -top-0.5" aria-hidden />
-          )}
-        </span>
+        <TabLiveLabel label={label} isLive={isLive} className="text-center" />
         {/* The unread count sits in the right padding, in the remove
             button's slot (it gives way to it on hover), so it never covers
             the name. Centered a little right of the slot so a "9+" clears

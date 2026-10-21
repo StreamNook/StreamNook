@@ -1504,8 +1504,8 @@ pub fn run() {
             // cards. Replaces three JS timers per mounted chat and a 2.5 s poll
             // per open card. See services::channel_state.
             services::channel_state::start(app_handle.clone());
-            // Live line for the chat dock's (desktop) and the phone chats'
-            // Kick / YouTube / TikTok rooms; Twitch ones ride channel_state.
+            // Live line for every chat tab strip (dock, phones, MultiChat,
+            // MultiNook); Twitch rides channel_state.
             // See services::chat_dock_live.
             services::chat_dock_live::start(app_handle.clone());
             // Minimized-window signal: the page cannot see it (native occlusion
@@ -1793,6 +1793,8 @@ pub fn run() {
             commands::chat_dock::set_docked_chat_light,
             #[cfg(desktop)]
             services::chat_dock_live::get_chat_dock_live,
+            #[cfg(desktop)]
+            services::chat_dock_live::set_tab_live_channels,
             #[cfg(desktop)]
             open_plugin_window,
             #[cfg(desktop)]
@@ -2736,6 +2738,8 @@ pub fn run() {
                 // recommended poll and the Discover lists running after Go Live,
                 // or a close to the tray, destroyed the main window.
                 services::home_snapshot::release_window(&label);
+                // And its chat tab strips' live watches.
+                services::chat_dock_live::release_window(&app_handle, &label);
                 // The emote menu closes with the chat window it types into.
                 commands::emote_palette::on_window_gone(&app_handle, &label);
                 // Tell popouts the main window is gone so their Go Live control

@@ -12,7 +12,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import ChatWidget, { type ChatWidgetChannelOverride } from '../ChatWidget';
 import type { HypeTrainData } from '../../types';
-import { chatKey, useChatDockStore, type DockedChat } from '../../stores/chatDockStore';
+import { chatKey, type DockedChat } from '../../stores/chatDockStore';
+import { useTabLiveStore } from '../../stores/tabLiveStore';
 import { useChannelState } from '../../stores/channelStateStore';
 import { watchHypeTrains } from '../../services/hypeTrainWatch';
 
@@ -25,8 +26,8 @@ export default function ChatDockPane({ chat }: { chat: DockedChat }) {
   // extras for one that is not.
   const answered = state?.viewers_at != null;
   const live = answered && !!state?.started_at;
-  // Kick / YouTube / TikTok: the dock's own poll (undefined until it answers).
-  const providerLive = useChatDockStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]?.live));
+  // Kick / YouTube / TikTok: Rust's tab live poll (undefined until it answers).
+  const providerLive = useTabLiveStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]?.live));
 
   const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
   const trainsOn = isTwitch && !!chat.channel_id && answered && live;

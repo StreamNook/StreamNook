@@ -1,12 +1,32 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pin, PinOff } from 'lucide-react';
 import { ProviderLogo } from '../ProviderLogo';
 import { makeKey } from '../../utils/providerKey';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { Tooltip } from '../ui/Tooltip';
+import { TabLiveLabel } from '../chat/TabLiveLabel';
+import { useTabLive } from '../../hooks/useTabLive';
+import { liveWord, type LiveSource } from '../../utils/tabLive';
+
+const NO_SOURCES: LiveSource[] = [];
 
 const MultiNookChatSwitcher: React.FC = () => {
-  const { slots, activeChatChannelId, setActiveChatChannelId, isChatPinned, toggleChatPinned } = usemultiNookStore();
+  const slots = usemultiNookStore((s) => s.slots);
+  const { activeChatChannelId, setActiveChatChannelId, isChatPinned, toggleChatPinned } = usemultiNookStore();
+  // Every tile's channel, docked tiles included: the strip lists them all.
+  const sources = useMemo<LiveSource[]>(
+    () =>
+      slots.length > 1
+        ? slots.map((s) => ({
+            channel: s.channelLogin,
+            channelName: s.channelName,
+            provider: s.provider ?? 'twitch',
+            channelId: s.channelId ?? null,
+          }))
+        : NO_SOURCES,
+    [slots],
+  );
+  const live = useTabLive('multinook', sources);
 
   if (slots.length <= 1) return null; // Only show if multiple streams exist
 
@@ -23,15 +43,22 @@ const MultiNookChatSwitcher: React.FC = () => {
           // id-then-login fallback to get wrong.
           const key = makeKey(slot.provider ?? 'twitch', slot.channelLogin);
           const isActive = activeChatChannelId === key;
+          const name = slot.channelName || slot.channelLogin;
+          const state = liveWord(live.byKey.get(key));
 
           return (
-            <Tooltip key={slot.id} content={`Switch chat to ${slot.channelName || slot.channelLogin}`} side="bottom">
+            <Tooltip
+              key={slot.id}
+              content={state ? `Switch chat to ${name} · ${state}` : `Switch chat to ${name}`}
+              side="bottom"
+            >
               <button
                 onClick={() => setActiveChatChannelId(key)}
+                aria-label={state ? `${name}, ${state}` : name}
                 className={`
                   no-live-blur px-3 py-1.5 text-xs font-bold tracking-wide flex items-center gap-1.5
-                  ${isActive 
-                    ? 'glass-input text-emerald-400 font-extrabold' 
+                  ${isActive
+                    ? 'glass-input text-emerald-400 font-extrabold'
                     : 'glass-button text-textSecondary hover:text-white'}
                 `}
                 style={{ borderRadius: '8px' }}
@@ -39,8 +66,9 @@ const MultiNookChatSwitcher: React.FC = () => {
                 {slot.provider && slot.provider !== 'twitch' && (
                   <ProviderLogo provider={slot.provider} size={11} className="shrink-0" />
                 )}
-                {slot.channelName || slot.channelLogin}
-                {isActive && isChatPinned && <Pin size={11} className="shrink-0" />}
+                {/* The dot hangs off the name's corner; the pin keeps clear of it. */}
+                <TabLiveLabel label={name} isLive={state === 'Live'} />
+                {isActive && isChatPinned && <Pin size={11} className="ml-1 shrink-0" />}
               </button>
             </Tooltip>
           );
@@ -68,4 +96,3 @@ const MultiNookChatSwitcher: React.FC = () => {
 };
 
 export default MultiNookChatSwitcher;
-

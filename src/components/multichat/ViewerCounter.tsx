@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { UsersThree } from 'phosphor-react';
 import { ProviderLogo } from '../ProviderLogo';
-import { totalViewers, type SourceLive } from './multiChatLive';
+import { totalViewers, type SourceLive } from '../../utils/tabLive';
 
 // A clean, aggregate viewer counter for the MultiChat title bar: total live
 // viewers across every open source, with a per-stream breakdown on hover. It
-// reads the window's shared live state (useMultiChatLive), the same rows the
+// reads the window's shared live state (useTabLive), the same rows the
 // tab strip's live dots read, so it asks nothing of any platform itself.
 
 export default function ViewerCounter({ stats }: { stats: SourceLive[] }) {

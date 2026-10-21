@@ -39,6 +39,8 @@ import {
   type HeldEntry,
 } from '../../stores/chatConnectionStore';
 import { useChannelState } from '../../stores/channelStateStore';
+import { useTabLiveStore } from '../../stores/tabLiveStore';
+import { useShallow } from 'zustand/react/shallow';
 import { nameFloor, useCapsuleName, useDockView } from '../../hooks/useChatDock';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { formatViewerCount } from '../../utils/streamStats';
@@ -221,7 +223,9 @@ interface RowProps {
 function useDockedLine(chat: DockedChat) {
   const isTwitch = chat.provider === 'twitch';
   const state = useChannelState(isTwitch ? chat.login : null);
-  const other = useChatDockStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]));
+  // Shallow: every update sends a fresh map, and an unchanged row must not
+  // re-render its tab.
+  const other = useTabLiveStore(useShallow((s) => (isTwitch ? undefined : s.live[chatKey(chat)])));
   return isTwitch
     ? state?.viewers_at != null
       ? { live: !!state.started_at, category: state.game_name, title: state.title, viewers: state.viewer_count }
