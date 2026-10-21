@@ -55,7 +55,7 @@ final class EmotePickerModel {
     /// The bottom bar's sections: emotes, Twitch chat GIFs, or a picture to upload.
     enum Section { case emotes, gifs, images }
     private(set) var section = Section.emotes
-    /// The Images section: the host, the upload in flight and the recent pictures.
+    /// The Images section: the host, the upload in flight and the uploads by host.
     let images: ImageUploadModel
     /// Twitch's answer about GIFs in this channel; nil (no GIFs section) until it answers, and
     /// when the question failed (signed out, offline), as on Android.
@@ -73,7 +73,7 @@ final class EmotePickerModel {
 
     init(session: ChatSession) {
         self.session = session
-        images = ImageUploadModel(core: session.core)
+        images = ImageUploadModel(core: session.core) { [weak session] in session?.rooms?.settings }
         tab = PickerTabs.defaultTab(provider: session.provider)
     }
 
