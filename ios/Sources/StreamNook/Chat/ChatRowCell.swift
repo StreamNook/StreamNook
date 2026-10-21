@@ -200,6 +200,8 @@ final class ChatRowCell: UIView {
         if effects & (Modifier.rotate90 | Modifier.rotateRight) != 0 { transform = CATransform3DRotate(transform, .pi / 2, 0, 0, 1) }
         if effects & Modifier.rotateLeft != 0 { transform = CATransform3DRotate(transform, -.pi / 2, 0, 0, 1) }
         group.transform = transform
+        // Built again on resume, so a Reduce Motion or Low Power change starts or stops them.
+        for key in ["spin", "shake", "bounce", "jam"] { group.removeAnimation(forKey: key) }
         guard !MotionGate.still else { return }
         if effects & Modifier.rotate != 0 {
             let spin = CABasicAnimation(keyPath: "transform.rotation.z")
@@ -243,10 +245,10 @@ final class ChatRowCell: UIView {
     /// The live highlight flash: the row's color under its text, tint and bar, stepping down to
     /// clear over two seconds as desktop's keyframes do. Only the layer's opacity animates, on
     /// the render server, so the row never redraws and the list keeps its frame rate. Motion off
-    /// (as desktop's) and Reduce Motion leave the row still.
+    /// (as desktop's), Reduce Motion and Low Power Mode leave the row still.
     func flash() {
         guard let flash = layout?.decor.flash, flash.alphas.count > 1, Look.shared.motion != .off,
-              !UIAccessibility.isReduceMotionEnabled else { return }
+              !MotionGate.still else { return }
         let overlay = flashLayer ?? CALayer()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -493,11 +495,12 @@ final class ChatRowCell: UIView {
     }
 
     /// Hands the images back to the clock when the row returns to the screen, and starts the
-    /// glint and the Atmosphere's motion again.
+    /// glint, the Atmosphere's motion and the emote modifiers again (as the motion state now allows).
     func resume() {
         guard let layout else { return }
         showGlint(layout)
         showWash(layout, scale: layer.contentsScale)
+        for (attachment, group) in zip(layout.attachments, groupLayers) { applyEffects(attachment.effects, to: group) }
         var i = 0
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count

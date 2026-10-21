@@ -16,8 +16,10 @@ struct ChatRoomsPanel: View {
     var drop: WatchDropModel?
     var onProfile: (ProfileTarget) -> Void = { _ in }
     /// The chat is laid out but not shown (the player's chat while mini, or in landscape with
-    /// chat off): its lists stop drawing and its decoration holds still.
+    /// chat off): its lists stop drawing and its decoration holds still, once the hiding
+    /// transition has played.
     var hidden = false
+    @State private var resting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +35,13 @@ struct ChatRoomsPanel: View {
                 roomsBody
             }
         }
-        .transformEnvironment(\.snStill) { if hidden { $0 = true } }
+        .transformEnvironment(\.snStill) { if resting { $0 = true } }
+        // Nothing stops mid-fade: the decoration rests after the transition (the lists wait as long).
+        .task(id: hidden) {
+            guard hidden else { return resting = false }
+            try? await Task.sleep(for: .milliseconds(350))
+            if !Task.isCancelled { resting = true }
+        }
         .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
             AddChatSheet(rooms: rooms)
                 .snSheetLight()

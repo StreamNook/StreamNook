@@ -30,11 +30,12 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     /// (the player's chat while mini or with landscape chat off): it takes none of its room's
     /// rows and never holds the room, so the list on top draws it, and its link and every moving
     /// thing in its rows stop. Uncovered, it takes the room back with every row the room kept
-    /// meanwhile.
+    /// meanwhile. It rests once the cover's transition has played, so nothing in its rows stops
+    /// mid-fade.
     var covered = false {
         didSet {
             guard covered != oldValue else { return }
-            updateDormant()
+            settleDormant()
             guard !covered, window != nil, let source, source.list !== self else { return }
             claim(source)
         }
@@ -56,6 +57,10 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
     private var displayLink: CADisplayLink?
     /// Off screen or covered: the link is paused and the rows hold still.
     private var dormant = false
+    /// A cover's rest waiting out its transition (`settleDormant`).
+    private var dormantSoon: Task<Void, Never>?
+    /// About the length of the transitions that cover or hide a list (the watch layer, the mini box).
+    private static let coverTransition: Duration = .milliseconds(350)
     /// Display frames since the link last had work (`ChatLinkPolicy.linger`).
     private var idleTicks = 0
     private var linkRate = ChatLinkPolicy.Rate.follow
@@ -215,6 +220,10 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         let link = CADisplayLink(target: LinkTarget(self), selector: #selector(LinkTarget.tick(_:)))
         linkRate = .follow
         link.preferredFrameRateRange = Self.frameRange(ChatLinkPolicy.range(.follow, lowPower: PowerState.shared.lowPower))
+        // A list that is already resting (made under a cover) starts paused; either way the
+        // frame before this one is no dropped frame.
+        link.isPaused = dormant
+        pacing.gap()
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
@@ -235,11 +244,29 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             for cell in cells.values { cell.recycle() }
             // Emote modifiers and anything else still on the render server stop with the layer clock.
             scroll.layer.speed = 0
+            // A list waiting on the room this one held runs its rule again and takes it.
+            if let source, source.list === self {
+                NotificationCenter.default.post(name: ChatPipeline.readyNotification, object: source)
+            }
         } else {
             scroll.layer.speed = 1
             layoutVisible()
             for cell in cells.values { cell.resume() }
             wake()
+        }
+    }
+
+    /// Uncovered, the list wakes at once; covered, it rests once the transition has played (and
+    /// not at all if the cover lifts first).
+    private func settleDormant() {
+        dormantSoon?.cancel()
+        dormantSoon = nil
+        guard covered, window != nil, !dormant else { return updateDormant() }
+        dormantSoon = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.coverTransition)
+            guard !Task.isCancelled, let self else { return }
+            self.dormantSoon = nil
+            self.updateDormant()
         }
     }
 
@@ -305,9 +332,12 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
             }
         }
         if glide != nil { stepGlide(link) }
-        let touching = scroll.isTracking || scroll.isDecelerating || swipe != nil || touchPress != nil
-        idleTicks = applied || glide != nil || touching ? 0 : idleTicks + 1
-        let rate = ChatLinkPolicy.rate(idleTicks: idleTicks, gliding: glide != nil, touching: touching)
+        // Only a moving list earns the full rate; a thumb resting on (or swiping) a row keeps the
+        // link awake at the follow rate.
+        let moving = scroll.isTracking || scroll.isDecelerating
+        let held = swipe != nil || touchPress != nil
+        idleTicks = applied || glide != nil || moving || held ? 0 : idleTicks + 1
+        let rate = ChatLinkPolicy.rate(idleTicks: idleTicks, gliding: glide != nil, touching: moving)
         if rate == .paused {
             link.isPaused = true
         } else {
@@ -349,6 +379,10 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         var mentioned = false
         for batch in batches {
             if let reset = batch.reset {
+                // A reader scrolled up stays on the row they were reading.
+                let top = scroll.contentOffset.y
+                let anchor = paused && !batch.forceLive
+                    ? rows.first(where: { $0.height > 0 && $0.y + $0.height > top }).map { (id: $0.id, y: $0.y) } : nil
                 for cell in cells.values { recycle(cell) }
                 cells.removeAll()
                 rows.removeAll()
@@ -358,7 +392,13 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                     y += layout.height
                 }
                 animate = false
-                if batch.forceLive { paused = false; updateOverlay() }
+                if batch.mentionsMe { mentioned = true }
+                if batch.forceLive {
+                    paused = false
+                    updateOverlay()
+                } else if let anchor, let row = rows.first(where: { $0.id == anchor.id }) {
+                    adjustOffset(by: row.y - anchor.y)
+                }
                 continue
             }
             if !batch.prepended.isEmpty {
@@ -996,14 +1036,17 @@ final class FramePacing {
     func frame(_ link: CADisplayLink) {
         guard recording else { return }
         let now = link.timestamp
-        let expected = link.targetTimestamp - link.timestamp
-        if expected > 0 { self.expected = expected }
+        let next = link.targetTimestamp - link.timestamp
+        let before = expected
+        if next > 0 { expected = next }
         defer { last = now }
         guard last > 0 else { return }
         let interval = now - last
         frames += 1
         intervals.append(interval)
-        let missed = Int((interval / self.expected).rounded()) - 1
+        // The frame that changes the rate (follow to touch or back) ran at one of the two
+        // periods: measured against the longer, the switch itself is no dropped frame.
+        let missed = Int((interval / max(before, expected)).rounded()) - 1
         if missed > 0 { dropped += missed }
     }
 

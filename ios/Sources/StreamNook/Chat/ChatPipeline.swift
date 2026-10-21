@@ -17,6 +17,11 @@ final class ChatPipeline: @unchecked Sendable {
         /// Every row laid out again (a new width or style); replaces the list's rows.
         var reset: [ChatRowLayout]?
         var forceLive = false
+        /// A reset stands in for batches that held a new live mention of the viewer: it still buzzes.
+        var mentionsMe = false
+
+        /// Whether taking this batch buzzes for a mention.
+        var buzzes: Bool { mentionsMe || appended.contains { $0.live && $0.mentionsMe } }
     }
 
     private let queue = DispatchQueue(label: "app.streamnook.chat.pipeline", qos: .userInitiated)
@@ -210,12 +215,15 @@ final class ChatPipeline: @unchecked Sendable {
     }
 
     /// No chat list can be seen: rows keep arriving into the buffer as text and none is laid out
-    /// or drawn. Seen again, a room that missed rows hands its list every row at once.
+    /// or drawn. Seen again, a room that missed rows hands its list every row at once, where the
+    /// reader left it: live stays live, a reader scrolled up stays on their row.
     func setSuspended(_ suspended: Bool) {
         queue.async { [self] in
             guard suspended != self.suspended else { return }
             self.suspended = suspended
-            if !suspended, missed, active { replayNow() }
+            guard !suspended, missed, active, width > 0 else { return }
+            missed = false
+            publish(Batch(reset: allRows()))
         }
     }
 
@@ -224,25 +232,24 @@ final class ChatPipeline: @unchecked Sendable {
     func replay() {
         queue.async { [self] in
             active = true
-            replayNow()
+            missed = false
+            buffer.paused = false
+            guard width > 0 else { return }
+            publish(Batch(reset: allRows(), forceLive: true))
         }
     }
 
-    /// `replay`'s work, on the queue.
-    private func replayNow() {
-        missed = false
-        buffer.paused = false
-        guard width > 0 else { return }
+    /// Every row the room holds, laid out, reusing layouts still current; the newest 40 drawn.
+    private func allRows() -> [ChatRowLayout] {
         let rows = buffer.rows
         let drawFrom = max(0, rows.count - 40)
-        let all = rows.enumerated().map { i, row -> ChatRowLayout in
+        return rows.enumerated().map { i, row -> ChatRowLayout in
             guard let cached = layouts[row.id], cached.revision == row.revision else {
                 return layout(row, bitmap: i >= drawFrom)
             }
             if i >= drawFrom, !cached.hasBitmap { cached.renderBitmap(scale: scale) }
             return cached
         }
-        publish(Batch(reset: all, forceLive: true))
     }
 
     func setWidth(_ width: CGFloat, scale: CGFloat) {
@@ -411,21 +418,21 @@ final class ChatPipeline: @unchecked Sendable {
     }
 
     /// Queues a batch and wakes the lists on this room (one main-thread hop per burst). A reset
-    /// carries every row, so it replaces whatever still waits (keeping a waiting force-live);
-    /// past `readyCap` untaken batches collapse into one reset.
+    /// carries every row, so it replaces whatever still waits (keeping a waiting force-live and
+    /// a waiting mention's buzz); past `readyCap` untaken batches collapse into one reset.
     private func publish(_ batch: Batch) {
         let overflow = ready.withLock { batches -> Bool in
             var queued = batch
             if queued.reset != nil {
                 if batches.contains(where: \.forceLive) { queued.forceLive = true }
+                if batches.contains(where: \.buzzes) { queued.mentionsMe = true }
                 batches.removeAll(keepingCapacity: true)
             }
             batches.append(queued)
             return batches.count > Self.readyCap
         }
         if overflow {
-            ready.withLock { $0.removeAll() }
-            replayNow()
+            collapseWaiting()
             return
         }
         let post = wakePosted.withLock { posted -> Bool in
@@ -438,5 +445,12 @@ final class ChatPipeline: @unchecked Sendable {
             wakePosted.withLock { $0 = false }
             NotificationCenter.default.post(name: Self.readyNotification, object: self)
         }
+    }
+
+    /// Batches nobody took (a list resting, the app away) become one reset of every row. It
+    /// replaces them in `publish`, so it is live only if one of them was, and the reader's pause
+    /// stays as it is.
+    private func collapseWaiting() {
+        publish(Batch(reset: allRows()))
     }
 }

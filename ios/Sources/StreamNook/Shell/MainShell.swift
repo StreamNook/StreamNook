@@ -76,8 +76,9 @@ struct MainShell: View {
         // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
         // player covers it) and under the full player.
         .onChange(of: onScreenRoom, initial: true) { _, room in model.chat.setVisible(room.map { [$0] } ?? []) }
-        // No chat can be seen (away, or no chat on screen): the rooms keep their rows as text.
-        .onChange(of: chatSeen, initial: true) { _, seen in model.chatSeen(seen) }
+        // A chat nobody can see (away, or not on screen) keeps its rows as text.
+        .onChange(of: liveChatSeen, initial: true) { _, seen in model.liveChatSeen(seen) }
+        .onChange(of: replayChatSeen, initial: true) { _, seen in model.replayChatSeen(seen) }
         // Which chat is on screen, for the inbox: a new mention's card rises only there.
         .onChange(of: inboxOnScreen, initial: true) { _, place in model.mentions.onScreen = place }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
@@ -125,13 +126,24 @@ struct MainShell: View {
         return nav.shellCovered || nav.tab == .chats ? room : nil
     }
 
-    /// Whether any chat can be seen: the player's own (full, in portrait or with landscape chat
-    /// on), or the Chats tab's; never in the background.
-    private var chatSeen: Bool {
-        guard scenePhase != .background else { return false }
-        if nav.shellCovered { return !landscape || nav.landscapeChat }
-        return nav.tab == .chats
+    /// The full player's chat is on screen (portrait, or landscape with chat on).
+    private var playerChatShown: Bool {
+        scenePhase != .background && nav.shellCovered && (!landscape || nav.landscapeChat)
     }
+
+    /// The player's chat shows the VOD's recorded chat instead of the live room.
+    private var replayShowing: Bool { model.signedIn && model.replay != nil && model.replayShown }
+
+    /// Whether a live room's chat can be seen: the full player's (unless it shows Replay), or the
+    /// Chats tab's own screen (not Mentions or Whispers pushed over it); never in the background.
+    private var liveChatSeen: Bool {
+        guard scenePhase != .background else { return false }
+        if nav.shellCovered { return playerChatShown && !replayShowing }
+        return nav.tab == .chats && (nav.paths[.chats]?.isEmpty ?? true)
+    }
+
+    /// Whether the VOD's recorded chat can be seen: only in the full player's chat, on Replay.
+    private var replayChatSeen: Bool { playerChatShown && replayShowing }
 
     private func stack<Content: View>(_ tab: MobileTab, @ViewBuilder content: () -> Content) -> some View {
         NavigationStack(path: nav.path(tab)) {
