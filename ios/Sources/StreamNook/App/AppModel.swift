@@ -378,6 +378,7 @@ final class AppModel {
         }
         let login = vod.channelLogin ?? watch.stream?.userLogin ?? ""
         replay = ChatSession(channel: login, core: core, source: .replay, roomID: watch.stream?.userID)
+        replay?.pipeline.setSuspended(!chatOnScreen)
         replayShown = true
     }
 
@@ -502,6 +503,17 @@ final class AppModel {
             if watch.stream != nil { stopWatching() }
         default: watch.cancelFade()
         }
+    }
+
+    /// A chat list can be seen (`MainShell.chatSeen`).
+    @ObservationIgnored private var chatOnScreen = true
+
+    /// Whether any chat can be seen: off, every room and the VOD replay keep their rows as text
+    /// and draw nothing until chat shows again.
+    func chatSeen(_ seen: Bool) {
+        chatOnScreen = seen
+        chat.setOnScreen(seen)
+        replay?.pipeline.setSuspended(!seen)
     }
 
     func stopWatching() {

@@ -149,7 +149,7 @@ struct WatchLayer: View {
                 let bottomKeep = max(0, insets.bottom - (keyboardUp ? 0 : Self.indicatorOverlap))
                 ChatArea(model: model, readOnly: landscapeChat && !chat.beside,
                          backdrop: landscapeChat ? (chat.beside ? .solid : .tint(chat.opacity / 100)) : nil,
-                         outerInset: landscapeChat ? outer : 0, leading: chat.leading)
+                         outerInset: landscapeChat ? outer : 0, leading: chat.leading, hidden: !chatShown)
                     .frame(width: landscapeChat ? columnWidth : layer.width,
                            height: landscapeChat ? max(0, screen.height - (keyboardUp ? insets.bottom : 0))
                                                  : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
@@ -528,6 +528,8 @@ private struct ChatArea: View {
     let backdrop: ChatBackdrop?
     let outerInset: CGFloat
     let leading: Bool
+    /// Laid out but not shown (mini, or landscape with chat off): the lists rest.
+    let hidden: Bool
 
     var body: some View {
         content
@@ -554,7 +556,8 @@ private struct ChatArea: View {
                            replayShown: Binding(get: { model.replayShown }, set: { model.replayShown = $0 }),
                            replayAt: model.watch.playingVod == nil ? nil : PlayerText.clock(model.watch.vodPosition),
                            drop: .watched,
-                           onProfile: { model.cosmetics.open($0) })
+                           onProfile: { model.cosmetics.open($0) },
+                           hidden: hidden)
                 // The reader stays mounted whichever room or mode is on screen, so its reading
                 // never stops; the chat stack draws what it reads.
                 .background {

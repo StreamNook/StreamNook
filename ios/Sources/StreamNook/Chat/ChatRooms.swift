@@ -93,6 +93,15 @@ final class ChatRooms {
     @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private var listening = false
     @ObservationIgnored private var backgroundedAt: ContinuousClock.Instant?
+    /// A chat list of these rooms can be seen (the app in front, chat on screen).
+    @ObservationIgnored private var onScreen = true
+
+    /// No chat of these rooms can be seen: every room keeps its rows as text and draws none
+    /// until one shows again (`ChatPipeline.setSuspended`).
+    func setOnScreen(_ onScreen: Bool) {
+        self.onScreen = onScreen
+        for session in sessions.values { session.pipeline.setSuspended(!onScreen) }
+    }
     /// Twitch's connection is up (a Twitch room ran `start_chat`); Kick rooms ride the bridge alone.
     @ObservationIgnored private var ircUp = false
     /// Kick rooms closed within their release grace, by room key.
@@ -301,6 +310,7 @@ final class ChatRooms {
                                   roomID: kick ? nil : tab.channelID, provider: tab.provider)
         session.rooms = self
         session.pipeline.setVisible(tab.channel == state.activeChannel)
+        session.pipeline.setSuspended(!onScreen)
         sessions[tab.channel] = session
         // Frames name their room: the Twitch login, or `kick:slug`.
         routes.set(tab.channel, session.pipeline)

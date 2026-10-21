@@ -76,6 +76,8 @@ struct MainShell: View {
         // The room on screen, for the mentions hub: chat shows on the Chats tab (unless the full
         // player covers it) and under the full player.
         .onChange(of: onScreenRoom, initial: true) { _, room in model.chat.setVisible(room.map { [$0] } ?? []) }
+        // No chat can be seen (away, or no chat on screen): the rooms keep their rows as text.
+        .onChange(of: chatSeen, initial: true) { _, seen in model.chatSeen(seen) }
         // Which chat is on screen, for the inbox: a new mention's card rises only there.
         .onChange(of: inboxOnScreen, initial: true) { _, place in model.mentions.onScreen = place }
         // Your picture follows who is signed in, a cosmetics change, and the theme's accent (the
@@ -121,6 +123,14 @@ struct MainShell: View {
     private var onScreenRoom: String? {
         guard scenePhase == .active, model.signedIn, let room = model.chat.state.activeChannel else { return nil }
         return nav.shellCovered || nav.tab == .chats ? room : nil
+    }
+
+    /// Whether any chat can be seen: the player's own (full, in portrait or with landscape chat
+    /// on), or the Chats tab's; never in the background.
+    private var chatSeen: Bool {
+        guard scenePhase != .background else { return false }
+        if nav.shellCovered { return !landscape || nav.landscapeChat }
+        return nav.tab == .chats
     }
 
     private func stack<Content: View>(_ tab: MobileTab, @ViewBuilder content: () -> Content) -> some View {
