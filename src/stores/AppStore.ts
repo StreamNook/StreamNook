@@ -16,6 +16,7 @@ import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
+import { categoryNavigation, type StreamCategoryTarget } from '../utils/streamCategory';
 import { signInRequiredFrom } from '../utils/signInRequired';
 import { transientSwapVerdict } from '../utils/transientSwap';
 import type { PlaybackAdapt } from '../utils/linkAdapt';
@@ -454,9 +455,10 @@ interface AppState {
   isTheaterMode: boolean;
   originalChatPlacement: string | null;
   // Borderless full screen: the whole app window (title bar, sidebar, player,
-  // chat) covers the entire screen including over the taskbar. Distinct from
-  // theater mode (hides chrome, stays windowed) and player fullscreen (video
-  // only). Mirrors the actual OS window state.
+  // chat) covers the entire screen including over the taskbar. Users know it
+  // as Theater mode (F11). Distinct from isTheaterMode, which is Compact
+  // View's internal name, and from player fullscreen (video only). Mirrors the
+  // actual OS window state.
   isWindowFullscreen: boolean;
   /** Plyr CSS fullscreen is active (single player or a MultiNook tile). Set by
    *  utils/windowFullscreen; drives the fullscreen chat overlay in App. */
@@ -464,6 +466,10 @@ interface AppState {
   /** The player's hover overlay (controls) is currently shown. Mirrored from
    *  VideoPlayer so the fullscreen chat overlay can hide with the controls. */
   playerOverlayVisible: boolean;
+  /** Chat brought up over the player's full screen (the chat button or C).
+   *  Every full screen starts without it; a hand-off between players keeps it. */
+  fsChatOpen: boolean;
+  toggleFsChat: () => void;
   toasts: Toast[];
   isAutoSwitching: boolean;
   /** The login of a stream whose streamer dropped and is being waited out
@@ -490,6 +496,11 @@ interface AppState {
    *  when you follow a fresh link. */
   homeLastExitedCategory: TwitchCategory | null;
   streamOriginCategory: TwitchCategory | null;
+  /** Another platform's category drilled into on Home's Categories tab. In the
+   *  store so the player's category link can open it, not only Home. */
+  homeProviderCategory: ProviderCategory | null;
+  /** The platform category last backed out of, so Forward can re-enter it. */
+  homeLastExitedProviderCategory: ProviderCategory | null;
   /**
    * Tab the most recent search was launched from. Used to send the user back to
    * a real page (instead of an empty "search" view) after they exit a stream
@@ -665,6 +676,9 @@ interface AppState {
    *  you just left, Home returns to the stream. */
   navigateForward: () => void;
   setStreamOriginCategory: (category: TwitchCategory | null) => void;
+  setHomeProviderCategory: (category: ProviderCategory | null) => void;
+  /** Open what a stream's category label points at (utils/streamCategory). */
+  openStreamCategory: (target: StreamCategoryTarget) => void;
   setSearchReturnTab: (tab: HomeTab) => void;
   setHomeCategoryTab: (tab: 'live' | 'clips' | 'videos') => void;
   
@@ -853,7 +867,9 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
       get().patchCurrentStream({
         viewer_count: update.viewer_count ?? current.viewer_count,
         title: update.title || current.title,
-        game_name: update.game_name || current.game_name,
+        // The id travels with its name, so a category switch can't leave the
+        // player's category link pointing at the old one.
+        ...(update.game_name ? { game_name: update.game_name, game_id: update.game_id ?? '' } : {}),
       });
     }
   });
@@ -1002,6 +1018,14 @@ let transientSwapInFlight: Promise<void> | null = null;
 let transientSwapSeq = 0;
 async function settleTransientSwap(): Promise<void> {
   if (transientSwapInFlight) await transientSwapInFlight.catch(() => {});
+}
+// The close that may still be running. Home shows as soon as the video clears,
+// while the close still awaits watch_stop and stop_chat; a start waits it out,
+// so the close's teardown (the chat connection, its final state clear) never
+// lands on the stream or room opened in the meantime.
+let stopInFlight: Promise<void> | null = null;
+async function settleStop(): Promise<void> {
+  while (stopInFlight) await stopInFlight.catch(() => {});
 }
 /** The most recent rewind / back-to-live swap, so a superseded swap only
  *  releases the loader freeze it set itself. */
@@ -1518,6 +1542,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isWindowFullscreen: false,
   isPlayerFullscreen: false,
   playerOverlayVisible: false,
+  fsChatOpen: false,
+  toggleFsChat: () => set((s) => ({ fsChatOpen: s.isPlayerFullscreen ? !s.fsChatOpen : false })),
   toasts: [],
   isAutoSwitching: false,
   streamReconnecting: null,
@@ -1532,6 +1558,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeSelectedCategory: null,
   homeLastExitedCategory: null,
   streamOriginCategory: null,
+  homeProviderCategory: null,
+  homeLastExitedProviderCategory: null,
   searchReturnTab: 'following' as HomeTab,
   homeCategoryTab: 'live' as 'live' | 'clips' | 'videos',
 
@@ -2148,6 +2176,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().openClipEditor({ vodId: vodId as string, offsetSeconds: vodOffset, channelName });
   },
   playMedia: async (type: 'clip' | 'video', url: string, info: MediaInfo) => {
+    await settleStop();
     set({ isLoading: true });
     trackActivity(`Started watching ${type}: ${info?.title || info?.id}`);
     try {
@@ -2368,6 +2397,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   stopStream: async (options) => {
     const preserveBackend = options?.preserveBackend ?? false;
     trackActivity('Stopped stream');
+    // Starts wait for this close to finish (settleStop).
+    let finishStop: () => void = () => {};
+    const stopping = new Promise<void>((resolve) => {
+      finishStop = resolve;
+    });
+    stopInFlight = stopping;
     // Tear down any VOD chat replay session (no-op if none is active).
     import('./vodReplayStore')
       .then((m) => m.stopVodReplay())
@@ -2439,6 +2474,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     } catch (e) {
       Logger.error('Failed to stop stream:', e);
+    } finally {
+      finishStop();
+      if (stopInFlight === stopping) stopInFlight = null;
     }
   },
 
@@ -2512,7 +2550,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           streamInfo.user_id = rawInfo.broadcaster_id;
           if (rawInfo.broadcaster_name) streamInfo.user_name = rawInfo.broadcaster_name;
           if (rawInfo.title) streamInfo.title = rawInfo.title;
-          if (rawInfo.game_name) streamInfo.game_name = rawInfo.game_name;
+          // Channel info carries no category id: a new name with the old id
+          // would open the old category, so it goes by name.
+          if (rawInfo.game_name && rawInfo.game_name !== streamInfo.game_name) {
+            streamInfo.game_name = rawInfo.game_name;
+            streamInfo.game_id = undefined;
+          }
           Logger.debug(`[Stream] Repaired missing user_id for ${channel} -> ${streamInfo.user_id}`);
         }
       } catch (e) {
@@ -2808,6 +2851,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startStream: async (channel, providedStreamInfo?, skipChatRefresh = false, preResolved?: StreamStartResult) => {
+    // A close still running (Home shows before it ends) finishes first.
+    await settleStop();
     // A live start ends any VOD/clip chat replay, on every provider. This is the
     // one entry that never went through stopStream (playMedia does), so a VOD
     // or offline-chat session followed by a sidebar click, or the "just went
@@ -2943,6 +2988,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startOfflineChat: async (channel, providedStreamInfo?, opts?) => {
+    // A close still running (Home shows before it ends) finishes first.
+    await settleStop();
     // Shares the Twitch start sequence: a newer stream start or room open wins,
     // and this one then touches nothing.
     const seq = ++twitchStartSeq;
@@ -3773,6 +3820,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         homeActiveTab: 'browse',
         homeSelectedCategory: null,
       });
+      return;
+    }
+    // Another platform's category is the same step, on its Categories tab.
+    if (s.homeActiveTab === 'browse' && s.homeProviderCategory) {
+      set({ homeLastExitedProviderCategory: s.homeProviderCategory, homeProviderCategory: null });
     }
   },
 
@@ -3789,6 +3841,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return;
     }
+    if (s.homeActiveTab === 'browse' && !s.homeProviderCategory && s.homeLastExitedProviderCategory) {
+      set({ homeProviderCategory: s.homeLastExitedProviderCategory, homeLastExitedProviderCategory: null });
+      return;
+    }
     if (s.streamUrl) {
       trackActivity('Closed Home');
       set({ isHomeActive: false });
@@ -3803,7 +3859,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().activePlatform === platform) return;
     // Leaving a platform drops its drill-down state, so returning later opens
     // on that platform's top level rather than a stale category.
-    set({ activePlatform: platform, homeSelectedCategory: null });
+    // Every drill-down and forward step belongs to the platform being left.
+    set({
+      activePlatform: platform,
+      homeSelectedCategory: null,
+      homeLastExitedCategory: null,
+      homeProviderCategory: null,
+      homeLastExitedProviderCategory: null,
+    });
     // Frontend-only preference: rides the settings catch-all as a top-level key.
     const settings = get().settings;
     void get().updateSettings({ ...settings, active_platform: platform });
@@ -3818,6 +3881,25 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setStreamOriginCategory: (category: TwitchCategory | null) => {
     set({ streamOriginCategory: category });
+  },
+
+  setHomeProviderCategory: (category) => {
+    // Same rule as setHomeSelectedCategory: a new destination drops the forward step.
+    set(category ? { homeProviderCategory: category, homeLastExitedProviderCategory: null } : { homeProviderCategory: null });
+  },
+
+  openStreamCategory: (target) => {
+    trackActivity(`Opened category: ${target.category.name}`);
+    // Home sits under the player's full screen, so leave it first.
+    if (get().isPlayerFullscreen) getPlayerControls()?.toggleFullscreen();
+    // A category Rust already counted brings its art and viewer count along.
+    const known = target.kind === 'provider'
+      ? get().otherCategories.find((c) => c.provider === target.category.provider && c.id === target.category.id)
+      : undefined;
+    const { platform, patch } = categoryNavigation(known ? { kind: 'provider', category: known } : target, get().activePlatform);
+    // Switching platform drops the old drill-down and forward steps, so it goes first.
+    if (platform) get().setActivePlatform(platform);
+    set({ ...patch, isHomeActive: true, showBadgesOverlay: false, showDropsOverlay: false });
   },
 
   setSearchReturnTab: (tab: HomeTab) => {

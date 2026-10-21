@@ -7,9 +7,10 @@ import Plyr from 'plyr';
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
-import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
+import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
+import { currentCategoryTarget } from '../utils/streamCategory';
 import { makeKey } from '../utils/providerKey';
 import { useMediaGlow } from '../utils/mediaGlow';
 import { useContentZoom } from '../utils/contentZoom';
@@ -43,7 +44,8 @@ import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
 import { createStallReporter, reportSegment } from '../utils/linkAdapt';
 
 import { Logger } from '../utils/logger';
-import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
+import { claimPlayerFullscreen, handOffPlayerFullscreen, PLYR_FULLSCREEN_I18N, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
+import { mountFullscreenChatButton } from '../utils/fullscreenChatButton';
 import { startLatencyGovernor, DEFAULT_LATENCY_BAND } from '../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap, type LivePath } from '../utils/latency';
 import { startLLDiagnostics, stopLLDiagnostics, llDiagNote, isLLDiagEnabled } from '../utils/llDiagnostics';
@@ -204,7 +206,7 @@ const VideoPlayer = () => {
   // subscribing; state goes through a shallow-compared selector. This component
   // is mounted for the whole session, and a bare `useAppStore()` re-rendered it
   // on every unrelated store tick (toasts, mod logs, drops polling).
-  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod } = useAppStore.getState();
+  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod, openStreamCategory } = useAppStore.getState();
   const { streamUrl, settings, activeQuality, adSource, isAutoSwitching, currentStream, isRestartingStream, isHomeActive, streamOriginCategory, isAuthenticated, currentMediaType, isCreatingClip, originalMediaUrl, vodPlayback, liveRewind, liveRewindAvailable, liveRewindAnchor, liveLeftOffSecs } = useAppStore(
     useShallow((s) => ({
       streamUrl: s.streamUrl,
@@ -441,6 +443,15 @@ const VideoPlayer = () => {
     return () => {
       cancelled = true;
     };
+  }, [playerReady]);
+
+  // The chat button, just before the full screen button. Shown only in the
+  // player's full screen (globals.css); brings chat up over the video.
+  useEffect(() => {
+    if (!playerReady) return;
+    const container = containerRef.current;
+    if (!container) return;
+    return mountFullscreenChatButton(container);
   }, [playerReady]);
 
   // Keep the injected toggle's color, tooltip and pressed state in sync whenever
@@ -1626,6 +1637,7 @@ const VideoPlayer = () => {
             // to the window viewport instead of the screen. We bridge Plyr's
             // enter/exit events to the Tauri window's true OS fullscreen below.
             fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+            i18n: PLYR_FULLSCREEN_I18N,
             // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
             storage: { enabled: false },
             // Plyr's typings only know the VTT-url form; a function source is
@@ -2338,6 +2350,7 @@ const VideoPlayer = () => {
         // See note in the HLS.js path above — force CSS-only fullscreen so we
         // can promote it to a real OS window fullscreen via Tauri.
         fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+        i18n: PLYR_FULLSCREEN_I18N,
         // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
         storage: { enabled: false },
         ...(previewSets.length > 0
@@ -3169,6 +3182,19 @@ const VideoPlayer = () => {
         backgroundImage: 'linear-gradient(var(--color-background-secondary), var(--color-background-secondary))',
       };
 
+  // What the category under the title opens, if anything (utils/streamCategory).
+  const categoryLink = currentCategoryTarget(currentStream, currentMediaType);
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  // What follows the category: nothing live, the date for the offline room's
+  // broadcast (it carries no view count), views and date for clips and VODs.
+  const categorySuffix =
+    !currentStream || currentMediaType === 'live' || streamUrl === 'offline'
+      ? null
+      : currentMediaType === 'offline_chat'
+        ? currentStream.started_at ? `• ${fmtDate(currentStream.started_at)}` : null
+        : `• ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${fmtDate(currentStream.started_at)}`;
+
   return (
     <div
       ref={containerRef}
@@ -3431,15 +3457,44 @@ const VideoPlayer = () => {
                 </Tooltip>
               )}
               {currentStream.game_name && (
-                <p className="text-white/70 text-xs mt-0.5 drop-shadow-md">
-                  {currentMediaType === 'live' 
-                    ? currentStream.game_name 
-                    : streamUrl === 'offline' 
-                      ? currentStream.game_name
-                      : currentMediaType === 'offline_chat'
-                        // The room's latest broadcast carries no view count.
-                        ? [currentStream.game_name, currentStream.started_at && new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })].filter(Boolean).join(' • ')
-                        : `${currentStream.game_name} • ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                // With the chip the line is a flex row, so the date beside it
+                // centers on the chip instead of riding its text baseline.
+                <p className={`text-white/70 text-xs drop-shadow-md ${categoryLink ? 'mt-1 flex items-center gap-1.5 min-w-0' : 'mt-0.5'}`}>
+                  {categoryLink ? (
+                    // A quiet chip, so it reads as something to press without a
+                    // link's underline. The dark fill matches the back button's
+                    // glass and holds on bright video. Padding is even at rest;
+                    // the arrow's slot opens on hover rather than sitting empty.
+                    // Named group: the player root is a `group` too, and would
+                    // open the arrow from anywhere over the video.
+                    <button
+                      type="button"
+                      aria-label={`Browse ${currentStream.game_name}`}
+                      onClick={(e) => {
+                        // Focus left here would let Space reopen it after coming back.
+                        e.currentTarget.blur();
+                        openStreamCategory(categoryLink);
+                      }}
+                      className="group/cat pointer-events-auto cursor-pointer inline-flex shrink-0 items-center px-2 py-0.5 rounded-full bg-black/30 border border-white/15 text-white/85 transition-colors hover:bg-black/45 hover:border-white/30 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/60"
+                    >
+                      <span className="truncate max-w-[220px]">{currentStream.game_name}</span>
+                      <span
+                        aria-hidden="true"
+                        className="grid grid-cols-[0fr] transition-[grid-template-columns] duration-150 ease-out group-hover/cat:grid-cols-[1fr] group-focus-visible/cat:grid-cols-[1fr]"
+                      >
+                        <span className="flex min-w-0 items-center overflow-hidden">
+                          <CaretRight
+                            size={10}
+                            weight="bold"
+                            className="ml-1 shrink-0 opacity-0 transition-opacity duration-150 group-hover/cat:opacity-100 group-focus-visible/cat:opacity-100"
+                          />
+                        </span>
+                      </span>
+                    </button>
+                  ) : (
+                    currentStream.game_name
+                  )}
+                  {categorySuffix && (categoryLink ? <span className="truncate">{categorySuffix}</span> : ` ${categorySuffix}`)}
                 </p>
               )}
             </div>

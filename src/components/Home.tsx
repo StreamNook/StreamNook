@@ -27,6 +27,7 @@ import { WATCHABLE_PROVIDERS, PROVIDER_WATCH, providerLabel, type ProviderId, ty
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
+import { streamCategoryTarget } from '../utils/streamCategory';
 import { lastLiveLabel } from '../utils/lastLive';
 import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
@@ -186,6 +187,8 @@ const Home = () => {
         loginToTwitch,
         setHomeActiveTab,
         setHomeSelectedCategory,
+        setHomeProviderCategory: setProviderCategory,
+        navigateBack,
         setSearchReturnTab,
         setCachedTopGames,
         appendCachedTopGames,
@@ -434,7 +437,8 @@ const Home = () => {
     // Categories for the selected platform, and which one is drilled into. The
     // Categories tab shows tiles like Twitch's; picking one lists its streams.
     const [providerCategories, setProviderCategories] = useState<ProviderCategory[]>([]);
-    const [providerCategory, setProviderCategory] = useState<ProviderCategory | null>(null);
+    // In the store, so the player's category link can open one too.
+    const providerCategory = useAppStore((s) => s.homeProviderCategory);
 
     const [categoryStreams, setCategoryStreams] = useState<TwitchStream[]>([]);
     const [categoryStreamsCursor, setCategoryStreamsCursor] = useState<string | null>(null);
@@ -1694,12 +1698,6 @@ const Home = () => {
         };
     }, [showsProviderCategories, providerFilter]);
 
-    // Leaving the platform view (or switching platform) drops the drill-down so
-    // the tab reopens on the tile grid rather than a stale category.
-    useEffect(() => {
-        setProviderCategory(null);
-    }, [providerFilter]);
-
     // The provider category drill-down lives INSIDE the Categories tab: it is
     // `providerCategory` being set while `activeTab === 'browse'`. Leaving that tab
     // has to clear it.
@@ -2120,6 +2118,12 @@ const Home = () => {
                                                                                 <button
                                                                                     onClick={(e) => {
                                                                                         e.stopPropagation();
+                                                                                        // Another platform's category id means nothing to Twitch's lookup.
+                                                                                        if (!isTwitchStream(stream)) {
+                                                                                            const target = streamCategoryTarget(stream);
+                                                                                            if (target) useAppStore.getState().openStreamCategory(target);
+                                                                                            return;
+                                                                                        }
                                                                                         if (stream.game_id && stream.game_name) {
                                                                                             handleCategoryClick({ 
                                                                                                 id: stream.game_id, 
@@ -3263,15 +3267,18 @@ const Home = () => {
                 {isProviderView && activeTab === 'browse' && providerCategory && (
                     <div className="mb-3 flex items-center gap-2">
                         <button
-                            onClick={() => setProviderCategory(null)}
+                            onClick={() => navigateBack()}
                             className="glass-button-secondary px-2.5 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary rounded-lg transition-colors"
                         >
                             ← All categories
                         </button>
                         <h2 className="text-textPrimary font-semibold text-[15px]">{providerCategory.name}</h2>
-                        <span className="text-textSecondary text-xs">
-                            {providerCategory.viewer_count.toLocaleString()} viewers
-                        </span>
+                        {/* Opened from a stream, a category may have no count yet. */}
+                        {providerCategory.viewer_count > 0 && (
+                            <span className="text-textSecondary text-xs">
+                                {providerCategory.viewer_count.toLocaleString()} viewers
+                            </span>
+                        )}
                     </div>
                 )}
 
