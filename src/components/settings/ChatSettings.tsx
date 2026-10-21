@@ -2729,10 +2729,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       </SettingsSection>
 
-      {/* Desktop only: the paste-to-upload flow lives in the desktop composer;
-          the phone composer has no uploader, so this section would configure
-          nothing there. */}
-      {!IS_MOBILE && <ImageUploadSettings />}
+      <ImageUploadSettings />
 
       {/* Shown on both now. It used to be hidden on the phone because the
           feature was Tab-driven and there is no Tab key; the phone composer

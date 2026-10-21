@@ -77,6 +77,12 @@ cosmic-text = "0.19.0"
 scopeguard = "1.2"
 phf = { version = "0.14", features = ["macros"] }
 lru = "0.18"
+# Decoding and re-encoding pictures: screen capture and media glow on the
+# desktop, and chat image uploads on every target (services/image_upload).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Sniffs and sizes images from their first bytes (chat image uploads and the
+# size an image link card is drawn at). Header parsing only, no decoders.
+imagesize = { version = "0.14", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "heif"] }
 
 # TikTok LIVE webcast reader (vendored in-tree, see vendor/tiktok-live). Pure-Rust
 # ttwid-only connector (no signing service / no Python); deps pinned to match ours
@@ -219,7 +225,6 @@ discord-rich-presence = "1.0.0"
 # Unlike keyring 3 (which silently fell back to an in-memory mock when no backend
 # feature was on), an entry with no store is an error.
 keyring-core = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 webp-animation = "0.10"
 
 # Transport stack is split per platform: desktop keeps the OS TLS it shipped

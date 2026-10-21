@@ -37,7 +37,10 @@ use commands::chat_query::{
 use commands::moderation_tools::{
     get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
     get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
-    update_channel_info, upload_image,
+    update_channel_info,
+};
+use commands::image_upload::{
+    accept_image_upload_host, image_upload_hosts, image_upload_panel, test_image_upload, upload_chat_image,
 };
 use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
@@ -2015,7 +2018,11 @@ pub fn run() {
             get_user_pronouns,
             get_user_note,
             set_user_note,
-            upload_image,
+            upload_chat_image,
+            image_upload_panel,
+            accept_image_upload_host,
+            image_upload_hosts,
+            test_image_upload,
             start_multi_chat,
             provider_chat_connect,
             chat_bridge_port,

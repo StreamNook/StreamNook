@@ -1181,15 +1181,22 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
-    title: 'Paste upload',
-    description: 'Paste a screenshot into the chat box and StreamNook uploads it to a host you pick (nuuls, catbox, Litterbox, uguu or your own) and inserts the link. Previously "Paste images to upload".'
+    title: 'Images tab',
+    description: 'Upload a picture from the emote menu and its link goes in your message. Photo, picture, screenshot, send image, attach image, upload.'
   },
   {
     tab: 'Chat',
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
-    title: 'Image host',
-    description: 'Choose where pasted images are uploaded: i.nuuls.com, catbox.moe, Litterbox (72 h), uguu.se (3 h), or a custom multipart uploader. Includes a one-click test upload.'
+    title: 'Paste upload',
+    description: 'Paste a screenshot into the chat box and StreamNook uploads it to the host you pick and inserts the link. Previously "Paste images to upload".'
+  },
+  {
+    tab: 'Chat',
+    section: 'Image Uploads',
+    sectionId: 'settings-section-image-uploads',
+    title: 'Where images go',
+    description: 'Choose where your pictures are uploaded: i.nuuls.com, kappa.lol, imgdrip.com, catbox.moe, Litterbox (72 h), uguu.se (3 h), or your own uploader. Image host. Previously "Image host".'
   },
   {
     tab: 'Chat',
@@ -1585,7 +1592,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
     title: 'Custom host',
-    parent: 'Paste upload',
+    parent: 'Where images go',
     description: 'Upload address, file field name, extra form fields and where the link sits in the reply, for your own image host. Host details, self-hosted uploader.'
   },
   {
@@ -1593,7 +1600,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
     title: 'Test upload',
-    parent: 'Paste upload',
     description: 'Sends a 1-pixel test image to the host you picked and shows the link it came back with. Try it.'
   },
   // === Moderation ===

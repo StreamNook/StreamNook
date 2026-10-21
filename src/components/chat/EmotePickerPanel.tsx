@@ -6,8 +6,9 @@
 // Everything that goes INTO a message lives here, as sections picked from a
 // switcher along the BOTTOM, right above the message box and the smiley that
 // opened it (where phone keyboards keep theirs): Emotes (the source tabs),
-// GIFs (Twitch, once Twitch says whether this channel allows them) and
-// Commands (the browsable list, where the host passes one). Bits is not here:
+// GIFs (Twitch, once Twitch says whether this channel allows them), Images
+// (upload a picture, its link goes in the box) and Commands (the browsable
+// list, where the host passes one). Bits is not here:
 // spending lives in the channel wallet (chat/ChannelWallet). A host with only
 // Emotes gets no switcher at all. The menu grows upward, so a short window
 // shrinks it from the top (useFitAbove) and the switcher never gets cut off.
@@ -15,7 +16,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { Clock, ExternalLink, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
+import { Clock, ExternalLink, Image as ImageIcon, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
 import { invoke } from '@tauri-apps/api/core';
@@ -67,6 +68,7 @@ import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
 import { SearchField } from '../../mobile/ui/SearchField';
 import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
+import ImageUploadSection from './ImageUploadSection';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
@@ -549,6 +551,9 @@ export interface EmotePickerPanelProps {
   /** The GIFs section. Off where there is no channel to post into (the mod
    *  room); on Twitch it still waits for Twitch's eligibility answer. */
   gifs?: boolean;
+  /** The Images section (upload a picture, its link goes in the box). Off
+   *  where there is no message to put it in (the mod room). */
+  images?: boolean;
 }
 
 /** The popover's height when the room above the message box allows it. */
@@ -581,14 +586,17 @@ export function EmotePickerPanel({
   className,
   commands,
   gifs: gifsSection = true,
+  images = false,
 }: EmotePickerPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [fullyClosed, setFullyClosed] = useState(!open);
   // Opening mounts the panel and cancels "fully closed" during render
   // (adjust-state-on-prop-change), so the first open frame already has it.
   const [seenOpen, setSeenOpen] = useState(open);
-  // Commands is a detour: every open starts back on the emotes.
-  const [detour, setDetour] = useState<'commands' | null>(null);
+  // Commands and Images are detours: every open starts back on the emotes.
+  const [detour, setDetour] = useState<'commands' | 'images' | null>(null);
+  const showImages = useAppStore((s) => s.settings.chat_input?.image_uploader?.show_in_menu) ?? true;
+  const imagesOn = images && showImages;
   if (open !== seenOpen) {
     setSeenOpen(open);
     if (open) {
@@ -1000,15 +1008,17 @@ export function EmotePickerPanel({
     return rustTabCount(tab);
   };
 
-  type Section = 'emotes' | 'gifs' | 'commands';
+  type Section = 'emotes' | 'gifs' | 'images' | 'commands';
   const section: Section =
     detour === 'commands' && commands
       ? 'commands'
-      : selectedProvider === 'gifs'
-        ? 'gifs'
-        : 'emotes';
+      : detour === 'images' && imagesOn
+        ? 'images'
+        : selectedProvider === 'gifs'
+          ? 'gifs'
+          : 'emotes';
   const pickSection = (next: Section) => {
-    setDetour(next === 'commands' ? next : null);
+    setDetour(next === 'commands' || next === 'images' ? next : null);
     if (next === 'gifs' && selectedProvider !== 'gifs') {
       setLastEmoteTab(selectedProvider);
       setSelectedProvider('gifs');
@@ -1034,6 +1044,9 @@ export function EmotePickerPanel({
           // Only GIFs has more to say than its label: they need Tier 2 or 3.
           hint: gifStatus.can_use ? undefined : 'GIFs (Tier 2 or Tier 3 subscribers)',
         }]
+      : []),
+    ...(imagesOn
+      ? [{ key: 'images' as const, label: 'Images', icon: <ImageIcon size={15} className="flex-shrink-0" aria-hidden /> }]
       : []),
     ...(commands
       ? [{ key: 'commands' as const, label: 'Commands', icon: <SquareSlash size={15} className="flex-shrink-0" aria-hidden /> }]
@@ -1192,11 +1205,12 @@ export function EmotePickerPanel({
       }}
     >
       {section === 'commands' && commands && <CommandBrowser {...commands} onClose={onClose} />}
-      {/* Kept mounted (only hidden) under Commands, so the grid's scroll
-          listener and lazy blocks survive a trip there and back. */}
+      {section === 'images' && <ImageUploadSection onInsert={onInsert} />}
+      {/* Kept mounted (only hidden) under Commands and Images, so the grid's
+          scroll listener and lazy blocks survive a trip there and back. */}
       <div
         className="flex min-h-0 flex-1 flex-col"
-        style={section === 'commands' ? { display: 'none' } : undefined}
+        style={section === 'commands' || section === 'images' ? { display: 'none' } : undefined}
       >
       <div className={IS_MOBILE ? 'px-2 pt-2 pb-1.5' : 'p-2 border-b border-borderSubtle'}>
         <div className="flex items-center gap-1.5">

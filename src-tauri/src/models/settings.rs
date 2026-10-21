@@ -1317,6 +1317,9 @@ pub struct ChatInputSettings {
     /// (the default, the chat menu on the right) or `right` (the pair
     /// mirrored, for a right thumb).
     pub inbox_button_side: String,
+    /// Image uploads: the emote menu's Images section, paste upload, and the
+    /// host both send to (`services::image_upload`).
+    pub image_uploader: ImageUploaderSettings,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1330,6 +1333,48 @@ impl Default for ChatInputSettings {
             room_modes_style: "prompt".into(),
             room_modes_prompt_adopted: true,
             inbox_button_side: "left".into(),
+            image_uploader: ImageUploaderSettings::default(),
+            extra: HashMap::new(),
+        }
+    }
+}
+
+/// Where chat images go. Mirrors the frontend `ImageUploaderSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ImageUploaderSettings {
+    /// Paste upload (desktop): an image pasted into the message box uploads.
+    pub enabled: bool,
+    /// The emote menu's Images section.
+    pub show_in_menu: bool,
+    /// A preset id (`services::image_upload::PRESETS`) or "custom".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_field: Option<String>,
+    /// Extra text form fields, url-encoded "k=v&k2=v2".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_fields: Option<String>,
+    /// Where the link is in the reply: empty = the body is the link, a dotted
+    /// JSON path, or a `{field}` template (`services::image_upload::link_from_reply`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_path: Option<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for ImageUploaderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_in_menu: true,
+            preset: None,
+            url: None,
+            form_field: None,
+            extra_fields: None,
+            response_path: None,
             extra: HashMap::new(),
         }
     }
@@ -2416,6 +2461,20 @@ mod backup_persistence_tests {
         let fresh = Settings::default();
         assert_eq!(fresh.chat_input.room_modes_style, "prompt");
         assert!(fresh.chat_input.room_modes_prompt_adopted);
+    }
+
+    #[test]
+    fn image_uploader_reads_old_files_and_defaults_the_menu_on() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["chat_input"]["image_uploader"] = serde_json::json!({ "enabled": true, "preset": "catbox", "later_key": 2 });
+        let s: Settings = serde_json::from_value(value).unwrap();
+        assert!(s.chat_input.image_uploader.enabled);
+        assert!(s.chat_input.image_uploader.show_in_menu, "the Images section is on unless turned off");
+        assert_eq!(s.chat_input.image_uploader.preset.as_deref(), Some("catbox"));
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["chat_input"]["image_uploader"]["preset"], "catbox");
+        assert_eq!(back["chat_input"]["image_uploader"]["later_key"], 2);
+        assert!(!Settings::default().chat_input.image_uploader.enabled, "paste upload starts off");
     }
 
     #[test]

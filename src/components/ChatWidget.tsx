@@ -10,7 +10,9 @@ import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
 import { useStreamerMode } from '../utils/streamerMode';
-import { resolveUploadTarget, encodeExtraFields } from '../utils/imageUploadHosts';
+import { firstDropOf, imagesTabOn, isDroppableImagePath, uploadIntoBox } from '../services/imageUploadService';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { IS_MOBILE } from '../utils/platform';
 import { registerChatSearchController } from '../keybindings/chatSearchController';
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
 
@@ -3910,38 +3912,77 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [messageInput]);
 
   // Handle input changes and detect @ mentions
-  // Paste an image -> upload through Rust to the configured host -> insert the
-  // link. Only when the user enabled the uploader; otherwise paste is untouched.
-  const handlePaste = useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const up = useAppStore.getState().settings.chat_input?.image_uploader;
-      if (!up?.enabled) return;
-      const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
-      if (!file) return;
+  // The composer's insert-at-caret, for uploads that finish after a render.
+  const insertTextRef = useRef<(text: string) => void>(() => {});
+  // Paste an image -> Rust uploads it to the chosen host -> the link goes in
+  // at the caret. Only while paste upload is on; otherwise paste is untouched.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!useAppStore.getState().settings.chat_input?.image_uploader?.enabled) return;
+    const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
+    if (!file) return;
+    e.preventDefault();
+    void uploadIntoBox({ file }, insertTextRef);
+  }, []);
+
+  // Drop a picture on this chat: it uploads and the link goes in the box.
+  // Windows that keep Tauri's native drop handler (the main one) report drops
+  // with file paths; the rest deliver HTML5 drops (the handlers on the root).
+  // Several chats can share a window, so each takes only drops on itself, and
+  // firstDropOf drops the second copy where a window delivers both.
+  const [dropOver, setDropOver] = useState(false);
+  const dragHasImageRef = useRef(false);
+  useEffect(() => {
+    if (IS_MOBILE || !chatContainerEl) return;
+    let off: (() => void) | undefined;
+    let alive = true;
+    const inside = (pos: { x: number; y: number }) => {
+      const r = chatContainerEl.getBoundingClientRect();
+      const x = pos.x / window.devicePixelRatio;
+      const y = pos.y / window.devicePixelRatio;
+      return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    void getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        if (!imagesTabOn()) return;
+        if (p.type === 'enter') dragHasImageRef.current = p.paths.some(isDroppableImagePath);
+        if (p.type === 'enter' || p.type === 'over') setDropOver(dragHasImageRef.current && inside(p.position));
+        else if (p.type === 'leave') setDropOver(false);
+        else if (p.type === 'drop') {
+          setDropOver(false);
+          const path = p.paths.find(isDroppableImagePath);
+          if (path && inside(p.position) && firstDropOf(path)) void uploadIntoBox({ path }, insertTextRef);
+        }
+      })
+      .then(
+        (u) => {
+          if (alive) off = u;
+          else u();
+        },
+        () => {},
+      );
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [chatContainerEl]);
+  const onImageDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (IS_MOBILE || !imagesTabOn()) return;
+    if (Array.from(e.dataTransfer.items).some((i) => i.kind === 'file' && i.type.startsWith('image/'))) {
       e.preventDefault();
-      const addToast = useAppStore.getState().addToast;
-      const target = resolveUploadTarget(up);
-      addToast(`Uploading image to ${target.label}…`, 'info');
-      try {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const link = await invoke<string>('upload_image', buf, {
-          headers: {
-            'x-upload-url': target.url,
-            'x-form-field': target.formField,
-            'x-extra-fields': encodeExtraFields(target.extraFields),
-            'x-response-path': target.responsePath,
-            'x-filename': file.name || 'image.png',
-            'x-mime': file.type || 'image/png',
-          },
-        });
-        setMessageInput((prev) => (prev && !prev.endsWith(' ') ? `${prev} ${link} ` : `${prev}${link} `));
-        addToast('Image link inserted', 'success');
-      } catch (err) {
-        addToast(typeof err === 'string' ? err : 'Image upload failed', 'error');
-      }
-    },
-    [],
-  );
+      setDropOver(true);
+    }
+  };
+  const onImageDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
+  };
+  const onImageDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    setDropOver(false);
+    if (IS_MOBILE || !imagesTabOn()) return;
+    const file = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/') || isDroppableImagePath(x.name));
+    if (!file) return;
+    e.preventDefault();
+    if (firstDropOf(file.name)) void uploadIntoBox({ file }, insertTextRef);
+  };
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -4213,6 +4254,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     el?.focus({ preventScroll: true });
     el?.setSelectionRange(caret, caret);
   };
+  useLayoutEffect(() => {
+    insertTextRef.current = insertEmote;
+  });
   // The emote menu popped out into its own window types into this chat box.
   const paletteChannel = useMemo<PaletteChannel | null>(() => {
     if (!currentStream?.user_login || (provider !== 'twitch' && provider !== 'kick' && provider !== 'youtube')) return null;
@@ -4690,7 +4734,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   return (
     <>
-      <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
+      <div
+        ref={setChatContainerEl}
+        className="h-full bg-secondary overflow-hidden flex flex-col relative"
+        onDragOver={onImageDragOver}
+        onDragLeave={onImageDragLeave}
+        onDrop={onImageDrop}
+      >
+        {dropOver && (
+          <div
+            className="pointer-events-none absolute inset-0 z-[60] flex items-center justify-center rounded-[inherit] shadow-[inset_0_0_0_2px_color-mix(in_srgb,var(--color-accent)_55%,transparent)]"
+            aria-hidden
+          >
+            <span className="glass-panel rounded-full px-4 py-2 text-[13px] font-medium text-textPrimary">Drop to upload</span>
+          </div>
+        )}
         {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column, laid out by Rust:
@@ -5571,6 +5629,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 channelLogin={channelOverride?.user_login ?? currentStream?.user_login}
                 isLoadingEmotes={isLoadingEmotes}
                 onInsert={insertEmote}
+                images={provider !== 'tiktok'}
                 onPopOut={
                   popOutEmotes
                     ? () => {

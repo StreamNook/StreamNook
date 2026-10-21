@@ -47,6 +47,11 @@ pub struct LinkPreview {
     pub online_count: Option<u64>,
     /// Total member count (the "discord" kind).
     pub member_count: Option<u64>,
+    /// Pixel size of the picture, for the "image" kind (`services::image_probe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
 }
 
 // We read only the page <head> (OG / Twitter-card /
@@ -66,8 +71,9 @@ const YT_CHANNEL_SCAN_CAP: usize = 1536 * 1024;
 
 /// Dedicated client with a desktop browser UA. Many sites only emit OG tags to
 /// "real" browsers, and a short timeout keeps a slow/hostile host from holding
-/// a slot. 10s is plenty for a HEAD-of-document meta read.
-static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+/// a slot. 10s is plenty for a HEAD-of-document meta read. Also reads image
+/// sizes (`services::image_probe`).
+pub(crate) static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
@@ -291,6 +297,8 @@ async fn youtube_preview(url: &str, video_id: &str) -> LinkPreview {
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -516,6 +524,8 @@ async fn tweet_preview(url: &str, handle: Option<&str>, id: &str) -> Result<Link
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -629,6 +639,8 @@ async fn x_profile_preview(url: &str, handle: &str) -> Result<LinkPreview, Strin
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -665,6 +677,8 @@ async fn giphy_preview(url: &str) -> Result<LinkPreview, String> {
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     };
 
     // Giphy's keyless oEmbed resolves any giphy page/clip/short-link to the
@@ -797,6 +811,8 @@ async fn twitch_clip_preview(url: &str, clip_id: &str) -> Result<LinkPreview, St
         duration,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -915,6 +931,8 @@ async fn twitch_vod_preview(url: &str, vod_id: &str) -> Result<LinkPreview, Stri
         duration,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -1023,6 +1041,8 @@ async fn discord_invite_preview(url: &str, code: &str) -> Result<LinkPreview, St
         duration: None,
         online_count,
         member_count,
+        width: None,
+        height: None,
     })
 }
 
@@ -1130,6 +1150,8 @@ async fn steam_preview(url: &str, app_id: &str) -> Result<LinkPreview, String> {
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -1215,6 +1237,8 @@ async fn spotify_preview(url: &str, content_kind: String) -> Result<LinkPreview,
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     })
 }
 
@@ -1330,6 +1354,8 @@ async fn instagram_preview(url: &str, handle: &str) -> Result<LinkPreview, Strin
         online_count: None,
         // member_count carries the follower count (both generic u64s).
         member_count: followers,
+        width: None,
+        height: None,
     })
 }
 
@@ -1380,6 +1406,8 @@ async fn tenor_preview(url: &str) -> Result<LinkPreview, String> {
             duration: None,
             online_count: None,
             member_count: None,
+            width: None,
+            height: None,
         }),
         None => fetch_generic(url).await,
     }
@@ -1651,6 +1679,8 @@ fn reddit_card(
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -1722,7 +1752,7 @@ fn is_image_url(url: &str) -> bool {
 
 /// The card for a link that is (or wraps) a picture: `url` is what was posted,
 /// `image` is what the card draws.
-fn image_preview(url: &str, image: &str) -> LinkPreview {
+pub(crate) fn image_preview(url: &str, image: &str) -> LinkPreview {
     LinkPreview {
         url: url.to_string(),
         kind: "image".to_string(),
@@ -1737,6 +1767,8 @@ fn image_preview(url: &str, image: &str) -> LinkPreview {
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -1915,6 +1947,8 @@ fn parse_meta(url: &str, html: &str) -> LinkPreview {
         duration: None,
         online_count: None,
         member_count: None,
+        width: None,
+        height: None,
     }
 }
 

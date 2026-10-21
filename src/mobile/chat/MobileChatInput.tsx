@@ -1122,6 +1122,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           channelLogin={channel ?? undefined}
           isLoadingEmotes={!emotes}
           onInsert={insertEmote}
+          images={provider !== 'tiktok'}
           className={PANEL_CLASS}
         />
       </div>

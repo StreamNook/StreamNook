@@ -747,26 +747,51 @@ export interface ChatRenderSettings {
 }
 
 export interface ImageUploaderSettings {
+  // Paste upload (desktop): an image pasted into the message box uploads.
   enabled?: boolean;
-  // A preset id from utils/imageUploadHosts (nuuls, catbox, litterbox, uguu)
-  // or "custom" for the fields below.
+  // The emote menu's Images section. Default true.
+  show_in_menu?: boolean;
+  // A preset id from Rust services/image_upload.rs (nuuls, kappa, imgdrip,
+  // catbox, litterbox, uguu) or "custom" for the fields below.
   preset?: string;
   // Extra text form fields some hosts require, url-encoded "k=v&k2=v2".
   extra_fields?: string;
-  // Multipart POST target. Chatterino's default is https://i.nuuls.com/upload.
+  // Multipart POST target for a custom host.
   url?: string;
-  // Form field name for the file (nuuls: "attachment").
+  // Form field name for the file.
   form_field?: string;
-  // Dotted path into a JSON response for the link; empty = the body is the link.
+  // Where the link is in the reply: empty = the body is the link, a dotted
+  // JSON path (data.link) or a {field} template ({link}{ext}).
   response_path?: string;
+}
+
+/** `upload_chat_image`'s answer. */
+export interface UploadedImage {
+  url: string;
+  width: number;
+  height: number;
+}
+
+/** One image host StreamNook can upload to (`image_upload_hosts`). */
+export interface UploadHost {
+  id: string;
+  label: string;
+  note: string;
+  max_mb: number;
+}
+
+/** The emote menu's Images section (`image_upload_panel`). */
+export interface ImageUploadPanel {
+  host: UploadHost;
+  needs_consent: boolean;
+  recents: UploadedImage[];
 }
 
 export interface ChatInputSettings {
   // Append an invisible suffix when sending the same message twice in a row,
   // so Twitch's duplicate-message rejection doesn't eat the second send.
   bypass_duplicate?: boolean;
-  // Paste an image into the composer to upload it and insert the link. Off by
-  // default: it sends the image to a third-party host you choose.
+  // Image uploads: the emote menu's Images section, paste upload and the host.
   image_uploader?: ImageUploaderSettings;
   // Ctrl+Enter sends the message AND keeps it in the input box. Plain Enter
   // still sends + clears like normal.

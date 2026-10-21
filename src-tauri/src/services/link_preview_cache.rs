@@ -63,6 +63,8 @@ pub const TRUSTED_BASE_DOMAINS: &[&str] = &[
     "nuuls.com",
     "catbox.moe",
     "uguu.se",
+    "kappa.lol",
+    "imgdrip.com",
     "bsky.app",
     "vimeo.com",
     "bandcamp.com",
@@ -108,6 +110,12 @@ pub(crate) fn remember_for_test(url: &str, preview: LinkPreview) {
     store(url, Some(preview));
 }
 
+/// An answer we already know, such as an image this app just uploaded, so
+/// the sender's own row draws its card at once.
+pub fn seed(url: &str, preview: LinkPreview) {
+    store(url, Some(preview));
+}
+
 /// The preview for `url`, read once however many callers ask at the same time.
 pub async fn get(url: &str) -> Option<LinkPreview> {
     if let Some(known) = peek(url) {
@@ -122,7 +130,19 @@ pub async fn get(url: &str) -> Option<LinkPreview> {
                 async move {
                     let got = {
                         let _slot = RUNNING.acquire().await.ok();
-                        build_preview(&url).await.ok()
+                        let mut built = build_preview(&url).await.ok();
+                        // An image card is drawn at its picture's size, so read it.
+                        if let Some(p) = built.as_mut() {
+                            if p.kind == "image" && p.width.is_none() {
+                                if let Some(image) = p.image.clone() {
+                                    if let Some((w, h)) = crate::services::image_probe::size(&image).await {
+                                        p.width = Some(w);
+                                        p.height = Some(h);
+                                    }
+                                }
+                            }
+                        }
+                        built
                     };
                     store(&url, got.clone());
                     if let Ok(mut inflight) = INFLIGHT.lock() {
