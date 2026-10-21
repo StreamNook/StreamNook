@@ -822,7 +822,10 @@ const eventTemplateContext = (
   };
 };
 
-const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; style: OverlayStyle; expiring?: boolean }) => {
+const OverlayRow = ({ message, style, expiring, enterDelay }: { message: OverlayMessage; style: OverlayStyle; expiring?: boolean; enterDelay?: number }) => {
+  // Undefined: the row does not play its entrance (catch-up, or mounting again
+  // later); otherwise how long it waits behind the rows that arrived with it.
+  const enterVar = enterDelay ? ({ '--sn-ov-enter-delay': `${enterDelay}ms` } as CSSProperties) : undefined;
   const provider = (message.provider ?? 'twitch') as ProviderId;
   // Max lines on a GIF row measures the GIF's line (useGifLine); up here,
   // ahead of the event rows' early return, as hooks have to be.
@@ -907,6 +910,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   const bubbleOn = style.bubble === true && !atmosphere;
 
   const rowStyle: CSSProperties = {
+    ...enterVar,
     position: 'relative',
     // Rows must keep their natural height. Without this, a fixed-height flex
     // column shrinks each item to cram them all in, so messages overlap/stack.
@@ -955,7 +959,8 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       : null),
   };
   const entranceClass =
-    style.entrance === 'fade' ? 'sn-ov-fade'
+    enterDelay === undefined ? ''
+    : style.entrance === 'fade' ? 'sn-ov-fade'
       : style.entrance === 'slide' ? 'sn-ov-slide'
         : style.entrance === 'drift' ? 'sn-ov-drift'
           : style.entrance === 'rise' ? 'sn-ov-rise'
@@ -1064,7 +1069,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
         ? <>{strong(emoteChange.oldName)} is now {strong(emoteChange.name)}</>
         : <>{strong(emoteChange.name)} was {emoteChange.action === 'removed' ? 'removed from' : 'added to'} the set</>;
     return (
-      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="" data-ov-7tv={emoteChange.action}>
+      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ ...enterVar, flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="" data-ov-7tv={emoteChange.action}>
         {style.sourceTag !== 'none' && (
           <span style={{ flexShrink: 0, paddingTop: '0.25em' }}>
             <SourceTag provider={provider} mode={style.sourceTag} />
@@ -1189,7 +1194,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       ? (message.segments ?? []).filter((s) => s.type === 'emote' || s.type === 'emoji')
       : [];
     return (
-      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="">
+      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ ...enterVar, flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="">
         {/* Source tag lives OUTSIDE the event highlight — it's its own thing, so
             the platform indicator is consistent with normal messages. */}
         {style.sourceTag !== 'none' && (
@@ -1561,6 +1566,32 @@ function ensureLocalFontAlias(family: string): void {
  * Self-contained styling (no app chat CSS) so it is portable to the hosted
  * overlay page unchanged.
  */
+/** How long after arriving a row may still play its entrance; a row that mounts
+ *  again later (the fit pass growing the window) appears without one. */
+const ENTRANCE_FRESH_MS = 1200;
+/** Rows that arrive together enter this far apart, at most ENTRANCE_STAGGER_MAX steps. */
+const ENTRANCE_STAGGER_MS = 30;
+const ENTRANCE_STAGGER_MAX = 8;
+
+/** Which rows play their entrance now, and their delay. Catch-up rows
+ *  (history, restored chat, a reconnect's refill: `from_backfill`) never do,
+ *  the way the app's own chat shows its backfill. */
+export function entranceDelays(
+  list: OverlayMessage[],
+  seenAt: Map<string, number>,
+  arrival: Map<string, number>,
+  nowMs: number,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const m of list) {
+    if (m.metadata?.from_backfill) continue;
+    const at = seenAt.get(m.id);
+    if (at === undefined || nowMs - at > ENTRANCE_FRESH_MS) continue;
+    out.set(m.id, Math.min(arrival.get(m.id) ?? 0, ENTRANCE_STAGGER_MAX) * ENTRANCE_STAGGER_MS);
+  }
+  return out;
+}
+
 export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { messages: OverlayMessage[]; style: OverlayStyle; superSample?: number }) => {
   const style = clampOverlayStyle(rawStyle);
   // Supersampling for crisp text in OBS. OBS's browser renders at devicePixelRatio
@@ -1702,6 +1733,8 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
   // state before removal.
   const EXPIRE_FADE_MS = 900;
   const seenAtRef = useRef<Map<string, number>>(new Map());
+  // Where each row came in among the rows that arrived with it (entranceDelays).
+  const arrivalRef = useRef<Map<string, number>>(new Map());
   const [expireTick, setExpireTick] = useState(0);
   useEffect(() => {
     if (ageSec <= 0) return;
@@ -1709,14 +1742,19 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
     return () => clearInterval(t);
   }, [ageSec]);
 
-  const { ordered, expiringIds } = useMemo(() => {
+  const { ordered, expiringIds, enterDelays } = useMemo(() => {
     void expireTick;
     const allowed = new Set(style.sources);
     const seen = seenAtRef.current;
     const nowMs = Date.now();
     const expiring = new Set<string>();
+    const arrival = arrivalRef.current;
+    let arrivals = 0;
     const list = collapseGiftBombs(messages).filter((m) => {
-      if (!seen.has(m.id)) seen.set(m.id, nowMs);
+      if (!seen.has(m.id)) {
+        seen.set(m.id, nowMs);
+        arrival.set(m.id, arrivals++);
+      }
 
       if (ageSec > 0) {
         const elapsed = nowMs - (seen.get(m.id) ?? nowMs);
@@ -1770,8 +1808,9 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
     if (seen.size > 2000) {
       const keep = new Set(messages.map((m) => m.id));
       for (const k of Array.from(seen.keys())) if (!keep.has(k)) seen.delete(k);
+      for (const k of Array.from(arrival.keys())) if (!keep.has(k)) arrival.delete(k);
     }
-    return { ordered: list, expiringIds: expiring };
+    return { ordered: list, expiringIds: expiring, enterDelays: entranceDelays(list, seen, arrival, nowMs) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, sourcesKey, style.hideBots, style.seventvEmoteChanges, hiddenKey, hiddenProviderKey, blockedKey, style.hideCommands, cmdFilterKey, phraseKey, ageSec, expireTick]);
 
@@ -2017,13 +2056,15 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
            Fill is backwards, never both: every entrance ends at the row's own
            look, and a forwards fill keeps the finished animation in effect, so
            Chromium kept each row on its own compositor layer for as long as it
-           stayed on screen. Backwards lets the row drop back into the page. */
-        .sn-ov-fade { animation: snOvFade 240ms ease-in-out backwards; }
-        .sn-ov-slide { animation: snOvSlide 320ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
-        .sn-ov-drift { animation: snOvDrift 500ms cubic-bezier(0.25, 0.8, 0.3, 1) backwards; }
-        .sn-ov-rise { animation: snOvRise 420ms cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: left center; }
-        .sn-ov-pop { animation: snOvPop 360ms cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: left center; }
-        .sn-ov-stamp { animation: snOvStamp 340ms cubic-bezier(0.5, 0, 0.2, 1) backwards; transform-origin: left center; }
+           stayed on screen. Backwards lets the row drop back into the page.
+           The delay comes from --sn-ov-enter-delay (rows that arrive together
+           enter one after another), so it never touches .sn-ov-out. */
+        .sn-ov-fade { animation: snOvFade 240ms ease-in-out var(--sn-ov-enter-delay, 0ms) backwards; }
+        .sn-ov-slide { animation: snOvSlide 320ms cubic-bezier(0.16, 1, 0.3, 1) var(--sn-ov-enter-delay, 0ms) backwards; }
+        .sn-ov-drift { animation: snOvDrift 500ms cubic-bezier(0.25, 0.8, 0.3, 1) var(--sn-ov-enter-delay, 0ms) backwards; }
+        .sn-ov-rise { animation: snOvRise 420ms cubic-bezier(0.22, 1, 0.36, 1) var(--sn-ov-enter-delay, 0ms) backwards; transform-origin: left center; }
+        .sn-ov-pop { animation: snOvPop 360ms cubic-bezier(0.22, 1, 0.36, 1) var(--sn-ov-enter-delay, 0ms) backwards; transform-origin: left center; }
+        .sn-ov-stamp { animation: snOvStamp 340ms cubic-bezier(0.5, 0, 0.2, 1) var(--sn-ov-enter-delay, 0ms) backwards; transform-origin: left center; }
         /* Moderation retract fade — declared AFTER the entrance classes so it
            overrides them on the same row (same specificity, later wins). */
         .sn-ov-out { animation: snOvOut 260ms ease both; pointer-events: none; }
@@ -2102,7 +2143,7 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
         .sn-aurora-2 { animation: sn-aurora-2 20s linear infinite; will-change: transform, opacity; }
       `}</style>
       {rendered.map((m) => (
-        <OverlayRow key={m.id} message={m} style={style} expiring={expiringIds.has(m.id)} />
+        <OverlayRow key={m.id} message={m} style={style} expiring={expiringIds.has(m.id)} enterDelay={enterDelays.get(m.id)} />
       ))}
     </div>
   );
