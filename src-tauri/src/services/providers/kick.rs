@@ -195,6 +195,7 @@ impl ChatProvider for KickProvider {
                 .await;
             // And its live 7TV feed: nothing reads this channel's set now.
             crate::services::seventv_eventapi::unsubscribe_channel_on(&slug, "kick").await;
+            kick_emotes::release(&slug);
         }
         Ok(())
     }
@@ -224,6 +225,7 @@ impl ChatProvider for KickProvider {
             crate::services::irc_service::remove_provider_room_state(&key::make_key("kick", &slug))
                 .await;
             crate::services::seventv_eventapi::unsubscribe_channel_on(&slug, "kick").await;
+            kick_emotes::release(&slug);
         }
     }
 

@@ -10,10 +10,12 @@
 //!
 //! (BTTV/FFZ don't support Kick, so this is 7TV-only by design.)
 
+use super::table_repair::{self, HeldRows, Install, Retrying, Standing};
+use crate::models::chat_layout::ChatMessage;
 use crate::services::emote_service;
 use crate::services::emote_service::{Emote, EmoteProvider, EmoteSet};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,12 +38,51 @@ pub struct KickEmote {
 struct ChannelEmotes {
     map: HashMap<String, KickEmote>, // emote name -> emote
     fetched_at: Instant,
+    standing: Standing,
 }
 
 static STORE: OnceLock<Mutex<HashMap<String, ChannelEmotes>>> = OnceLock::new();
 
 fn store() -> &'static Mutex<HashMap<String, ChannelEmotes>> {
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Channels whose chat is open, so a retry loop knows when to stop.
+static IN_USE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// One retry loop per channel while its 7TV table is partial.
+static RETRYING: Retrying = Retrying::new();
+/// Rows parsed before the channel's whole 7TV table landed.
+static HELD: HeldRows = HeldRows::new();
+
+fn in_use_set() -> &'static Mutex<HashSet<String>> {
+    IN_USE.get_or_init(Default::default)
+}
+
+fn in_use(slug: &str) -> bool {
+    in_use_set().lock().map(|s| s.contains(slug)).unwrap_or(false)
+}
+
+/// The channel's chat was left: its retries stop and its held rows go.
+pub fn release(slug: &str) {
+    let slug = slug.to_lowercase();
+    if let Ok(mut s) = in_use_set().lock() {
+        s.remove(&slug);
+    }
+    HELD.drop_key(&slug);
+}
+
+/// Keeps a published row for a re-bake when its channel's 7TV table is not
+/// whole yet (still loading, partial, or only the saved copy), so the row's
+/// 7TV words are patched in once the whole table lands.
+pub fn hold_row(msg: &ChatMessage) {
+    let slug = super::key::parse_key(&msg.channel).channel.to_lowercase();
+    let whole = store()
+        .lock()
+        .map(|s| s.get(&slug).is_some_and(|c| c.standing == Standing::Whole))
+        .unwrap_or(true);
+    if !whole {
+        HELD.hold(&slug, msg);
+    }
 }
 
 /// One of Kick's OWN emotes (a channel sub emote, a Global emote, or an Emoji),
@@ -128,8 +169,8 @@ pub fn inline_native_emotes(slug: &str, text: &str) -> String {
 /// to globals. This runs in a background task, so waiting is free.
 const SEVENTV_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// How soon to retry after a channel-set fetch failed (vs the full TTL).
-const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// A partial table is fetched again by its retry loop (`table_repair::DELAYS`),
+/// not by this.
 const TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Look up a single word against a channel's 7TV emotes. Cheap (one uncontended
@@ -278,172 +319,184 @@ fn kick_set_label(raw: &str, slug: &str, display: Option<&str>) -> String {
     raw.to_string()
 }
 
-/// Fetch + cache a Kick channel's 7TV emotes (channel set over globals). Safe to
+//// Fetch + cache a Kick channel's 7TV emotes (channel set over globals). Safe to
 /// call repeatedly — it self-throttles to the TTL. Spawned during channel resolve
 /// once the numeric Kick `user_id` is known.
 pub async fn refresh(slug: &str, user_id: u64) {
-    refresh_inner(slug, user_id, false).await;
+    refresh_inner(slug, user_id, Mode::Normal).await;
 }
 
 /// Refetch right away after a live 7TV edit, skipping the TTL. The cached set
 /// keeps serving while the fetch runs (dropping it first left every 7TV word
 /// in this chat as text for as long as the fetch took, up to 90 s), and it is
-/// replaced, smaller or not, only by a complete answer: a removal must land,
+/// replaced, smaller or not, only by a whole answer: a removal must land,
 /// a failed fetch must not wipe the set.
 pub async fn refresh_after_edit(slug: &str, user_id: u64) {
-    refresh_inner(slug, user_id, true).await;
+    refresh_inner(slug, user_id, Mode::LiveEdit).await;
 }
 
-async fn refresh_inner(slug: &str, user_id: u64, live_edit: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Channel resolve or the picker: throttled to the TTL.
+    Normal,
+    /// A live 7TV edit: right away.
+    LiveEdit,
+    /// The background retry of a partial table: right away, and it starts no
+    /// other loop.
+    Retry,
+}
+
+/// One fetch of the channel's table and what it did with it. True when the
+/// answer was whole.
+async fn refresh_inner(slug: &str, user_id: u64, mode: Mode) -> bool {
     let slug = slug.to_lowercase();
+    if mode == Mode::Normal {
+        if let Ok(mut s) = in_use_set().lock() {
+            s.insert(slug.clone());
+        }
+    }
     // No set in memory yet (first use this run): seed the saved one so this
     // chat parses 7TV words from its first message, marked stale so the fetch
-    // below still runs.
+    // below still runs. Only whole answers are ever saved.
     if let Ok(mut s) = store().lock() {
         if !s.contains_key(&slug) {
             if let Some(map) = crate::services::emote_set_cache::load_provider::<HashMap<String, KickEmote>>("kick7tv", &slug) {
                 log::debug!("[Kick] seeded {} 7TV emote(s) for {} from disk", map.len(), slug);
                 let stale = Instant::now().checked_sub(TTL).unwrap_or_else(Instant::now);
-                s.insert(slug.clone(), ChannelEmotes { map, fetched_at: stale });
+                s.insert(slug.clone(), ChannelEmotes { map, fetched_at: stale, standing: Standing::Saved });
             }
         }
     }
-    {
+    if mode == Mode::Normal {
         if let Ok(s) = store().lock() {
             if let Some(c) = s.get(&slug) {
-                if !live_edit && c.fetched_at.elapsed() < TTL {
-                    return;
+                if c.fetched_at.elapsed() < TTL {
+                    return c.standing == Standing::Whole;
                 }
             }
         }
     }
 
     let client = crate::services::http::client_unbounded();
+    let (map, whole) = fetch_table(&client, user_id).await;
+    let count = map.len();
+
+    let install = install_table(&slug, map, whole);
+    if install == (Install::Replace { save: true }) {
+        if let Ok(s) = store().lock() {
+            if let Some(c) = s.get(&slug) {
+                crate::services::emote_set_cache::save_provider("kick7tv", &slug, &c.map);
+            }
+        }
+    }
+
+    if install != Install::Keep {
+        log::info!("[Kick] 7TV emotes for {slug} (user {user_id}): {count} loaded{}", if whole { "" } else { " (partial)" });
+        repair_rows(&slug, whole).await;
+    }
+    if !whole {
+        log::warn!("[Kick] 7TV channel set for {} did not fully resolve; retrying in the background", slug);
+        if mode != Mode::Retry {
+            spawn_retries(slug, user_id);
+        }
+    }
+    whole
+}
+
+/// Puts a fetched table in place, or keeps the held one (`table_repair::decide`).
+/// A partial table is used only while nothing better is held; whatever is
+/// kept stops counting toward the TTL, since its retry loop fetches it again.
+fn install_table(slug: &str, map: HashMap<String, KickEmote>, whole: bool) -> Install {
+    let Ok(mut s) = store().lock() else { return Install::Keep };
+    let count = map.len();
+    let held = s.get(slug).map(|c| (c.standing, c.map.len()));
+    let install = table_repair::decide(held, whole, count);
+    match install {
+        Install::Replace { .. } => {
+            let standing = if whole { Standing::Whole } else { Standing::Partial };
+            s.insert(slug.to_string(), ChannelEmotes { map, fetched_at: Instant::now(), standing });
+        }
+        Install::Keep => {
+            if let Some(c) = s.get_mut(slug) {
+                c.fetched_at = Instant::now();
+            }
+            log::debug!(
+                "[Kick] 7TV refresh for {} was partial ({} emotes); keeping the held set ({})",
+                slug,
+                count,
+                held.map(|(_, len)| len).unwrap_or(0)
+            );
+        }
+    }
+    install
+}
+
+/// Fetches the channel's 7TV table: the globals with the channel's set over
+/// them. Whole only when every part answered; a 404 for the channel means it
+/// is not on 7TV, which is a whole answer (the globals alone).
+async fn fetch_table(client: &reqwest::Client, user_id: u64) -> (HashMap<String, KickEmote>, bool) {
     let mut map: HashMap<String, KickEmote> = HashMap::new();
     // Globals first so the channel set overrides on name collisions.
-    fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;
-    let globals_len = map.len();
-    // Whether 7TV says this channel HAS a set; with one, an answer holding only
-    // the globals means the set fetch failed.
-    let mut has_set = false;
+    let globals_ok = match table_repair::get_json(client, "https://7tv.io/v3/emote-sets/global", SEVENTV_TIMEOUT).await {
+        Ok(Some(v)) => {
+            collect_emotes(&v, "/emotes", &mut map);
+            true
+        }
+        _ => false,
+    };
     let chan_url = format!("https://7tv.io/v3/users/kick/{user_id}");
-    // Whether the CHANNEL half resolved. A failed fetch and a channel with no
-    // 7TV set both leave the map holding globals only, but they need opposite
-    // treatment: the first should be retried soon, the second is the final answer.
-    let mut channel_ok = false;
-    let fetched = fetch_user(&client, &chan_url).await;
-    if let Ok(none_or_user) = &fetched {
-        // Reached 7TV and got a definitive answer, even if that answer is
-        // "this channel has no set".
-        channel_ok = true;
-        let _ = none_or_user;
-    }
-    if let Ok(Some(user)) = fetched {
-        if user
-            .pointer("/emote_set/emotes")
-            .and_then(|e| e.as_array())
-            .is_some()
-        {
-            // Inline set (pre-change payload).
-            has_set = true;
-            collect_emotes(&user, "/emote_set/emotes", &mut map);
-        } else if let Some(set_id) = emote_service::seventv_active_set_id(&user) {
-            has_set = true;
-            // Post-change payload: fetch the active set by id.
-            let set_url = format!("https://7tv.io/v3/emote-sets/{set_id}");
-            fetch_into(&client, &set_url, "/emotes", &mut map).await;
+    let channel_ok = match table_repair::get_json(client, &chan_url, SEVENTV_TIMEOUT).await {
+        Err(()) => false,
+        // Not on 7TV: final.
+        Ok(None) => true,
+        Ok(Some(user)) => {
+            if user.pointer("/emote_set/emotes").and_then(|e| e.as_array()).is_some() {
+                // Inline set (pre-change payload).
+                collect_emotes(&user, "/emote_set/emotes", &mut map);
+                true
+            } else if let Some(set_id) = emote_service::seventv_active_set_id(&user) {
+                // Post-change payload: fetch the active set by id.
+                let set_url = format!("https://7tv.io/v3/emote-sets/{set_id}");
+                match table_repair::get_json(client, &set_url, SEVENTV_TIMEOUT).await {
+                    Ok(Some(v)) => {
+                        collect_emotes(&v, "/emotes", &mut map);
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                // On 7TV with no active set.
+                true
+            }
         }
-    }
-
-    // A channel-set fetch that failed leaves ONLY the globals in `map`. Writing
-    // that would clobber a good set with a worse one — observed live: xqc's 999
-    // emotes were replaced by the 45 globals when one of three concurrent
-    // refreshes lost its channel fetch. Same discipline `store_native` already
-    // uses: never let a partial result overwrite a fuller one.
-    // After a live edit a complete answer replaces the set even when smaller,
-    // since that is what a removal looks like.
-    let channel_complete = channel_ok && (!has_set || map.len() > globals_len);
-    if let Ok(s) = store().lock() {
-        let cached = s.get(&slug);
-        if live_edit && !channel_complete && cached.is_some() {
-            log::debug!("[7TV] refetch after an edit for {} was incomplete; keeping the cached set", slug);
-            return;
-        }
-        if !(live_edit && channel_complete) && cached.is_some_and(|c| c.map.len() > map.len()) {
-            log::debug!(
-                "[Kick] 7TV refresh for {} returned {} vs {} cached; keeping the cached set",
-                slug,
-                map.len(),
-                s.get(&slug).map(|c| c.map.len()).unwrap_or(0)
-            );
-            return;
-        }
-    }
-    let count = map.len();
-    // A partial result is still worth serving (globals beat nothing), but it must
-    // not sit for the whole TTL: backdating `fetched_at` makes the next call retry
-    // in RETRY_AFTER instead of ten minutes. Seen live on xqc, whose 999-emote set
-    // failed to fetch three times in a row and would otherwise have left that chat
-    // with 45 emotes until the TTL lapsed.
-    let stamp = if channel_ok {
-        Instant::now()
-    } else {
-        log::warn!(
-            "[Kick] 7TV channel set for {} did not resolve; serving {} global(s) and retrying shortly",
-            slug,
-            count
-        );
-        Instant::now()
-            .checked_sub(TTL - RETRY_AFTER)
-            .unwrap_or_else(Instant::now)
     };
-    if channel_complete {
-        crate::services::emote_set_cache::save_provider("kick7tv", &slug, &map);
-    }
-    if let Ok(mut s) = store().lock() {
-        s.insert(
-            slug.clone(),
-            ChannelEmotes {
-                map,
-                fetched_at: stamp,
-            },
-        );
-    }
-    log::info!("[Kick] 7TV emotes for {slug} (user {user_id}): {count} loaded");
+    (map, globals_ok && channel_ok)
 }
 
-/// Fetch a 7TV USER document, keeping the distinction `fetch_json` throws away.
-///
-/// A channel that simply is not on 7TV answers 404, which is a FINAL answer and
-/// must be cached like any other; a timeout or a 5xx is transient and should be
-/// retried shortly. Collapsing both to `None` meant either caching "no emotes"
-/// for ten minutes after a blip, or retrying forever for a channel that will
-/// never have a set.
-async fn fetch_user(client: &reqwest::Client, url: &str) -> Result<Option<Value>, ()> {
-    let resp = match client.get(url).timeout(SEVENTV_TIMEOUT).send().await {
-        Ok(r) => r,
-        Err(_) => return Err(()),
-    };
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None); // not on 7TV: final
-    }
-    if !resp.status().is_success() {
-        return Err(()); // 5xx / rate limit: transient
-    }
-    resp.json().await.map(Some).map_err(|_| ())
+/// Fetches a partial table again in the background while the chat is open.
+fn spawn_retries(slug: String, user_id: u64) {
+    let open = slug.clone();
+    let key = slug.clone();
+    table_repair::spawn(&RETRYING, key, move || in_use(&open), move || {
+        let slug = slug.clone();
+        async move { refresh_inner(&slug, user_id, Mode::Retry).await }
+    });
 }
 
-async fn fetch_json(client: &reqwest::Client, url: &str) -> Option<Value> {
-    let resp = client
-        .get(url)
-        .timeout(SEVENTV_TIMEOUT)
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+/// Bakes the held rows again with the channel's current table and patches the
+/// ones that changed.
+async fn repair_rows(slug: &str, whole: bool) {
+    if HELD.len(slug) == 0 {
+        return;
     }
-    resp.json().await.ok()
+    let table = store().lock().ok().and_then(|s| s.get(slug).map(|c| c.map.clone()));
+    let Some(table) = table else { return };
+    let patches = HELD.repair(slug, whole, |segments| table_repair::bake(segments, |word| baked(&table, word)));
+    table_repair::send_patches(patches).await;
+}
+
+fn baked(table: &HashMap<String, KickEmote>, word: &str) -> Option<table_repair::Baked> {
+    table.get(word).map(|e| table_repair::Baked { id: e.id.clone(), url: e.url.clone(), zero_width: e.zero_width })
 }
 
 fn collect_emotes(v: &Value, pointer: &str, map: &mut HashMap<String, KickEmote>) {
@@ -483,17 +536,6 @@ fn collect_emotes(v: &Value, pointer: &str, map: &mut HashMap<String, KickEmote>
                 owner_ref: e.pointer("/data/owner/id").and_then(|x| x.as_str()).map(str::to_string),
             },
         );
-    }
-}
-
-async fn fetch_into(
-    client: &reqwest::Client,
-    url: &str,
-    pointer: &str,
-    map: &mut HashMap<String, KickEmote>,
-) {
-    if let Some(v) = fetch_json(client, url).await {
-        collect_emotes(&v, pointer, map);
     }
 }
 
@@ -559,6 +601,156 @@ mod tests {
                 },
             ],
         );
+    }
+
+    fn table(names: &[(&str, &str)]) -> HashMap<String, KickEmote> {
+        names
+            .iter()
+            .map(|(name, id)| {
+                (
+                    name.to_string(),
+                    KickEmote {
+                        id: id.to_string(),
+                        url: format!("https://cdn.7tv.app/emote/{id}/2x.webp"),
+                        zero_width: false,
+                        owner_name: None,
+                        original_name: None,
+                        owner_ref: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn standing(slug: &str) -> Option<(Standing, usize)> {
+        store().lock().unwrap().get(slug).map(|c| (c.standing, c.map.len()))
+    }
+
+    /// A row as the Kick parser leaves it: 7TV words the table knew are emotes,
+    /// the rest text, and a `[emote:id:name]` token a Kick emote.
+    fn row(id: &str, slug: &str, body: &str) -> ChatMessage {
+        use crate::models::chat_layout::MessageSegment;
+        let mut segments = Vec::new();
+        for (i, word) in body.split(' ').enumerate() {
+            let sep = if i == 0 { "" } else { " " };
+            if let Some(inner) = word.strip_prefix("[emote:").and_then(|w| w.strip_suffix(']')) {
+                let (eid, name) = inner.split_once(':').unwrap();
+                if !sep.is_empty() {
+                    segments.push(MessageSegment::Text { content: sep.to_string() });
+                }
+                segments.push(MessageSegment::Emote {
+                    content: name.to_string(),
+                    emote_id: Some(eid.to_string()),
+                    emote_url: format!("https://files.kick.com/emotes/{eid}/fullsize"),
+                    is_zero_width: None,
+                    modifier_flags: None,
+                    is_personal: None,
+                });
+            } else if let Some(e) = lookup(slug, word) {
+                if !sep.is_empty() {
+                    segments.push(MessageSegment::Text { content: sep.to_string() });
+                }
+                segments.push(MessageSegment::Emote {
+                    content: word.to_string(),
+                    emote_id: Some(e.id),
+                    emote_url: e.url,
+                    is_zero_width: Some(false),
+                    modifier_flags: None,
+                    is_personal: None,
+                });
+            } else {
+                segments.push(MessageSegment::Text { content: format!("{sep}{word}") });
+            }
+        }
+        let mut msg: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "user_id": "1",
+            "username": "a",
+            "display_name": "A",
+            "color": null,
+            "badges": [],
+            "timestamp": "",
+            "content": body,
+            "tags": {},
+            "provider": "kick",
+            "channel": format!("kick:{slug}"),
+        }))
+        .expect("a row");
+        msg.segments = segments;
+        msg
+    }
+
+    #[test]
+    fn a_partial_table_never_replaces_the_saved_copy() {
+        let slug = "kick_rule1_saved";
+        store().lock().unwrap().insert(
+            slug.to_string(),
+            ChannelEmotes {
+                map: table(&[("OMEGALUL", "chan1"), ("EZ", "glob1")]),
+                fetched_at: Instant::now(),
+                standing: Standing::Saved,
+            },
+        );
+        // The channel lookup failed: globals only. Kept out; the saved copy stays.
+        assert_eq!(install_table(slug, table(&[("EZ", "glob1")]), false), Install::Keep);
+        assert_eq!(standing(slug), Some((Standing::Saved, 2)));
+        // A whole answer replaces it, smaller or not, and is the one saved.
+        assert_eq!(install_table(slug, table(&[("EZ", "glob1")]), true), Install::Replace { save: true });
+        assert_eq!(standing(slug), Some((Standing::Whole, 1)));
+    }
+
+    #[test]
+    fn a_partial_table_serves_only_when_nothing_is_held_and_is_never_saved() {
+        let slug = "kick_rule1_empty";
+        assert_eq!(install_table(slug, table(&[("EZ", "glob1")]), false), Install::Replace { save: false });
+        assert_eq!(standing(slug), Some((Standing::Partial, 1)));
+        // A later partial answer that is no fuller changes nothing.
+        assert_eq!(install_table(slug, table(&[("EZ", "glob1")]), false), Install::Keep);
+        // A whole answer lands over the partial one.
+        assert_eq!(
+            install_table(slug, table(&[("EZ", "glob1"), ("OMEGALUL", "chan1")]), true),
+            Install::Replace { save: true }
+        );
+        assert_eq!(standing(slug), Some((Standing::Whole, 2)));
+    }
+
+    #[test]
+    fn rows_parsed_before_the_whole_table_are_held_and_repaired_once_it_lands() {
+        let slug = "kick_rule4";
+        install_table(slug, table(&[("EZ", "glob1")]), false);
+        let early = row("m1", slug, "EZ OMEGALUL [emote:37225:KEKW]");
+        hold_row(&early);
+        assert_eq!(HELD.len(slug), 1, "held while the table is partial");
+
+        install_table(slug, table(&[("EZ", "glob1"), ("OMEGALUL", "chan1")]), true);
+        let whole = store().lock().unwrap().get(slug).map(|c| c.map.clone()).unwrap();
+        let patches = HELD.repair(slug, true, |s| table_repair::bake(s, |w| baked(&whole, w)));
+        let rows = patches.get(&format!("kick:{slug}")).expect("patched in its own chat");
+        assert_eq!(rows.len(), 1);
+        let segments = rows[0]["segments"].as_array().unwrap();
+        let emotes: Vec<&str> = segments
+            .iter()
+            .filter(|s| s["type"] == "emote")
+            .map(|s| s["emote_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(emotes, vec!["glob1", "chan1", "37225"], "the 7TV word baked, the Kick emote kept");
+        assert_eq!(HELD.len(slug), 0);
+
+        // Once whole, new rows parse right and are not held.
+        hold_row(&row("m2", slug, "OMEGALUL"));
+        assert_eq!(HELD.len(slug), 0);
+    }
+
+    #[test]
+    fn leaving_the_chat_stops_its_retries_and_drops_its_held_rows() {
+        let slug = "kick_rule3_release";
+        in_use_set().lock().unwrap().insert(slug.to_string());
+        hold_row(&row("m1", slug, "OMEGALUL"));
+        assert!(in_use(slug));
+        assert_eq!(HELD.len(slug), 1, "no table yet: held");
+        release("KICK_RULE3_RELEASE");
+        assert!(!in_use(slug), "the retry loop sees the chat is gone");
+        assert_eq!(HELD.len(slug), 0);
     }
 
     #[test]
