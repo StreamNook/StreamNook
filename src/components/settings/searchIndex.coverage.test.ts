@@ -103,32 +103,33 @@ function renderedTree(files: string[]): { rows: Rendered[]; sections: Set<string
     sources.push(src);
     // Rows nest two ways: a SubControl inside its row, or whole rows inside a
     // SettingsSubGroup (the overlay builder), which belong to the row above it.
+    // Groups nest too (a row in a group can open its own), so each open group
+    // remembers its parent row and the row before it comes back on close.
     const re =
       /<SettingsSection\b[^>]*?\blabel="([^"]+)"|<(SettingsRow|SubControl)\s+(?:(?:key|onReset)=\{[^}]*\}\s+)*title=(?:"([^"]*)"|\{`([^`]*)`\}|\{([^`}][^}]*)\})|<(\/?)SettingsSubGroup>|<([A-Z]\w+)\b/g;
     let section = '';
     let lastRow = '';
-    let groupParent: string | null = null;
+    const groups: string[] = [];
     for (const m of src.matchAll(re)) {
       if (m[1]) {
         section = m[1];
         sections.add(section);
         lastRow = '';
-        groupParent = null;
+        groups.length = 0;
       } else if (m[2] && m[5]) {
-        if (m[2] === 'SettingsRow' && groupParent === null) lastRow = ANY_PARENT;
+        if (m[2] === 'SettingsRow') lastRow = ANY_PARENT;
       } else if (m[2]) {
         const title = titleKey(m[3] ?? m[4] ?? '');
         if (!title) continue;
-        if (m[2] === 'SettingsRow' && groupParent !== null) {
-          rows.push({ section, title, parent: groupParent });
-        } else if (m[2] === 'SettingsRow') {
+        if (m[2] === 'SettingsRow') {
+          rows.push(groups.length ? { section, title, parent: groups[groups.length - 1] } : { section, title });
           lastRow = title;
-          rows.push({ section, title });
         } else {
           rows.push({ section, title, parent: lastRow });
         }
       } else if (m[6] !== undefined && m[0].endsWith('SettingsSubGroup>')) {
-        groupParent = m[6] === '/' ? null : lastRow;
+        if (m[6] === '/') lastRow = groups.pop() ?? '';
+        else groups.push(lastRow);
       } else if (m[7] && COMPONENT_SECTIONS[m[7]]) {
         section = COMPONENT_SECTIONS[m[7]];
         sections.add(section);

@@ -34,7 +34,7 @@ import { AtmosphereChatWash } from './AtmosphereChatWash';
 import { convertMoneyInText, loadRates, ratesReady } from './currency';
 import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../../utils/giftBombCollapse';
 import { adjustNameColor } from '../../utils/nameColor';
-import { gifLineIndex, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
+import { cachedBadgeUrl, emoteCandidates, gifLineIndex, hiResBadgeUrl, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
 
 // The StreamNook identity badge on the overlay is just the member's equipped
 // cosmetic image (the app's rich hover card doesn't belong on a broadcast). The
@@ -43,64 +43,130 @@ import { gifLineIndex, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout 
 // no equipped cosmetic. Absolute so it loads both in-app and on the overlay page.
 const SN_DEFAULT_LOGO = 'https://streamnook.app/cosmetics/streamnook-logo.png';
 
-// Prefer a raster (webp/gif) emote URL over AVIF: OBS's embedded Chromium can be
-// old and may not decode AVIF, leaving emotes blank. 7TV serves both.
-const preferRasterEmote = (url: string): string =>
-  (url || '').includes('cdn.7tv.app') ? url.replace(/\.avif(\b|$)/i, '.webp') : url;
-
-// Reconstruct an emote's URL from its id — the same resolution the in-app chat row
-// does (ChatMessage builds `.../emoticons/v2/{id}/...` when the tokenized URL is
-// absent). This is why a Twitch/7TV emote never renders broken just because its
-// baked URL wasn't accessible: we resolve it, we don't just hide it. 7TV ids are
-// 24/26 chars; everything else is a numeric Twitch id.
-const is7tvId = (id: string): boolean => id.length === 24 || id.length === 26;
-const emoteUrlFromId = (id: string): string =>
-  is7tvId(id)
-    ? `https://cdn.7tv.app/emote/${id}/3x.webp`
-    : `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/3.0`;
-
-// 4x-equivalent art for a gigantified emote. 7TV has a real 4x tier; Twitch
-// serves size 4.0 (legacy emotes alias 3.0, the CSS height upscales — same as
-// FFZ's client); BTTV tops out at 3x, FFZ at /4. Unknown CDNs upscale their
-// inline art.
-const giantEmoteUrl = (url: string, id?: string): string => {
-  if (id && is7tvId(id)) return `https://cdn.7tv.app/emote/${id}/4x.webp`;
-  if (id && /^\d+$/.test(id) && (!url || url.includes('jtvnw.net')))
-    return `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/4.0`;
-  if (url.includes('cdn.7tv.app')) return url.replace(/\/\dx(\.\w+)?$/, '/4x$1');
-  if (url.includes('jtvnw.net')) return url.replace(/\/[\d.]+$/, '/4.0');
-  if (url.includes('frankerfacez')) return url.replace(/\/[124]$/, '/4');
-  return url;
-};
-
-// The text shadow, built from the streamer's chosen color / size / strength. Two
-// layers, the same shape as the fixed value it replaces: a hard drop plus a soft halo
-// at ~65% of the chosen strength. Sized in EM, not px, because the overlay renders
-// supersampled and is scaled back down — a raw px blur lands at half its intended size
-// (the same sub-pixel trap as the bubble radius and the outline stroke).
-const textShadowCss = (style: OverlayStyle): string | undefined => {
-  if (!style.textShadow) return undefined;
+// The streamer's one shadow, from their color / size / strength, in the two forms
+// the overlay draws it. Text takes a text-shadow: a hard drop plus a soft halo at
+// ~65% of the strength. Badges and 7TV paints take a drop-shadow() filter, which
+// follows the drawn pixels, so a badge gets a shadow in its own shape and a
+// paint (glyphs a clipped background that text-shadow cannot see) still casts
+// one. Sized in EM, not px, because the overlay renders supersampled and is
+// scaled back down: a raw px blur lands at half its intended size (the same
+// sub-pixel trap as the bubble radius and the outline stroke).
+//
+// Dark is the look a painted name casts: most paints carry a tight dark contour
+// of their own, and a chain of drop-shadow filters compounds, each one also
+// shadowing the one before it. So Dark text adds that contour and the copy of
+// the drop the halo casts (blurred by both, at both strengths multiplied), and a
+// Dark filter chains contour, drop and halo. A soft filter is one drop between
+// the two text layers, so it stays as light as soft text.
+const overlayShadow = (style: OverlayStyle) => {
+  if (!style.textShadow) return null;
   const px = Math.max(0, style.textShadowSize ?? 2);
-  if (px === 0) return undefined;
+  if (px === 0) return null;
   const em = (v: number) => `${(v / Math.max(8, style.fontSize)).toFixed(3)}em`;
-  const color = style.textShadowColor || '#000000';
+  const c = style.textShadowColor || '#000000';
   const alpha = Math.max(0, Math.min(1, style.textShadowOpacity ?? 0.85));
-  const tint = (mul: number) => `color-mix(in srgb, ${color} ${Math.round(alpha * mul * 100)}%, transparent)`;
-  return `0 ${em(px / 2)} ${em(px)} ${tint(1)}, 0 0 ${em(px)} ${tint(0.65)}`;
+  const tint = (mul: number) => `color-mix(in srgb, ${c} ${Math.round(alpha * mul * 100)}%, transparent)`;
+  const contour = `0 0 ${em(1)} ${tint(1)}`;
+  const drop = `0 ${em(px / 2)} ${em(px)} ${tint(1)}`;
+  const halo = `0 0 ${em(px)} ${tint(0.65)}`;
+  return {
+    text: (dark: boolean) =>
+      (dark ? [contour, drop, halo, `0 ${em(px / 2)} ${em(px * Math.SQRT2)} ${tint(0.65 * alpha)}`] : [drop, halo]).join(', '),
+    filter: (dark: boolean) =>
+      (dark ? [contour, drop, halo] : [`0 ${em(px / 4)} ${em(px)} ${tint(1)}`]).map((l) => `drop-shadow(${l})`).join(' '),
+    // How far past the drawn edge the shadow reaches, for rows that clip.
+    reach: em(px * 1.5 + 1),
+  };
 };
 
-// Resolve an emote to a display URL: the baked URL if present, else rebuilt from the
-// id. On a load failure, retry the id-rebuilt URL once before falling back to the
-// text code — so a stale/wrong baked URL still resolves to a working image. Giant
-// mode (gigantified emotes) swaps in the 4x art and 4x sizing, degrading to the
-// inline art upscaled if the big file fails.
+// The shadow a row's text inherits: none when text is left out (names and the
+// colon then set their own).
+const rowTextShadow = (style: OverlayStyle): string | undefined =>
+  style.shadowOnText !== false ? overlayShadow(style)?.text(style.shadowDarkText === true) : undefined;
+
+// A box that must clip (the line cap) would cut a shadow off at its edges.
+// Room on the sides and the top, given back by an equal negative margin, moves
+// the clip out past the shadow without moving anything drawn. Not the bottom:
+// room there would show the top of the first line past the cap.
+const shadowRoom = (style: OverlayStyle): CSSProperties | null => {
+  const reach = overlayShadow(style)?.reach;
+  return reach
+    ? { paddingLeft: reach, paddingRight: reach, paddingTop: reach, marginLeft: `-${reach}`, marginRight: `-${reach}`, marginTop: `-${reach}` }
+    : null;
+};
+
+// How far a badge's art may be shrunk and still drawn with the crisp filter. The
+// browser's default filter for a shrunk image blurs flat badge art (the 72 px
+// Twitch file drawn at 20 px reads soft next to text); the crisp filter keeps
+// its edges. Past about 6x it starts to skip detail, so very large art (the
+// StreamNook member badges are ~1000 px) keeps the default.
+const CRISP_BADGE_MAX_SHRINK = 6;
+
+// A badge image: the largest art first (through StreamNook's badge cache, then
+// straight from its host), then the URL as given, then any smaller
+// sizes the badge carries; nothing at all if every one fails. `boxPx` is the
+// badge's on-screen size, which decides the crisp filter once the art's real
+// size is known.
+const BadgeImg = ({
+  src,
+  fallbacks,
+  alt,
+  boxPx,
+  style,
+  loading,
+}: {
+  src: string;
+  fallbacks?: (string | undefined)[];
+  alt: string;
+  boxPx: number;
+  style: CSSProperties;
+  loading?: 'lazy' | 'eager';
+}) => {
+  const big = hiResBadgeUrl(src);
+  const candidates = Array.from(new Set([cachedBadgeUrl(big), big, src, ...(fallbacks ?? [])].filter((u): u is string => !!u)));
+  const [at, setAt] = useState(0);
+  const [crisp, setCrisp] = useState(false);
+  // A chatter who changes badges hands this a new src: start over from its
+  // largest art instead of the step the old badge failed down to.
+  const [forSrc, setForSrc] = useState(src);
+  if (forSrc !== src) {
+    setForSrc(src);
+    setAt(0);
+    setCrisp(false);
+  }
+  const url = candidates[at];
+  if (!url) return null;
+  return (
+    <img
+      src={url}
+      alt={alt}
+      loading={loading}
+      className="inline-block align-middle"
+      style={crisp ? { ...style, imageRendering: '-webkit-optimize-contrast' } : style}
+      onLoad={(e) => {
+        const img = e.currentTarget;
+        const shrink = Math.max(img.naturalWidth, img.naturalHeight) / Math.max(1, boxPx);
+        const vector = url.startsWith('data:image/svg') || /\.svg(\?|$)/i.test(url);
+        setCrisp(!vector && shrink > 1 && shrink <= CRISP_BADGE_MAX_SHRINK);
+      }}
+      onError={() => setAt((i) => i + 1)}
+    />
+  );
+};
+
+// Draws the first address that loads, else the emote's text code.
 const EmoteImg = ({ segment, emoteScale, giant = false }: { segment: Extract<MessageSegment, { type: 'emote' }>; emoteScale: number; giant?: boolean }) => {
-  const rebuilt = segment.emote_id ? emoteUrlFromId(segment.emote_id) : '';
-  const inline = preferRasterEmote(segment.emote_url) || rebuilt;
-  const primary = giant ? preferRasterEmote(giantEmoteUrl(segment.emote_url || '', segment.emote_id)) || inline : inline;
-  const [src, setSrc] = useState(primary);
-  const [failed, setFailed] = useState(!primary);
-  if (failed) return <span>{segment.content}</span>;
+  const candidates = emoteCandidates(segment, giant);
+  const key = candidates.join(' ');
+  const [at, setAt] = useState(0);
+  // A segment that now names another emote starts over from its first address.
+  const [forKey, setForKey] = useState(key);
+  if (forKey !== key) {
+    setForKey(key);
+    setAt(0);
+  }
+  const src = candidates[at];
+  if (!src) return <span>{segment.content}</span>;
   return (
     <img
       src={src}
@@ -113,11 +179,7 @@ const EmoteImg = ({ segment, emoteScale, giant = false }: { segment: Extract<Mes
       // it against the text instead. No-op in the block placements, where the giant is
       // alone in a flex row and vertical-align does not apply.
       style={{ height: `calc(${giant ? 8 : 2}em * ${emoteScale})`, maxWidth: `calc(${giant ? 24 : 9}em * ${emoteScale})`, margin: '0 0.125rem', verticalAlign: giant ? 'middle' : '-0.35em' }}
-      onError={() => {
-        if (giant && inline && src !== inline) setSrc(inline);
-        else if (rebuilt && src !== rebuilt) setSrc(rebuilt);
-        else setFailed(true);
-      }}
+      onError={() => setAt((i) => i + 1)}
     />
   );
 };
@@ -209,6 +271,10 @@ const useGifLine = (active: boolean, message: OverlayMessage, style: OverlayStyl
 
 const badgeUrl = (b: OverlayMessage['badges'][number]): string | undefined =>
   b.image_url_4x || b.image_url_2x || b.image_url_1x;
+
+// Smaller sizes a platform badge also carries, tried in order if the bigger ones fail.
+const badgeFallbacks = (b: OverlayMessage['badges'][number]): (string | undefined)[] =>
+  [b.image_url_2x, b.image_url_1x];
 
 // YouTube role badges (mod / owner / verified) carry no image over the API —
 // only an iconType — so a YouTube row gets its authentic platform art here
@@ -778,6 +844,9 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   );
 
   const badgeSize = `calc(1.35em * ${style.badgeScale})`;
+  // The same size in on-screen pixels (style.fontSize is the canvas font size,
+  // whatever the supersampling), for BadgeImg's crisp-filter choice.
+  const badgePx = 1.35 * style.fontSize * style.badgeScale;
   // Native platform badges obey showBadges. Everything else — StreamNook member
   // badge, 7TV, FFZ, Chatterino, and the rest — obeys the showThirdPartyBadges
   // master AND a per-provider allowlist, each toggling independently by the
@@ -848,9 +917,11 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
     // animated layers. `isolation: isolate` makes a stacking context so the wash
     // sits behind this row's text but not behind the whole overlay.
     isolation: 'isolate',
-    overflow: 'hidden',
+    // Only those rows clip. A plain row draws nothing past its box but the
+    // shadow, which clipping cut off around the badges and names.
+    overflow: atmosphere || (firstTime && !bubbleOn) ? 'hidden' : 'visible',
     lineHeight: style.lineHeight,
-    textShadow: textShadowCss(style),
+    textShadow: rowTextShadow(style),
     ...(atmosphere ? { padding: '2px 6px', borderRadius: 6 } : null),
     // Ring/bar thickness is in EM, not px: the overlay renders supersampled
     // (2x, scaled back down) and the builder preview scales tall canvases down
@@ -899,39 +970,44 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
 
   // Reusable pieces so events (decorated style) render the sender exactly like a
   // normal chat row: their badges + paint-decorated name.
+  // One filter on the whole cluster rather than one per badge, so neighboring
+  // badges never stack their shadows on each other.
+  const shadow = overlayShadow(style);
+  const badgeShadow = style.shadowOnBadges === true ? shadow?.filter(style.shadowDarkBadges === true) ?? null : null;
   const badgesNode = anyBadge ? (
-    <span className="inline-flex items-center" style={{ gap: '0.2em', verticalAlign: '-0.18em', ...(provider === 'youtube' ? { marginLeft: '0.3em', marginRight: '0.15em' } : { marginRight: '0.4em' }) }}>
+    <span className="inline-flex items-center" style={{ gap: '0.2em', verticalAlign: '-0.18em', ...(provider === 'youtube' ? { marginLeft: '0.3em', marginRight: '0.15em' } : { marginRight: '0.4em' }), ...(badgeShadow ? { filter: badgeShadow } : null) }} data-ov-badges="">
       {showNativeBadges && nativeBadges.map((b, i) => {
         // YouTube rows resolve role badges (no API image) to their own platform
         // art; everything else uses the badge's resolved image.
         const url = badgeUrl(b) || (provider === 'youtube' ? YT_ROLE_BADGES[b.name] : undefined);
         if (!url) return null;
         return (
-          <FallbackImg key={`tw-${b.name}-${i}`} src={url} alt={b.title || b.name} className="inline-block align-middle" style={{ height: badgeSize, width: badgeSize }} />
+          <BadgeImg key={`tw-${b.name}-${i}-${url}`} src={url} fallbacks={badgeFallbacks(b)} alt={b.title || b.name} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />
         );
       })}
-      {showSeventvBadge && (
-        <FallbackImg key="seventv" src={message.seventvBadgeUrl} alt={message.seventvBadgeTitle || '7TV badge'} className="inline-block align-middle" style={{ height: badgeSize, width: badgeSize }} />
+      {showSeventvBadge && message.seventvBadgeUrl && (
+        <BadgeImg key={`seventv-${message.seventvBadgeUrl}`} src={message.seventvBadgeUrl} alt={message.seventvBadgeTitle || '7TV badge'} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />
       )}
       {showExtraBadges && visibleExtraBadges.map((b, i) => (
         // A glyph badge (FFZ:AP) carries its backdrop colour: the rounded
         // square its own client draws behind it (radius side / 9).
-        <FallbackImg
-          key={`tp-${i}`}
+        <BadgeImg
+          key={`tp-${i}-${b.url}`}
           src={b.url}
           alt={b.title || 'badge'}
-          className="inline-block align-middle"
+          boxPx={badgePx}
           style={{ height: badgeSize, width: badgeSize, ...(b.backdrop ? { backgroundColor: b.backdrop, borderRadius: `calc(${badgeSize} / 9)` } : null) }}
         />
       ))}
       {/* StreamNook identity badge sits rightmost, next to the name, mirroring
           the real chat row (see utils/badgeOrder in the app repo). */}
       {showSnBadge && (
-        <FallbackImg
+        <BadgeImg
+          key={`sn-${message.streamNookBadgeUrl || SN_DEFAULT_LOGO}`}
           src={message.streamNookBadgeUrl || SN_DEFAULT_LOGO}
           alt="StreamNook"
           loading="lazy"
-          className="inline-block align-middle"
+          boxPx={badgePx}
           style={{ height: badgeSize, width: badgeSize, objectFit: 'contain' }}
         />
       )}
@@ -952,8 +1028,21 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   const ownerPillStyle: CSSProperties = isYtOwner && nativeBadgesOn
     ? { color: '#111111', backgroundColor: '#ffd600', padding: '0.13em 0.27em', borderRadius: '0.13em', textShadow: 'none' }
     : {};
+  // A plain name sets the shadow as a text-shadow, or clears the row's when names
+  // are left out. A 7TV paint draws its glyphs as a clipped background that
+  // text-shadow cannot see, so there the shadow joins the paint's own
+  // drop-shadows as a filter. The YouTube owner pill stands in for a badge, so it
+  // follows badges and casts the shadow from the pill.
+  const namesShadowed = style.shadowOnNames !== false && !!shadow;
+  const darkNames = style.shadowDarkNames === true;
+  const nameTextShadow = namesShadowed ? shadow.text(darkNames) : 'none';
+  const nameShadowStyle: CSSProperties = isYtOwner && nativeBadgesOn
+    ? (badgeShadow ? { filter: badgeShadow } : {})
+    : paintOn
+      ? (namesShadowed ? { filter: [nameTextStyle.filter, shadow.filter(darkNames)].filter(Boolean).join(' ') } : {})
+      : { textShadow: nameTextShadow };
   const nameNode = (
-    <span style={{ ...nameTextStyle, fontWeight: 700, display: 'inline-block', verticalAlign: 'baseline', textShadow: paintOn ? 'none' : undefined, ...ownerPillStyle }}>
+    <span style={{ ...nameTextStyle, fontWeight: 700, display: 'inline-block', verticalAlign: 'baseline', textShadow: paintOn ? 'none' : undefined, ...ownerPillStyle, ...nameShadowStyle }}>
       {showAt ? rawName : stripAt(rawName)}
     </span>
   );
@@ -975,7 +1064,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
         ? <>{strong(emoteChange.oldName)} is now {strong(emoteChange.name)}</>
         : <>{strong(emoteChange.name)} was {emoteChange.action === 'removed' ? 'removed from' : 'added to'} the set</>;
     return (
-      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: textShadowCss(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="" data-ov-7tv={emoteChange.action}>
+      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="" data-ov-7tv={emoteChange.action}>
         {style.sourceTag !== 'none' && (
           <span style={{ flexShrink: 0, paddingTop: '0.25em' }}>
             <SourceTag provider={provider} mode={style.sourceTag} />
@@ -1100,7 +1189,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       ? (message.segments ?? []).filter((s) => s.type === 'emote' || s.type === 'emoji')
       : [];
     return (
-      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: textShadowCss(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="">
+      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: rowTextShadow(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="">
         {/* Source tag lives OUTSIDE the event highlight — it's its own thing, so
             the platform indicator is consistent with normal messages. */}
         {style.sourceTag !== 'none' && (
@@ -1246,7 +1335,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // block placements dodge this by living outside the clamped div entirely.
   const lineClampStyle =
     clampLines >= 1 && !giantInline
-      ? { display: '-webkit-box', WebkitLineClamp: clampLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
+      ? { display: '-webkit-box', WebkitLineClamp: clampLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden', ...shadowRoom(style) }
       : null;
 
   // Inline flow (NOT flex) so the 7TV paint's background-clip:text renders like
@@ -1263,7 +1352,8 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       {nameAndBadges}
       {/* /me actions drop the colon and render the body in the sender's color,
           italic — the Twitch convention. */}
-      {message.metadata?.is_action ? ' ' : <><span style={{ color, fontWeight: 700 }}>:</span>{' '}</>}
+      {/* The colon reads as part of the name, so it follows names. */}
+      {message.metadata?.is_action ? ' ' : <><span style={{ color, fontWeight: 700, textShadow: nameTextShadow }}>:</span>{' '}</>}
       {/* Italic and strikethrough live HERE, not on the container: a text-decoration set
           on an ancestor is drawn across every descendant and a child cannot cancel it, so
           on the container a strikethrough would permanently strike names, badges and
@@ -1923,13 +2013,17 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
            fade": Fade is opacity only and quiet; Slide snaps in hard from the
            far left; Drift is a slow, airy diagonal float; Rise springs up from
            below and overshoots to settle; Pop scales up from small with a big
-           overshoot; Stamp slams down from oversized with a bounced settle. */
-        .sn-ov-fade { animation: snOvFade 240ms ease-in-out both; }
-        .sn-ov-slide { animation: snOvSlide 320ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-        .sn-ov-drift { animation: snOvDrift 500ms cubic-bezier(0.25, 0.8, 0.3, 1) both; }
-        .sn-ov-rise { animation: snOvRise 420ms cubic-bezier(0.22, 1, 0.36, 1) both; transform-origin: left center; }
-        .sn-ov-pop { animation: snOvPop 360ms cubic-bezier(0.22, 1, 0.36, 1) both; transform-origin: left center; }
-        .sn-ov-stamp { animation: snOvStamp 340ms cubic-bezier(0.5, 0, 0.2, 1) both; transform-origin: left center; }
+           overshoot; Stamp slams down from oversized with a bounced settle.
+           Fill is backwards, never both: every entrance ends at the row's own
+           look, and a forwards fill keeps the finished animation in effect, so
+           Chromium kept each row on its own compositor layer for as long as it
+           stayed on screen. Backwards lets the row drop back into the page. */
+        .sn-ov-fade { animation: snOvFade 240ms ease-in-out backwards; }
+        .sn-ov-slide { animation: snOvSlide 320ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+        .sn-ov-drift { animation: snOvDrift 500ms cubic-bezier(0.25, 0.8, 0.3, 1) backwards; }
+        .sn-ov-rise { animation: snOvRise 420ms cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: left center; }
+        .sn-ov-pop { animation: snOvPop 360ms cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: left center; }
+        .sn-ov-stamp { animation: snOvStamp 340ms cubic-bezier(0.5, 0, 0.2, 1) backwards; transform-origin: left center; }
         /* Moderation retract fade — declared AFTER the entrance classes so it
            overrides them on the same row (same specificity, later wins). */
         .sn-ov-out { animation: snOvOut 260ms ease both; pointer-events: none; }

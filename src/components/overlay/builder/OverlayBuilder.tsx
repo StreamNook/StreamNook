@@ -46,8 +46,10 @@ import {
   THIRD_PARTY_BADGE_PROVIDERS,
   TWITCH_BADGE_CATEGORIES,
   clampOverlayStyle,
+  decimalsOf,
   overlayFontStack,
   overlayStyleTooLarge,
+  parseSliderInput,
   type EventCategory,
   type OverlayStyle,
 } from '../overlayConfig';
@@ -240,10 +242,73 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
   </button>
 );
 
+// The value beside a slider, typable. At rest it reads exactly like the label it
+// replaced (same slot, font, tabular digits, right edge). The unit sits outside
+// the field, so the digits never move between rest, hover and editing, and the
+// padding that gives the hover and focus fill its room is taken back by negative
+// margins. Editing selects the bare number; Enter or leaving commits, Escape
+// puts it back, and anything that is not a number reverts. A word label ("No
+// limit") has no number to keep in place and edits as 0.
+const SliderValue = ({
+  value, min, max, step, scale = 1, onChange, format,
+}: {
+  value: number; min: number; max: number; step: number; scale?: number;
+  onChange: (v: number) => void; format?: (v: number) => string;
+}) => {
+  const [draft, setDraft] = useState<string | null>(null);
+  const skipCommit = useRef(false);
+  const label = format ? format(value) : String(value);
+  // The number the label shows, so editing "1.40" starts from 1.40, not 1.4,
+  // and the unit after it.
+  const parts = /^(-?\d+(?:\.\d+)?)(.*)$/.exec(label);
+  const number = parts?.[1] ?? null;
+  const unit = parts?.[2] ?? '';
+  const commit = (text: string) => {
+    const next = parseSliderInput(text, { min, max, step, scale });
+    if (next !== null && next !== value) onChange(next);
+  };
+  return (
+    <label className="w-[4.75rem] -mx-1.5 -my-0.5 px-1.5 py-0.5 flex-shrink-0 inline-flex items-baseline justify-end rounded-md text-[12px] tabular-nums text-textSecondary cursor-text transition-colors hover:bg-white/[0.06] focus-within:bg-white/[0.08] focus-within:text-textPrimary focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent/60">
+      <input
+        type="text"
+        inputMode="decimal"
+        spellCheck={false}
+        aria-label="Value"
+        value={draft ?? number ?? label}
+        onFocus={(e) => {
+          const el = e.currentTarget;
+          setDraft(number ?? (value * scale).toFixed(decimalsOf(step * scale)));
+          requestAnimationFrame(() => el.select());
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          else if (e.key === 'Escape') {
+            e.stopPropagation();
+            skipCommit.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+        onBlur={(e) => {
+          if (!skipCommit.current) commit(e.currentTarget.value);
+          skipCommit.current = false;
+          setDraft(null);
+        }}
+        className="w-full min-w-0 p-0 border-0 bg-transparent text-right text-inherit cursor-text focus:outline-none"
+      />
+      {/* The unit stays put while the number is edited, unless the label was a word. */}
+      {number !== null && unit && <span aria-hidden="true" className="flex-shrink-0 whitespace-pre text-textSecondary">{unit}</span>}
+    </label>
+  );
+};
+
 const Slider = ({
-  value, min, max, step = 1, onChange, format,
+  value, min, max, step = 1, scale, onChange, format,
 }: {
   value: number; min: number; max: number; step?: number;
+  /** What the shown number is per unit of the stored value: 100 for a 0 to 1
+   *  value shown as a percent. */
+  scale?: number;
   onChange: (v: number) => void; format?: (v: number) => string;
 }) => (
   <div className="flex items-center gap-3 w-full">
@@ -252,9 +317,7 @@ const Slider = ({
       onChange={(e) => onChange(parseFloat(e.target.value))}
       className="flex-1 accent-accent cursor-pointer"
     />
-    <span className="w-16 text-right text-[12px] tabular-nums text-textSecondary">
-      {format ? format(value) : value}
-    </span>
+    <SliderValue value={value} min={min} max={max} step={step} scale={scale} onChange={onChange} format={format} />
   </div>
 );
 
@@ -1949,7 +2012,7 @@ const OverlayEditor = () => {
                 <input type="color" value={style.backgroundColor} onChange={(e) => set('backgroundColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
               } />
               <SettingsRow onReset={resetFor('backgroundOpacity')} title="Opacity">
-                <Slider value={style.backgroundOpacity} min={0} max={1} step={0.05} onChange={(v) => set('backgroundOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
+                <Slider value={style.backgroundOpacity} min={0} max={1} step={0.05} onChange={(v) => set('backgroundOpacity', v)} scale={100} format={(v) => `${Math.round(v * 100)}%`} />
               </SettingsRow>
             </SettingsSubGroup>
           )}
@@ -2002,9 +2065,27 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('bodyTextColor')} title="Color" control={
             <input type="color" value={style.bodyTextColor} onChange={(e) => set('bodyTextColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
           } />
-          <SettingsRow onReset={resetFor('textShadow')} title="Shadow" description="An outline behind text so it stays readable over any scene." control={<Toggle enabled={style.textShadow} onChange={() => set('textShadow', !style.textShadow)} />} />
+          <SettingsRow onReset={resetFor('textShadow')} title="Shadow" description="A shadow so text, names, and badges stay readable over any scene." control={<Toggle enabled={style.textShadow} onChange={() => set('textShadow', !style.textShadow)} />} />
           {style.textShadow && (
             <SettingsSubGroup>
+              <SettingsRow onReset={resetFor('shadowOnText')} title="Text" description="Behind message and event text." control={<Toggle enabled={style.shadowOnText !== false} onChange={() => set('shadowOnText', style.shadowOnText === false)} />} />
+              {style.shadowOnText !== false && (
+                <SettingsSubGroup>
+                  <SettingsRow onReset={resetFor('shadowDarkText')} title="Dark" description="A heavier, darker outline." control={<Toggle enabled={style.shadowDarkText === true} onChange={() => set('shadowDarkText', style.shadowDarkText !== true)} />} />
+                </SettingsSubGroup>
+              )}
+              <SettingsRow onReset={resetFor('shadowOnNames')} title="Names" description="Behind usernames, 7TV paints included." control={<Toggle enabled={style.shadowOnNames !== false} onChange={() => set('shadowOnNames', style.shadowOnNames === false)} />} />
+              {style.shadowOnNames !== false && (
+                <SettingsSubGroup>
+                  <SettingsRow onReset={resetFor('shadowDarkNames')} title="Dark" description="A heavier, darker outline." control={<Toggle enabled={style.shadowDarkNames === true} onChange={() => set('shadowDarkNames', style.shadowDarkNames !== true)} />} />
+                </SettingsSubGroup>
+              )}
+              <SettingsRow onReset={resetFor('shadowOnBadges')} title="Badges" description="Behind badges, in each badge's own shape." control={<Toggle enabled={style.shadowOnBadges === true} onChange={() => set('shadowOnBadges', style.shadowOnBadges !== true)} />} />
+              {style.shadowOnBadges === true && (
+                <SettingsSubGroup>
+                  <SettingsRow onReset={resetFor('shadowDarkBadges')} title="Dark" description="A heavier, darker outline." control={<Toggle enabled={style.shadowDarkBadges === true} onChange={() => set('shadowDarkBadges', style.shadowDarkBadges !== true)} />} />
+                </SettingsSubGroup>
+              )}
               <SettingsRow onReset={resetFor('textShadowColor')} title="Color" control={
                 <input type="color" value={style.textShadowColor || '#000000'} onChange={(e) => set('textShadowColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
               } />
@@ -2012,7 +2093,7 @@ const OverlayEditor = () => {
                 <Slider value={style.textShadowSize ?? 2} min={OVERLAY_LIMITS.textShadowSize.min} max={OVERLAY_LIMITS.textShadowSize.max} step={0.5} onChange={(v) => set('textShadowSize', v)} format={(v) => `${v}px`} />
               </SettingsRow>
               <SettingsRow onReset={resetFor('textShadowOpacity')} title="Strength" description="How solid the shadow is.">
-                <Slider value={style.textShadowOpacity ?? 0.85} min={OVERLAY_LIMITS.textShadowOpacity.min} max={OVERLAY_LIMITS.textShadowOpacity.max} step={0.05} onChange={(v) => set('textShadowOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
+                <Slider value={style.textShadowOpacity ?? 0.85} min={OVERLAY_LIMITS.textShadowOpacity.min} max={OVERLAY_LIMITS.textShadowOpacity.max} step={0.05} onChange={(v) => set('textShadowOpacity', v)} scale={100} format={(v) => `${Math.round(v * 100)}%`} />
               </SettingsRow>
             </SettingsSubGroup>
           )}
@@ -2172,7 +2253,7 @@ const OverlayEditor = () => {
                 <input type="color" value={style.bubbleColor} onChange={(e) => set('bubbleColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
               } />
               <SettingsRow onReset={resetFor('bubbleOpacity')} title="Opacity">
-                <Slider value={style.bubbleOpacity} min={OVERLAY_LIMITS.bubbleOpacity.min} max={OVERLAY_LIMITS.bubbleOpacity.max} step={0.05} onChange={(v) => set('bubbleOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
+                <Slider value={style.bubbleOpacity} min={OVERLAY_LIMITS.bubbleOpacity.min} max={OVERLAY_LIMITS.bubbleOpacity.max} step={0.05} onChange={(v) => set('bubbleOpacity', v)} scale={100} format={(v) => `${Math.round(v * 100)}%`} />
               </SettingsRow>
             </SettingsSubGroup>
           )}
