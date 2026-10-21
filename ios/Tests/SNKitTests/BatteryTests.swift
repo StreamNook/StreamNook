@@ -6,8 +6,9 @@ import Testing
     @Test func theClockRunsAt30OnlyWhenNoFrameIsShorterThanATick() {
         #expect(ClockRate.hz(shortest: 0.1) == 30)
         #expect(ClockRate.hz(shortest: 0.04) == 30)
-        #expect(ClockRate.hz(shortest: 1.0 / 30) == 30)
-        #expect(ClockRate.hz(shortest: 0.03) == 60)
+        // A 30 fps file's whole-millisecond frames would skip on a 30 Hz clock.
+        #expect(ClockRate.hz(shortest: 1.0 / 30) == 60)
+        #expect(ClockRate.hz(shortest: 0.033) == 60)
         #expect(ClockRate.hz(shortest: 0.02) == 60)
     }
 

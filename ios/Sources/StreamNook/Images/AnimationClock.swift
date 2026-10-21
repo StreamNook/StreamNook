@@ -51,6 +51,14 @@ final class AnimationClock {
         if moves(always: always) {
             layer.advance(to: now)
             startIfNeeded()
+            // A faster animation than the clock runs for raises the rate now, not at the next tick.
+            if let image = layer.image, image.isAnimated, let link {
+                let wanted = ClockRate.hz(shortest: image.timeline.shortest)
+                if wanted > hz {
+                    hz = wanted
+                    link.preferredFrameRateRange = Self.range(wanted)
+                }
+            }
         } else {
             layer.showFirstFrame()
         }

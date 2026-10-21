@@ -2,9 +2,10 @@ import Foundation
 
 /// The rate the shared image clock asks for: the slower of 30 and 60 Hz that still shows every
 /// frame of the fastest animation on screen. Frames are never shorter than 20 ms (`FrameTimeline`),
-/// so 60 always suffices.
+/// so 60 always suffices. A 30 fps file stores its frames as whole milliseconds (33 ms), a hair
+/// under a 30 Hz tick, so a 30 Hz clock would skip one every few seconds: it gets 60.
 public enum ClockRate {
-    public static func hz(shortest: Double) -> Int { shortest >= 1.0 / 30 - 0.0005 ? 30 : 60 }
+    public static func hz(shortest: Double) -> Int { shortest > 1.0 / 30 + 0.001 ? 30 : 60 }
 }
 
 /// When the chat list's display link runs and how fast: only while it has work, following new
