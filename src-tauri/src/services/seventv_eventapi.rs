@@ -122,8 +122,8 @@ pub fn init(app_handle: AppHandle, emote_service: Arc<RwLock<EmoteService>>) {
         cmd_tx,
     };
 
-    // The connection task connects immediately and idles until the first
-    // subscribe; it re-subscribes from `subs` on every fresh connect.
+    // The connection task connects on the first subscribe (no socket while no
+    // chat is open); it re-subscribes from `subs` on every fresh connect.
     // Use tauri::async_runtime::spawn (not tokio::spawn): init() runs from the
     // Tauri setup hook, which is OUTSIDE the Tokio runtime context, so a bare
     // tokio::spawn panics with "there is no reactor running".
@@ -477,6 +477,19 @@ async fn connection_loop(
     let mut backoff = BACKOFF_MIN;
     let mut resume_session: Option<String> = None;
     loop {
+        // No channel: connect on the first subscribe, not at boot. The waking
+        // command is already in `subs` and a fresh connect subscribes from it;
+        // a resume would skip it, so an idle wait starts fresh.
+        if subs.read().await.is_empty() {
+            if cmd_rx.recv().await.is_none() {
+                return;
+            }
+            if subs.read().await.is_empty() {
+                continue;
+            }
+            resume_session = None;
+            backoff = BACKOFF_MIN;
+        }
         let report = match connect_and_run(
             &app_handle,
             &emote_service,

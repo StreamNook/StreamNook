@@ -14,17 +14,26 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
-const EVENTSUB_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
+const EVENTSUB_BASE: &str = "wss://eventsub.wss.twitch.tv/ws";
+/// Twitch's keepalive (default 10; it accepts 10 to 600). 30 matches the chat
+/// socket's IRC_READ_TIMEOUT: a dead socket is found about as fast, at a third of
+/// the wakeups. Readers take their deadline from the welcome, so none changes.
+const KEEPALIVE_SECS: u64 = 30;
+
+/// The URL every fresh EventSub session (watch, whisper, moderation) opens.
+pub(crate) fn session_url() -> String {
+    format!("{EVENTSUB_BASE}?keepalive_timeout_seconds={KEEPALIVE_SECS}")
+}
 /// Wait before the one retry of a subscription that failed in transit, was
 /// rate limited, or hit a Twitch server error.
 const SUBSCRIBE_RETRY: Duration = Duration::from_secs(1);
 const WELCOME_TIMEOUT_SECS: u64 = 15;
 /// Wait before a fresh reconnect after the socket ends; doubles per failure.
-const RECONNECT_MIN_SECS: u64 = 5;
+pub(crate) const RECONNECT_MIN_SECS: u64 = 5;
 const RECONNECT_MAX_SECS: u64 = 300;
 /// A connection that ends sooner than this counts as a failure for the
 /// backoff, so a socket Twitch keeps closing cannot spin.
-const HEALTHY_CONNECTION: Duration = Duration::from_secs(60);
+pub(crate) const HEALTHY_CONNECTION: Duration = Duration::from_secs(60);
 
 pub(crate) type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -33,7 +42,7 @@ pub(crate) type WsStream =
 pub(crate) type PendingSession = Pin<Box<dyn Future<Output = Result<(WsStream, Session)>> + Send>>;
 
 /// The wait before the next fresh reconnect, and the wait after that.
-fn reconnect_backoff(retry_secs: u64, healthy: bool) -> (u64, u64) {
+pub(crate) fn reconnect_backoff(retry_secs: u64, healthy: bool) -> (u64, u64) {
     if healthy {
         (RECONNECT_MIN_SECS, RECONNECT_MIN_SECS)
     } else {
@@ -621,7 +630,7 @@ impl EventSubService {
         session_id: &Arc<RwLock<Option<String>>>,
     ) -> Result<Duration> {
         debug!("Connecting to Twitch EventSub...");
-        let (ws_stream, session_info) = Self::open_session(EVENTSUB_URL.to_string()).await?;
+        let (ws_stream, session_info) = Self::open_session(session_url()).await?;
         let started = Instant::now();
         let (mut write, mut read) = ws_stream.split();
         let mut keepalive_timeout = session_info.keepalive_timeout_seconds.unwrap_or(10);
@@ -1177,6 +1186,12 @@ mod tests {
         assert_eq!(session.id, "AQoQILE98gtqShGmLD7AM6yJThAB");
         assert_eq!(session.keepalive_timeout_seconds, Some(10));
         assert_eq!(session.reconnect_url, None);
+    }
+
+    #[test]
+    fn sockets_ask_for_a_keepalive_twitch_accepts() {
+        assert!((10..=600).contains(&KEEPALIVE_SECS));
+        assert_eq!(session_url(), "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=30");
     }
 
     #[test]
