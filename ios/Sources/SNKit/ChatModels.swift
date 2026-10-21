@@ -354,15 +354,19 @@ public struct ChatLinkPreview: Codable, Sendable, Equatable {
     public var duration: Double?
     public var onlineCount: Int?
     public var memberCount: Int?
+    /// An "image" card's picture size in pixels, when the core could read it.
+    public var width: Int?
+    public var height: Int?
 
     enum CodingKeys: String, CodingKey {
-        case url, kind, title, description, image, author, duration
+        case url, kind, title, description, image, author, duration, width, height
         case siteName = "site_name", authorAvatar = "author_avatar", viewCount = "view_count"
         case onlineCount = "online_count", memberCount = "member_count"
     }
 
     public init(url: String, kind: String, title: String? = nil, description: String? = nil, image: String? = nil,
-                siteName: String? = nil, author: String? = nil, onlineCount: Int? = nil, memberCount: Int? = nil) {
+                siteName: String? = nil, author: String? = nil, onlineCount: Int? = nil, memberCount: Int? = nil,
+                width: Int? = nil, height: Int? = nil) {
         self.url = url
         self.kind = kind
         self.title = title
@@ -372,6 +376,8 @@ public struct ChatLinkPreview: Codable, Sendable, Equatable {
         self.author = author
         self.onlineCount = onlineCount
         self.memberCount = memberCount
+        self.width = width
+        self.height = height
     }
 }
 

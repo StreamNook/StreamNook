@@ -21,6 +21,7 @@ struct ChatSettingsPanel: View {
         emotes
         emoteEffects
         input
+        ImageUploadSettings()
         tabCompletion
         points
         behavior
@@ -523,6 +524,111 @@ struct SettingTextField: View {
                 save?.cancel()
                 Task { await store.set(path, text) }
             }
+        }
+    }
+}
+
+/// Image Uploads: the emote panel's Images tab and the host its pictures go to. The host list and
+/// the test come from the core (Rust `services/image_upload.rs`), and choosing a host writes only
+/// its id. The phone has no paste upload and no custom host.
+private struct ImageUploadSettings: View {
+    @Environment(SettingsStore.self) private var store
+    @Environment(AppModel.self) private var model
+    @State private var hosts: [UploadHostData] = []
+    @State private var testing = false
+    @State private var test: TestResult?
+
+    private enum TestResult: Equatable {
+        case link(String)
+        case failed(String)
+    }
+
+    private static let path = "chat_input.image_uploader.preset"
+
+    var body: some View {
+        let preset = store.string(Self.path, "nuuls")
+        SettingsBlock(title: "Image Uploads",
+                      detail: "Send a picture to chat from the emote menu's Images tab. It goes to the host you pick here, and its link lands in your message.") {
+            ToggleRow(title: "Images tab", path: "chat_input.image_uploader.show_in_menu", fallback: true,
+                      detail: "The Images tab in the emote menu, for choosing a picture to send.")
+            WideRow(title: "Where images go", detail: "The host your pictures are sent to. Anyone with a link can see the picture.",
+                    paths: [Self.path]) {
+                VStack(spacing: 0) {
+                    ForEach(hosts) { host in hostRow(host, on: host.id == preset) }
+                }
+                .padding(.top, 8)
+            }
+            WideRow(title: "Test upload",
+                    detail: "Sends a 1-pixel test image to the host you picked and shows the link it came back with.") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingButton(title: "Send a test image", symbol: "paperplane", enabled: !testing) {
+                        Task { await runTest() }
+                    }
+                    switch test {
+                    case .link(let link)?:
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Worked. The host answered:", systemImage: "checkmark")
+                                .font(.sn(12))
+                                .foregroundStyle(SN.textSecondary)
+                            Text(link)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(SN.textPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                    case .failed(let why)?:
+                        Text(why).font(.sn(12)).foregroundStyle(SN.error)
+                    case nil:
+                        EmptyView()
+                    }
+                }
+                .padding(.top, 10)
+            }
+        }
+        .task {
+            hosts = (try? await model.core.invoke("image_upload_hosts", args: [:], as: [UploadHostData].self)) ?? []
+        }
+    }
+
+    private func hostRow(_ host: UploadHostData, on: Bool) -> some View {
+        Button {
+            Task { await store.set(Self.path, host.id) }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(host.label).font(.sn(14, 600)).foregroundStyle(SN.textPrimary)
+                    Text(host.note).font(.sn(12)).foregroundStyle(SN.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("up to \(host.maxMB) MB").font(.sn(11)).foregroundStyle(SN.textMuted)
+                }
+                Spacer(minLength: 8)
+                if on {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(SN.accent)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(.vertical, 8)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    private func runTest() async {
+        guard !testing else { return }
+        testing = true
+        test = nil
+        defer { testing = false }
+        do {
+            let link = try await model.core.invoke("test_image_upload", args: [:], as: String.self)
+            test = .link(link)
+        } catch {
+            let why = (error as? CoreFailure)?.description ?? ""
+            test = .failed(why.isEmpty ? "Upload failed" : why)
         }
     }
 }
