@@ -40,16 +40,20 @@ pub fn all_hidden() -> bool {
     !ANY_ON_SCREEN.load(Ordering::Relaxed)
 }
 
-/// Some surface exists that can show what the UI pollers fetch: a webview
-/// window on desktop and Android. The iPhone app draws natively and has no
-/// webview window at all, so there it is the app being in front.
+/// Some surface is on screen that can show what the UI pollers fetch: a
+/// webview window on desktop; on the phones, the app in front (the iPhone app
+/// draws natively and has no webview window at all).
 pub fn ui_exists(app: &AppHandle) -> bool {
     #[cfg(target_os = "ios")]
     {
         let _ = app;
         !all_hidden()
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "android")]
+    {
+        !all_hidden() && !app.webview_windows().is_empty()
+    }
+    #[cfg(desktop)]
     {
         !app.webview_windows().is_empty()
     }
@@ -71,11 +75,36 @@ pub fn window_open(app: &AppHandle, label: &str) -> bool {
     }
 }
 
-/// The iPhone app moved to the front (`true`) or the background (`false`).
-/// Its shell has no window for the poller below to read, so it says so itself.
-#[cfg(target_os = "ios")]
-pub fn set_native_shell_shown(shown: bool) {
+static SHOWN: once_cell::sync::Lazy<tokio::sync::watch::Sender<bool>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::watch::channel(true).0);
+
+/// A phone app moved to the front (`true`) or the background (`false`;
+/// picture-in-picture is the front). Neither phone has a window the poller
+/// below can read, so each shell says so itself (app_presence::set_foreground).
+#[cfg(mobile)]
+pub fn set_app_foreground(shown: bool) {
     ANY_ON_SCREEN.store(shown, Ordering::Relaxed);
+    SHOWN.send_replace(shown);
+}
+
+/// The phone app is in the background: pollers that only feed the UI rest.
+/// Always false on desktop, whose gates keep reading `all_hidden` (and whose
+/// followed poll also feeds live notifications).
+pub fn phone_idle() -> bool {
+    idle_when(cfg!(mobile), all_hidden())
+}
+
+fn idle_when(mobile: bool, hidden: bool) -> bool {
+    mobile && hidden
+}
+
+/// Returns once the phone app is in front (at once when it is; always at once on desktop).
+pub async fn until_shown() {
+    if !phone_idle() {
+        return;
+    }
+    let mut rx = SHOWN.subscribe();
+    let _ = rx.wait_for(|shown| *shown).await;
 }
 
 #[derive(Serialize, Clone)]
@@ -122,4 +151,16 @@ pub fn start(app: AppHandle) {
             ANY_ON_SCREEN.store(on_screen, Ordering::Relaxed);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_phone_in_the_background_is_idle() {
+        assert!(idle_when(true, true));
+        assert!(!idle_when(true, false));
+        assert!(!idle_when(false, true));
+    }
 }

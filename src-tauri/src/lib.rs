@@ -1740,6 +1740,12 @@ pub fn run() {
             cast_plugin::tv_control,
             #[cfg(mobile)]
             flush_persistent_stores,
+            #[cfg(mobile)]
+            set_app_foreground,
+            #[cfg(mobile)]
+            set_low_power,
+            #[cfg(mobile)]
+            get_app_presence,
             reveal_main_window,
             #[cfg(desktop)]
             ensure_main_window,

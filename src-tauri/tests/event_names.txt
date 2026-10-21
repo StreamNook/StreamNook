@@ -7,6 +7,7 @@
 account-roster-changed
 ad-pivot
 app-foregrounded
+app-presence
 asset-cache://cached
 asset-cache://cleared
 badge-available
