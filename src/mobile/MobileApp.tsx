@@ -15,6 +15,7 @@ import { installBackHandler, useMobileNavStore } from './navStore';
 import { installLifecycle } from './lifecycle';
 import { installVideoCap } from './videoCap';
 import { installLowPower } from './lowPower';
+import { installAppPresence } from './appPresence';
 import { MobileTabBar } from './MobileTabBar';
 import { MobileOnboarding } from './MobileOnboarding';
 // The real wizard, not a phone-shaped rewrite of it. SetupWizard is already
@@ -148,6 +149,8 @@ const MobileApp: React.FC = () => {
   useEffect(() => installVideoCap(), []);
   // Follow the system Battery Saver: still emotes, decorative motion off, 60 Hz.
   useEffect(() => installLowPower(), []);
+  // The core's presence snapshot: the player reads whether Rust parked the relay.
+  useEffect(() => installAppPresence(), []);
   useEffect(() => {
     applyNativeInsetsOnce();
   }, []);

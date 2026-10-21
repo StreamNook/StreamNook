@@ -19,13 +19,17 @@
 // (services::badge_feed) and keeps its socket up while backgrounded; a
 // backgrounded pause for it is a follow-up on the Rust side.
 //
-// Playback is deliberately NOT touched. Backgrounding a stream to keep
-// listening is a normal thing to do with a Twitch client, and pausing the video
-// (or calling hls stopLoad, which stalls it once the buffer drains) would take
-// that away. The sockets are pure background chatter with no user-visible
-// value while hidden; the audio is not.
+// Playback is deliberately NOT touched here. Pausing on surface loss is
+// lockScreenAudio's job and follows Background play: on, the audio keeps going
+// behind the media notification; off, locking or leaving pauses the stream.
+// The sockets are pure background chatter with no user-visible value while
+// hidden; the audio, when wanted, is not.
+//
+// Rust learns the same thing (set_app_foreground; PiP counts as seen), so its
+// pollers rest while the app is away. Going to the background also flushes
+// every debounced store there.
 import { invoke } from '@tauri-apps/api/core';
-import { refreshEntitlementRegistries } from '../services/supabaseService';
+import { refreshEntitlementRegistries, resumePresence, suspendPresence } from '../services/supabaseService';
 import { refreshFollowingIfStale } from './followRefresh';
 import { isInPip, runNotifyCheckNow } from './nativeBridge';
 import { setBackgrounded } from './backgroundGate';
@@ -68,6 +72,14 @@ function inPictureInPicture(): boolean {
   return document.documentElement.dataset.snPip === 'true';
 }
 
+// Tell the core whether the app is seen (PiP counts as seen). The one presence
+// signal its pollers read; going to the background also flushes the stores.
+function reportForeground(foreground: boolean): void {
+  void invoke('set_app_foreground', { foreground }).catch((err) => {
+    Logger.debug('[Lifecycle] set_app_foreground failed:', err);
+  });
+}
+
 async function onHidden(): Promise<void> {
   if (inPictureInPicture()) return;
   hiddenSince = Date.now();
@@ -75,15 +87,16 @@ async function onHidden(): Promise<void> {
   // firing in the same turn already sees it.
   setBackgrounded(true);
   // Fire-and-forget on purpose: the IPC message is posted synchronously, so
-  // it reaches Rust even if the WebView is frozen a moment later, and every
-  // flush is a no-op when nothing is dirty.
-  void invoke('flush_persistent_stores').catch((err) => {
-    Logger.warn('[Lifecycle] flush on hide failed:', err);
-  });
+  // it reaches Rust even if the WebView is frozen a moment later. Rust flushes
+  // every store as part of it (each a no-op when nothing is dirty).
+  reportForeground(false);
+  suspendPresence();
 }
 
 async function onVisible(): Promise<void> {
   setBackgrounded(false);
+  reportForeground(true);
+  void resumePresence();
   const now = Date.now();
   if (now - lastNotifyKick >= NOTIFY_KICK_MIN_GAP_MS) {
     lastNotifyKick = now;
@@ -128,9 +141,17 @@ export function installLifecycle(): () => void {
     if (document.visibilityState === 'hidden') void onHidden();
     else void onVisible();
   };
+  // Closing the PiP window backgrounds the app with no visibilitychange (the
+  // page was already hidden behind the window).
+  const onPipClosed = () => {
+    if (document.visibilityState === 'hidden') void onHidden();
+  };
   document.addEventListener('visibilitychange', handler);
+  window.addEventListener('sn:pip-closed', onPipClosed);
+  reportForeground(document.visibilityState === 'visible');
   return () => {
     document.removeEventListener('visibilitychange', handler);
+    window.removeEventListener('sn:pip-closed', onPipClosed);
     installed = false;
   };
 }
