@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { MotionConfig } from 'framer-motion';
 import { useAppStore } from '../stores/AppStore';
 import type { MotionMode } from '../types';
+import { useLowPower } from '../utils/lowPower';
 
 /**
  * Applies the user's Motion preference (Interface > Motion) across the whole
@@ -18,7 +19,11 @@ import type { MotionMode } from '../types';
  * immediately without a reload.
  */
 export function MotionScope({ children }: { children: ReactNode }) {
-  const mode: MotionMode = useAppStore((s) => s.settings.motion_mode) ?? 'full';
+  const chosen: MotionMode = useAppStore((s) => s.settings.motion_mode) ?? 'full';
+  // Battery Saver (phone only, utils/lowPower) steps Full down to Reduced: the
+  // decorative loops stop, quick fades stay. The setting itself is untouched.
+  const lowPower = useLowPower();
+  const mode: MotionMode = lowPower && chosen === 'full' ? 'reduced' : chosen;
 
   useEffect(() => {
     document.documentElement.dataset.motion = mode;

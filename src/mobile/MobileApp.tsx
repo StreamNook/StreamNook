@@ -14,6 +14,7 @@ import { useCurrentStreamStats } from '../utils/useCurrentStreamStats';
 import { installBackHandler, useMobileNavStore } from './navStore';
 import { installLifecycle } from './lifecycle';
 import { installVideoCap } from './videoCap';
+import { installLowPower } from './lowPower';
 import { MobileTabBar } from './MobileTabBar';
 import { MobileOnboarding } from './MobileOnboarding';
 // The real wizard, not a phone-shaped rewrite of it. SetupWizard is already
@@ -145,6 +146,8 @@ const MobileApp: React.FC = () => {
   useEffect(() => installWhisperInbox(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
   useEffect(() => installVideoCap(), []);
+  // Follow the system Battery Saver: still emotes, decorative motion off, 60 Hz.
+  useEffect(() => installLowPower(), []);
   useEffect(() => {
     applyNativeInsetsOnce();
   }, []);

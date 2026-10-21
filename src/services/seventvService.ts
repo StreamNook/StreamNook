@@ -197,12 +197,12 @@ export async function fetchUserInventory(
 // Pick the best image URL from a V4 badge's images[] for a target scale. A
 // badge's id is NOT its image id in V4, so these API-provided URLs are the only
 // reliable source. Prefers the requested scale, the animated (non-_static)
-// form, and webp > avif > png > gif.
-const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number): string | undefined => {
+// form (the `_static` still when `still`), and webp > avif > png > gif.
+const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number, still = false): string | undefined => {
   if (!images?.length) return undefined;
   const rank = (img: BadgeImageV4): number => {
     let s = Math.abs((img.scale ?? 1) - scale) * 10;
-    if (img.url.includes('_static')) s += 3;
+    if (img.url.includes('_static') !== still) s += 3;
     const m = img.mime ?? '';
     s += m.includes('webp') ? 0 : m.includes('avif') ? 1 : m.includes('png') ? 2 : 4;
     return s;
@@ -210,7 +210,12 @@ const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number): stri
   return [...images].sort((a, b) => rank(a) - rank(b))[0]?.url;
 };
 
-export const getBadgeImageUrl = (badge: BadgeV4): string => {
+export const getBadgeImageUrl = (badge: BadgeV4, still = false): string => {
+  // Battery Saver: the published still, from the CDN (the disk cache holds the animated file).
+  if (still) {
+    const url = pickBadgeImage(badge.images, 4, true);
+    if (url?.includes('_static')) return url;
+  }
   if (badge.localUrl) return badge.localUrl;
   return pickBadgeImage(badge.images, 4) ?? `https://cdn.7tv.app/badge/${badge.id}/4x.webp`;
 };
