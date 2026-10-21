@@ -17,6 +17,10 @@
 //! - Chatters arriving within BATCH_WINDOW are multiplexed into one aliased
 //!   GraphQL query. Live chat delivers one message at a time, so without the
 //!   window every chatter paid a round-trip of their own.
+//! - Each chatter's last real answer (the ids they wear, nothing more) is kept
+//!   on disk too. When 7TV fails, or hangs past KEPT_WAIT, that answer is drawn
+//!   instead of a plain name, marked stale so it is asked again: on 2026-10-20
+//!   every 7tv.io host answered 503 and every name on every platform went plain.
 
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{self, StreamExt};
@@ -65,6 +69,23 @@ const USER_CACHE_CAPACITY: usize = 4000;
 
 const CATALOG_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const CATALOG_FILE: &str = "seventv_cosmetic_catalog.json";
+
+/// Each chatter's last real answer, as ids. ~100 bytes a chatter, so the cap is
+/// ~2 MB on disk at most; the least recently answered chatter goes first.
+const KEPT_FILE: &str = "seventv_worn_cosmetics.json";
+const KEPT_VERSION: u32 = 1;
+#[cfg(mobile)]
+const KEPT_CAPACITY: usize = 5000;
+#[cfg(not(mobile))]
+const KEPT_CAPACITY: usize = 20_000;
+/// Answers gather this long before one write: a busy chat answers hundreds of
+/// chatters a minute, and the file is rewritten whole.
+const KEPT_FLUSH_DELAY: Duration = Duration::from_secs(30);
+/// How long a lookup for a chatter with a kept answer waits on 7TV before
+/// drawing the kept one. A 7TV that hangs instead of failing would otherwise
+/// hold the name plain through six attempts of the HTTP timeout. A healthy
+/// answer lands well inside it, and still replaces the kept one when late.
+const KEPT_WAIT: Duration = Duration::from_secs(3);
 
 /// Opening a profile card asks for the same inventory twice at once (the card's
 /// Rust profile and its cosmetics section); one request answers both, and a
@@ -136,6 +157,9 @@ pub struct CosmeticsLookup {
     /// cosmetics". Callers short-TTL their own caches on it.
     #[serde(rename = "hardFail")]
     pub hard_fail: bool,
+    /// With `hard_fail`: `data` is this chatter's last real answer, kept on
+    /// disk, standing in until 7TV answers again. Draw it, and ask again.
+    pub stale: bool,
 }
 
 // ---- Catalog ----------------------------------------------------------------
@@ -152,15 +176,19 @@ static CATALOG: RwLock<Option<Catalog>> = RwLock::new(None);
 static CATALOG_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
-fn catalog_path() -> Option<std::path::PathBuf> {
-    // A copy of 7TV's public catalog: with a separate cache dir (iOS) it goes
-    // there, so it is never backed up.
+fn disk_path(file: &str) -> Option<std::path::PathBuf> {
+    // Copies of 7TV's public data: with a separate cache dir (iOS) they go
+    // there, so they are never backed up.
     if crate::services::app_paths::cache_base().is_some() {
-        return crate::services::cache_service::get_cache_dir().ok().map(|d| d.join(CATALOG_FILE));
+        return crate::services::cache_service::get_cache_dir().ok().map(|d| d.join(file));
     }
     crate::services::cache_service::get_app_data_dir()
         .ok()
-        .map(|d| d.join(CATALOG_FILE))
+        .map(|d| d.join(file))
+}
+
+fn catalog_path() -> Option<std::path::PathBuf> {
+    disk_path(CATALOG_FILE)
 }
 
 fn now_ms() -> i64 {
@@ -595,11 +623,197 @@ fn usable_personal_set(user: &Value) -> Option<&str> {
     user.pointer("/personalEmoteSet/id").and_then(Value::as_str)
 }
 
+// ---- Last answers, kept on disk -------------------------------------------------
+
+/// What a chatter wore at 7TV's last real answer. Ids only: definitions come
+/// from the catalog, which is on disk as well, so a kept answer draws in full
+/// even when 7TV is down at launch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Kept {
+    /// Their 7TV account id.
+    #[serde(rename = "u", default, skip_serializing_if = "Option::is_none")]
+    seventv_user: Option<String>,
+    #[serde(rename = "p", default, skip_serializing_if = "Option::is_none")]
+    paint: Option<String>,
+    #[serde(rename = "b", default, skip_serializing_if = "Option::is_none")]
+    badge: Option<String>,
+    /// The badge's tooltip, for a badge the catalog does not know yet.
+    #[serde(rename = "d", default, skip_serializing_if = "Option::is_none")]
+    badge_description: Option<String>,
+}
+
+/// The file: `{ "v": 1, "users": [["<cosmetics id>", Kept], ...] }`, least
+/// recently answered first, so reading it back in order restores the LRU.
+#[derive(Deserialize)]
+struct KeptFile {
+    v: u32,
+    #[serde(default)]
+    users: Vec<(String, Kept)>,
+}
+
+#[derive(Serialize)]
+struct KeptFileOut<'a> {
+    v: u32,
+    users: Vec<(&'a str, &'a Kept)>,
+}
+
+struct KeptStore {
+    users: LruCache<String, Kept>,
+    /// Changed since the last write.
+    dirty: bool,
+    flush_scheduled: bool,
+}
+
+impl KeptStore {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            users: LruCache::new(NonZeroUsize::new(capacity.max(1)).expect("non-zero capacity")),
+            dirty: false,
+            flush_scheduled: false,
+        }
+    }
+
+    /// Record a real answer: what they wear, or None for nothing at all (which
+    /// forgets them). True when the file needs writing.
+    fn note(&mut self, id: &str, kept: Option<Kept>) -> bool {
+        let changed = match kept {
+            Some(kept) => self.users.put(id.to_string(), kept.clone()).as_ref() != Some(&kept),
+            None => self.users.pop(id).is_some(),
+        };
+        self.dirty |= changed;
+        changed
+    }
+
+    /// The file's entries, under anything answered before it was read (newer).
+    fn fill(&mut self, stored: Vec<(String, Kept)>) {
+        let newer: Vec<(String, Kept)> = self.users.iter().rev().map(|(id, k)| (id.clone(), k.clone())).collect();
+        self.users.clear();
+        for (id, kept) in stored.into_iter().chain(newer) {
+            self.users.put(id, kept);
+        }
+    }
+
+    fn body(&self) -> String {
+        let users: Vec<(&str, &Kept)> = self.users.iter().rev().map(|(id, k)| (id.as_str(), k)).collect();
+        serde_json::to_string(&KeptFileOut { v: KEPT_VERSION, users }).unwrap_or_default()
+    }
+}
+
+/// A file from another version, or a torn one, reads as nothing kept.
+fn parse_kept(raw: &str) -> Vec<(String, Kept)> {
+    match serde_json::from_str::<KeptFile>(raw) {
+        Ok(file) if file.v == KEPT_VERSION => file.users,
+        _ => Vec::new(),
+    }
+}
+
+static KEPT: Mutex<Option<KeptStore>> = Mutex::new(None);
+static KEPT_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static KEPT_LOADED: AtomicBool = AtomicBool::new(false);
+
+fn with_kept<R>(f: impl FnOnce(&mut KeptStore) -> R) -> R {
+    let mut guard = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(|| KeptStore::with_capacity(KEPT_CAPACITY)))
+}
+
+/// Read the file once, off the async threads, on the first lookup rather than
+/// at boot.
+async fn ensure_kept() {
+    if KEPT_LOADED.load(Ordering::Acquire) {
+        return;
+    }
+    let _guard = KEPT_LOAD.lock().await;
+    if KEPT_LOADED.load(Ordering::Acquire) {
+        return;
+    }
+    let stored = tokio::task::spawn_blocking(|| {
+        disk_path(KEPT_FILE).and_then(|p| std::fs::read_to_string(p).ok()).map(|raw| parse_kept(&raw))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    log::debug!("[7TV] {} kept cosmetics answer(s) read", stored.len());
+    with_kept(|store| store.fill(stored));
+    KEPT_LOADED.store(true, Ordering::Release);
+}
+
+/// The ids a real 7TV answer says this person wears; None when they wear
+/// nothing or have no 7TV account (`user` None), which is an answer too.
+fn kept_from(user: Option<&Value>) -> Option<Kept> {
+    let user = user?;
+    let text = |path: &str| user.pointer(path).and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from);
+    let kept = Kept {
+        seventv_user: text("/id"),
+        paint: text("/style/activePaint/id"),
+        badge: text("/style/activeBadge/id"),
+        badge_description: text("/style/activeBadge/description"),
+    };
+    (kept.paint.is_some() || kept.badge.is_some()).then_some(kept)
+}
+
+/// Keep (or forget) one chatter's real answer. True when the file needs writing.
+fn note_answer(id: &str, user: Option<&Value>) -> bool {
+    let kept = kept_from(user);
+    with_kept(|store| store.note(id, kept))
+}
+
+#[cfg(test)]
+fn has_kept(id: &str) -> bool {
+    with_kept(|store| store.users.contains(id))
+}
+
+/// This chatter's kept answer, drawn the way a live one is.
+fn kept_cosmetics(id: &str) -> Option<UserCosmetics> {
+    let kept = with_kept(|store| store.users.get(id).cloned())?;
+    let user = json!({
+        "id": kept.seventv_user,
+        "style": {
+            "activePaint": kept.paint.as_ref().map(|paint| json!({ "id": paint })),
+            "activeBadge": kept.badge.as_ref().map(|badge| json!({ "id": badge, "description": kept.badge_description })),
+        },
+    });
+    Some(worn_cosmetics(&user))
+}
+
+/// One write for every answer that changed in the last KEPT_FLUSH_DELAY.
+fn schedule_kept_flush() {
+    let start = with_kept(|store| {
+        let start = store.dirty && !store.flush_scheduled;
+        store.flush_scheduled |= start;
+        start
+    });
+    if !start {
+        return;
+    }
+    tauri::async_runtime::spawn(async {
+        tokio::time::sleep(KEPT_FLUSH_DELAY).await;
+        let body = with_kept(|store| {
+            store.flush_scheduled = false;
+            std::mem::take(&mut store.dirty).then(|| store.body())
+        });
+        let (Some(body), Some(path)) = (body, disk_path(KEPT_FILE)) else { return };
+        let written = tokio::task::spawn_blocking(move || {
+            // Whole or not at all: a torn file would read as nothing kept.
+            let tmp = path.with_extension("json.tmp");
+            std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path))
+        })
+        .await;
+        if !matches!(written, Ok(Ok(()))) {
+            log::debug!("[7TV] kept cosmetics not written: {written:?}");
+            // Try again with the next answer.
+            with_kept(|store| store.dirty = true);
+        }
+    });
+}
+
 // ---- Cache and batching -------------------------------------------------------
 
 struct Cached {
     at: Instant,
     hard_fail: bool,
+    /// A kept answer standing in for a failed lookup.
+    stale: bool,
     data: UserCosmetics,
     /// The personal emote lane has been told about this user's set. A list
     /// surface's lookup leaves it false, so the first chat lookup still tells it.
@@ -634,7 +848,7 @@ fn cached(id: &str, chatter: bool) -> Option<(CosmeticsLookup, bool)> {
     if note {
         entry.personal_noted = true;
     }
-    Some((CosmeticsLookup { data: entry.data.clone(), hard_fail: entry.hard_fail }, note))
+    Some((CosmeticsLookup { data: entry.data.clone(), hard_fail: entry.hard_fail, stale: entry.stale }, note))
 }
 
 fn remember(id: &str, lookup: &CosmeticsLookup, personal_noted: bool) {
@@ -645,9 +859,33 @@ fn remember(id: &str, lookup: &CosmeticsLookup, personal_noted: bool) {
             })
             .put(
                 id.to_string(),
-                Cached { at: Instant::now(), hard_fail: lookup.hard_fail, data: lookup.data.clone(), personal_noted },
+                Cached {
+                    at: Instant::now(),
+                    hard_fail: lookup.hard_fail,
+                    stale: lookup.stale,
+                    data: lookup.data.clone(),
+                    personal_noted,
+                },
             );
     }
+}
+
+/// What a lookup comes to once 7TV has answered (`Some`) or failed (`None`),
+/// cached for every window. A failure draws the chatter's kept answer, marked
+/// stale; with nothing kept it reads as a plain failure, as before.
+fn settle(id: &str, answer: Option<UserCosmetics>, chatter: bool) -> CosmeticsLookup {
+    let lookup = match answer {
+        Some(data) => CosmeticsLookup { data, hard_fail: false, stale: false },
+        None => match kept_cosmetics(id) {
+            Some(data) => CosmeticsLookup { data, hard_fail: true, stale: true },
+            None => CosmeticsLookup { data: UserCosmetics::default(), hard_fail: true, stale: false },
+        },
+    };
+    remember(id, &lookup, chatter);
+    if chatter {
+        note_personal_set(id, &lookup.data);
+    }
+    lookup
 }
 
 /// Hand a chatter's personal emote set to the personal emote lane. Personal
@@ -702,6 +940,7 @@ fn chunks_of(ids: Vec<String>) -> Vec<Vec<String>> {
 async fn resolve_chunk(chunk: &[String]) -> Option<HashMap<String, UserCosmetics>> {
     let data = request_gql(&user_query(chunk, ACTIVE_ONLY_SELECTION)).await?;
     let mut resolved = 0;
+    let mut kept_changed = false;
     let out = chunk
         .iter()
         .map(|id| {
@@ -709,6 +948,8 @@ async fn resolve_chunk(chunk: &[String]) -> Option<HashMap<String, UserCosmetics
             if user.is_some() {
                 resolved += 1;
             }
+            // A real answer, so it is kept (or, wearing nothing, forgotten).
+            kept_changed |= note_answer(id, user);
             let mut cosmetics = user.map(worn_cosmetics).unwrap_or_default();
             // Personal emotes are a Twitch feature; the bare id is the Twitch
             // one. The set is handed on only when a chat lookup asked (`resolve`).
@@ -719,11 +960,16 @@ async fn resolve_chunk(chunk: &[String]) -> Option<HashMap<String, UserCosmetics
         })
         .collect();
     log::debug!("[7TV-diag] chunk resolved {resolved}/{} user(s) with a 7TV connection", chunk.len());
+    if kept_changed {
+        schedule_kept_flush();
+    }
     Some(out)
 }
 
 async fn drain() {
-    ensure_catalog().await;
+    // The kept answers are read before any is noted, so the file never
+    // overwrites a newer answer.
+    tokio::join!(ensure_catalog(), ensure_kept());
     let mut waiters = take_queue();
     if waiters.is_empty() {
         return;
@@ -774,17 +1020,18 @@ fn start_drain(immediate: bool) {
 /// Puts a chatter's cosmetics in the cache as if 7TV had answered.
 #[cfg(test)]
 pub(crate) fn remember_for_test(id: &str, data: UserCosmetics) {
-    remember(id, &CosmeticsLookup { data, hard_fail: false }, true);
+    remember(id, &CosmeticsLookup { data, hard_fail: false, stale: false }, true);
 }
 
 /// What a chatter is wearing when the cache already knows, without asking
-/// 7TV. A failed lookup reads as unknown so the caller asks again.
+/// 7TV. A failed lookup reads as unknown so the caller asks again; one a kept
+/// answer stands in for is drawn until it is due that re-check.
 pub fn peek(id: &str) -> Option<UserCosmetics> {
     let data = {
         let guard = USERS.lock().ok()?;
         let entry = guard.as_ref()?.peek(id)?;
         let ttl = if entry.hard_fail { HARD_FAIL_TTL } else { USER_TTL };
-        (!entry.hard_fail && entry.at.elapsed() < ttl).then(|| entry.data.clone())?
+        ((!entry.hard_fail || entry.stale) && entry.at.elapsed() < ttl).then(|| entry.data.clone())?
     };
     Some(with_pick(id, data, false))
 }
@@ -879,23 +1126,37 @@ async fn resolve_as(id: String, chatter: bool) -> CosmeticsLookup {
         if note {
             note_personal_set(&id, &hit.data);
         }
-        return CosmeticsLookup { data: with_pick(&id, hit.data, false), hard_fail: hit.hard_fail };
+        return CosmeticsLookup { data: with_pick(&id, hit.data, false), hard_fail: hit.hard_fail, stale: hit.stale };
     }
-    let (tx, rx) = oneshot::channel();
+    let (tx, mut rx) = oneshot::channel();
     match enqueue(&id, tx) {
         (true, immediate) => start_drain(immediate),
         (false, true) => DRAIN_NOW.notify_one(),
         (false, false) => {}
     }
-    let lookup = match rx.await.ok().flatten() {
-        Some(data) => CosmeticsLookup { data, hard_fail: false },
-        None => CosmeticsLookup { data: UserCosmetics::default(), hard_fail: true },
+    ensure_kept().await;
+    let kept = with_kept(|store| store.users.contains(id.as_str()));
+    let answer = if kept {
+        let waited = tokio::time::timeout(KEPT_WAIT, &mut rx).await;
+        match waited {
+            Ok(answer) => answer.ok().flatten(),
+            Err(_) => {
+                // The kept answer is drawn now; 7TV's, whenever it comes,
+                // replaces it in the cache.
+                let late = id.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(answer) = rx.await {
+                        settle(&late, answer, chatter);
+                    }
+                });
+                None
+            }
+        }
+    } else {
+        rx.await.ok().flatten()
     };
-    remember(&id, &lookup, chatter);
-    if chatter {
-        note_personal_set(&id, &lookup.data);
-    }
-    CosmeticsLookup { data: with_pick(&id, lookup.data, false), hard_fail: lookup.hard_fail }
+    let CosmeticsLookup { data, hard_fail, stale } = settle(&id, answer, chatter);
+    CosmeticsLookup { data: with_pick(&id, data, false), hard_fail, stale }
 }
 
 /// Drop one chatter from the cache so the next lookup asks 7TV again.
@@ -1137,8 +1398,9 @@ mod tests {
         take_queue();
     }
 
-    #[test]
-    fn worn_cosmetics_come_from_the_catalog_and_are_marked_selected() {
+    /// Every test that reads the shared catalog seeds this same one, so tests
+    /// running side by side never see each other's.
+    fn seed_catalog() {
         if let Ok(mut slot) = CATALOG.write() {
             *slot = Some(catalog_from(
                 &[json!({ "id": "p1", "name": "Sunset" })],
@@ -1146,6 +1408,93 @@ mod tests {
                 now_ms(),
             ));
         }
+    }
+
+    fn wearing_p1_b1() -> Value {
+        json!({ "id": "7tv-kept", "style": {
+            "activePaint": { "id": "p1" }, "activeBadge": { "id": "b1", "description": "d" } } })
+    }
+
+    #[test]
+    fn a_failed_lookup_draws_the_kept_answer_marked_stale() {
+        seed_catalog();
+        assert!(note_answer("90000101", Some(&wearing_p1_b1())));
+        assert!(!note_answer("90000101", Some(&wearing_p1_b1())), "the same answer again writes nothing");
+
+        let lookup = settle("90000101", None, false);
+        assert!(lookup.hard_fail && lookup.stale);
+        assert_eq!(lookup.data.seventv_user_id.as_deref(), Some("7tv-kept"));
+        assert_eq!(lookup.data.paints, vec![json!({ "id": "p1", "name": "Sunset", "selected": true })]);
+        assert_eq!(lookup.data.badges[0]["id"], "b1");
+        // A row stamped from the cache draws it too, until the re-check is due.
+        assert_eq!(peek("90000101").map(|u| u.paints.len()), Some(1));
+        let (hit, _) = cached("90000101", false).expect("cached for the short TTL");
+        assert!(hit.stale && hit.hard_fail);
+
+        // 7TV answering again replaces it.
+        let fresh = settle("90000101", Some(UserCosmetics::default()), false);
+        assert!(!fresh.hard_fail && !fresh.stale);
+        assert_eq!(peek("90000101").map(|u| u.paints.len()), Some(0));
+
+        // A failure with nothing kept is still a plain failure, unknown to a row.
+        let plain = settle("90000102", None, false);
+        assert!(plain.hard_fail && !plain.stale && plain.data.paints.is_empty());
+        assert!(peek("90000102").is_none());
+    }
+
+    #[test]
+    fn a_definitive_empty_answer_clears_the_kept_one() {
+        seed_catalog();
+        note_answer("90000103", Some(&wearing_p1_b1()));
+        assert!(has_kept("90000103"));
+        // 7TV answers: the account now wears nothing.
+        let bare = json!({ "id": "7tv-kept", "style": { "activePaint": null, "activeBadge": null } });
+        assert!(note_answer("90000103", Some(&bare)));
+        assert!(!has_kept("90000103"));
+        let lookup = settle("90000103", None, false);
+        assert!(lookup.hard_fail && !lookup.stale && lookup.data.paints.is_empty());
+
+        // No 7TV account for the id at all is an answer too.
+        note_answer("90000104", Some(&wearing_p1_b1()));
+        assert!(note_answer("90000104", None));
+        assert!(!has_kept("90000104"));
+    }
+
+    #[test]
+    fn the_kept_store_drops_the_least_recently_answered_past_its_cap() {
+        let kept = |paint: &str| Kept { seventv_user: None, paint: Some(paint.into()), badge: None, badge_description: None };
+        let mut store = KeptStore::with_capacity(3);
+        for id in ["a", "b", "c"] {
+            store.note(id, Some(kept(id)));
+        }
+        // "a" answered again is the newest; "d" then pushes out "b".
+        assert!(!store.note("a", Some(kept("a"))));
+        store.note("d", Some(kept("d")));
+        assert_eq!(store.users.len(), 3);
+        assert!(!store.users.contains("b"));
+        assert!(store.users.contains("a") && store.users.contains("c") && store.users.contains("d"));
+
+        // The file keeps that order, oldest first: read into a smaller store it
+        // keeps the two newest.
+        let mut back = KeptStore::with_capacity(2);
+        back.fill(parse_kept(&store.body()));
+        assert!(back.users.contains("a") && back.users.contains("d") && !back.users.contains("c"));
+
+        // An answer that arrived before the file was read outranks the file.
+        let mut live = KeptStore::with_capacity(5);
+        live.note("a", Some(kept("new")));
+        live.fill(parse_kept(&store.body()));
+        assert_eq!(live.users.peek("a").and_then(|k| k.paint.as_deref()), Some("new"));
+        assert_eq!(live.users.len(), 3);
+
+        // Another version or a torn write reads as nothing kept.
+        assert!(parse_kept(r#"{"v":99,"users":[["a",{"p":"x"}]]}"#).is_empty());
+        assert!(parse_kept(r#"{"v":1,"users":[["a",{"p":"#).is_empty());
+    }
+
+    #[test]
+    fn worn_cosmetics_come_from_the_catalog_and_are_marked_selected() {
+        seed_catalog();
         let user = json!({ "id": "7tv-user", "style": {
             "activePaint": { "id": "p1" }, "activeBadge": { "id": "b1", "description": "d" } } });
         let worn = worn_cosmetics(&user);
@@ -1233,7 +1582,13 @@ mod tests {
             .get_or_insert_with(|| LruCache::new(NonZeroUsize::new(USER_CACHE_CAPACITY).unwrap()))
             .put(
                 id.to_string(),
-                Cached { at: Instant::now().checked_sub(age).unwrap(), hard_fail: false, data, personal_noted },
+                Cached {
+                    at: Instant::now().checked_sub(age).unwrap(),
+                    hard_fail: false,
+                    stale: false,
+                    data,
+                    personal_noted,
+                },
             );
     }
 
