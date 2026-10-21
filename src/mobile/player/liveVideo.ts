@@ -15,8 +15,21 @@
 // be ambiguous exactly when it matters.
 
 import { useSyncExternalStore } from 'react';
+import { setPipMuted } from '../nativeBridge';
 
 let liveVideo: HTMLVideoElement | null = null;
+
+// Whether the live element is muted, by any control: the player bar, the mini
+// box's corner, the PiP window's action or a clip ducking it. Follows the
+// element's own `volumechange`, so it can never disagree with what is playing.
+let muted = false;
+const mutedListeners = new Set<() => void>();
+function syncMuted(): void {
+  const next = !!liveVideo?.muted;
+  if (muted === next) return;
+  muted = next;
+  mutedListeners.forEach((l) => l());
+}
 
 // Whether the viewer has the live element paused, for the watch layer's
 // keep-awake: a paused stream lets the screen sleep like any other paused
@@ -38,6 +51,7 @@ export function setLiveVideo(el: HTMLVideoElement | null): void {
   if (liveVideo) {
     liveVideo.removeEventListener('play', onPlay);
     liveVideo.removeEventListener('pause', onPause);
+    liveVideo.removeEventListener('volumechange', syncMuted);
   }
   liveVideo = el;
   // A fresh element is about to play; nothing is paused until it says so.
@@ -45,7 +59,9 @@ export function setLiveVideo(el: HTMLVideoElement | null): void {
   if (el) {
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
+    el.addEventListener('volumechange', syncMuted);
   }
+  syncMuted();
 }
 
 /** True while the live element is paused by the viewer (or the system). */
@@ -57,6 +73,32 @@ export function useLiveVideoPaused(): boolean {
     },
     () => paused,
   );
+}
+
+/** Whether the live element is muted right now. */
+export function liveVideoMuted(): boolean {
+  return muted;
+}
+
+/** True while the live element is muted, whichever control did it. */
+export function useLiveVideoMuted(): boolean {
+  return useSyncExternalStore((listener) => {
+    mutedListeners.add(listener);
+    return () => mutedListeners.delete(listener);
+  }, liveVideoMuted);
+}
+
+/**
+ * The one mute toggle: the player bar, the PiP window's action and the mini
+ * box's corner all go through it, and it keeps the PiP action's icon in step.
+ * Returns the new state, or null when there is no live element.
+ */
+export function toggleLiveMute(): boolean | null {
+  const el = liveVideo;
+  if (!el) return null;
+  el.muted = !el.muted;
+  setPipMuted(el.muted);
+  return el.muted;
 }
 
 export function getLiveVideo(): HTMLVideoElement | null {

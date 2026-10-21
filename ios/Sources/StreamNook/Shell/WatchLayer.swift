@@ -197,8 +197,14 @@ struct WatchLayer: View {
                 }
 
                 if mini {
-                    MiniClose { model.stopWatching() }
+                    MiniButton(symbol: Symbol.close, label: "Close stream") { model.stopWatching() }
                         .offset(x: miniRect.maxX - 56, y: miniRect.minY)
+                    // Mute on the opposite corner, under the full bar's rule: no VOD, no offline room.
+                    if watch.playingVod == nil, watch.room == nil {
+                        MiniButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute,
+                                   label: watch.muted ? "Unmute" : "Mute") { watch.toggleMute() }
+                            .offset(x: miniRect.minX, y: miniRect.maxY - 56)
+                    }
                 }
             }
             .frame(width: screen.width, height: screen.height, alignment: .topLeading)
@@ -497,12 +503,16 @@ private struct RoomExit: View {
     }
 }
 
-private struct MiniClose: View {
+/// One of the mini box's two corner controls (close top-right, mute bottom-left): the whole
+/// 56 point corner takes the tap, marked by the symbol in a dark circle.
+private struct MiniButton: View {
+    let symbol: String
+    let label: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: Symbol.close)
+            Image(systemName: symbol)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
@@ -511,7 +521,7 @@ private struct MiniClose: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Close stream")
+        .accessibilityLabel(label)
     }
 }
 
