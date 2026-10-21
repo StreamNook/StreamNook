@@ -343,6 +343,14 @@ export interface OverlayStyle {
   /** Chat GIF size multiplier on top of the gigantified size (which already
    *  follows emoteScale). 1 = the size GIFs have always drawn at. */
   gifScale: number;
+  /** Pictures linked from StreamNook's upload hosts (uploadedImage.ts) draw in
+   *  the message in place of their link. Off (default) keeps every link text. */
+  showUploadedImages: boolean;
+  /** Uploaded picture height multiplier. 1 = 6em tall at most. */
+  uploadedImageScale: number;
+  /** Whose uploaded pictures draw: the channel's roles and subscribers
+   *  (isTrustedSender), or every chatter. */
+  uploadedImagesFrom: 'trusted' | 'everyone';
 }
 
 // ---------------------------------------------------------------------------
@@ -730,6 +738,9 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   giantEmoteAlign: 'center',
   showGifs: true,
   gifScale: 1,
+  showUploadedImages: false,
+  uploadedImageScale: 1,
+  uploadedImagesFrom: 'trusted',
 };
 
 // Clamp ranges so a builder (or a hand-edited saved config) can't produce a
@@ -745,6 +756,7 @@ export const OVERLAY_LIMITS = {
   messageGap: { min: 0, max: 28 },
   emoteScale: { min: 0.5, max: 3 },
   gifScale: { min: 0.5, max: 2 },
+  uploadedImageScale: { min: 0.5, max: 3 },
   badgeScale: { min: 0.5, max: 2.5 },
   fontWeight: { min: 300, max: 700 },
   textShadowSize: { min: 0, max: 12 },
@@ -873,6 +885,15 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
       OVERLAY_LIMITS.gifScale.min,
       OVERLAY_LIMITS.gifScale.max,
     ),
+    // Absent on configs saved before uploaded pictures existed: off, so every
+    // link stays text as it always did.
+    showUploadedImages: s.showUploadedImages === true,
+    uploadedImageScale: clamp(
+      Number.isFinite(s.uploadedImageScale) ? s.uploadedImageScale : 1,
+      OVERLAY_LIMITS.uploadedImageScale.min,
+      OVERLAY_LIMITS.uploadedImageScale.max,
+    ),
+    uploadedImagesFrom: s.uploadedImagesFrom === 'everyone' ? 'everyone' : 'trusted',
     textAlign: s.textAlign === 'center' || s.textAlign === 'right' ? s.textAlign : 'left',
     cheerDisplay: s.cheerDisplay === 'event' ? 'event' : 'message',
     fontWeight:

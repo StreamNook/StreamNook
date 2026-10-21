@@ -2035,6 +2035,19 @@ const OverlayEditor = () => {
               <Slider value={style.gifScale ?? 1} min={OVERLAY_LIMITS.gifScale.min} max={OVERLAY_LIMITS.gifScale.max} step={0.05} onChange={(v) => set('gifScale', v)} format={(v) => `${v.toFixed(2)}x`} />
             </SettingsRow>
           </SettingsSubGroup>
+          <SettingsRow onReset={resetFor('showUploadedImages')} title="Uploaded images" description="Pictures chatters send with StreamNook draw in the message instead of their link." help="Only links to StreamNook's image hosts draw. Trusted chatters means the streamer, mods, VIPs and subscribers. Deleted messages still leave the overlay." control={<Toggle enabled={style.showUploadedImages === true} onChange={() => set('showUploadedImages', !style.showUploadedImages)} />} />
+          <SettingsSubGroup>
+            <SettingsRow onReset={resetFor('uploadedImagesFrom')} title="From" description="Whose pictures draw on your overlay." disabled={style.showUploadedImages !== true}>
+              <SegmentedSelect
+                value={style.uploadedImagesFrom ?? 'trusted'}
+                onChange={(v) => set('uploadedImagesFrom', v)}
+                options={[{ value: 'trusted', label: 'Trusted chatters' }, { value: 'everyone', label: 'Everyone' }]}
+              />
+            </SettingsRow>
+            <SettingsRow onReset={resetFor('uploadedImageScale')} title="Size" description="How tall uploaded pictures draw on your overlay." disabled={style.showUploadedImages !== true}>
+              <Slider value={style.uploadedImageScale ?? 1} min={OVERLAY_LIMITS.uploadedImageScale.min} max={OVERLAY_LIMITS.uploadedImageScale.max} step={0.05} onChange={(v) => set('uploadedImageScale', v)} format={(v) => `${v.toFixed(2)}x`} />
+            </SettingsRow>
+          </SettingsSubGroup>
           <SettingsRow onReset={resetFor('showPersonalEmotes')} title="Personal emotes" titleBadge={<SourceScope sources={['twitch']} />} description="Emotes a 7TV subscriber brings into every channel from their personal set." help="A subscriber's personal 7TV set works in every channel, so chatters can show emotes your channel never added. Off renders those as the word that was typed. Your channel's own 7TV emotes are unaffected." control={<Toggle enabled={style.showPersonalEmotes !== false} onChange={() => set('showPersonalEmotes', style.showPersonalEmotes === false)} />} />
           <SettingsRow onReset={resetFor('showBadges')} title="Badges" description="Badges the platform sends: subscriber, moderator, VIP, and the rest." help="These arrive with each message from Twitch, Kick, YouTube and TikTok. Chat-client badges and the StreamNook member badge are separate, on the Add-on badges switch below, so turning this off leaves those showing." control={<Toggle enabled={style.showBadges} onChange={() => set('showBadges', !style.showBadges)} />} />
           <SettingsSubGroup>

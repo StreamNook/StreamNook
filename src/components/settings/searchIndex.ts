@@ -1978,6 +1978,26 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    title: 'Uploaded images',
+    description: 'Pictures chatters send with StreamNook draw in the message instead of their link. Images on stream, picture links.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'From',
+    parent: 'Uploaded images',
+    description: 'Whose pictures draw on your overlay: trusted chatters (the streamer, mods, VIPs and subscribers) or everyone.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'Size',
+    parent: 'Uploaded images',
+    description: 'How tall uploaded pictures draw on your overlay, from half to three times their usual size.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
     title: 'Personal emotes',
     description: "Show or hide 7TV personal emotes on the overlay. A subscriber's own set works in every channel, so chatters show emotes your channel never added. Unknown emotes, random emotes, emotes not in my channel. Previously \"7TV personal emotes\"."
   },
