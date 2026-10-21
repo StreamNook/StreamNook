@@ -7,6 +7,11 @@ import { isPowerSaveMode } from './nativeBridge';
 import { setLowPower } from '../utils/lowPower';
 import { Logger } from '../utils/logger';
 
+// Read once at module load, before the shell's first render, so a phone
+// already on Battery Saver never draws a frame of animated emotes first.
+// installLowPower keeps it current and tells the core.
+if (typeof window !== 'undefined') setLowPower(isPowerSaveMode() ?? false);
+
 function tellCore(on: boolean): void {
   void invoke('set_low_power', { on }).catch((err) => Logger.debug('[LowPower] set_low_power failed:', err));
 }

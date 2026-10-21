@@ -210,9 +210,20 @@ const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number, still
   return [...images].sort((a, b) => rank(a) - rank(b))[0]?.url;
 };
 
+// Whether a badge moves: a frame count says so when the API sent one; without
+// it, an animated badge is the one publishing a `_static` still beside a
+// webp/avif that is not.
+const badgeAnimates = (images: BadgeImageV4[] | undefined): boolean => {
+  if (!images?.length) return false;
+  if (images.some((img) => img.frameCount !== undefined)) return images.some((img) => (img.frameCount ?? 1) > 1);
+  const moving = images.some((img) => !img.url.includes('_static') && /webp|avif/.test(img.mime ?? img.url));
+  return moving && images.some((img) => img.url.includes('_static'));
+};
+
 export const getBadgeImageUrl = (badge: BadgeV4, still = false): string => {
-  // Battery Saver: the published still, from the CDN (the disk cache holds the animated file).
-  if (still) {
+  // Battery Saver: an animated badge's published still, from the CDN (the disk
+  // cache holds the animated file). A badge that never moves keeps its cached file.
+  if (still && badgeAnimates(badge.images)) {
     const url = pickBadgeImage(badge.images, 4, true);
     if (url?.includes('_static')) return url;
   }

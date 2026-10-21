@@ -22,4 +22,14 @@ describe('getBadgeImageUrl', () => {
     expect(getBadgeImageUrl(badge).endsWith('4x.webp')).toBe(true);
     expect(getBadgeImageUrl(badge).endsWith('_static.webp')).toBe(false);
   });
+
+  it('a badge that never moves keeps its cached file', () => {
+    const badge = {
+      id: 's',
+      name: 's',
+      localUrl: 'asset://badge-s',
+      images: [{ url: 'https://cdn.7tv.app/badge/s/4x.png', scale: 4, mime: 'image/png', frameCount: 1 }],
+    };
+    expect(getBadgeImageUrl(badge, true)).toBe('asset://badge-s');
+  });
 });

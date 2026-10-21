@@ -129,9 +129,13 @@ const computeImageLayer = (layer: PaintLayer['ty'], opacity: number, still = fal
     return undefined;
   }
 
-  // Battery Saver: the first scale-1 image is 7TV's `_static` still, drawn from
-  // the CDN (the layer's cached file is the animated one).
-  const img = still ? layer.images.find((i) => i.scale === 1) : pickPaintLayerImage(layer.images);
+  // Battery Saver: an animated layer draws 7TV's scale-1 `_static` still, from
+  // the CDN (the layer's cached file is the animated one). A layer that never
+  // moves keeps its ordinary pick and its cached file.
+  const goStill = still && layer.images.some((i) => i.frameCount > 1);
+  const img = goStill
+    ? (layer.images.find((i) => i.scale === 1 && i.frameCount <= 1) ?? layer.images.find((i) => i.scale === 1))
+    : pickPaintLayerImage(layer.images);
 
   if (!img) {
     return undefined;
@@ -139,7 +143,7 @@ const computeImageLayer = (layer: PaintLayer['ty'], opacity: number, still = fal
 
   // Use local URL if available (desktop cache); the hosted overlay falls to the
   // CDN url, which is exactly what a browser source wants.
-  const url = still ? img.url : img.localUrl || img.url;
+  const url = goStill ? img.url : img.localUrl || img.url;
 
   return {
     opacity,

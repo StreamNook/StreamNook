@@ -99,6 +99,16 @@ async function push(): Promise<void> {
 export function installVideoCap(): () => void {
   void push();
   const onChange = () => void push();
+  // Every return to the app tries again too: sn:display-changed now fires only
+  // on a size change, so a boot push that failed would otherwise never retry.
+  // An unchanged rung sends nothing (nextCap).
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') void push();
+  };
   window.addEventListener('sn:display-changed', onChange);
-  return () => window.removeEventListener('sn:display-changed', onChange);
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    window.removeEventListener('sn:display-changed', onChange);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
 }

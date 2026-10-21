@@ -1457,7 +1457,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // every emote from the CDN.
       // Static mode: the CDN's first-frame file, bypassing the animated disk
       // cache (a static URL under the animated key would corrupt it).
-      const wantStatic = !giant && (stillEmotes || animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering));
+      // Battery Saver stills the gigantified emote too, the costliest one.
+      const wantStatic = stillEmotes || (!giant && (animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering)));
       const cachedEmoteUrl = !wantStatic && segment.emoteId && (!giant || emoteProvider === '7tv')
         ? getCachedEmoteUrl(segment.emoteId, emoteProvider, emoteTier)
         : undefined;

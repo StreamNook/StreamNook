@@ -297,9 +297,7 @@ html[data-sn-low-power] .sn-atm-breathe-2,
 html[data-sn-low-power] .cologne-wash,
 html[data-sn-low-power] .hype-train-fill-wave,
 html[data-sn-low-power] .hype-train-progress-rainbow::before,
-html[data-sn-low-power] .hype-train-progress-golden::before,
-html[data-sn-low-power] .hype-train-badge-glass::after,
-html[data-sn-low-power] .hype-train-badge-glass-golden::after {
+html[data-sn-low-power] .hype-train-progress-golden::before {
   animation: none !important;
 }
 html[data-sn-low-power] .card-chip-shine > span {
