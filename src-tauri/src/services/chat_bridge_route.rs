@@ -16,6 +16,11 @@
 //! - `UNPARK:<key>` sends what waited, in order, then `PARK_END:<key>`, then
 //!   live frames again. If more arrived than were kept, `PARK_GAP:<key>` goes
 //!   first so the window drops its older rows instead of showing a hole.
+//! - A state frame (the room's modes, the account's own badges and color
+//!   there) is never held back: it says how the channel stands, not what
+//!   happened in it, and Twitch sends it only once per JOIN, so a busy
+//!   channel's backlog pushed it out of the ring and the chat never learned
+//!   the account moderates it.
 //!
 //! The rule everywhere is to deliver when unsure: a frame with no channel (a
 //! status line, a frame whose channel is not known) always goes through.
@@ -24,30 +29,31 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 /// One frame on the bridge: the text the page parses, the channel it belongs
-/// to when known, and whether it is a chat row (counted while held back) that
-/// mentions the viewer.
+/// to when known, whether it is a chat row (counted while held back) that
+/// mentions the viewer, and whether it is channel state (never held back).
 #[derive(Clone, Debug)]
 pub struct BridgeFrame {
     pub channel: Option<Arc<str>>,
     pub text: Arc<str>,
     pub row: bool,
     pub mention: bool,
+    pub state: bool,
 }
 
 impl BridgeFrame {
     /// A frame for every window (status lines, frames of unknown channel).
     pub fn all(text: impl Into<Arc<str>>) -> Self {
-        Self { channel: None, text: text.into(), row: false, mention: false }
+        Self { channel: None, text: text.into(), row: false, mention: false, state: false }
     }
 
     /// A non-row frame for one channel (room state, a deletion, a timeout).
     pub fn channel(channel: &str, text: impl Into<Arc<str>>) -> Self {
-        Self { channel: Some(channel_key(channel)), text: text.into(), row: false, mention: false }
+        Self { channel: Some(channel_key(channel)), text: text.into(), row: false, mention: false, state: false }
     }
 
     /// A chat row for one channel.
     pub fn row(channel: &str, text: impl Into<Arc<str>>, mention: bool) -> Self {
-        Self { channel: Some(channel_key(channel)), text: text.into(), row: true, mention }
+        Self { channel: Some(channel_key(channel)), text: text.into(), row: true, mention, state: false }
     }
 
     /// The channel when known, else a frame for every window.
@@ -56,6 +62,15 @@ impl BridgeFrame {
             Some(c) if !c.trim().is_empty() => Self::channel(c, text),
             _ => Self::all(text),
         }
+    }
+
+    /// The same frame, marked as channel state: delivered at once even while
+    /// the channel is held back. Only for frames that replace what the page
+    /// knew (ROOMSTATE, USER_BADGES, USER_COLOR), never for rows or deletions,
+    /// which must stay in order with the rows around them.
+    pub fn as_state(mut self) -> Self {
+        self.state = true;
+        self
     }
 }
 
@@ -135,6 +150,9 @@ impl SocketRoute {
             return Some(f.text.clone());
         };
         if let Some(h) = self.held.get_mut(ch) {
+            if f.state {
+                return Some(f.text.clone());
+            }
             if h.ring.len() >= h.cap {
                 h.ring.pop_front();
                 h.dropped = true;
@@ -237,5 +255,31 @@ mod tests {
         r.on_frame(&BridgeFrame::row("xqc", "1", false));
         r.on_line("UNSUB:xqc");
         assert!(r.on_line("UNPARK:xqc").is_empty());
+    }
+
+    #[test]
+    fn a_held_back_chat_still_learns_how_it_stands() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:10:xqc");
+        assert!(r.on_frame(&BridgeFrame::row("xqc", "1", false)).is_none());
+        let badges = BridgeFrame::channel("xqc", "USER_BADGES:#xqc:moderator/1").as_state();
+        assert_eq!(r.on_frame(&badges).as_deref(), Some("USER_BADGES:#xqc:moderator/1"));
+        assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:0:1:xqc"], "state is not a new message");
+        assert!(r.on_frame(&BridgeFrame::channel("xqc", "del")).is_none(), "deletions stay in order");
+        assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["1", "del", "PARK_END:xqc"]);
+    }
+
+    #[test]
+    fn state_never_falls_off_a_full_backlog() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:2:xqc");
+        let badges = BridgeFrame::channel("xqc", "USER_BADGES:#xqc:moderator/1").as_state();
+        assert!(r.on_frame(&badges).is_some());
+        for t in ["1", "2", "3"] {
+            r.on_frame(&BridgeFrame::row("xqc", t, false));
+        }
+        assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["PARK_GAP:xqc", "2", "3", "PARK_END:xqc"]);
     }
 }
