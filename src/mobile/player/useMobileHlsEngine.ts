@@ -37,6 +37,8 @@ import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
 import { isCodecFailure } from '../../utils/codecFailure';
 import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
+import { resyncOnResume } from './pausePolicy';
+import { isMainParked } from '../appPresence';
 
 // The earning gate (drops progress, channel points, watch time) is Rust's
 // (services/earning_gate.rs): the player only says what its video does. A
@@ -109,6 +111,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     let stallGiveUpTimer: number | null = null;
     let reloadTimer: number | null = null;
     let loadStopped = false;
+    // When the viewer paused (null while playing). Past RESYNC_AFTER_PAUSE_MS
+    // the core has parked the relay, so play starts over at the live edge.
+    let pausedAt: number | null = null;
     // The route the current player was built on, whether it already fell back
     // from low latency, and how many rebuilds this URL has had since it last
     // played. All per URL: a new URL starts the count again.
@@ -305,10 +310,21 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       }
       // Where the cushion lives in hls.js (its start and resync position, and
       // the whole-segment governor's target), kept in step with the core.
-      cushionTimer = window.setInterval(() => {
-        if (!live()) return;
+      // Rests while loading is stopped for a pause; the resume re-arms it.
+      const armCushion = () => {
+        if (cushionTimer !== null) return;
         hls.config.liveSyncDuration = llTargetRaw + linkCushion();
-      }, 2000);
+        cushionTimer = window.setInterval(() => {
+          if (!live()) return;
+          hls.config.liveSyncDuration = llTargetRaw + linkCushion();
+        }, 2000);
+      };
+      const disarmCushion = () => {
+        if (cushionTimer === null) return;
+        window.clearInterval(cushionTimer);
+        cushionTimer = null;
+      };
+      armCushion();
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!live()) return;
@@ -456,6 +472,8 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           // resuming behaves exactly as it does today. Passing -1 here would
           // snap to the live edge and silently skip content on a short pause.
           hls.startLoad();
+          armCushion();
+          if (!stopGovernor) stopGovernor = startGovernor();
           Logger.debug(`[MobilePlayer] segment loading resumed (${why})`);
         } catch {
           /* player already torn down */
@@ -469,6 +487,20 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
 
       const onPlayIntent = () => {
         if (!live()) return;
+        // Paused long enough that the core has parked the relay and the buffer
+        // is far behind live: start over at the live edge through the same
+        // rebuild a failed load takes, not a stale playhead. Same URL, so an
+        // audio-only stream stays audio-only. The core's own park flag counts
+        // too: its timer and this one start a moment apart.
+        if (!vodStart && !frozen && (resyncOnResume(pausedAt, Date.now()) || isMainParked())) {
+          pausedAt = null;
+          Logger.info('[MobilePlayer] paused past the live window; rebuilding at the live edge');
+          teardownPlayer();
+          setState('loading');
+          build(lowLatency);
+          return;
+        }
+        pausedAt = null;
         resumeLoad('play');
       };
 
@@ -476,6 +508,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         if (!live()) return;
         // Belt and braces: if anything resumed playback without a `play` event
         // reaching us, do not leave the loader stopped under a running element.
+        pausedAt = null;
         resumeLoad('playing');
         stalls.end();
         endStallWatch();
@@ -511,6 +544,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       };
       const onPauseOrEnd = () => {
         if (!live()) return;
+        if (video.paused && !video.ended && !frozen && pausedAt === null) pausedAt = Date.now();
         stalls.cancel();
         endStallWatch();
         // Stop pulling segments once the pause outlives the grace window. See
@@ -528,6 +562,11 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             loadStopped = true;
             try {
               hls.stopLoad();
+              // Nothing to steer while nothing loads: the cushion and the
+              // governor rest until the resume.
+              disarmCushion();
+              stopGovernor?.();
+              stopGovernor = null;
               Logger.debug('[MobilePlayer] paused past the grace window, segment loading stopped');
             } catch {
               /* player already torn down */
@@ -572,7 +611,8 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // it needs the buffer floor to stay safe; the ordinary one just mops up
       // drift against the forward buffer.
       // A VOD has no live edge to hold: no governor at all.
-      stopGovernor = vodStart
+      const startGovernor = (): (() => void) | null =>
+        vodStart
         ? null
         : ll
         ? startLatencyGovernor(hls, video, {
@@ -597,6 +637,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             log: Logger.debug,
           })
         : startLatencyGovernor(hls, video, { label: 'mobile', log: Logger.debug });
+      stopGovernor = startGovernor();
     };
 
     // A restart or quality switch raises isRestartingStream while the core
