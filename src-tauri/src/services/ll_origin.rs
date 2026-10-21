@@ -1068,11 +1068,14 @@ impl LlOrigin {
     }
 
     /// The player paused past earning_gate::PARK_AFTER: stop downloading. The reader
-    /// ends and the edge is held exactly as last served, so the playlist never
-    /// shrinks under a client that already read it; a paused player's blocking
-    /// reloads time out and get that same playlist back (serve_playlist_apple).
-    /// `unpark` restarts the reader, whose catch-up rebuilds at the live edge
-    /// (plan_catch_up).
+    /// ends and the half-read in-progress segment is closed the way an abandoned
+    /// tail is (stream_response): what arrived stays, the transmuxer drops its
+    /// partial input and bridges the loss, and the segment is finished at the sum
+    /// of its parts. So the playlist never shrinks under a client that read it, a
+    /// paused player's blocking reloads get it back (serve_playlist_apple), and a
+    /// reader restarted soon after (`unpark`, a gap too small to rebuild) carries on
+    /// from a complete segment instead of an unfinishable one. A long park rebuilds
+    /// at the live edge (plan_catch_up).
     pub fn park(&self) -> bool {
         if !self.is_active() || self.parked.swap(true, Ordering::SeqCst) {
             return false;
@@ -1082,8 +1085,9 @@ impl LlOrigin {
             h.abort();
         }
         if let Some(t) = self.transmux.lock().unwrap().as_mut() {
-            t.reset_assembly();
+            t.drop_partial_input();
         }
+        self.close_tail();
         self.wake_serves();
         info!("[LLOrigin] parked (player paused)");
         true
@@ -1108,6 +1112,28 @@ impl LlOrigin {
 
     pub fn is_parked(&self) -> bool {
         self.parked.load(Ordering::SeqCst)
+    }
+
+    /// The in-progress tail at a park: finished at what it holds, or dropped when
+    /// it is still a bare shell (listed only as the preload hint, so no listed
+    /// segment disappears).
+    fn close_tail(&self) {
+        let tail = {
+            let mut g = self.live_edge.lock().unwrap();
+            let Some(edge) = g.as_mut() else { return };
+            let (pop, finish) = match edge.segments.back() {
+                Some(s) if !s.complete && s.parts.is_empty() => (edge.segments.len() > 1, None),
+                Some(s) if !s.complete => (false, Some(s.sn)),
+                _ => (false, None),
+            };
+            if pop {
+                edge.segments.pop_back();
+            }
+            finish
+        };
+        if let Some(sn) = tail {
+            self.finish_segment(sn);
+        }
     }
 
     /// Probe the upstream and, if it's a low-latency broadcast we can serve, build the
@@ -3741,6 +3767,31 @@ mod tests {
 
     fn held_sns(origin: &LlOrigin) -> Vec<u64> {
         origin.live_edge.lock().unwrap().as_ref().unwrap().segments.iter().map(|s| s.sn).collect()
+    }
+
+    #[test]
+    fn park_finishes_a_half_read_tail_at_its_parts() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![1], vec![2]])));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        assert!(origin.park());
+        let g = origin.live_edge.lock().unwrap();
+        let tail = g.as_ref().unwrap().segments.back().unwrap();
+        assert_eq!(tail.sn, 2);
+        assert!(tail.complete, "a restarted reader must find a finished segment");
+        let sum: f64 = tail.parts.iter().map(|p| p.duration).sum();
+        assert!((tail.duration - sum).abs() < 1e-9);
+    }
+
+    #[test]
+    fn park_drops_a_bare_shell() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, Vec::new()));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        assert!(origin.park());
+        assert_eq!(held_sns(&origin), vec![1]);
     }
 
     #[test]

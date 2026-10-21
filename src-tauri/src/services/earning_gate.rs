@@ -91,6 +91,8 @@ enum ParkStep {
     Unpark,
     Rewake(u64),
     Clear,
+    /// A new stream or a stop: forget the park (the origin is being stopped anyway).
+    Forget,
     Nothing,
 }
 
@@ -148,7 +150,7 @@ impl ParkGate {
         let was = self.state == Park::Parked;
         self.generation += 1;
         self.state = Park::Active;
-        if was { ParkStep::Clear } else { ParkStep::Nothing }
+        if was { ParkStep::Forget } else { ParkStep::Nothing }
     }
 }
 
@@ -248,6 +250,9 @@ fn apply_park(step: ParkStep) {
             ll_origin::unpark();
             app_presence::set_main_parked(false);
         }
+        // reset_ad_state stops the origin right after; restarting its reader
+        // first would only start a download to abort.
+        ParkStep::Forget => app_presence::set_main_parked(false),
         ParkStep::Nothing => {}
     }
 }
@@ -323,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn teardown_and_reset_clear_the_park() {
+    fn teardown_clears_and_reset_forgets_the_park() {
         let mut p = ParkGate::default();
         let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
         assert_eq!(p.expire(generation), ParkStep::Park);
@@ -331,7 +336,7 @@ mod tests {
         assert_eq!(p.relay_wake(), ParkStep::Nothing);
         let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
         assert_eq!(p.expire(generation), ParkStep::Park);
-        assert_eq!(p.reset(), ParkStep::Clear);
+        assert_eq!(p.reset(), ParkStep::Forget);
         assert_eq!(p.reset(), ParkStep::Nothing);
     }
 
