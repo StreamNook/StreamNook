@@ -163,6 +163,8 @@ final class AppModel {
             }.value
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
+            core.setLowPower(PowerState.shared.lowPower)
+            PowerState.shared.onChange = { [core] on in core.setLowPower(on) }
             log.notice("core started (\(core.kind, privacy: .public)) in \(self.startMS ?? 0) ms, codecs \(codecs.joined(separator: ","), privacy: .public)")
             return true
         } catch {
@@ -528,6 +530,8 @@ final class AppModel {
             whispers.setInFront(false)
         }
         if state == "foreground" {
+            // A Low Power Mode change while suspended may not have been posted.
+            PowerState.shared.refresh()
             whispers.setInFront(true)
             Task { await signIn.refresh() }
             Task { await home.resumed() }

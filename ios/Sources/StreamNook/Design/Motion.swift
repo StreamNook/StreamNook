@@ -1,5 +1,6 @@
 import SNKit
 import SwiftUI
+import UIKit
 
 /// The motion StreamNook's surfaces use. Movement is dropped under Reduced or Off motion (the
 /// setting) and under the phone's own Reduce Motion; fades stay unless motion is Off.
@@ -53,8 +54,17 @@ private struct MotionScope: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var system
 
     func body(content: Content) -> some View {
-        content.environment(\.snStill, system || Look.shared.motion.dropsMovement)
+        // Low Power Mode drops movement too, whatever the setting says.
+        content.environment(\.snStill, system || Look.shared.motion.dropsMovement || PowerState.shared.lowPower)
     }
+}
+
+/// UIKit's view of the motion state (SwiftUI reads `snStill`): stills under Reduce Motion or Low
+/// Power Mode; moving decoration only at Full motion.
+@MainActor
+enum MotionGate {
+    static var still: Bool { UIAccessibility.isReduceMotionEnabled || PowerState.shared.lowPower }
+    static var decor: Bool { Look.shared.motion == .full && !still }
 }
 
 private struct SettleIn: ViewModifier {
