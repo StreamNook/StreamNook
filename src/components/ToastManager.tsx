@@ -201,8 +201,8 @@ const ToastManager = () => {
   // Thin wrapper so existing callers keep the (soundType?: string) signature.
   // Actual sound generation lives in utils/notificationSound so chat highlights
   // can share the same AudioContext + envelope library.
-  const playNotificationSound = useCallback((soundType?: string) => {
-    playGatedNotificationSound(soundType);
+  const playNotificationSound = useCallback((soundType?: string, volume?: number) => {
+    playGatedNotificationSound(soundType, volume);
   }, []);
 
   // Listen for live stream notifications from backend
@@ -212,9 +212,10 @@ const ToastManager = () => {
     const unlisten = listen<LiveNotification>('show-live-toast', (event) => {
       const notification = event.payload;
 
-      // Play sound if enabled
-      if (settings.live_notifications?.play_sound) {
-        playNotificationSound(settings.live_notifications?.sound_type);
+      // The Test button plays its own sound; a real go-live plays here, at the
+      // chosen volume.
+      if (settings.live_notifications?.play_sound && !notification.is_test) {
+        playNotificationSound(settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume);
       }
 
       // Create a rich notification message with all available data
@@ -308,7 +309,7 @@ const ToastManager = () => {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [addToast, settings.live_notifications?.play_sound, settings.live_notifications?.sound_type, playNotificationSound]);
+  }, [addToast, settings.live_notifications?.play_sound, settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume, playNotificationSound]);
 
   const getToastIcon = (type: string) => {
     switch (type) {

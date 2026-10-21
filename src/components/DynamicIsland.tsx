@@ -546,8 +546,6 @@ const DynamicIsland = () => {
 
     const soundEnabled = settings.live_notifications?.play_sound ?? true;
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
-    const showLiveNotifications = settings.live_notifications?.show_live_notifications ?? true;
-    const showFavoriteLiveNotifications = settings.live_notifications?.show_favorite_live_notifications ?? true;
     const showDropsNotifications = settings.live_notifications?.show_drops_notifications ?? true;
     const showFavoriteDropsNotifications = settings.live_notifications?.show_favorite_drops_notifications ?? true;
     const showChannelPointsNotifications = settings.live_notifications?.show_channel_points_notifications ?? true;
@@ -985,24 +983,15 @@ const DynamicIsland = () => {
         const unlisten = listen<LiveNotificationFromBackend>('streamer-went-live', (event) => {
             const data = event.payload;
 
-            // Two watchers emit this event now, and each has its own toggle:
-            // the follow poller (no `source`) and the favorites sweep. Gating
-            // both on `show_live_notifications` would mean turning off
-            // notifications for your follows also silenced your favorites.
             if (!notificationsEnabled) return;
-            const typeEnabled = data.source === 'favorite'
-                ? showFavoriteLiveNotifications
-                : showLiveNotifications;
-            if (!typeEnabled) return;
 
-            // Test notifications mirror whichever surfaces the user has enabled
-            // so the "Test" button previews their actual setup:
+            // Rust's live_announce already dropped any go-live whose type is
+            // switched off, before this event was sent; tests skip that gate on
+            // purpose, so the Test button previews the setup below whatever is on.
             //  - Dynamic Island on -> drop a dummy entry in the notification
             //    center (auto-removed after a few seconds so tests don't pile up).
             //  - Toast on          -> ToastManager shows the decorated toast.
-            // Sound plays exactly once: the toast path owns it when a toast is
-            // shown, otherwise it plays here so the sound still previews with
-            // toast popups off.
+            // The Test button plays the test's sound itself.
             if (data.is_test) {
                 if (useDynamicIsland) {
                     const testId = data.notification_id;
@@ -1030,8 +1019,6 @@ const DynamicIsland = () => {
 
                 if (useToast) {
                     emit('show-live-toast', data);
-                } else if (soundEnabled) {
-                    playNotificationSound();
                 }
                 return;
             }
@@ -1102,7 +1089,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, notificationsEnabled, showLiveNotifications, showFavoriteLiveNotifications, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
+    }, [addNotification, notificationsEnabled, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
 
     // Listen for whisper notifications
     useEffect(() => {

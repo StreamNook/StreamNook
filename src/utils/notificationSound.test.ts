@@ -6,6 +6,8 @@ vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (p: string) => p }));
 
 // Counts tones started on the shared context: each play is one oscillator.
 let tonesStarted = 0;
+// Every gain node's param, so a test can read the volume it was set to.
+let gains: Array<{ value?: number }> = [];
 
 class FakeAudioContext {
   state = 'running';
@@ -17,7 +19,8 @@ class FakeAudioContext {
     return { type: '', frequency: param, connect() {}, start() { tonesStarted += 1; }, stop() {} };
   }
   createGain() {
-    const param = { setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {} };
+    const param = { value: undefined as number | undefined, setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {} };
+    gains.push(param);
     return { gain: param, connect() {} };
   }
 }
@@ -27,6 +30,7 @@ describe('playNotificationSound', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     tonesStarted = 0;
+    gains = [];
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.resetModules();
   });
@@ -66,6 +70,33 @@ describe('playNotificationSound', () => {
     playSound('morse');
     // ... -- ... is eight marks.
     expect(tonesStarted).toBe(8);
+  });
+
+  describe('playTestNotificationSound', () => {
+    const on = { play_sound: true, sound_type: 'boop' };
+
+    it('plays on every press, whatever the shared gate holds', async () => {
+      const { playNotificationSound, playTestNotificationSound } = await import('./notificationSound');
+      playTestNotificationSound(on);
+      playTestNotificationSound(on);
+      playNotificationSound('boop');
+      playTestNotificationSound(on);
+      expect(tonesStarted).toBe(4);
+    });
+
+    it('plays at the picked volume', async () => {
+      const { playTestNotificationSound } = await import('./notificationSound');
+      playTestNotificationSound({ ...on, sound_volume: 50 });
+      expect(tonesStarted).toBe(1);
+      expect(gains.some((g) => g.value === 0.5)).toBe(true);
+    });
+
+    it('stays quiet with Sound off', async () => {
+      const { playTestNotificationSound } = await import('./notificationSound');
+      playTestNotificationSound({ ...on, play_sound: false });
+      playTestNotificationSound(undefined);
+      expect(tonesStarted).toBe(0);
+    });
   });
 });
 

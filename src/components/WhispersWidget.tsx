@@ -315,7 +315,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     // Play notification sound. Shared gate, so a whisper that also raises a
     // notification-center entry pings once rather than twice.
     const playNotificationSound = useCallback(() => {
-        playGatedNotificationSound('whisper');
+        playGatedNotificationSound('whisper', useAppStore.getState().settings.live_notifications?.sound_volume);
     }, []);
 
     // Whispers are recorded by Rust as they arrive (sent ones too); each change
