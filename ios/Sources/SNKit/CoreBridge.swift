@@ -80,8 +80,9 @@ extension CoreBridge {
         return try JSONDecoder().decode(T.self, from: Data(json.utf8))
     }
 
-    /// Tells the core whether the phone is in Low Power Mode (the `set_low_power` command).
-    public func setLowPower(_ on: Bool) {
-        Task { _ = try? await invoke("set_low_power", args: ["on": on]) }
+    /// Tells the core whether the phone is in Low Power Mode (the `set_low_power` command). The
+    /// caller awaits each report before the next, so the core hears changes in order.
+    public func setLowPower(_ on: Bool) async {
+        _ = try? await invoke("set_low_power", args: ["on": on])
     }
 }

@@ -163,8 +163,11 @@ final class AppModel {
             }.value
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
-            core.setLowPower(PowerState.shared.lowPower)
-            PowerState.shared.onChange = { [core] on in core.setLowPower(on) }
+            // One consumer sends every Low Power report, so quick toggles reach the core in order.
+            let (lowPower, report) = AsyncStream<Bool>.makeStream()
+            Task { for await on in lowPower { await core.setLowPower(on) } }
+            report.yield(PowerState.shared.lowPower)
+            PowerState.shared.onChange = { on in report.yield(on) }
             log.notice("core started (\(core.kind, privacy: .public)) in \(self.startMS ?? 0) ms, codecs \(codecs.joined(separator: ","), privacy: .public)")
             return true
         } catch {
