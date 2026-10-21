@@ -2,11 +2,10 @@ import SNKit
 import SwiftUI
 
 /// First-load placeholders shaped like stream cards: a 16:9 block, then a bar at 75 percent and
-/// one at 33 percent. They pulse quietly (no shimmer); the pulse stops when movement is dropped.
+/// one at 33 percent. They pulse quietly (no shimmer); the pulse stops when movement is dropped
+/// or the full player covers them.
 struct SkeletonCards: View {
     var count = 3
-    @Environment(\.snStill) private var still
-    @State private var dim = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -30,11 +29,7 @@ struct SkeletonCards: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
-        .opacity(dim ? 0.5 : 1)
-        .onAppear {
-            guard !still else { return }
-            withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { dim = true }
-        }
+        .modifier(SkeletonPulse())
         .accessibilityLabel("Loading")
     }
 }
@@ -44,8 +39,6 @@ struct SkeletonCards: View {
 /// tiles will, so nothing moves when they arrive.
 struct SkeletonTiles: View {
     var rows = 3
-    @Environment(\.snStill) private var still
-    @State private var dim = false
     @State private var width: CGFloat = 402
 
     var body: some View {
@@ -72,12 +65,29 @@ struct SkeletonTiles: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .padding(.top, CategoryTile.top)
         .padding(.bottom, 16)
-        .opacity(dim ? 0.5 : 1)
-        .onAppear {
-            guard !still else { return }
-            withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { dim = true }
-        }
+        .modifier(SkeletonPulse())
         .accessibilityLabel("Loading")
+    }
+}
+
+/// The skeletons' quiet pulse, stopped when movement is dropped or the full player covers them.
+private struct SkeletonPulse: ViewModifier {
+    @Environment(\.snStill) private var still
+    @Environment(\.shellCovered) private var covered
+    @State private var dim = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.5 : 1)
+            .onChange(of: still || covered, initial: true) { _, stop in
+                if stop {
+                    var quiet = Transaction()
+                    quiet.disablesAnimations = true
+                    withTransaction(quiet) { dim = false }
+                } else {
+                    withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { dim = true }
+                }
+            }
     }
 }
 

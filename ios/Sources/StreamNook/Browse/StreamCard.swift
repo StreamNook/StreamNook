@@ -1,5 +1,6 @@
 import SNKit
 import SwiftUI
+import UIKit
 
 /// A live stream in a list, in StreamNook's card language: a media card holding the preview with
 /// its chips (DROPS and the hype train on top, the viewers and the watch streak below), then the
@@ -397,29 +398,69 @@ struct PartnerMark: View {
 }
 
 /// The row's bare live dot with a halo pinging out of it, still when movement is dropped or the
-/// player covers the list.
+/// player covers the list. The halo is a Core Animation loop: the main thread never runs for it.
 private struct PingDot: View {
     @Environment(\.snStill) private var still
     @Environment(\.shellCovered) private var covered
-    @State private var ping = false
 
     var body: some View {
         ZStack {
-            if !still && !covered {
-                Circle()
-                    .fill(SN.live.opacity(0.6))
-                    .scaleEffect(ping ? 2 : 1)
-                    .opacity(ping ? 0 : 1)
-                    .onAppear {
-                        withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) { ping = true }
-                    }
-                    .onDisappear { ping = false }
-            }
+            if !still && !covered { PingHalo(color: UIColor(SN.live)).allowsHitTesting(false) }
             Circle()
                 .fill(SN.live)
                 .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
         }
         .frame(width: 8, height: 8)
         .accessibilityLabel("Live")
+    }
+}
+
+private struct PingHalo: UIViewRepresentable {
+    let color: UIColor
+    func makeUIView(context: Context) -> PingHaloView { PingHaloView() }
+    func updateUIView(_ view: PingHaloView, context: Context) { view.color = color }
+}
+
+/// Scale 1 to 2 while fading out, every second, eased out (the SwiftUI ping it replaces).
+final class PingHaloView: UIView {
+    var color: UIColor = .systemRed {
+        didSet { disc.backgroundColor = color.withAlphaComponent(0.6).cgColor }
+    }
+    private let disc = CALayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        layer.addSublayer(disc)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        disc.frame = bounds
+        disc.cornerRadius = bounds.width / 2
+        CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // Core Animation drops a layer's animations once it leaves the window.
+        guard window != nil, disc.animation(forKey: "ping") == nil else { return }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 1
+        scale.toValue = 2
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        let ping = CAAnimationGroup()
+        ping.animations = [scale, fade]
+        ping.duration = 1
+        ping.repeatCount = .infinity
+        ping.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ping.preferredFrameRateRange = FrameRate.slowDecor
+        disc.add(ping, forKey: "ping")
     }
 }

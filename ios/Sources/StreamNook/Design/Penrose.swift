@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The StreamNook mark: nine isometric cubes forming a Penrose triangle, each marching one slot
 /// around it on a 1.5 s loop, colored from the theme accent. It keeps marching whatever the
-/// Motion setting says, because a frozen loader reads as a hung app, and draws at the display's
-/// full rate.
+/// Motion setting says, because a frozen loader reads as a hung app, at 30 frames a second, and
+/// rests under the full player.
 ///
 /// The drawing order is the desktop mark's, hand-tuned: several cubes are deliberately drawn in
 /// the wrong depth order, which is what makes the triangle impossible. Each internal seam is
@@ -17,6 +17,7 @@ struct PenroseMark: View {
     var centered = true
     /// The logo at rest, as StreamNook's brand mark beside words (never as a loader).
     var still = false
+    @Environment(\.shellCovered) private var covered
 
     private static let box = CGRect(x: 14.68, y: 12, width: 128.64, height: 146)
     private static let loop = 1.5
@@ -25,7 +26,7 @@ struct PenroseMark: View {
 
     var body: some View {
         let accent = Look.shared.palette.accent
-        TimelineView(.animation(paused: still)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || covered)) { timeline in
             let raw = still ? 0 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.loop) / Self.loop
             Canvas { context, size in
                 Self.draw(&context, size: size, raw: raw, accent: accent)
