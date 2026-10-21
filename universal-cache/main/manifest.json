@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1792492724,
+  "last_sync": 1792579772,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -3058,6 +3058,21 @@
                   "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/1e3b6965-2224-44d1-a67a-6d186c1fb17d/3",
                   "title": "GP Explorer 3",
                   "description": "This badge was earned by watching 15 minutes of GP Explorer 3 on any of the broadcasting channels.",
+                  "click_action": null,
+                  "click_url": null
+                }
+              ]
+            },
+            {
+              "set_id": "gray-zone-warfare-gold",
+              "versions": [
+                {
+                  "id": "1",
+                  "image_url_1x": "https://static-cdn.jtvnw.net/badges/v1/29bd60c0-72a3-4151-8bb8-73153add8f85/1",
+                  "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/29bd60c0-72a3-4151-8bb8-73153add8f85/2",
+                  "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/29bd60c0-72a3-4151-8bb8-73153add8f85/3",
+                  "title": "Gray Zone Warfare (Gold)",
+                  "description": "This badge was earned by subscribing or gifting a sub to a streamer in the Gray Zone Warfare category",
                   "click_action": null,
                   "click_url": null
                 }
@@ -6394,6 +6409,21 @@
               ]
             },
             {
+              "set_id": "the-mox",
+              "versions": [
+                {
+                  "id": "1",
+                  "image_url_1x": "https://static-cdn.jtvnw.net/badges/v1/1b9b6fbf-9100-4b2c-9bdf-8be0f1456ff9/1",
+                  "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/1b9b6fbf-9100-4b2c-9bdf-8be0f1456ff9/2",
+                  "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/1b9b6fbf-9100-4b2c-9bdf-8be0f1456ff9/3",
+                  "title": "The Mox",
+                  "description": "This badge was earned by subscribing or gifting a sub to a streamer in the Cyberpunk 2077 category",
+                  "click_action": null,
+                  "click_url": null
+                }
+              ]
+            },
+            {
               "set_id": "the-onryos-mask",
               "versions": [
                 {
@@ -7630,10 +7660,10 @@
             }
           ]
         },
-        "cached_at": 1792492720
+        "cached_at": 1792579757
       },
       "metadata": {
-        "timestamp": 1792492720,
+        "timestamp": 1792579757,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -7653,7 +7683,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 502
+      "position": 504
     },
     "metadata:60-seconds_1-v1": {
       "id": "metadata:60-seconds_1-v1",
@@ -7669,7 +7699,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 459
+      "position": 461
     },
     "metadata:60-seconds_2-v1": {
       "id": "metadata:60-seconds_2-v1",
@@ -7685,7 +7715,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 460
+      "position": 462
     },
     "metadata:60-seconds_3-v1": {
       "id": "metadata:60-seconds_3-v1",
@@ -7701,7 +7731,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 461
+      "position": 463
     },
     "metadata:H1Z1_1-v1": {
       "id": "metadata:H1Z1_1-v1",
@@ -7717,7 +7747,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 495
+      "position": 497
     },
     "metadata:admin-v1": {
       "id": "metadata:admin-v1",
@@ -7733,7 +7763,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 416
+      "position": 418
     },
     "metadata:alone-v1": {
       "id": "metadata:alone-v1",
@@ -7749,7 +7779,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 263
+      "position": 265
     },
     "metadata:ambassador-v1": {
       "id": "metadata:ambassador-v1",
@@ -7765,7 +7795,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 409
+      "position": 411
     },
     "metadata:anomaly-2_1-v1": {
       "id": "metadata:anomaly-2_1-v1",
@@ -7781,7 +7811,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 503
+      "position": 505
     },
     "metadata:anomaly-warzone-earth_1-v1": {
       "id": "metadata:anomaly-warzone-earth_1-v1",
@@ -7797,7 +7827,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 504
+      "position": 506
     },
     "metadata:anonymous-cheerer-v1": {
       "id": "metadata:anonymous-cheerer-v1",
@@ -7813,7 +7843,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 437
+      "position": 439
     },
     "metadata:arc-raiders-launch-2025-v1": {
       "id": "metadata:arc-raiders-launch-2025-v1",
@@ -7829,7 +7859,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 254
+      "position": 256
     },
     "metadata:arcane-season-2-premiere-v1": {
       "id": "metadata:arcane-season-2-premiere-v1",
@@ -7845,7 +7875,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 310
+      "position": 312
     },
     "metadata:artist-badge-v1": {
       "id": "metadata:artist-badge-v1",
@@ -7861,7 +7891,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 398
+      "position": 400
     },
     "metadata:axiom-verge_1-v1": {
       "id": "metadata:axiom-verge_1-v1",
@@ -7877,7 +7907,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 505
+      "position": 507
     },
     "metadata:battlechefbrigade_1-v1": {
       "id": "metadata:battlechefbrigade_1-v1",
@@ -7893,7 +7923,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 482
+      "position": 484
     },
     "metadata:battlechefbrigade_2-v1": {
       "id": "metadata:battlechefbrigade_2-v1",
@@ -7909,7 +7939,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 483
+      "position": 485
     },
     "metadata:battlechefbrigade_3-v1": {
       "id": "metadata:battlechefbrigade_3-v1",
@@ -7925,7 +7955,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 484
+      "position": 486
     },
     "metadata:battlefield-6-v1": {
       "id": "metadata:battlefield-6-v1",
@@ -7941,7 +7971,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 261
+      "position": 263
     },
     "metadata:battlerite_1-v1": {
       "id": "metadata:battlerite_1-v1",
@@ -7957,7 +7987,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 485
+      "position": 487
     },
     "metadata:bits-v1": {
       "id": "metadata:bits-v1",
@@ -7973,7 +8003,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 540
+      "position": 542
     },
     "metadata:bits-v100": {
       "id": "metadata:bits-v100",
@@ -7989,7 +8019,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 541
+      "position": 543
     },
     "metadata:bits-v1000": {
       "id": "metadata:bits-v1000",
@@ -8005,7 +8035,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 542
+      "position": 544
     },
     "metadata:bits-v10000": {
       "id": "metadata:bits-v10000",
@@ -8021,7 +8051,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 543
+      "position": 545
     },
     "metadata:bits-v100000": {
       "id": "metadata:bits-v100000",
@@ -8037,7 +8067,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 544
+      "position": 546
     },
     "metadata:bits-v1000000": {
       "id": "metadata:bits-v1000000",
@@ -8053,7 +8083,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 528
+      "position": 530
     },
     "metadata:bits-v1250000": {
       "id": "metadata:bits-v1250000",
@@ -8069,7 +8099,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 462
+      "position": 464
     },
     "metadata:bits-v1500000": {
       "id": "metadata:bits-v1500000",
@@ -8085,7 +8115,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 463
+      "position": 465
     },
     "metadata:bits-v1750000": {
       "id": "metadata:bits-v1750000",
@@ -8101,7 +8131,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 464
+      "position": 466
     },
     "metadata:bits-v200000": {
       "id": "metadata:bits-v200000",
@@ -8117,7 +8147,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 529
+      "position": 531
     },
     "metadata:bits-v2000000": {
       "id": "metadata:bits-v2000000",
@@ -8133,7 +8163,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 465
+      "position": 467
     },
     "metadata:bits-v25000": {
       "id": "metadata:bits-v25000",
@@ -8149,7 +8179,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 530
+      "position": 532
     },
     "metadata:bits-v2500000": {
       "id": "metadata:bits-v2500000",
@@ -8165,7 +8195,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 466
+      "position": 468
     },
     "metadata:bits-v300000": {
       "id": "metadata:bits-v300000",
@@ -8181,7 +8211,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 531
+      "position": 533
     },
     "metadata:bits-v3000000": {
       "id": "metadata:bits-v3000000",
@@ -8197,7 +8227,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 467
+      "position": 469
     },
     "metadata:bits-v3500000": {
       "id": "metadata:bits-v3500000",
@@ -8213,7 +8243,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 468
+      "position": 470
     },
     "metadata:bits-v400000": {
       "id": "metadata:bits-v400000",
@@ -8229,7 +8259,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 532
+      "position": 534
     },
     "metadata:bits-v4000000": {
       "id": "metadata:bits-v4000000",
@@ -8245,7 +8275,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 469
+      "position": 471
     },
     "metadata:bits-v4500000": {
       "id": "metadata:bits-v4500000",
@@ -8261,7 +8291,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 470
+      "position": 472
     },
     "metadata:bits-v5000": {
       "id": "metadata:bits-v5000",
@@ -8277,7 +8307,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 545
+      "position": 547
     },
     "metadata:bits-v50000": {
       "id": "metadata:bits-v50000",
@@ -8293,7 +8323,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 533
+      "position": 535
     },
     "metadata:bits-v500000": {
       "id": "metadata:bits-v500000",
@@ -8309,7 +8339,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 534
+      "position": 536
     },
     "metadata:bits-v5000000": {
       "id": "metadata:bits-v5000000",
@@ -8325,7 +8355,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 471
+      "position": 473
     },
     "metadata:bits-v600000": {
       "id": "metadata:bits-v600000",
@@ -8341,7 +8371,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 535
+      "position": 537
     },
     "metadata:bits-v700000": {
       "id": "metadata:bits-v700000",
@@ -8357,7 +8387,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 536
+      "position": 538
     },
     "metadata:bits-v75000": {
       "id": "metadata:bits-v75000",
@@ -8373,7 +8403,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 537
+      "position": 539
     },
     "metadata:bits-v800000": {
       "id": "metadata:bits-v800000",
@@ -8389,7 +8419,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 538
+      "position": 540
     },
     "metadata:bits-v900000": {
       "id": "metadata:bits-v900000",
@@ -8405,7 +8435,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 539
+      "position": 541
     },
     "metadata:bits-charity-v1": {
       "id": "metadata:bits-charity-v1",
@@ -8421,7 +8451,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 446
+      "position": 448
     },
     "metadata:bits-leader-v1": {
       "id": "metadata:bits-leader-v1",
@@ -8437,7 +8467,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 428
+      "position": 430
     },
     "metadata:bits-leader-v2": {
       "id": "metadata:bits-leader-v2",
@@ -8453,7 +8483,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 429
+      "position": 431
     },
     "metadata:bits-leader-v3": {
       "id": "metadata:bits-leader-v3",
@@ -8469,7 +8499,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 430
+      "position": 432
     },
     "metadata:black-ops-7-global-launch-v1": {
       "id": "metadata:black-ops-7-global-launch-v1",
@@ -8485,7 +8515,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 253
+      "position": 255
     },
     "metadata:borderlands-4-badge---ripper-v1": {
       "id": "metadata:borderlands-4-badge---ripper-v1",
@@ -8501,7 +8531,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 290
+      "position": 292
     },
     "metadata:borderlands-4-badge---vault-symbol-v1": {
       "id": "metadata:borderlands-4-badge---vault-symbol-v1",
@@ -8517,7 +8547,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 289
+      "position": 291
     },
     "metadata:bot-badge-v1": {
       "id": "metadata:bot-badge-v1",
@@ -8533,7 +8563,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 291
+      "position": 293
     },
     "metadata:brawlhalla_1-v1": {
       "id": "metadata:brawlhalla_1-v1",
@@ -8549,7 +8579,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 506
+      "position": 508
     },
     "metadata:broadcaster-v1": {
       "id": "metadata:broadcaster-v1",
@@ -8565,7 +8595,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 417
+      "position": 419
     },
     "metadata:broken-age_1-v1": {
       "id": "metadata:broken-age_1-v1",
@@ -8581,7 +8611,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 507
+      "position": 509
     },
     "metadata:bubsy-the-woolies_1-v1": {
       "id": "metadata:bubsy-the-woolies_1-v1",
@@ -8597,7 +8627,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 487
+      "position": 489
     },
     "metadata:chatter-cs-go-2022-v1": {
       "id": "metadata:chatter-cs-go-2022-v1",
@@ -8613,7 +8643,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 334
+      "position": 336
     },
     "metadata:clip-champ-v1": {
       "id": "metadata:clip-champ-v1",
@@ -8629,7 +8659,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 418
+      "position": 420
     },
     "metadata:clip-the-halls-v1": {
       "id": "metadata:clip-the-halls-v1",
@@ -8645,7 +8675,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 306
+      "position": 308
     },
     "metadata:clips-leader-v1": {
       "id": "metadata:clips-leader-v1",
@@ -8661,7 +8691,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 296
+      "position": 298
     },
     "metadata:clips-leader-v2": {
       "id": "metadata:clips-leader-v2",
@@ -8677,7 +8707,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 297
+      "position": 299
     },
     "metadata:clips-leader-v3": {
       "id": "metadata:clips-leader-v3",
@@ -8693,7 +8723,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 298
+      "position": 300
     },
     "metadata:creator-cs-go-2022-v1": {
       "id": "metadata:creator-cs-go-2022-v1",
@@ -8709,7 +8739,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 335
+      "position": 337
     },
     "metadata:cuphead_1-v1": {
       "id": "metadata:cuphead_1-v1",
@@ -8725,7 +8755,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 493
+      "position": 495
     },
     "metadata:darkest-dungeon_1-v1": {
       "id": "metadata:darkest-dungeon_1-v1",
@@ -8741,7 +8771,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 508
+      "position": 510
     },
     "metadata:deceit_1-v1": {
       "id": "metadata:deceit_1-v1",
@@ -8757,7 +8787,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 497
+      "position": 499
     },
     "metadata:destiny-2-final-shape-raid-race-v1": {
       "id": "metadata:destiny-2-final-shape-raid-race-v1",
@@ -8773,7 +8803,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 318
+      "position": 320
     },
     "metadata:destiny-2-the-final-shape-streamer-v1": {
       "id": "metadata:destiny-2-the-final-shape-streamer-v1",
@@ -8789,7 +8819,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 319
+      "position": 321
     },
     "metadata:devil-may-cry-hd_1-v1": {
       "id": "metadata:devil-may-cry-hd_1-v1",
@@ -8805,7 +8835,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 472
+      "position": 474
     },
     "metadata:devil-may-cry-hd_2-v1": {
       "id": "metadata:devil-may-cry-hd_2-v1",
@@ -8821,7 +8851,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 473
+      "position": 475
     },
     "metadata:devil-may-cry-hd_3-v1": {
       "id": "metadata:devil-may-cry-hd_3-v1",
@@ -8837,7 +8867,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 474
+      "position": 476
     },
     "metadata:devil-may-cry-hd_4-v1": {
       "id": "metadata:devil-may-cry-hd_4-v1",
@@ -8853,7 +8883,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 475
+      "position": 477
     },
     "metadata:devilian_1-v1": {
       "id": "metadata:devilian_1-v1",
@@ -8869,7 +8899,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 509
+      "position": 511
     },
     "metadata:dragonscimmy-v1": {
       "id": "metadata:dragonscimmy-v1",
@@ -8885,7 +8915,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 246
+      "position": 248
     },
     "metadata:dreamcon-2024-v1": {
       "id": "metadata:dreamcon-2024-v1",
@@ -8901,7 +8931,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 313
+      "position": 315
     },
     "metadata:duelyst_1-v1": {
       "id": "metadata:duelyst_1-v1",
@@ -8917,7 +8947,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 450
+      "position": 452
     },
     "metadata:duelyst_2-v1": {
       "id": "metadata:duelyst_2-v1",
@@ -8933,7 +8963,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 451
+      "position": 453
     },
     "metadata:duelyst_3-v1": {
       "id": "metadata:duelyst_3-v1",
@@ -8949,7 +8979,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 452
+      "position": 454
     },
     "metadata:duelyst_4-v1": {
       "id": "metadata:duelyst_4-v1",
@@ -8965,7 +8995,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 453
+      "position": 455
     },
     "metadata:duelyst_5-v1": {
       "id": "metadata:duelyst_5-v1",
@@ -8981,7 +9011,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 454
+      "position": 456
     },
     "metadata:duelyst_6-v1": {
       "id": "metadata:duelyst_6-v1",
@@ -8997,7 +9027,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 455
+      "position": 457
     },
     "metadata:duelyst_7-v1": {
       "id": "metadata:duelyst_7-v1",
@@ -9013,7 +9043,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 456
+      "position": 458
     },
     "metadata:elden-ring-recluse-v1": {
       "id": "metadata:elden-ring-recluse-v1",
@@ -9029,7 +9059,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 292
+      "position": 294
     },
     "metadata:elden-ring-wylder-v1": {
       "id": "metadata:elden-ring-wylder-v1",
@@ -9045,7 +9075,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 293
+      "position": 295
     },
     "metadata:enter-the-gungeon_1-v1": {
       "id": "metadata:enter-the-gungeon_1-v1",
@@ -9061,7 +9091,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 510
+      "position": 512
     },
     "metadata:eso_1-v1": {
       "id": "metadata:eso_1-v1",
@@ -9077,7 +9107,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 449
+      "position": 451
     },
     "metadata:evo-2025-v1": {
       "id": "metadata:evo-2025-v1",
@@ -9093,7 +9123,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 284
+      "position": 286
     },
     "metadata:extension-v1": {
       "id": "metadata:extension-v1",
@@ -9109,7 +9139,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 447
+      "position": 449
     },
     "metadata:firewatch_1-v1": {
       "id": "metadata:firewatch_1-v1",
@@ -9125,7 +9155,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 511
+      "position": 513
     },
     "metadata:founder-v0": {
       "id": "metadata:founder-v0",
@@ -9141,7 +9171,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 434
+      "position": 436
     },
     "metadata:fright-fest-2025-v1": {
       "id": "metadata:fright-fest-2025-v1",
@@ -9157,7 +9187,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 255
+      "position": 257
     },
     "metadata:frozen-cortext_1-v1": {
       "id": "metadata:frozen-cortext_1-v1",
@@ -9173,7 +9203,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 488
+      "position": 490
     },
     "metadata:frozen-synapse_1-v1": {
       "id": "metadata:frozen-synapse_1-v1",
@@ -9189,7 +9219,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 489
+      "position": 491
     },
     "metadata:game-developer-v1": {
       "id": "metadata:game-developer-v1",
@@ -9205,7 +9235,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 340
+      "position": 342
     },
     "metadata:gamerduo-v1": {
       "id": "metadata:gamerduo-v1",
@@ -9221,7 +9251,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 267
+      "position": 269
     },
     "metadata:gears-of-war-superfan-badge-v1": {
       "id": "metadata:gears-of-war-superfan-badge-v1",
@@ -9237,7 +9267,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 280
+      "position": 282
     },
     "metadata:getting-over-it_1-v1": {
       "id": "metadata:getting-over-it_1-v1",
@@ -9253,7 +9283,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 477
+      "position": 479
     },
     "metadata:getting-over-it_2-v1": {
       "id": "metadata:getting-over-it_2-v1",
@@ -9269,7 +9299,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 478
+      "position": 480
     },
     "metadata:gingko-leaf-v1": {
       "id": "metadata:gingko-leaf-v1",
@@ -9285,7 +9315,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 266
+      "position": 268
     },
     "metadata:glhf-pledge-v1": {
       "id": "metadata:glhf-pledge-v1",
@@ -9301,7 +9331,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 435
+      "position": 437
     },
     "metadata:glitchcon2020-v1": {
       "id": "metadata:glitchcon2020-v1",
@@ -9317,7 +9347,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 408
+      "position": 410
     },
     "metadata:global_mod-v1": {
       "id": "metadata:global_mod-v1",
@@ -9333,7 +9363,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 419
+      "position": 421
     },
     "metadata:gold-pixel-heart-v1": {
       "id": "metadata:gold-pixel-heart-v1",
@@ -9349,7 +9379,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 327
+      "position": 329
     },
     "metadata:gold-pixel-heart---together-for-good-24-v1": {
       "id": "metadata:gold-pixel-heart---together-for-good-24-v1",
@@ -9365,7 +9395,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 307
+      "position": 309
     },
     "metadata:gone-bananas-v1": {
       "id": "metadata:gone-bananas-v1",
@@ -9381,7 +9411,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 301
+      "position": 303
     },
     "metadata:gp-explorer-3-v1": {
       "id": "metadata:gp-explorer-3-v1",
@@ -9397,7 +9427,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 269
+      "position": 271
     },
     "metadata:heavy-bullets_1-v1": {
       "id": "metadata:heavy-bullets_1-v1",
@@ -9413,7 +9443,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 512
+      "position": 514
     },
     "metadata:hello_neighbor_1-v1": {
       "id": "metadata:hello_neighbor_1-v1",
@@ -9429,7 +9459,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 498
+      "position": 500
     },
     "metadata:hornet-v1": {
       "id": "metadata:hornet-v1",
@@ -9445,7 +9475,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 278
+      "position": 280
     },
     "metadata:hype-train-v1": {
       "id": "metadata:hype-train-v1",
@@ -9461,7 +9491,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 412
+      "position": 414
     },
     "metadata:hype-train-v2": {
       "id": "metadata:hype-train-v2",
@@ -9477,7 +9507,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 413
+      "position": 415
     },
     "metadata:innerspace_1-v1": {
       "id": "metadata:innerspace_1-v1",
@@ -9493,7 +9523,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 479
+      "position": 481
     },
     "metadata:innerspace_2-v1": {
       "id": "metadata:innerspace_2-v1",
@@ -9509,7 +9539,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 480
+      "position": 482
     },
     "metadata:jackbox-party-pack_1-v1": {
       "id": "metadata:jackbox-party-pack_1-v1",
@@ -9525,7 +9555,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 513
+      "position": 515
     },
     "metadata:kingdom-new-lands_1-v1": {
       "id": "metadata:kingdom-new-lands_1-v1",
@@ -9541,7 +9571,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 514
+      "position": 516
     },
     "metadata:la-velada-iv-v1": {
       "id": "metadata:la-velada-iv-v1",
@@ -9557,7 +9587,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 315
+      "position": 317
     },
     "metadata:la-velada-v-badge-v1": {
       "id": "metadata:la-velada-v-badge-v1",
@@ -9573,7 +9603,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 285
+      "position": 287
     },
     "metadata:league-of-legends-mid-season-invitational-2025---grey-v1": {
       "id": "metadata:league-of-legends-mid-season-invitational-2025---grey-v1",
@@ -9589,7 +9619,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 287
+      "position": 289
     },
     "metadata:league-of-legends-mid-season-invitational-2025---purple-v1": {
       "id": "metadata:league-of-legends-mid-season-invitational-2025---purple-v1",
@@ -9605,7 +9635,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 288
+      "position": 290
     },
     "metadata:legendus-v1": {
       "id": "metadata:legendus-v1",
@@ -9621,7 +9651,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 286
+      "position": 288
     },
     "metadata:lol-worlds-2025-v1": {
       "id": "metadata:lol-worlds-2025-v1",
@@ -9637,7 +9667,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 260
+      "position": 262
     },
     "metadata:low-v1": {
       "id": "metadata:low-v1",
@@ -9653,7 +9683,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 264
+      "position": 266
     },
     "metadata:marathon-reveal-runner-v1": {
       "id": "metadata:marathon-reveal-runner-v1",
@@ -9669,7 +9699,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 299
+      "position": 301
     },
     "metadata:mel-v1": {
       "id": "metadata:mel-v1",
@@ -9685,7 +9715,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 270
+      "position": 272
     },
     "metadata:minecraft-15th-anniversary-celebration-v1": {
       "id": "metadata:minecraft-15th-anniversary-celebration-v1",
@@ -9701,7 +9731,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 321
+      "position": 323
     },
     "metadata:moderator-v1": {
       "id": "metadata:moderator-v1",
@@ -9717,7 +9747,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 420
+      "position": 422
     },
     "metadata:moments-v1": {
       "id": "metadata:moments-v1",
@@ -9733,7 +9763,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 378
+      "position": 380
     },
     "metadata:moments-v10": {
       "id": "metadata:moments-v10",
@@ -9749,7 +9779,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 379
+      "position": 381
     },
     "metadata:moments-v11": {
       "id": "metadata:moments-v11",
@@ -9765,7 +9795,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 380
+      "position": 382
     },
     "metadata:moments-v12": {
       "id": "metadata:moments-v12",
@@ -9781,7 +9811,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 381
+      "position": 383
     },
     "metadata:moments-v13": {
       "id": "metadata:moments-v13",
@@ -9797,7 +9827,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 382
+      "position": 384
     },
     "metadata:moments-v14": {
       "id": "metadata:moments-v14",
@@ -9813,7 +9843,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 383
+      "position": 385
     },
     "metadata:moments-v15": {
       "id": "metadata:moments-v15",
@@ -9829,7 +9859,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 384
+      "position": 386
     },
     "metadata:moments-v16": {
       "id": "metadata:moments-v16",
@@ -9845,7 +9875,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 385
+      "position": 387
     },
     "metadata:moments-v17": {
       "id": "metadata:moments-v17",
@@ -9861,7 +9891,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 386
+      "position": 388
     },
     "metadata:moments-v18": {
       "id": "metadata:moments-v18",
@@ -9877,7 +9907,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 387
+      "position": 389
     },
     "metadata:moments-v19": {
       "id": "metadata:moments-v19",
@@ -9893,7 +9923,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 388
+      "position": 390
     },
     "metadata:moments-v2": {
       "id": "metadata:moments-v2",
@@ -9909,7 +9939,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 389
+      "position": 391
     },
     "metadata:moments-v20": {
       "id": "metadata:moments-v20",
@@ -9925,7 +9955,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 390
+      "position": 392
     },
     "metadata:moments-v3": {
       "id": "metadata:moments-v3",
@@ -9941,7 +9971,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 391
+      "position": 393
     },
     "metadata:moments-v4": {
       "id": "metadata:moments-v4",
@@ -9957,7 +9987,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 392
+      "position": 394
     },
     "metadata:moments-v5": {
       "id": "metadata:moments-v5",
@@ -9973,7 +10003,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 393
+      "position": 395
     },
     "metadata:moments-v6": {
       "id": "metadata:moments-v6",
@@ -9989,7 +10019,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 394
+      "position": 396
     },
     "metadata:moments-v7": {
       "id": "metadata:moments-v7",
@@ -10005,7 +10035,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 395
+      "position": 397
     },
     "metadata:moments-v8": {
       "id": "metadata:moments-v8",
@@ -10021,7 +10051,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 396
+      "position": 398
     },
     "metadata:moments-v9": {
       "id": "metadata:moments-v9",
@@ -10037,7 +10067,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 397
+      "position": 399
     },
     "metadata:no_audio-v1": {
       "id": "metadata:no_audio-v1",
@@ -10053,7 +10083,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 341
+      "position": 343
     },
     "metadata:no_video-v1": {
       "id": "metadata:no_video-v1",
@@ -10069,7 +10099,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 342
+      "position": 344
     },
     "metadata:okhlos_1-v1": {
       "id": "metadata:okhlos_1-v1",
@@ -10085,7 +10115,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 515
+      "position": 517
     },
     "metadata:overwatch-league-insider_1-v1": {
       "id": "metadata:overwatch-league-insider_1-v1",
@@ -10101,7 +10131,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 458
+      "position": 460
     },
     "metadata:overwatch-league-insider_2018B-v1": {
       "id": "metadata:overwatch-league-insider_2018B-v1",
@@ -10117,7 +10147,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 457
+      "position": 459
     },
     "metadata:overwatch-league-insider_2019A-v1": {
       "id": "metadata:overwatch-league-insider_2019A-v1",
@@ -10133,7 +10163,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 439
+      "position": 441
     },
     "metadata:overwatch-league-insider_2019A-v2": {
       "id": "metadata:overwatch-league-insider_2019A-v2",
@@ -10149,7 +10179,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 440
+      "position": 442
     },
     "metadata:overwatch-league-insider_2019B-v1": {
       "id": "metadata:overwatch-league-insider_2019B-v1",
@@ -10165,7 +10195,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 441
+      "position": 443
     },
     "metadata:overwatch-league-insider_2019B-v2": {
       "id": "metadata:overwatch-league-insider_2019B-v2",
@@ -10181,7 +10211,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 442
+      "position": 444
     },
     "metadata:overwatch-league-insider_2019B-v3": {
       "id": "metadata:overwatch-league-insider_2019B-v3",
@@ -10197,7 +10227,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 443
+      "position": 445
     },
     "metadata:overwatch-league-insider_2019B-v4": {
       "id": "metadata:overwatch-league-insider_2019B-v4",
@@ -10213,7 +10243,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 444
+      "position": 446
     },
     "metadata:overwatch-league-insider_2019B-v5": {
       "id": "metadata:overwatch-league-insider_2019B-v5",
@@ -10229,7 +10259,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 445
+      "position": 447
     },
     "metadata:partner-v1": {
       "id": "metadata:partner-v1",
@@ -10245,7 +10275,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 421
+      "position": 423
     },
     "metadata:path-of-exile-2-badge-v1": {
       "id": "metadata:path-of-exile-2-badge-v1",
@@ -10261,7 +10291,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 281
+      "position": 283
     },
     "metadata:pokemon-legends-z-a-chikorita-v1": {
       "id": "metadata:pokemon-legends-z-a-chikorita-v1",
@@ -10277,7 +10307,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 256
+      "position": 258
     },
     "metadata:pokemon-legends-z-a-tepig-v1": {
       "id": "metadata:pokemon-legends-z-a-tepig-v1",
@@ -10293,7 +10323,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 257
+      "position": 259
     },
     "metadata:pokemon-legends-z-a-totodile-v1": {
       "id": "metadata:pokemon-legends-z-a-totodile-v1",
@@ -10309,7 +10339,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 258
+      "position": 260
     },
     "metadata:power-rangers-v0": {
       "id": "metadata:power-rangers-v0",
@@ -10325,7 +10355,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 516
+      "position": 518
     },
     "metadata:power-rangers-v1": {
       "id": "metadata:power-rangers-v1",
@@ -10341,7 +10371,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 517
+      "position": 519
     },
     "metadata:power-rangers-v2": {
       "id": "metadata:power-rangers-v2",
@@ -10357,7 +10387,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 518
+      "position": 520
     },
     "metadata:power-rangers-v3": {
       "id": "metadata:power-rangers-v3",
@@ -10373,7 +10403,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 519
+      "position": 521
     },
     "metadata:power-rangers-v4": {
       "id": "metadata:power-rangers-v4",
@@ -10389,7 +10419,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 520
+      "position": 522
     },
     "metadata:power-rangers-v5": {
       "id": "metadata:power-rangers-v5",
@@ -10405,7 +10435,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 521
+      "position": 523
     },
     "metadata:power-rangers-v6": {
       "id": "metadata:power-rangers-v6",
@@ -10421,7 +10451,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 522
+      "position": 524
     },
     "metadata:predictions-vblue-1": {
       "id": "metadata:predictions-vblue-1",
@@ -10437,7 +10467,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 343
+      "position": 345
     },
     "metadata:predictions-vblue-10": {
       "id": "metadata:predictions-vblue-10",
@@ -10453,7 +10483,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 400
+      "position": 402
     },
     "metadata:predictions-vblue-2": {
       "id": "metadata:predictions-vblue-2",
@@ -10469,7 +10499,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 344
+      "position": 346
     },
     "metadata:predictions-vblue-3": {
       "id": "metadata:predictions-vblue-3",
@@ -10485,7 +10515,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 401
+      "position": 403
     },
     "metadata:predictions-vblue-4": {
       "id": "metadata:predictions-vblue-4",
@@ -10501,7 +10531,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 402
+      "position": 404
     },
     "metadata:predictions-vblue-5": {
       "id": "metadata:predictions-vblue-5",
@@ -10517,7 +10547,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 403
+      "position": 405
     },
     "metadata:predictions-vblue-6": {
       "id": "metadata:predictions-vblue-6",
@@ -10533,7 +10563,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 404
+      "position": 406
     },
     "metadata:predictions-vblue-7": {
       "id": "metadata:predictions-vblue-7",
@@ -10549,7 +10579,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 405
+      "position": 407
     },
     "metadata:predictions-vblue-8": {
       "id": "metadata:predictions-vblue-8",
@@ -10565,7 +10595,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 406
+      "position": 408
     },
     "metadata:predictions-vblue-9": {
       "id": "metadata:predictions-vblue-9",
@@ -10581,7 +10611,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 407
+      "position": 409
     },
     "metadata:predictions-vgray-1": {
       "id": "metadata:predictions-vgray-1",
@@ -10597,7 +10627,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 345
+      "position": 347
     },
     "metadata:predictions-vgray-2": {
       "id": "metadata:predictions-vgray-2",
@@ -10613,7 +10643,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 346
+      "position": 348
     },
     "metadata:predictions-vpink-1": {
       "id": "metadata:predictions-vpink-1",
@@ -10629,7 +10659,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 410
+      "position": 412
     },
     "metadata:predictions-vpink-2": {
       "id": "metadata:predictions-vpink-2",
@@ -10645,7 +10675,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 347
+      "position": 349
     },
     "metadata:premium-v1": {
       "id": "metadata:premium-v1",
@@ -10661,7 +10691,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 411
+      "position": 413
     },
     "metadata:psychonauts_1-v1": {
       "id": "metadata:psychonauts_1-v1",
@@ -10677,7 +10707,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 523
+      "position": 525
     },
     "metadata:purple-pixel-heart---together-for-good-24-v1": {
       "id": "metadata:purple-pixel-heart---together-for-good-24-v1",
@@ -10693,7 +10723,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 308
+      "position": 310
     },
     "metadata:raging-wolf-helm-v1": {
       "id": "metadata:raging-wolf-helm-v1",
@@ -10709,7 +10739,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 316
+      "position": 318
     },
     "metadata:raiden-v-directors-cut_1-v1": {
       "id": "metadata:raiden-v-directors-cut_1-v1",
@@ -10725,7 +10755,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 494
+      "position": 496
     },
     "metadata:rift_1-v1": {
       "id": "metadata:rift_1-v1",
@@ -10741,7 +10771,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 524
+      "position": 526
     },
     "metadata:rplace-2023-v1": {
       "id": "metadata:rplace-2023-v1",
@@ -10757,7 +10787,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 329
+      "position": 331
     },
     "metadata:ruby-pixel-heart---together-for-good-24-v1": {
       "id": "metadata:ruby-pixel-heart---together-for-good-24-v1",
@@ -10773,7 +10803,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 309
+      "position": 311
     },
     "metadata:sajam-slam-badge-v1": {
       "id": "metadata:sajam-slam-badge-v1",
@@ -10789,7 +10819,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 259
+      "position": 261
     },
     "metadata:samusoffer_beta-v0": {
       "id": "metadata:samusoffer_beta-v0",
@@ -10805,7 +10835,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 496
+      "position": 498
     },
     "metadata:share-the-love-v1": {
       "id": "metadata:share-the-love-v1",
@@ -10821,7 +10851,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 303
+      "position": 305
     },
     "metadata:social-sharing-v1": {
       "id": "metadata:social-sharing-v1",
@@ -10837,7 +10867,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 271
+      "position": 273
     },
     "metadata:social-sharing-v2": {
       "id": "metadata:social-sharing-v2",
@@ -10853,7 +10883,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 272
+      "position": 274
     },
     "metadata:social-sharing-v3": {
       "id": "metadata:social-sharing-v3",
@@ -10869,7 +10899,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 273
+      "position": 275
     },
     "metadata:sonic-racing-crossworlds-v1": {
       "id": "metadata:sonic-racing-crossworlds-v1",
@@ -10885,7 +10915,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 268
+      "position": 270
     },
     "metadata:speedons-5-badge-v1": {
       "id": "metadata:speedons-5-badge-v1",
@@ -10901,7 +10931,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 302
+      "position": 304
     },
     "metadata:staff-v1": {
       "id": "metadata:staff-v1",
@@ -10917,7 +10947,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 422
+      "position": 424
     },
     "metadata:starbound_1-v1": {
       "id": "metadata:starbound_1-v1",
@@ -10933,7 +10963,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 486
+      "position": 488
     },
     "metadata:strafe_1-v1": {
       "id": "metadata:strafe_1-v1",
@@ -10949,7 +10979,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 500
+      "position": 502
     },
     "metadata:stream-for-humanity-2-2025-v1": {
       "id": "metadata:stream-for-humanity-2-2025-v1",
@@ -10965,7 +10995,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 252
+      "position": 254
     },
     "metadata:streamer-awards-2024-v1": {
       "id": "metadata:streamer-awards-2024-v1",
@@ -10981,7 +11011,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 323
+      "position": 325
     },
     "metadata:sub-gift-leader-v1": {
       "id": "metadata:sub-gift-leader-v1",
@@ -10997,7 +11027,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 431
+      "position": 433
     },
     "metadata:sub-gift-leader-v2": {
       "id": "metadata:sub-gift-leader-v2",
@@ -11013,7 +11043,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 432
+      "position": 434
     },
     "metadata:sub-gift-leader-v3": {
       "id": "metadata:sub-gift-leader-v3",
@@ -11029,7 +11059,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 433
+      "position": 435
     },
     "metadata:sub-gifter-v1": {
       "id": "metadata:sub-gifter-v1",
@@ -11045,7 +11075,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 351
+      "position": 353
     },
     "metadata:sub-gifter-v10": {
       "id": "metadata:sub-gifter-v10",
@@ -11061,7 +11091,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 352
+      "position": 354
     },
     "metadata:sub-gifter-v100": {
       "id": "metadata:sub-gifter-v100",
@@ -11077,7 +11107,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 353
+      "position": 355
     },
     "metadata:sub-gifter-v1000": {
       "id": "metadata:sub-gifter-v1000",
@@ -11093,7 +11123,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 354
+      "position": 356
     },
     "metadata:sub-gifter-v150": {
       "id": "metadata:sub-gifter-v150",
@@ -11109,7 +11139,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 355
+      "position": 357
     },
     "metadata:sub-gifter-v200": {
       "id": "metadata:sub-gifter-v200",
@@ -11125,7 +11155,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 356
+      "position": 358
     },
     "metadata:sub-gifter-v2000": {
       "id": "metadata:sub-gifter-v2000",
@@ -11141,7 +11171,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 357
+      "position": 359
     },
     "metadata:sub-gifter-v25": {
       "id": "metadata:sub-gifter-v25",
@@ -11157,7 +11187,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 358
+      "position": 360
     },
     "metadata:sub-gifter-v250": {
       "id": "metadata:sub-gifter-v250",
@@ -11173,7 +11203,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 359
+      "position": 361
     },
     "metadata:sub-gifter-v300": {
       "id": "metadata:sub-gifter-v300",
@@ -11189,7 +11219,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 360
+      "position": 362
     },
     "metadata:sub-gifter-v3000": {
       "id": "metadata:sub-gifter-v3000",
@@ -11205,7 +11235,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 361
+      "position": 363
     },
     "metadata:sub-gifter-v350": {
       "id": "metadata:sub-gifter-v350",
@@ -11221,7 +11251,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 362
+      "position": 364
     },
     "metadata:sub-gifter-v400": {
       "id": "metadata:sub-gifter-v400",
@@ -11237,7 +11267,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 363
+      "position": 365
     },
     "metadata:sub-gifter-v4000": {
       "id": "metadata:sub-gifter-v4000",
@@ -11253,7 +11283,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 364
+      "position": 366
     },
     "metadata:sub-gifter-v450": {
       "id": "metadata:sub-gifter-v450",
@@ -11269,7 +11299,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 365
+      "position": 367
     },
     "metadata:sub-gifter-v5": {
       "id": "metadata:sub-gifter-v5",
@@ -11285,7 +11315,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 366
+      "position": 368
     },
     "metadata:sub-gifter-v50": {
       "id": "metadata:sub-gifter-v50",
@@ -11301,7 +11331,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 367
+      "position": 369
     },
     "metadata:sub-gifter-v500": {
       "id": "metadata:sub-gifter-v500",
@@ -11317,7 +11347,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 368
+      "position": 370
     },
     "metadata:sub-gifter-v5000": {
       "id": "metadata:sub-gifter-v5000",
@@ -11333,7 +11363,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 369
+      "position": 371
     },
     "metadata:sub-gifter-v550": {
       "id": "metadata:sub-gifter-v550",
@@ -11349,7 +11379,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 370
+      "position": 372
     },
     "metadata:sub-gifter-v600": {
       "id": "metadata:sub-gifter-v600",
@@ -11365,7 +11395,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 371
+      "position": 373
     },
     "metadata:sub-gifter-v650": {
       "id": "metadata:sub-gifter-v650",
@@ -11381,7 +11411,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 372
+      "position": 374
     },
     "metadata:sub-gifter-v700": {
       "id": "metadata:sub-gifter-v700",
@@ -11397,7 +11427,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 373
+      "position": 375
     },
     "metadata:sub-gifter-v750": {
       "id": "metadata:sub-gifter-v750",
@@ -11413,7 +11443,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 374
+      "position": 376
     },
     "metadata:sub-gifter-v800": {
       "id": "metadata:sub-gifter-v800",
@@ -11429,7 +11459,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 375
+      "position": 377
     },
     "metadata:sub-gifter-v850": {
       "id": "metadata:sub-gifter-v850",
@@ -11445,7 +11475,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 348
+      "position": 350
     },
     "metadata:sub-gifter-v900": {
       "id": "metadata:sub-gifter-v900",
@@ -11461,7 +11491,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 349
+      "position": 351
     },
     "metadata:sub-gifter-v950": {
       "id": "metadata:sub-gifter-v950",
@@ -11477,7 +11507,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 350
+      "position": 352
     },
     "metadata:subscriber-v0": {
       "id": "metadata:subscriber-v0",
@@ -11493,7 +11523,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 423
+      "position": 425
     },
     "metadata:subscriber-v1": {
       "id": "metadata:subscriber-v1",
@@ -11509,7 +11539,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 424
+      "position": 426
     },
     "metadata:subscriber-v2": {
       "id": "metadata:subscriber-v2",
@@ -11525,7 +11555,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 336
+      "position": 338
     },
     "metadata:subscriber-v3": {
       "id": "metadata:subscriber-v3",
@@ -11541,7 +11571,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 337
+      "position": 339
     },
     "metadata:subscriber-v4": {
       "id": "metadata:subscriber-v4",
@@ -11557,7 +11587,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 338
+      "position": 340
     },
     "metadata:subscriber-v5": {
       "id": "metadata:subscriber-v5",
@@ -11573,7 +11603,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 339
+      "position": 341
     },
     "metadata:subscriber-v6": {
       "id": "metadata:subscriber-v6",
@@ -11589,7 +11619,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 331
+      "position": 333
     },
     "metadata:subtember-2024-v1": {
       "id": "metadata:subtember-2024-v1",
@@ -11605,7 +11635,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 311
+      "position": 313
     },
     "metadata:subtember-2025-v1": {
       "id": "metadata:subtember-2025-v1",
@@ -11621,7 +11651,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 279
+      "position": 281
     },
     "metadata:superhot_1-v1": {
       "id": "metadata:superhot_1-v1",
@@ -11637,7 +11667,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 501
+      "position": 503
     },
     "metadata:superultracombo-2023-v1": {
       "id": "metadata:superultracombo-2023-v1",
@@ -11653,7 +11683,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 332
+      "position": 334
     },
     "metadata:survival-cup-4-v1": {
       "id": "metadata:survival-cup-4-v1",
@@ -11669,7 +11699,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 247
+      "position": 249
     },
     "metadata:the-first-descendant-badge-v1": {
       "id": "metadata:the-first-descendant-badge-v1",
@@ -11685,7 +11715,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 283
+      "position": 285
     },
     "metadata:the-game-awards-2023-v1": {
       "id": "metadata:the-game-awards-2023-v1",
@@ -11701,7 +11731,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 324
+      "position": 326
     },
     "metadata:the-golden-predictor-of-the-game-awards-2023-v1": {
       "id": "metadata:the-golden-predictor-of-the-game-awards-2023-v1",
@@ -11717,7 +11747,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 325
+      "position": 327
     },
     "metadata:the-man-without-fear-v1": {
       "id": "metadata:the-man-without-fear-v1",
@@ -11733,7 +11763,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 262
+      "position": 264
     },
     "metadata:the-onryos-mask-v1": {
       "id": "metadata:the-onryos-mask-v1",
@@ -11749,7 +11779,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 265
+      "position": 267
     },
     "metadata:the-surge_1-v1": {
       "id": "metadata:the-surge_1-v1",
@@ -11765,7 +11795,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 490
+      "position": 492
     },
     "metadata:the-surge_2-v1": {
       "id": "metadata:the-surge_2-v1",
@@ -11781,7 +11811,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 491
+      "position": 493
     },
     "metadata:the-surge_3-v1": {
       "id": "metadata:the-surge_3-v1",
@@ -11797,7 +11827,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 492
+      "position": 494
     },
     "metadata:this-war-of-mine_1-v1": {
       "id": "metadata:this-war-of-mine_1-v1",
@@ -11813,7 +11843,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 525
+      "position": 527
     },
     "metadata:titan-souls_1-v1": {
       "id": "metadata:titan-souls_1-v1",
@@ -11829,7 +11859,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 526
+      "position": 528
     },
     "metadata:together-for-good-25---good-badge-v1": {
       "id": "metadata:together-for-good-25---good-badge-v1",
@@ -11845,7 +11875,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 248
+      "position": 250
     },
     "metadata:together-for-good-25---gooder-badge-v1": {
       "id": "metadata:together-for-good-25---gooder-badge-v1",
@@ -11861,7 +11891,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 249
+      "position": 251
     },
     "metadata:together-for-good-25---goodest-badge-v1": {
       "id": "metadata:together-for-good-25---goodest-badge-v1",
@@ -11877,7 +11907,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 250
+      "position": 252
     },
     "metadata:together-for-good-25---wicked-dub-badge-v1": {
       "id": "metadata:together-for-good-25---wicked-dub-badge-v1",
@@ -11893,7 +11923,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 251
+      "position": 253
     },
     "metadata:touch-grass-v1": {
       "id": "metadata:touch-grass-v1",
@@ -11909,7 +11939,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 282
+      "position": 284
     },
     "metadata:treasure-adventure-world_1-v1": {
       "id": "metadata:treasure-adventure-world_1-v1",
@@ -11925,7 +11955,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 476
+      "position": 478
     },
     "metadata:turbo-v1": {
       "id": "metadata:turbo-v1",
@@ -11941,7 +11971,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 425
+      "position": 427
     },
     "metadata:twitch-dj-v1": {
       "id": "metadata:twitch-dj-v1",
@@ -11957,7 +11987,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 317
+      "position": 319
     },
     "metadata:twitch-intern-2022-v1": {
       "id": "metadata:twitch-intern-2022-v1",
@@ -11973,7 +12003,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 276
+      "position": 278
     },
     "metadata:twitch-intern-2023-v1": {
       "id": "metadata:twitch-intern-2023-v1",
@@ -11989,7 +12019,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 328
+      "position": 330
     },
     "metadata:twitch-intern-2024-v1": {
       "id": "metadata:twitch-intern-2024-v1",
@@ -12005,7 +12035,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 314
+      "position": 316
     },
     "metadata:twitch-recap-2023-v1": {
       "id": "metadata:twitch-recap-2023-v1",
@@ -12021,7 +12051,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 326
+      "position": 328
     },
     "metadata:twitch-recap-2024-v1": {
       "id": "metadata:twitch-recap-2024-v1",
@@ -12037,7 +12067,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 305
+      "position": 307
     },
     "metadata:twitchbot-v1": {
       "id": "metadata:twitchbot-v1",
@@ -12053,7 +12083,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 426
+      "position": 428
     },
     "metadata:twitchbot-v2": {
       "id": "metadata:twitchbot-v2",
@@ -12069,7 +12099,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 300
+      "position": 302
     },
     "metadata:twitchcon-2024---rotterdam-v1": {
       "id": "metadata:twitchcon-2024---rotterdam-v1",
@@ -12085,7 +12115,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 322
+      "position": 324
     },
     "metadata:twitchcon-2024---san-diego-v1": {
       "id": "metadata:twitchcon-2024---san-diego-v1",
@@ -12101,7 +12131,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 320
+      "position": 322
     },
     "metadata:twitchcon-2025---rotterdam-v1": {
       "id": "metadata:twitchcon-2025---rotterdam-v1",
@@ -12117,7 +12147,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 304
+      "position": 306
     },
     "metadata:twitchcon-referral-program-2025-bleedpurple-v1": {
       "id": "metadata:twitchcon-referral-program-2025-bleedpurple-v1",
@@ -12133,7 +12163,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 294
+      "position": 296
     },
     "metadata:twitchcon-referral-program-2025-chrome-star-v1": {
       "id": "metadata:twitchcon-referral-program-2025-chrome-star-v1",
@@ -12149,7 +12179,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 295
+      "position": 297
     },
     "metadata:twitchcon2017-v1": {
       "id": "metadata:twitchcon2017-v1",
@@ -12165,7 +12195,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 499
+      "position": 501
     },
     "metadata:twitchcon2018-v1": {
       "id": "metadata:twitchcon2018-v1",
@@ -12181,7 +12211,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 448
+      "position": 450
     },
     "metadata:twitchconAmsterdam2020-v1": {
       "id": "metadata:twitchconAmsterdam2020-v1",
@@ -12197,7 +12227,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 414
+      "position": 416
     },
     "metadata:twitchconEU2019-v1": {
       "id": "metadata:twitchconEU2019-v1",
@@ -12213,7 +12243,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 438
+      "position": 440
     },
     "metadata:twitchconEU2022-v1": {
       "id": "metadata:twitchconEU2022-v1",
@@ -12229,7 +12259,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 376
+      "position": 378
     },
     "metadata:twitchconEU2023-v1": {
       "id": "metadata:twitchconEU2023-v1",
@@ -12245,7 +12275,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 333
+      "position": 335
     },
     "metadata:twitchconNA2019-v1": {
       "id": "metadata:twitchconNA2019-v1",
@@ -12261,7 +12291,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 436
+      "position": 438
     },
     "metadata:twitchconNA2020-v1": {
       "id": "metadata:twitchconNA2020-v1",
@@ -12277,7 +12307,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 415
+      "position": 417
     },
     "metadata:twitchconNA2022-v1": {
       "id": "metadata:twitchconNA2022-v1",
@@ -12293,7 +12323,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 377
+      "position": 379
     },
     "metadata:twitchconNA2023-v1": {
       "id": "metadata:twitchconNA2023-v1",
@@ -12309,7 +12339,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 330
+      "position": 332
     },
     "metadata:tyranny_1-v1": {
       "id": "metadata:tyranny_1-v1",
@@ -12325,7 +12355,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 527
+      "position": 529
     },
     "metadata:user-anniversary-v1": {
       "id": "metadata:user-anniversary-v1",
@@ -12341,7 +12371,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 399
+      "position": 401
     },
     "metadata:vct-paris-2025-v1": {
       "id": "metadata:vct-paris-2025-v1",
@@ -12357,7 +12387,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 275
+      "position": 277
     },
     "metadata:vga-champ-2017-v1": {
       "id": "metadata:vga-champ-2017-v1",
@@ -12373,7 +12403,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 481
+      "position": 483
     },
     "metadata:video-games-day-v1": {
       "id": "metadata:video-games-day-v1",
@@ -12389,7 +12419,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 274
+      "position": 276
     },
     "metadata:vip-v1": {
       "id": "metadata:vip-v1",
@@ -12405,7 +12435,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 427
+      "position": 429
     },
     "metadata:warcraft-valliance": {
       "id": "metadata:warcraft-valliance",
@@ -12421,7 +12451,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 546
+      "position": 548
     },
     "metadata:warcraft-vhorde": {
       "id": "metadata:warcraft-vhorde",
@@ -12437,7 +12467,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 547
+      "position": 549
     },
     "metadata:zevent-2024-v1": {
       "id": "metadata:zevent-2024-v1",
@@ -12453,7 +12483,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 312
+      "position": 314
     },
     "metadata:zevent25-v1": {
       "id": "metadata:zevent25-v1",
@@ -12469,7 +12499,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 277
+      "position": 279
     },
     "metadata:rainbow-six-siege-x-10th-anniversary-v1": {
       "id": "metadata:rainbow-six-siege-x-10th-anniversary-v1",
@@ -12485,7 +12515,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 245
+      "position": 247
     },
     "metadata:streamer-awards-tux-v1": {
       "id": "metadata:streamer-awards-tux-v1",
@@ -12501,7 +12531,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 242
+      "position": 244
     },
     "metadata:twitch-recap-2025-v1": {
       "id": "metadata:twitch-recap-2025-v1",
@@ -12517,7 +12547,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 243
+      "position": 245
     },
     "metadata:ugly-sweater-v1": {
       "id": "metadata:ugly-sweater-v1",
@@ -12533,7 +12563,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 244
+      "position": 246
     },
     "metadata:revedtv-stream-awards-2025-v1": {
       "id": "metadata:revedtv-stream-awards-2025-v1",
@@ -12549,7 +12579,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 240
+      "position": 242
     },
     "metadata:total-war-anniversary-v1": {
       "id": "metadata:total-war-anniversary-v1",
@@ -12565,7 +12595,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 241
+      "position": 243
     },
     "metadata:k4sen-con-2025-v1": {
       "id": "metadata:k4sen-con-2025-v1",
@@ -12581,7 +12611,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 238
+      "position": 240
     },
     "metadata:rustmas-2025-v1": {
       "id": "metadata:rustmas-2025-v1",
@@ -12597,7 +12627,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 239
+      "position": 241
     },
     "metadata:jeff-the-land-shark-v1": {
       "id": "metadata:jeff-the-land-shark-v1",
@@ -12613,7 +12643,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 237
+      "position": 239
     },
     "metadata:lead_moderator-v1": {
       "id": "metadata:lead_moderator-v1",
@@ -12629,7 +12659,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 236
+      "position": 238
     },
     "metadata:007-gun-barrel-v1": {
       "id": "metadata:007-gun-barrel-v1",
@@ -12645,7 +12675,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 155
+      "position": 157
     },
     "metadata:10-years-as-twitch-staff-v1": {
       "id": "metadata:10-years-as-twitch-staff-v1",
@@ -12661,7 +12691,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 227
+      "position": 229
     },
     "metadata:15-years-as-twitch-staff-v1": {
       "id": "metadata:15-years-as-twitch-staff-v1",
@@ -12677,7 +12707,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 228
+      "position": 230
     },
     "metadata:2026-bafta-games-awards-v1": {
       "id": "metadata:2026-bafta-games-awards-v1",
@@ -12693,7 +12723,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 183
+      "position": 185
     },
     "metadata:2026-worlds-costumed-pikachu-v1": {
       "id": "metadata:2026-worlds-costumed-pikachu-v1",
@@ -12709,7 +12739,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 74
+      "position": 76
     },
     "metadata:5-years-as-twitch-staff-v1": {
       "id": "metadata:5-years-as-twitch-staff-v1",
@@ -12725,7 +12755,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 229
+      "position": 231
     },
     "metadata:aang-v1": {
       "id": "metadata:aang-v1",
@@ -12741,7 +12771,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 209
+      "position": 211
     },
     "metadata:ace-combat-8-nugget-v1": {
       "id": "metadata:ace-combat-8-nugget-v1",
@@ -12757,7 +12787,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 35
+      "position": 37
     },
     "metadata:alterra-corporation-v1": {
       "id": "metadata:alterra-corporation-v1",
@@ -12773,7 +12803,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 154
+      "position": 156
     },
     "metadata:ampersand-v1": {
       "id": "metadata:ampersand-v1",
@@ -12789,7 +12819,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 45
+      "position": 47
     },
     "metadata:assassins-creed-black-flag-resynced-v1": {
       "id": "metadata:assassins-creed-black-flag-resynced-v1",
@@ -12805,7 +12835,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 138
+      "position": 140
     },
     "metadata:ayane-v1": {
       "id": "metadata:ayane-v1",
@@ -12821,7 +12851,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 113
+      "position": 115
     },
     "metadata:baby-chick-chat-badge-v1": {
       "id": "metadata:baby-chick-chat-badge-v1",
@@ -12837,7 +12867,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 184
+      "position": 186
     },
     "metadata:big-walk-v1": {
       "id": "metadata:big-walk-v1",
@@ -12853,7 +12883,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 37
+      "position": 39
     },
     "metadata:bingbonglove-v1": {
       "id": "metadata:bingbonglove-v1",
@@ -12869,7 +12899,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 215
+      "position": 217
     },
     "metadata:bloody-finger-elden-ring-v1": {
       "id": "metadata:bloody-finger-elden-ring-v1",
@@ -12885,7 +12915,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 33
+      "position": 35
     },
     "metadata:bloom-badge-v1": {
       "id": "metadata:bloom-badge-v1",
@@ -12901,7 +12931,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 186
+      "position": 188
     },
     "metadata:bloom-badge-v2": {
       "id": "metadata:bloom-badge-v2",
@@ -12917,7 +12947,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 187
+      "position": 189
     },
     "metadata:bloom-badge-v3": {
       "id": "metadata:bloom-badge-v3",
@@ -12933,7 +12963,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 188
+      "position": 190
     },
     "metadata:bloom-badge-v4": {
       "id": "metadata:bloom-badge-v4",
@@ -12949,7 +12979,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 189
+      "position": 191
     },
     "metadata:blossom-badge-v1": {
       "id": "metadata:blossom-badge-v1",
@@ -12965,7 +12995,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 130
+      "position": 132
     },
     "metadata:blossom-badge-v2": {
       "id": "metadata:blossom-badge-v2",
@@ -12981,7 +13011,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 131
+      "position": 133
     },
     "metadata:blossom-badge-v3": {
       "id": "metadata:blossom-badge-v3",
@@ -12997,7 +13027,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 132
+      "position": 134
     },
     "metadata:blossom-badge-v4": {
       "id": "metadata:blossom-badge-v4",
@@ -13013,7 +13043,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 133
+      "position": 135
     },
     "metadata:blue-creeper-boss-v1": {
       "id": "metadata:blue-creeper-boss-v1",
@@ -13029,7 +13059,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 47
+      "position": 49
     },
     "metadata:borderlands-4---c4sh-v1": {
       "id": "metadata:borderlands-4---c4sh-v1",
@@ -13045,7 +13075,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 193
+      "position": 195
     },
     "metadata:brawlhallawoo-v1": {
       "id": "metadata:brawlhallawoo-v1",
@@ -13061,7 +13091,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 159
+      "position": 161
     },
     "metadata:bubsy-4d-v1": {
       "id": "metadata:bubsy-4d-v1",
@@ -13077,7 +13107,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 153
+      "position": 155
     },
     "metadata:budz-v1": {
       "id": "metadata:budz-v1",
@@ -13093,7 +13123,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 94
+      "position": 96
     },
     "metadata:bulbasaur-v1": {
       "id": "metadata:bulbasaur-v1",
@@ -13109,7 +13139,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 79
+      "position": 81
     },
     "metadata:bungie-foundation-ally-v1": {
       "id": "metadata:bungie-foundation-ally-v1",
@@ -13125,7 +13155,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 221
+      "position": 223
     },
     "metadata:bungie-foundation-supporter-v1": {
       "id": "metadata:bungie-foundation-supporter-v1",
@@ -13141,7 +13171,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 222
+      "position": 224
     },
     "metadata:cdawg-cyclethon-5-badge-v1": {
       "id": "metadata:cdawg-cyclethon-5-badge-v1",
@@ -13157,7 +13187,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 185
+      "position": 187
     },
     "metadata:chains-v1": {
       "id": "metadata:chains-v1",
@@ -13173,7 +13203,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 56
+      "position": 58
     },
     "metadata:charmander-v1": {
       "id": "metadata:charmander-v1",
@@ -13189,7 +13219,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 80
+      "position": 82
     },
     "metadata:civ-vii---test-of-time-v1": {
       "id": "metadata:civ-vii---test-of-time-v1",
@@ -13205,7 +13235,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 160
+      "position": 162
     },
     "metadata:clair-obscur-expedition-33-one-year-anniversary-v1": {
       "id": "metadata:clair-obscur-expedition-33-one-year-anniversary-v1",
@@ -13221,7 +13251,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 178
+      "position": 180
     },
     "metadata:clipped-that-v1": {
       "id": "metadata:clipped-that-v1",
@@ -13237,7 +13267,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 39
+      "position": 41
     },
     "metadata:cool-cattiva-v1": {
       "id": "metadata:cool-cattiva-v1",
@@ -13253,7 +13283,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 114
+      "position": 116
     },
     "metadata:crash-v1": {
       "id": "metadata:crash-v1",
@@ -13269,7 +13299,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 164
+      "position": 166
     },
     "metadata:crimson-butterfly-v1": {
       "id": "metadata:crimson-butterfly-v1",
@@ -13285,7 +13315,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 199
+      "position": 201
     },
     "metadata:crimson-desert---crest-v1": {
       "id": "metadata:crimson-desert---crest-v1",
@@ -13301,7 +13331,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 194
+      "position": 196
     },
     "metadata:cryana-v1": {
       "id": "metadata:cryana-v1",
@@ -13317,7 +13347,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 179
+      "position": 181
     },
     "metadata:d20-v1": {
       "id": "metadata:d20-v1",
@@ -13333,7 +13363,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 46
+      "position": 48
     },
     "metadata:dallas-v1": {
       "id": "metadata:dallas-v1",
@@ -13349,7 +13379,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 57
+      "position": 59
     },
     "metadata:dead-by-daylight-icon-v1": {
       "id": "metadata:dead-by-daylight-icon-v1",
@@ -13365,7 +13395,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 139
+      "position": 141
     },
     "metadata:dead-by-daylight-pride-icon-v1": {
       "id": "metadata:dead-by-daylight-pride-icon-v1",
@@ -13381,7 +13411,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 92
+      "position": 94
     },
     "metadata:dead-by-daylight-x-jason-universe-v1": {
       "id": "metadata:dead-by-daylight-x-jason-universe-v1",
@@ -13397,7 +13427,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 140
+      "position": 142
     },
     "metadata:default-creator-campaign-reward-v1": {
       "id": "metadata:default-creator-campaign-reward-v1",
@@ -13413,7 +13443,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 165
+      "position": 167
     },
     "metadata:detroit-android-triangle-v1": {
       "id": "metadata:detroit-android-triangle-v1",
@@ -13429,7 +13459,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 134
+      "position": 136
     },
     "metadata:detroit-blue-led-v1": {
       "id": "metadata:detroit-blue-led-v1",
@@ -13445,7 +13475,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 135
+      "position": 137
     },
     "metadata:diablo-v1": {
       "id": "metadata:diablo-v1",
@@ -13461,7 +13491,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 76
+      "position": 78
     },
     "metadata:diablo-30th-anniversary-v1": {
       "id": "metadata:diablo-30th-anniversary-v1",
@@ -13477,7 +13507,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 216
+      "position": 218
     },
     "metadata:diana-v1": {
       "id": "metadata:diana-v1",
@@ -13493,7 +13523,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 230
+      "position": 232
     },
     "metadata:ditto-v1": {
       "id": "metadata:ditto-v1",
@@ -13509,7 +13539,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 200
+      "position": 202
     },
     "metadata:doa6lr-kasumi-v1": {
       "id": "metadata:doa6lr-kasumi-v1",
@@ -13525,7 +13555,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 129
+      "position": 131
     },
     "metadata:dodomogged-v1": {
       "id": "metadata:dodomogged-v1",
@@ -13541,7 +13571,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 180
+      "position": 182
     },
     "metadata:dont-eat-the-mold-v1": {
       "id": "metadata:dont-eat-the-mold-v1",
@@ -13557,7 +13587,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 41
+      "position": 43
     },
     "metadata:dream-beyond-v1": {
       "id": "metadata:dream-beyond-v1",
@@ -13573,7 +13603,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 111
+      "position": 113
     },
     "metadata:dreamers-v1": {
       "id": "metadata:dreamers-v1",
@@ -13589,7 +13619,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 104
+      "position": 106
     },
     "metadata:dron-e-v1": {
       "id": "metadata:dron-e-v1",
@@ -13605,7 +13635,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 77
+      "position": 79
     },
     "metadata:egg-v1": {
       "id": "metadata:egg-v1",
@@ -13621,7 +13651,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 91
+      "position": 93
     },
     "metadata:enchantedbigboiboxers-v1": {
       "id": "metadata:enchantedbigboiboxers-v1",
@@ -13637,7 +13667,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 87
+      "position": 89
     },
     "metadata:evo-las-vegas-2026-v1": {
       "id": "metadata:evo-las-vegas-2026-v1",
@@ -13653,7 +13683,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 126
+      "position": 128
     },
     "metadata:ewc-2026-bronze-v1": {
       "id": "metadata:ewc-2026-bronze-v1",
@@ -13669,7 +13699,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 120
+      "position": 122
     },
     "metadata:ewc-2026-co-streamer-bronze-v1": {
       "id": "metadata:ewc-2026-co-streamer-bronze-v1",
@@ -13685,7 +13715,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 96
+      "position": 98
     },
     "metadata:ewc-2026-co-streamer-diamond-v1": {
       "id": "metadata:ewc-2026-co-streamer-diamond-v1",
@@ -13701,7 +13731,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 97
+      "position": 99
     },
     "metadata:ewc-2026-co-streamer-gold-v1": {
       "id": "metadata:ewc-2026-co-streamer-gold-v1",
@@ -13717,7 +13747,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 98
+      "position": 100
     },
     "metadata:ewc-2026-co-streamer-platinum-v1": {
       "id": "metadata:ewc-2026-co-streamer-platinum-v1",
@@ -13733,7 +13763,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 99
+      "position": 101
     },
     "metadata:ewc-2026-co-streamer-silver-v1": {
       "id": "metadata:ewc-2026-co-streamer-silver-v1",
@@ -13749,7 +13779,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 100
+      "position": 102
     },
     "metadata:ewc-2026-co-streamer-ultraviolet-v1": {
       "id": "metadata:ewc-2026-co-streamer-ultraviolet-v1",
@@ -13765,7 +13795,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 101
+      "position": 103
     },
     "metadata:ewc-2026-diamond-v1": {
       "id": "metadata:ewc-2026-diamond-v1",
@@ -13781,7 +13811,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 121
+      "position": 123
     },
     "metadata:ewc-2026-gold-v1": {
       "id": "metadata:ewc-2026-gold-v1",
@@ -13797,7 +13827,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 122
+      "position": 124
     },
     "metadata:ewc-2026-platinum-v1": {
       "id": "metadata:ewc-2026-platinum-v1",
@@ -13813,7 +13843,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 123
+      "position": 125
     },
     "metadata:ewc-2026-silver-v1": {
       "id": "metadata:ewc-2026-silver-v1",
@@ -13829,7 +13859,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 124
+      "position": 126
     },
     "metadata:ewc-2026-ultraviolet-v1": {
       "id": "metadata:ewc-2026-ultraviolet-v1",
@@ -13845,7 +13875,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 125
+      "position": 127
     },
     "metadata:fallout-season-2-ghoul-v1": {
       "id": "metadata:fallout-season-2-ghoul-v1",
@@ -13861,7 +13891,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 225
+      "position": 227
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-eu---content-unlock-quest-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-eu---content-unlock-quest-chat-v1",
@@ -13877,7 +13907,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 172
+      "position": 174
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-eu---moogle-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-eu---moogle-chat-v1",
@@ -13893,7 +13923,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 173
+      "position": 175
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-jp---alpha-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-jp---alpha-chat-v1",
@@ -13909,7 +13939,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 174
+      "position": 176
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-jp---quest-complete-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-jp---quest-complete-chat-v1",
@@ -13925,7 +13955,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 175
+      "position": 177
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-na---fat-cat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-na---fat-cat-v1",
@@ -13941,7 +13971,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 169
+      "position": 171
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-na---fat-cat-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-na---fat-cat-chat-v1",
@@ -13957,7 +13987,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 176
+      "position": 178
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-na---main-scenario-quest--v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-na---main-scenario-quest--v1",
@@ -13973,7 +14003,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 170
+      "position": 172
     },
     "metadata:final-fantasy-xiv-fan-festival-2026-na---main-scenario-quest-chat-v1": {
       "id": "metadata:final-fantasy-xiv-fan-festival-2026-na---main-scenario-quest-chat-v1",
@@ -13989,7 +14019,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 177
+      "position": 179
     },
     "metadata:first-stand-2026-supporter-v1": {
       "id": "metadata:first-stand-2026-supporter-v1",
@@ -14005,7 +14035,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 196
+      "position": 198
     },
     "metadata:first-stand-2026-viewer-v1": {
       "id": "metadata:first-stand-2026-viewer-v1",
@@ -14021,7 +14051,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 195
+      "position": 197
     },
     "metadata:fischer-v1": {
       "id": "metadata:fischer-v1",
@@ -14037,7 +14067,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 213
+      "position": 215
     },
     "metadata:football-fest-2026-v1": {
       "id": "metadata:football-fest-2026-v1",
@@ -14053,7 +14083,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 142
+      "position": 144
     },
     "metadata:frog-lantern-v1": {
       "id": "metadata:frog-lantern-v1",
@@ -14069,7 +14099,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 231
+      "position": 233
     },
     "metadata:grey-zone-warfare-v1": {
       "id": "metadata:grey-zone-warfare-v1",
@@ -14085,7 +14115,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 127
+      "position": 129
     },
     "metadata:harley-mayhem-v1": {
       "id": "metadata:harley-mayhem-v1",
@@ -14101,7 +14131,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 71
+      "position": 73
     },
     "metadata:hime-v1": {
       "id": "metadata:hime-v1",
@@ -14117,7 +14147,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 162
+      "position": 164
     },
     "metadata:homo-tenta-v1": {
       "id": "metadata:homo-tenta-v1",
@@ -14133,7 +14163,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 48
+      "position": 50
     },
     "metadata:hotline-v1": {
       "id": "metadata:hotline-v1",
@@ -14149,7 +14179,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 107
+      "position": 109
     },
     "metadata:hoxton-v1": {
       "id": "metadata:hoxton-v1",
@@ -14165,7 +14195,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 58
+      "position": 60
     },
     "metadata:hulk-v1": {
       "id": "metadata:hulk-v1",
@@ -14181,7 +14211,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 90
+      "position": 92
     },
     "metadata:hunt-crosses-v1": {
       "id": "metadata:hunt-crosses-v1",
@@ -14197,7 +14227,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 232
+      "position": 234
     },
     "metadata:hypershot-celestial-v1": {
       "id": "metadata:hypershot-celestial-v1",
@@ -14213,7 +14243,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 210
+      "position": 212
     },
     "metadata:invincible-vs-v1": {
       "id": "metadata:invincible-vs-v1",
@@ -14229,7 +14259,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 171
+      "position": 173
     },
     "metadata:jasontheween-7-day-survival-v1": {
       "id": "metadata:jasontheween-7-day-survival-v1",
@@ -14245,7 +14275,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 214
+      "position": 216
     },
     "metadata:joker-mayhem-v1": {
       "id": "metadata:joker-mayhem-v1",
@@ -14261,7 +14291,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 55
+      "position": 57
     },
     "metadata:jubilee-v1": {
       "id": "metadata:jubilee-v1",
@@ -14277,7 +14307,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 112
+      "position": 114
     },
     "metadata:killer-inn-v1": {
       "id": "metadata:killer-inn-v1",
@@ -14293,7 +14323,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 115
+      "position": 117
     },
     "metadata:kodama-v1": {
       "id": "metadata:kodama-v1",
@@ -14309,7 +14339,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 220
+      "position": 222
     },
     "metadata:koromaru-v1": {
       "id": "metadata:koromaru-v1",
@@ -14325,7 +14355,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 49
+      "position": 51
     },
     "metadata:la-velada-vi-v1": {
       "id": "metadata:la-velada-vi-v1",
@@ -14341,7 +14371,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 95
+      "position": 97
     },
     "metadata:lamby-v1": {
       "id": "metadata:lamby-v1",
@@ -14357,7 +14387,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 223
+      "position": 225
     },
     "metadata:league-of-legends-classic-v1": {
       "id": "metadata:league-of-legends-classic-v1",
@@ -14373,7 +14403,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 86
+      "position": 88
     },
     "metadata:lego-batman-legacy-of-the-dark-knight-v1": {
       "id": "metadata:lego-batman-legacy-of-the-dark-knight-v1",
@@ -14389,7 +14419,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 156
+      "position": 158
     },
     "metadata:lost-ark-anniversary-v1": {
       "id": "metadata:lost-ark-anniversary-v1",
@@ -14405,7 +14435,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 217
+      "position": 219
     },
     "metadata:marathon-silkworm-v1": {
       "id": "metadata:marathon-silkworm-v1",
@@ -14421,7 +14451,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 204
+      "position": 206
     },
     "metadata:marathon-sub-burger-v1": {
       "id": "metadata:marathon-sub-burger-v1",
@@ -14437,7 +14467,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 205
+      "position": 207
     },
     "metadata:marvels-wolverine-v1": {
       "id": "metadata:marvels-wolverine-v1",
@@ -14453,7 +14483,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 54
+      "position": 56
     },
     "metadata:meccha-chameleon-v1": {
       "id": "metadata:meccha-chameleon-v1",
@@ -14469,7 +14499,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 102
+      "position": 104
     },
     "metadata:meltan-v1": {
       "id": "metadata:meltan-v1",
@@ -14485,7 +14515,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 116
+      "position": 118
     },
     "metadata:mint-v1": {
       "id": "metadata:mint-v1",
@@ -14501,7 +14531,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 117
+      "position": 119
     },
     "metadata:mod-founder-v1": {
       "id": "metadata:mod-founder-v1",
@@ -14517,7 +14547,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 151
+      "position": 153
     },
     "metadata:mootivation-v1": {
       "id": "metadata:mootivation-v1",
@@ -14533,7 +14563,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 68
+      "position": 70
     },
     "metadata:morgana-v1": {
       "id": "metadata:morgana-v1",
@@ -14549,7 +14579,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 50
+      "position": 52
     },
     "metadata:mouseathon-v1": {
       "id": "metadata:mouseathon-v1",
@@ -14565,7 +14595,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 73
+      "position": 75
     },
     "metadata:mr-raccoon-v1": {
       "id": "metadata:mr-raccoon-v1",
@@ -14581,7 +14611,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 206
+      "position": 208
     },
     "metadata:msi-2026-v1": {
       "id": "metadata:msi-2026-v1",
@@ -14597,7 +14627,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 128
+      "position": 130
     },
     "metadata:nahobiho-v1": {
       "id": "metadata:nahobiho-v1",
@@ -14613,7 +14643,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 51
+      "position": 53
     },
     "metadata:nasa-artemis-ii-v1": {
       "id": "metadata:nasa-artemis-ii-v1",
@@ -14629,7 +14659,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 190
+      "position": 192
     },
     "metadata:nasa-roman-v1": {
       "id": "metadata:nasa-roman-v1",
@@ -14645,7 +14675,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 78
+      "position": 80
     },
     "metadata:never-grave---witch-hat-v1": {
       "id": "metadata:never-grave---witch-hat-v1",
@@ -14661,7 +14691,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 201
+      "position": 203
     },
     "metadata:nopixel-v-launch-v1": {
       "id": "metadata:nopixel-v-launch-v1",
@@ -14677,7 +14707,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 65
+      "position": 67
     },
     "metadata:onimusha-armament-v1": {
       "id": "metadata:onimusha-armament-v1",
@@ -14693,7 +14723,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 66
+      "position": 68
     },
     "metadata:perlica-v1": {
       "id": "metadata:perlica-v1",
@@ -14709,7 +14739,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 118
+      "position": 120
     },
     "metadata:pichu-v1": {
       "id": "metadata:pichu-v1",
@@ -14725,7 +14755,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 81
+      "position": 83
     },
     "metadata:pogchamps-6-7-v1": {
       "id": "metadata:pogchamps-6-7-v1",
@@ -14741,7 +14771,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 182
+      "position": 184
     },
     "metadata:pokemon-30th-anniversary-v1": {
       "id": "metadata:pokemon-30th-anniversary-v1",
@@ -14757,7 +14787,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 207
+      "position": 209
     },
     "metadata:pokemonxp-costumed-pikachu-v1": {
       "id": "metadata:pokemonxp-costumed-pikachu-v1",
@@ -14773,7 +14803,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 75
+      "position": 77
     },
     "metadata:princessdonutbrown-v1": {
       "id": "metadata:princessdonutbrown-v1",
@@ -14789,7 +14819,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 88
+      "position": 90
     },
     "metadata:princessdonutpink-v1": {
       "id": "metadata:princessdonutpink-v1",
@@ -14805,7 +14835,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 89
+      "position": 91
     },
     "metadata:puacl2026-finals-charizard-v1": {
       "id": "metadata:puacl2026-finals-charizard-v1",
@@ -14821,7 +14851,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 191
+      "position": 193
     },
     "metadata:purple-noob-v1": {
       "id": "metadata:purple-noob-v1",
@@ -14837,7 +14867,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 226
+      "position": 228
     },
     "metadata:qsmp2-v1": {
       "id": "metadata:qsmp2-v1",
@@ -14853,7 +14883,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 197
+      "position": 199
     },
     "metadata:raider-icon-badge-v1": {
       "id": "metadata:raider-icon-badge-v1",
@@ -14869,7 +14899,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 233
+      "position": 235
     },
     "metadata:relink-fabicon-v1": {
       "id": "metadata:relink-fabicon-v1",
@@ -14885,7 +14915,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 119
+      "position": 121
     },
     "metadata:rematch-blue-lock-v1": {
       "id": "metadata:rematch-blue-lock-v1",
@@ -14901,7 +14931,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 40
+      "position": 42
     },
     "metadata:rematch-brazil-v1": {
       "id": "metadata:rematch-brazil-v1",
@@ -14917,7 +14947,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 145
+      "position": 147
     },
     "metadata:rematch-england-v1": {
       "id": "metadata:rematch-england-v1",
@@ -14933,7 +14963,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 146
+      "position": 148
     },
     "metadata:rematch-france-v1": {
       "id": "metadata:rematch-france-v1",
@@ -14949,7 +14979,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 147
+      "position": 149
     },
     "metadata:rematch-nations-cup-v1": {
       "id": "metadata:rematch-nations-cup-v1",
@@ -14965,7 +14995,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 148
+      "position": 150
     },
     "metadata:rematch-nations-cup-eng-v1": {
       "id": "metadata:rematch-nations-cup-eng-v1",
@@ -14981,7 +15011,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 149
+      "position": 151
     },
     "metadata:rematch-us-v1": {
       "id": "metadata:rematch-us-v1",
@@ -14997,7 +15027,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 150
+      "position": 152
     },
     "metadata:resonance-minotaur-v1": {
       "id": "metadata:resonance-minotaur-v1",
@@ -15013,7 +15043,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 83
+      "position": 85
     },
     "metadata:road-to-twitchcon-26-v1": {
       "id": "metadata:road-to-twitchcon-26-v1",
@@ -15029,7 +15059,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 157
+      "position": 159
     },
     "metadata:rudy-v1": {
       "id": "metadata:rudy-v1",
@@ -15045,7 +15075,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 198
+      "position": 200
     },
     "metadata:runescape-dragon-dagger-v1": {
       "id": "metadata:runescape-dragon-dagger-v1",
@@ -15061,7 +15091,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 143
+      "position": 145
     },
     "metadata:runescape-dragonwilds-eye-v1": {
       "id": "metadata:runescape-dragonwilds-eye-v1",
@@ -15077,7 +15107,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 61
+      "position": 63
     },
     "metadata:runescape-shrimp-v1": {
       "id": "metadata:runescape-shrimp-v1",
@@ -15093,7 +15123,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 38
+      "position": 40
     },
     "metadata:runescape-skull-v1": {
       "id": "metadata:runescape-skull-v1",
@@ -15109,7 +15139,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 144
+      "position": 146
     },
     "metadata:sand-v1": {
       "id": "metadata:sand-v1",
@@ -15125,7 +15155,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 103
+      "position": 105
     },
     "metadata:scampuss-v1": {
       "id": "metadata:scampuss-v1",
@@ -15141,7 +15171,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 218
+      "position": 220
     },
     "metadata:seegson-synthetics-v1": {
       "id": "metadata:seegson-synthetics-v1",
@@ -15157,7 +15187,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 42
+      "position": 44
     },
     "metadata:seeks-eye-v1": {
       "id": "metadata:seeks-eye-v1",
@@ -15173,7 +15203,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 211
+      "position": 213
     },
     "metadata:sevastopol-station-v1": {
       "id": "metadata:sevastopol-station-v1",
@@ -15189,7 +15219,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 43
+      "position": 45
     },
     "metadata:skulls-10th-anniversary-v1": {
       "id": "metadata:skulls-10th-anniversary-v1",
@@ -15205,7 +15235,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 158
+      "position": 160
     },
     "metadata:solasta-2-multiplayer-v1": {
       "id": "metadata:solasta-2-multiplayer-v1",
@@ -15221,7 +15251,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 62
+      "position": 64
     },
     "metadata:sorcerer-rogier-elden-ring-v1": {
       "id": "metadata:sorcerer-rogier-elden-ring-v1",
@@ -15237,7 +15267,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 72
+      "position": 74
     },
     "metadata:speedons-6-v1": {
       "id": "metadata:speedons-6-v1",
@@ -15253,7 +15283,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 166
+      "position": 168
     },
     "metadata:spiderman-v1": {
       "id": "metadata:spiderman-v1",
@@ -15269,7 +15299,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 93
+      "position": 95
     },
     "metadata:squirtle-v1": {
       "id": "metadata:squirtle-v1",
@@ -15285,7 +15315,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 82
+      "position": 84
     },
     "metadata:star-force-mega-man-v1": {
       "id": "metadata:star-force-mega-man-v1",
@@ -15301,7 +15331,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 192
+      "position": 194
     },
     "metadata:subtember-2026-v1": {
       "id": "metadata:subtember-2026-v1",
@@ -15317,7 +15347,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 63
+      "position": 65
     },
     "metadata:support-a-streamer-ho26-badge-v1": {
       "id": "metadata:support-a-streamer-ho26-badge-v1",
@@ -15333,7 +15363,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 234
+      "position": 236
     },
     "metadata:team-instinct-v1": {
       "id": "metadata:team-instinct-v1",
@@ -15349,7 +15379,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 108
+      "position": 110
     },
     "metadata:team-mystic-v1": {
       "id": "metadata:team-mystic-v1",
@@ -15365,7 +15395,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 109
+      "position": 111
     },
     "metadata:team-valor-v1": {
       "id": "metadata:team-valor-v1",
@@ -15381,7 +15411,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 110
+      "position": 112
     },
     "metadata:teddie-v1": {
       "id": "metadata:teddie-v1",
@@ -15397,7 +15427,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 52
+      "position": 54
     },
     "metadata:tft-paris-open-v1": {
       "id": "metadata:tft-paris-open-v1",
@@ -15413,7 +15443,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 235
+      "position": 237
     },
     "metadata:the-blood-of-dawnwalker-launch-v1": {
       "id": "metadata:the-blood-of-dawnwalker-launch-v1",
@@ -15429,7 +15459,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 84
+      "position": 86
     },
     "metadata:the-blood-of-dawnwalker-supporter-v1": {
       "id": "metadata:the-blood-of-dawnwalker-supporter-v1",
@@ -15445,7 +15475,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 85
+      "position": 87
     },
     "metadata:the-deer-v1": {
       "id": "metadata:the-deer-v1",
@@ -15461,7 +15491,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 212
+      "position": 214
     },
     "metadata:the-inverted-man-v1": {
       "id": "metadata:the-inverted-man-v1",
@@ -15477,7 +15507,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 44
+      "position": 46
     },
     "metadata:toxic-zombie-v1": {
       "id": "metadata:toxic-zombie-v1",
@@ -15493,7 +15523,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 208
+      "position": 210
     },
     "metadata:twitchcon-2026---san-diego---beachball-v1": {
       "id": "metadata:twitchcon-2026---san-diego---beachball-v1",
@@ -15509,7 +15539,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 105
+      "position": 107
     },
     "metadata:twitchcon-2026---san-diego---taco-v1": {
       "id": "metadata:twitchcon-2026---san-diego---taco-v1",
@@ -15525,7 +15555,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 106
+      "position": 108
     },
     "metadata:twitchcon-2026-europe-row-houses-v1": {
       "id": "metadata:twitchcon-2026-europe-row-houses-v1",
@@ -15541,7 +15571,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 202
+      "position": 204
     },
     "metadata:twitchcon-2026-europe-windmill-v1": {
       "id": "metadata:twitchcon-2026-europe-windmill-v1",
@@ -15557,7 +15587,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 203
+      "position": 205
     },
     "metadata:two-point-museum-v1": {
       "id": "metadata:two-point-museum-v1",
@@ -15573,7 +15603,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 136
+      "position": 138
     },
     "metadata:two-point-pickle-v1": {
       "id": "metadata:two-point-pickle-v1",
@@ -15589,7 +15619,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 137
+      "position": 139
     },
     "metadata:ultramarine-v1": {
       "id": "metadata:ultramarine-v1",
@@ -15605,7 +15635,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 53
+      "position": 55
     },
     "metadata:umbrella-corporation-v1": {
       "id": "metadata:umbrella-corporation-v1",
@@ -15621,7 +15651,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 224
+      "position": 226
     },
     "metadata:unicorn-tachanka-v1": {
       "id": "metadata:unicorn-tachanka-v1",
@@ -15637,7 +15667,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 168
+      "position": 170
     },
     "metadata:volume-up-v1": {
       "id": "metadata:volume-up-v1",
@@ -15653,7 +15683,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 64
+      "position": 66
     },
     "metadata:wardog-v1": {
       "id": "metadata:wardog-v1",
@@ -15669,7 +15699,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 69
+      "position": 71
     },
     "metadata:warlord-v1": {
       "id": "metadata:warlord-v1",
@@ -15685,7 +15715,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 70
+      "position": 72
     },
     "metadata:waterslug-v1": {
       "id": "metadata:waterslug-v1",
@@ -15701,7 +15731,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 161
+      "position": 163
     },
     "metadata:went-outside-v1": {
       "id": "metadata:went-outside-v1",
@@ -15717,7 +15747,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 167
+      "position": 169
     },
     "metadata:wholesome-direct-2026-v1": {
       "id": "metadata:wholesome-direct-2026-v1",
@@ -15733,7 +15763,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 152
+      "position": 154
     },
     "metadata:winston-overwatch-v1": {
       "id": "metadata:winston-overwatch-v1",
@@ -15749,7 +15779,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 181
+      "position": 183
     },
     "metadata:wolf-v1": {
       "id": "metadata:wolf-v1",
@@ -15765,7 +15795,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 59
+      "position": 61
     },
     "metadata:wolf-medallion-v1": {
       "id": "metadata:wolf-medallion-v1",
@@ -15781,7 +15811,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 34
+      "position": 36
     },
     "metadata:wsci-2026-v1": {
       "id": "metadata:wsci-2026-v1",
@@ -15797,7 +15827,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 60
+      "position": 62
     },
     "metadata:yellow-noob-v1": {
       "id": "metadata:yellow-noob-v1",
@@ -15813,7 +15843,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 219
+      "position": 221
     },
     "metadata:yellow-party-hat-v1": {
       "id": "metadata:yellow-party-hat-v1",
@@ -15829,7 +15859,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 36
+      "position": 38
     },
     "metadata:you-got-this-v1": {
       "id": "metadata:you-got-this-v1",
@@ -15845,7 +15875,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 141
+      "position": 143
     },
     "metadata:yuzu-v1": {
       "id": "metadata:yuzu-v1",
@@ -15861,7 +15891,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 163
+      "position": 165
     },
     "metadata:zevent-2026-v1": {
       "id": "metadata:zevent-2026-v1",
@@ -15877,7 +15907,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 67
+      "position": 69
     },
     "metadata:frekifriend-v1": {
       "id": "metadata:frekifriend-v1",
@@ -15893,7 +15923,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 31
+      "position": 33
     },
     "metadata:thedragonsdogma-v1": {
       "id": "metadata:thedragonsdogma-v1",
@@ -15909,7 +15939,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 32
+      "position": 34
     },
     "metadata:dayz-yellow-king-v1": {
       "id": "metadata:dayz-yellow-king-v1",
@@ -15925,7 +15955,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 25
+      "position": 27
     },
     "metadata:vaultbreakers-v1": {
       "id": "metadata:vaultbreakers-v1",
@@ -15941,7 +15971,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 29
+      "position": 31
     },
     "metadata:vaultbreakers-golden-v1": {
       "id": "metadata:vaultbreakers-golden-v1",
@@ -15957,7 +15987,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 30
+      "position": 32
     },
     "metadata:blastoise-v1": {
       "id": "metadata:blastoise-v1",
@@ -15965,15 +15995,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Blastoise is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Blastoise is an evolved form of the Wartortle global chat badge. Important : You must have the Wartortle badge to unlock Blastoise. No additional subscription purchases are required. How this works: Step 1: Equip Wartortle Open the Drops Panel below chat on Twitch and select your Wartortle badge. Step 2: Evolve Wartortle Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Blastoise badge as an additional badge. Your Wartortle badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897031,
+        "timestamp": 1792579759,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 18
+      "position": 20
     },
     "metadata:charizard-v1": {
       "id": "metadata:charizard-v1",
@@ -15981,15 +16011,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Charizard is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Charizard is an evolved form of the Charmeleon global chat badge. Important : You must have the Charmeleon badge to unlock Charizard. No additional subscription purchases are required. How this works: Step 1: Equip Charmeleon Open the Drops Panel below chat on Twitch and select your Charmeleon badge. Step 2: Evolve Charmeleon Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Charizard badge as an additional badge. Your Charmeleon badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897033,
+        "timestamp": 1792579760,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 19
+      "position": 21
     },
     "metadata:charmeleon-v1": {
       "id": "metadata:charmeleon-v1",
@@ -15997,15 +16027,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Charmeleon is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Charmeleon is an evolved form of the Charmander global chat badge. Important : You must have the Charmander badge to unlock Charmeleon. No additional subscription purchases are required. How this works: Step 1: Equip Charmander Open the Drops Panel below chat on Twitch and select your Charmander badge. Step 2: Evolve Charmander Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Charmeleon badge as an additional badge. Your Charmander badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897035,
+        "timestamp": 1792579761,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 20
+      "position": 22
     },
     "metadata:gastly-v1": {
       "id": "metadata:gastly-v1",
@@ -16013,15 +16043,15 @@
       "data": {
         "date_added": "5 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Gastly is a limited-time global chat badge dedicated to the Pokémon Night Out Campaign. How this works: Step 1: Get the Poké Ball Purchase a gifted or recurring subscription between 2026-10-16T17:00:00Z and 2026-10-24T23:59:00Z to receive the Pokémon Night Out Themed Poké Ball . Step 2: Unlock the Poké Ball Watch participating channels for at least 20 minutes a day on 3 different days before 2026-11-22T23:59:00Z . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once unlocked, the Poké Ball will reward you with the Gastly badge . Step 3 ( optional ): Evolve Gastly Use the Gastly badge for Evolution to unlock two additional badges: Haunter and Gengar . Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting"
       },
       "metadata": {
-        "timestamp": 1791897036,
+        "timestamp": 1792579763,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 26
+      "position": 28
     },
     "metadata:gengar-v1": {
       "id": "metadata:gengar-v1",
@@ -16029,15 +16059,15 @@
       "data": {
         "date_added": "5 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Gengar is a limited-time global chat badge dedicated to the Pokémon Night Out Campaign. Gengar is an evolved form of the Haunter global chat badge. Important : You must have the Haunter badge to unlock Gengar. No additional subscription purchases are required. How this works: Step 1: Equip Haunter Open the Drops Panel below chat on Twitch and equip your Haunter badge. Step 2: Evolve Haunter Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Gengar badge as an additional badge. Your Haunter badge will not be lost. Your chance to evolve Haunter ends on January 30, 2027 . Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897038,
+        "timestamp": 1792579764,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 27
+      "position": 29
     },
     "metadata:haunter-v1": {
       "id": "metadata:haunter-v1",
@@ -16045,15 +16075,15 @@
       "data": {
         "date_added": "5 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Haunter is a limited-time global chat badge dedicated to the Pokémon Night Out Campaign. Haunter is an evolved form of the Gastly global chat badge. Important : You must have the Gastly badge to unlock Haunter. No additional subscription purchases are required. How this works: Step 1: Equip Gastly Open the Drops Panel below chat on Twitch and equip your Gastly badge. Step 2: Evolve Gastly Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Haunter badge as an additional badge. Your Gastly badge will not be lost. Step 3 ( optional ): Evolve Haunter Use the Haunter badge for Evolution to unlock additional Gengar badge. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897040,
+        "timestamp": 1792579766,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 28
+      "position": 30
     },
     "metadata:ivysaur-v1": {
       "id": "metadata:ivysaur-v1",
@@ -16061,15 +16091,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Ivysaur is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Ivysaur is an evolved form of the Bulbasaur global chat badge. Important : You must have the Bulbasaur badge to unlock Ivysaur. No additional subscription purchases are required. How this works: Step 1: Equip Bulbasaur Open the Drops Panel below chat on Twitch and select your Bulbasaur badge. Step 2: Evolve Bulbasaur Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Ivysaur badge as an additional badge. Your Bulbasaur badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897042,
+        "timestamp": 1792579767,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 21
+      "position": 23
     },
     "metadata:pikachu-v1": {
       "id": "metadata:pikachu-v1",
@@ -16077,15 +16107,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Pikachu is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Pikachu is an evolved form of the Pichu global chat badge. Important : You must have the Pichu badge to unlock Pikachu. No additional subscription purchases are required. How this works: Step 1: Equip Pichu Open the Drops Panel below chat on Twitch and select your Pichu badge. Step 2: Evolve Pichu Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Pikachu badge as an additional badge. Your Pichu badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897045,
+        "timestamp": 1792579768,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 22
+      "position": 24
     },
     "metadata:venusaur-v1": {
       "id": "metadata:venusaur-v1",
@@ -16093,15 +16123,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Venusaur is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Venusaur is an evolved form of the Ivysaur global chat badge. Important : You must have the Ivysaur badge to unlock Venusaur. No additional subscription purchases are required. How this works: Step 1: Equip Ivysaur Open the Drops Panel below chat on Twitch and select your Ivysaur badge. Step 2: Evolve Ivysaur Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Venusaur badge as an additional badge. Your Ivysaur badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897047,
+        "timestamp": 1792579771,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 23
+      "position": 25
     },
     "metadata:wartortle-v1": {
       "id": "metadata:wartortle-v1",
@@ -16109,15 +16139,15 @@
       "data": {
         "date_added": "6 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Wartortle is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Wartortle is an evolved form of the Squirtle global chat badge. Important : You must have the Squirtle badge to unlock Wartortle. No additional subscription purchases are required. How this works: Step 1: Equip Squirtle Open the Drops Panel below chat on Twitch and select your Squirtle badge. Step 2: Evolve Squirtle Watch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027 . The days don’t need to be consecutive, and watch time can be accumulated across multiple participating channels. Once you complete the requirements, you’ll receive the Wartortle badge as an additional badge. Your Squirtle badge will not be lost. Full list of eligible categories: Pokémon FireRed/LeafGreen, Pokémon Pokopia, Pokémon UNITE, Pokémon Champions, Pokémon GO, Pokémon Legends: Z-A, Pokémon Scarlet/Violet, Pokémon Trading Card Game, Pokémon Trading Card Game Pocket, Pokémon Trading Card Game Live, Pokémon: Diamond/Pearl, Just Chatting, DJs, Art, Special Events, Sports, Music, Talk Shows & Podcasts, Animals/Aquariums/Zoos, Co-working & Studying, Makers & Crafting How Pokémon badge Evolution works: Open the Drops Panel below chat on Twitch and equip the Pokémon badge you want to evolve. Watch participating channels for at least 20 minutes a day on 3 different days. The days don’t need to be consecutive. Once you complete the requirements, you’ll receive the evolved badge as an additional badge. Your original badge will remain in your collection. Equip the newly evolved badge and repeat the process to unlock the next evolution. Important: You can evolve only one equipped Pokémon badge at a time. No additional subscription purchases are required for Evolution. Pokémon badge Evolution is available until January 30, 2027 ."
       },
       "metadata": {
-        "timestamp": 1791897049,
+        "timestamp": 1792579772,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
       },
-      "position": 24
+      "position": 26
     },
     "metadata:crossworlds-world-championship-2026-v1": {
       "id": "metadata:crossworlds-world-championship-2026-v1",
@@ -16133,7 +16163,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 14
+      "position": 16
     },
     "metadata:gold-stamp-v1": {
       "id": "metadata:gold-stamp-v1",
@@ -16149,7 +16179,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 15
+      "position": 17
     },
     "metadata:witch-hat-v1": {
       "id": "metadata:witch-hat-v1",
@@ -16165,7 +16195,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 16
+      "position": 18
     },
     "metadata:witchspire-logo-v1": {
       "id": "metadata:witchspire-logo-v1",
@@ -16181,7 +16211,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 17
+      "position": 19
     },
     "metadata:modern-warfare-4-v1": {
       "id": "metadata:modern-warfare-4-v1",
@@ -16197,7 +16227,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 13
+      "position": 15
     },
     "metadata:castlevania-belmonts-curse-v1": {
       "id": "metadata:castlevania-belmonts-curse-v1",
@@ -16213,7 +16243,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 5
+      "position": 7
     },
     "metadata:heartsteel-fan-v1": {
       "id": "metadata:heartsteel-fan-v1",
@@ -16229,7 +16259,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 8
+      "position": 10
     },
     "metadata:kda-fan-v1": {
       "id": "metadata:kda-fan-v1",
@@ -16245,7 +16275,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 9
+      "position": 11
     },
     "metadata:pentakill-fan-v1": {
       "id": "metadata:pentakill-fan-v1",
@@ -16261,7 +16291,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 10
+      "position": 12
     },
     "metadata:true-damage-fan-v1": {
       "id": "metadata:true-damage-fan-v1",
@@ -16277,7 +16307,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 11
+      "position": 13
     },
     "metadata:worlds-2026-supporter-v1": {
       "id": "metadata:worlds-2026-supporter-v1",
@@ -16293,7 +16323,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 12
+      "position": 14
     },
     "metadata:flameborn-sigil-v1": {
       "id": "metadata:flameborn-sigil-v1",
@@ -16309,7 +16339,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 6
+      "position": 8
     },
     "metadata:streamer-awards-2026-vote-v1": {
       "id": "metadata:streamer-awards-2026-vote-v1",
@@ -16325,7 +16355,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 7
+      "position": 9
     },
     "metadata:beagoldfish-v1": {
       "id": "metadata:beagoldfish-v1",
@@ -16341,7 +16371,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 3
+      "position": 5
     },
     "metadata:believeinrichmond-v1": {
       "id": "metadata:believeinrichmond-v1",
@@ -16357,7 +16387,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 4
+      "position": 6
     },
     "metadata:edgerunners-d-v1": {
       "id": "metadata:edgerunners-d-v1",
@@ -16373,7 +16403,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 0
+      "position": 2
     },
     "metadata:edgerunners-talia-v1": {
       "id": "metadata:edgerunners-talia-v1",
@@ -16389,7 +16419,7 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 1
+      "position": 3
     },
     "metadata:edgerunners-weak-v1": {
       "id": "metadata:edgerunners-weak-v1",
@@ -16405,7 +16435,39 @@
         "source": "badgebase",
         "version": 2
       },
-      "position": 2
+      "position": 4
+    },
+    "metadata:gray-zone-warfare-gold-v1": {
+      "id": "metadata:gray-zone-warfare-gold-v1",
+      "cache_type": "badge",
+      "data": {
+        "date_added": "20 October 2026",
+        "usage_stats": null,
+        "more_info": "Gray Zone Warfare (Gold) is a limited-time global chat badge dedicated to the Gray Zone Warfare. To earn it, you need to to subscribe or gift a subscription (Prime subs doesn’t count) to one of the participating channels. List of channels is limited! Please double-check the drops before paying for a subscription. Event time: Oct 22 – Nov 06 The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
+      },
+      "metadata": {
+        "timestamp": 1792579764,
+        "expiry_days": 0,
+        "source": "badgebase",
+        "version": 2
+      },
+      "position": 0
+    },
+    "metadata:the-mox-v1": {
+      "id": "metadata:the-mox-v1",
+      "cache_type": "badge",
+      "data": {
+        "date_added": "20 October 2026",
+        "usage_stats": null,
+        "more_info": null
+      },
+      "metadata": {
+        "timestamp": 1792579769,
+        "expiry_days": 0,
+        "source": "badgebase",
+        "version": 2
+      },
+      "position": 1
     }
   }
 }
