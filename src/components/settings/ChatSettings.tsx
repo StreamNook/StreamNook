@@ -2710,10 +2710,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       </SettingsSection>
 
-      {/* Desktop only: the paste-to-upload flow lives in the desktop composer;
-          the phone composer has no uploader, so this section would configure
-          nothing there. */}
-      {!IS_MOBILE && <ImageUploadSettings />}
+      <ImageUploadSettings />
 
       {/* Shown on both now. It used to be hidden on the phone because the
           feature was Tab-driven and there is no Tab key; the phone composer
@@ -3146,17 +3143,17 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         <span className="text-[12px] text-textMuted">Using the default: anything starting with !</span>
                       )}
                       {commandFilters.map((f, i) => (
-                        <button
-                          key={`${f.mode}:${f.value}:${i}`}
-                          type="button"
-                          onClick={() => removeCommandFilter(i)}
-                          title="Remove"
-                          className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
-                        >
-                          <span className="font-mono">{f.value}</span>
-                          <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
-                          <X size={12} className="text-textMuted" />
-                        </button>
+                        <Tooltip key={`${f.mode}:${f.value}:${i}`} content="Remove" describe>
+                          <button
+                            type="button"
+                            onClick={() => removeCommandFilter(i)}
+                            className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
+                          >
+                            <span className="font-mono">{f.value}</span>
+                            <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
+                            <X size={12} className="text-textMuted" />
+                          </button>
+                        </Tooltip>
                       ))}
                     </div>
                     <div className="flex items-center gap-2">

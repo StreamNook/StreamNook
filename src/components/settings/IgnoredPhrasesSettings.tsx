@@ -10,6 +10,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import type { IgnoredPhrase } from '../../types';
+import { Tooltip } from '../ui/Tooltip';
 
 /** One edit to the stored ignored-phrase list; Rust makes new entries.
  *  Answers the list as stored, or null when the edit failed. */
@@ -33,16 +34,17 @@ const Chip = ({
   title: string;
   onClick: () => void;
 }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    title={title}
-    className={`rounded px-1.5 py-0.5 text-[11px] font-semibold transition-colors ${
-      on ? 'bg-accent/25 text-accent' : 'bg-surface text-textSecondary hover:text-textPrimary'
-    }`}
-  >
-    {label}
-  </button>
+  <Tooltip content={title} describe>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded px-1.5 py-0.5 text-[11px] font-semibold transition-colors ${
+        on ? 'bg-accent/25 text-accent' : 'bg-surface text-textSecondary hover:text-textPrimary'
+      }`}
+    >
+      {label}
+    </button>
+  </Tooltip>
 );
 
 const IgnoredPhrasesSettings = () => {

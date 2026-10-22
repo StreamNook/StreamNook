@@ -10,6 +10,7 @@ import {
 } from '../../services/badgeStanding';
 import { CatchUpPanel } from './CatchUpPanel';
 import { ChannelsOnlyNote, EarnChips, RandomDrawNote } from './EarnChips';
+import { Tooltip } from '../ui/Tooltip';
 
 // Every card is the same height, so a collapsed list always ends on a row
 // boundary instead of slicing a card in half.
@@ -188,48 +189,50 @@ const MissingCard = ({
   };
 
   return (
-    <div
-      className="group min-w-0 h-full flex items-center gap-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] px-3 transition-colors"
-      title={badge.earn.detail ?? undefined}
-    >
-      <button onClick={onOpen} className="shrink-0" aria-label={`${badge.title} details`}>
-        <img
-          src={badge.image_url}
-          alt=""
-          className="w-10 h-10 object-contain drop-shadow-[0_0_10px_color-mix(in_srgb,var(--color-success)_35%,transparent)]"
-          loading="lazy"
-          draggable={false}
-        />
-      </button>
-      <div className="flex-1 min-w-0">
-        {/* The title and how it is earned share the top line; the title gives
-            way first, truncating with a tooltip, and when even its shortest
-            width leaves too little room the pill drops its words. */}
-        <div ref={compactPill.lineRef} className="flex items-center gap-2 min-w-0">
-          <button
-            onClick={onOpen}
-            title={badge.title}
-            className="min-w-[3.5rem] flex-1 text-left text-[13px] font-medium text-textPrimary truncate group-hover:text-accent transition-colors"
-          >
-            {badge.title}
-          </button>
-          <EarnChips earn={badge.earn} icons={icons} iconsOnly={compactPill.compact} />
-        </div>
-        <div className="flex items-center gap-2 mt-1">
-          {left && <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-success">{left}</span>}
-          {badge.earn.random_of && <RandomDrawNote of={badge.earn.random_of} />}
-          {badge.earn.channels && <ChannelsOnlyNote channels={badge.earn.channels} />}
-          {category && (
-            <button
-              onClick={openCategory}
-              className="flex items-center gap-0.5 min-w-0 text-[11px] text-textMuted hover:text-accent transition-colors"
-            >
-              <span className="truncate">{category}</span>
-              <ArrowUpRight size={11} className="shrink-0" />
-            </button>
-          )}
+    <Tooltip content={badge.earn.detail} describe delay={500}>
+      <div
+        className="group min-w-0 h-full flex items-center gap-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] px-3 transition-colors"
+      >
+        <button onClick={onOpen} className="shrink-0" aria-label={`${badge.title} details`}>
+          <img
+            src={badge.image_url}
+            alt=""
+            className="w-10 h-10 object-contain drop-shadow-[0_0_10px_color-mix(in_srgb,var(--color-success)_35%,transparent)]"
+            loading="lazy"
+            draggable={false}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          {/* The title and how it is earned share the top line; the title gives
+              way first, truncating with a tooltip, and when even its shortest
+              width leaves too little room the pill drops its words. */}
+          <div ref={compactPill.lineRef} className="flex items-center gap-2 min-w-0">
+            <Tooltip content={badge.title}>
+              <button
+                onClick={onOpen}
+                className="min-w-[3.5rem] flex-1 text-left text-[13px] font-medium text-textPrimary truncate group-hover:text-accent transition-colors"
+              >
+                {badge.title}
+              </button>
+            </Tooltip>
+            <EarnChips earn={badge.earn} icons={icons} iconsOnly={compactPill.compact} />
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            {left && <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-success">{left}</span>}
+            {badge.earn.random_of && <RandomDrawNote of={badge.earn.random_of} />}
+            {badge.earn.channels && <ChannelsOnlyNote channels={badge.earn.channels} />}
+            {category && (
+              <button
+                onClick={openCategory}
+                className="flex items-center gap-0.5 min-w-0 text-[11px] text-textMuted hover:text-accent transition-colors"
+              >
+                <span className="truncate">{category}</span>
+                <ArrowUpRight size={11} className="shrink-0" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </Tooltip>
   );
 };

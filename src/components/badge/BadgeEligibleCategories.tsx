@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Gamepad2 } from 'lucide-react';
 import { Logger } from '../../utils/logger';
 import { categoryLookupNames, readCategoryList } from '../../utils/eligibleCategories';
+import { Tooltip } from '../ui/Tooltip';
 
 interface HelixCategory {
   id: string;
@@ -88,23 +89,23 @@ export const BadgeEligibleCategories = ({
         {categories.map((c) => {
           const art = c.boxArtUrl?.replace('{width}', '52').replace('{height}', '72');
           return (
-            <button
-              key={c.name}
-              onClick={() => onOpen(c.name)}
-              title={c.name}
-              className="group flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] transition-colors max-w-full"
-            >
-              {art ? (
-                <img src={art} alt="" className="w-[22px] h-[30px] rounded object-cover shrink-0" loading="lazy" />
-              ) : (
-                <span className="w-[22px] h-[30px] rounded bg-white/[0.06] flex items-center justify-center shrink-0">
-                  <Gamepad2 size={13} className="text-textMuted" />
+            <Tooltip key={c.name} content={c.name}>
+              <button
+                onClick={() => onOpen(c.name)}
+                className="group flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] transition-colors max-w-full"
+              >
+                {art ? (
+                  <img src={art} alt="" className="w-[22px] h-[30px] rounded object-cover shrink-0" loading="lazy" />
+                ) : (
+                  <span className="w-[22px] h-[30px] rounded bg-white/[0.06] flex items-center justify-center shrink-0">
+                    <Gamepad2 size={13} className="text-textMuted" />
+                  </span>
+                )}
+                <span className="text-[13px] text-textPrimary truncate group-hover:text-accent transition-colors">
+                  {c.name}
                 </span>
-              )}
-              <span className="text-[13px] text-textPrimary truncate group-hover:text-accent transition-colors">
-                {c.name}
-              </span>
-            </button>
+              </button>
+            </Tooltip>
           );
         })}
       </div>

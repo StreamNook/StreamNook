@@ -12,6 +12,7 @@ import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
 import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultView } from '../types';
+import { Tooltip } from './ui/Tooltip';
 
 /**
  * The prediction card. Rust (services/predictions.rs) decides everything on
@@ -367,14 +368,15 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                 </div>
                 {/* What there is to spend, at the end of the amount row. */}
                 {bet?.balance_line && (
-                  <span
-                    className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
-                    title={`Your points: ${bet.balance_line}`}
-                    aria-label={`Your points: ${bet.balance_line}`}
-                  >
-                    {pointsIcon('text-textSecondary')}
-                    {bet.balance_line.split(' ')[0]}
-                  </span>
+                  <Tooltip content={`Your points: ${bet.balance_line}`}>
+                    <span
+                      className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
+                      aria-label={`Your points: ${bet.balance_line}`}
+                    >
+                      {pointsIcon('text-textSecondary')}
+                      {bet.balance_line.split(' ')[0]}
+                    </span>
+                  </Tooltip>
                 )}
               </div>
               {failureLine && (

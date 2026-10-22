@@ -27,6 +27,7 @@ import {
   useVodReplayStore,
   type ReplaySession,
 } from '../stores/vodReplayStore';
+import { Tooltip } from './ui/Tooltip';
 
 interface ClipResolveResult {
   url: string;
@@ -635,17 +636,18 @@ function ClipModalInner({
               {channel ? ` · ${channel}` : ''}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowChat({ ...settings, clip_chat_replay: !showChat })}
-            aria-label={showChat ? 'Hide chat replay' : 'Show chat replay'}
-            title={showChat ? 'Hide chat replay' : 'Show chat replay'}
-            className={`hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/[0.06] lg:flex ${
-              showChat ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
-            }`}
-          >
-            <MessageSquare size={16} />
-          </button>
+          <Tooltip content={showChat ? 'Hide chat replay' : 'Show chat replay'}>
+            <button
+              type="button"
+              onClick={() => setShowChat({ ...settings, clip_chat_replay: !showChat })}
+              aria-label={showChat ? 'Hide chat replay' : 'Show chat replay'}
+              className={`hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/[0.06] lg:flex ${
+                showChat ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
+              }`}
+            >
+              <MessageSquare size={16} />
+            </button>
+          </Tooltip>
           <button
             type="button"
             onClick={onClose}

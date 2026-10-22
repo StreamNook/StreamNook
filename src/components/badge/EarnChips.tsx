@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { Clapperboard, Coins, Dices, Eye, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { earnChipHint, earnChipText, type EarnPath, type EarnStep } from '../../services/badgeStanding';
+import { Tooltip } from '../ui/Tooltip';
 
 // Drawn icons, one hue per way of earning, for the kinds Twitch has no art for.
 // Subscribing and Bits use Twitch's own badge art when the standing carries it.
@@ -49,10 +50,12 @@ export const EarnChips = ({
       {earn.steps.map((step, i) => (
         <Fragment key={`${step.kind}-${i}`}>
           {i > 0 && <span aria-hidden className="w-px h-3 bg-white/15" />}
-          <span className="inline-flex items-center gap-1" title={earnChipHint(step)}>
-            <StepIcon step={step} art={icons?.[step.kind]} />
-            {iconsOnly ? <span className="sr-only">{earnChipText(step)}</span> : earnChipText(step)}
-          </span>
+          <Tooltip content={earnChipHint(step)} describe>
+            <span className="inline-flex items-center gap-1">
+              <StepIcon step={step} art={icons?.[step.kind]} />
+              {iconsOnly ? <span className="sr-only">{earnChipText(step)}</span> : earnChipText(step)}
+            </span>
+          </Tooltip>
         </Fragment>
       ))}
     </span>
@@ -66,22 +69,20 @@ export const ChannelsOnlyNote = ({ channels }: { channels: string[] }) => {
   const named = channels.length <= 3;
   const label = named ? `Only on ${channels.join(', ')}` : `Only on ${channels.length} channels`;
   return (
-    <span
-      className="inline-flex items-center gap-1 min-w-0 whitespace-nowrap text-[11px] text-textMuted"
-      title={named ? `Counts only on ${channels.join(', ')}` : channels.join(', ')}
-    >
-      <Radio size={11} className="shrink-0" />
-      <span className="truncate">{label}</span>
-    </span>
+    <Tooltip content={named ? `Counts only on ${channels.join(', ')}` : channels.join(', ')} describe>
+      <span className="inline-flex items-center gap-1 min-w-0 whitespace-nowrap text-[11px] text-textMuted">
+        <Radio size={11} className="shrink-0" />
+        <span className="truncate">{label}</span>
+      </span>
+    </Tooltip>
   );
 };
 
 /** "1 of 3 at random" for a badge drawn from a pool, as quiet inline text. */
 export const RandomDrawNote = ({ of }: { of: number }) => (
-  <span
-    className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted"
-    title={`You get one of ${of} badges, drawn at random`}
-  >
-    <Dices size={11} className="shrink-0" />1 of {of} at random
-  </span>
+  <Tooltip content={`You get one of ${of} badges, drawn at random`} describe>
+    <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap text-[11px] text-textMuted">
+      <Dices size={11} className="shrink-0" />1 of {of} at random
+    </span>
+  </Tooltip>
 );

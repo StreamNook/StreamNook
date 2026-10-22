@@ -1354,13 +1354,6 @@ export default function GameDetailPanel({
                                                 <div className="absolute top-0 right-0 w-5 h-5 rounded-full bg-success flex items-center justify-center shadow-lg border-2 border-background">
                                                     <Check size={10} className="text-white" />
                                                 </div>
-
-                                                {/* Name on hover */}
-                                                <div className="absolute -bottom-5 left-0 right-0 text-center opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                                                    <span className="text-[9px] text-textMuted bg-background/90 px-1.5 py-0.5 rounded truncate max-w-full inline-block">
-                                                        {benefitName}
-                                                    </span>
-                                                </div>
                                             </div>
                                             </Tooltip>
                                         ))}

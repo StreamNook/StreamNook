@@ -1,4 +1,5 @@
 import { usdLabel, watchTimeLabel, type CatchUp } from '../../services/badgeStanding';
+import { Tooltip } from '../ui/Tooltip';
 
 /** What earning everything above takes, in money and in watching. The math
  *  (effort shared within a category, US Tier 1 price) is Rust's `CatchUp`. */
@@ -24,19 +25,31 @@ export const CatchUpPanel = ({ totals, stacked = false }: { totals: CatchUp; sta
   const floor = totals.random > 0 || totals.unpriced > 0;
 
   return (
-    <div
-      className={`missing-now-catchup glaze-inset${stacked ? ' missing-now-catchup--stacked' : ''}`}
-      title={notes.join('\n')}
+    <Tooltip
+      content={
+        <span className="block space-y-0.5 text-left">
+          {notes.map((n) => (
+            <span key={String(n)} className="block">
+              {n}
+            </span>
+          ))}
+        </span>
+      }
     >
-      <span className="missing-now-catchup-label">{floor ? 'To catch up, at least' : 'To catch up'}</span>
-      <div className="missing-now-stats">
-        {stats.map((s) => (
-          <div key={s.label} className="missing-now-stat">
-            <span className="missing-now-stat-value">{s.value}</span>
-            <span className="missing-now-stat-label">{s.label}</span>
-          </div>
-        ))}
+      <div
+        className={`missing-now-catchup glaze-inset${stacked ? ' missing-now-catchup--stacked' : ''}`}
+        aria-description={notes.join(' ')}
+      >
+        <span className="missing-now-catchup-label">{floor ? 'To catch up, at least' : 'To catch up'}</span>
+        <div className="missing-now-stats">
+          {stats.map((s) => (
+            <div key={s.label} className="missing-now-stat">
+              <span className="missing-now-stat-value">{s.value}</span>
+              <span className="missing-now-stat-label">{s.label}</span>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </Tooltip>
   );
 };

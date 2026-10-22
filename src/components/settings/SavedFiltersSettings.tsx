@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { SavedChatFilter } from '../../types';
+import { Tooltip } from '../ui/Tooltip';
 
 function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -143,15 +144,15 @@ const SavedFiltersSettings = () => {
         </button>
         <span className="mx-1 text-xs text-textSecondary">Presets:</span>
         {PRESETS.map((p) => (
-          <button
-            key={p.name}
-            type="button"
-            onClick={() => add(p)}
-            className="rounded-full bg-surface px-2.5 py-1 text-xs text-textSecondary transition-colors hover:text-textPrimary"
-            title={p.expr}
-          >
-            {p.name}
-          </button>
+          <Tooltip key={p.name} content={p.expr} describe>
+            <button
+              type="button"
+              onClick={() => add(p)}
+              className="rounded-full bg-surface px-2.5 py-1 text-xs text-textSecondary transition-colors hover:text-textPrimary"
+            >
+              {p.name}
+            </button>
+          </Tooltip>
         ))}
       </div>
     </div>
