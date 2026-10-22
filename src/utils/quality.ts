@@ -2,7 +2,9 @@
 // "audio_only", "best", "worst". Used to decide when a closest-match fallback
 // is meaningfully different from what the user asked for.
 
-const SYMBOLIC_QUALITIES = new Set(['best', 'worst', 'audio_only']);
+import { IS_MOBILE } from './platform';
+
+const SYMBOLIC_QUALITIES = new Set(['auto', 'best', 'worst', 'audio_only']);
 
 export function parseQualityHeight(q: string): number | null {
   const m = q.trim().match(/^(\d+)/);
@@ -47,4 +49,16 @@ export function qualitiesEquivalent(a: string, b: string): boolean {
   const af = parseQualityFps(an);
   const bf = parseQualityFps(bn);
   return af === null || bf === null || af === bf;
+}
+
+/**
+ * How a quality reads in the player menus. "auto" follows the connection, so it
+ * names the rendition it plays right now when Rust has said (`playback-adapt`).
+ * On the phones "best" is their Auto; on the desktop it is the fixed source.
+ */
+export function qualityLabel(quality: string, autoPlaying?: string | null, mobile: boolean = IS_MOBILE): string {
+  const q = quality.trim().toLowerCase();
+  if (q === 'auto' || (q === 'best' && mobile)) return autoPlaying ? `Auto (${autoPlaying})` : 'Auto';
+  if (q === 'best' || q === 'source') return 'Source';
+  return quality.charAt(0).toUpperCase() + quality.slice(1);
 }

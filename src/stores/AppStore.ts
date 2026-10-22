@@ -18,6 +18,7 @@ import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
 import { signInRequiredFrom } from '../utils/signInRequired';
 import { transientSwapVerdict } from '../utils/transientSwap';
+import type { PlaybackAdapt } from '../utils/linkAdapt';
 import { WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
 import { settleFirstSettings } from '../utils/settingsOnceLoaded';
@@ -268,6 +269,9 @@ interface AppState {
   availableQualities: string[];
   /** How the current live stream is being served ad-free (entitlement vs proxy). */
   adSource: AdSource | null;
+  /** The rendition "Auto" plays right now, as Rust's link governor reports it
+   *  (`playback-adapt`). Null when the stream is not adapting. */
+  autoQuality: string | null;
   /** How the player should ingest `streamUrl`. 'hls' for every Twitch stream and
    *  for provider streams served through the relay; 'mp4' for clips/VODs played
    *  directly; 'flv' for platforms with no HLS rendition. Null when idle. */
@@ -589,6 +593,9 @@ interface AppState {
   /** Apply a backend ad auto-pivot: the relay already hot-swapped to a clean
    *  region, so point the player at the fresh URL to resync cleanly. */
   applyAdPivot: (url: string, region?: string) => void;
+  /** Follow Rust's link governor for the solo player: show the rendition
+   *  "Auto" plays, and reload when the relay restarted on another one. */
+  applyLinkAdapt: (adapt: PlaybackAdapt) => void;
   openSettings: (initialTab?: SettingsTab, initialSection?: string) => void;
   closeSettings: () => void;
   closeProfileViewer: () => void;
@@ -1446,6 +1453,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeQuality: null,
   availableQualities: [],
   adSource: null,
+  autoQuality: null,
   playbackKind: null,
   currentStream: null,
   channelsInPopouts: new Set<string>(),
@@ -2646,6 +2654,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       streamUrl: url,
       adSource: cur ? { ...cur, region } : { mode: 'plugin', entitled: false, region },
     });
+  },
+
+  applyLinkAdapt: (adapt) => {
+    set({ autoQuality: adapt.auto && adapt.quality ? adapt.quality : null });
+    // The relay restarted on another rendition: reload on it exactly as a
+    // quality change does. A stream already closed must not be revived.
+    if (adapt.url && get().streamUrl) {
+      Logger.info(`[LinkAdapt] ${adapt.quality} (${adapt.reason}), reloading`);
+      set({ streamUrl: adapt.url });
+    }
   },
 
   applyTransientQuality: async (quality: string) => {

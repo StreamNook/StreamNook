@@ -21,8 +21,6 @@ allow = [
   "live_poll_check",
   "live_poll_seen",
   "set_max_video_height",
-  "report_playback_health",
-  "get_live_edge_cushion",
   "fetch_chat_identity_badges_gql",
   "update_chat_identity_gql",
   "flush_persistent_stores",

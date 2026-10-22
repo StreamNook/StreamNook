@@ -5,16 +5,17 @@ import React, { useState } from 'react';
 import { Check } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { MobileSheet } from '../ui/MobileSheet';
+import { qualityLabel as menuLabel } from '../../utils/quality';
 import { SleepTimerSection } from './SleepTimerSection';
 
 // Row names, the same words the iPhone sheet uses. Labelled here rather than
 // with CSS `capitalize`, which read the raw keys back as "Audio_only" and
 // "Worst". A named tier keeps its own spelling past the first letter, so
 // "1080p60 (source)" is not turned into "1080p60 (Source)".
-const qualityLabel = (q: string): string => {
+const qualityLabel = (q: string, autoPlaying: string | null): string => {
   switch (q) {
     case 'best':
-      return 'Auto';
+      return menuLabel(q, autoPlaying);
     case 'audio_only':
       return 'Audio only';
     case 'worst':
@@ -38,6 +39,8 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   const availableQualities = useAppStore((s) => s.availableQualities);
   const changeStreamQuality = useAppStore((s) => s.changeStreamQuality);
   const savedQuality = useAppStore((s) => s.settings.quality);
+  // The rendition Auto plays right now, as Rust's link governor names it.
+  const autoQuality = useAppStore((s) => s.autoQuality);
   const [selected, setSelected] = useState<string | null>(null);
 
   // What is actually in effect: this session's pick if there was one, else the
@@ -62,8 +65,9 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
           {qualityRows(availableQualities).map((q) => {
             // "best" is shown as Auto on a phone, because it no longer means
             // "the highest tier that exists" - it means the highest tier this
-            // SCREEN can show. Calling that "best" would read as a downgrade to
-            // anyone who noticed the resolution drop.
+            // SCREEN can show, stepped down while the connection cannot carry
+            // it. Calling that "best" would read as a downgrade to anyone who
+            // noticed the resolution drop.
             //
             // Keeping it labelled and pickable is the point, not decoration: a
             // named tier is written to settings and persists across launches and
@@ -77,9 +81,9 @@ export const QualitySheet: React.FC<{ open: boolean; onClose: () => void }> = ({
                 className="sn-touch flex items-center justify-between px-2 text-[15px] text-textPrimary active:opacity-70"
               >
                 <span className="flex flex-col items-start leading-tight">
-                  <span>{qualityLabel(q)}</span>
+                  <span>{qualityLabel(q, autoQuality)}</span>
                   {isAuto && (
-                    <span className="text-[11px] text-textMuted">Matches your screen</span>
+                    <span className="text-[11px] text-textMuted">Matches your screen and connection</span>
                   )}
                 </span>
                 {/* The tick matches the label's size, never bigger than the

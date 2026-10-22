@@ -1599,10 +1599,17 @@ fn default_theme() -> String {
     "winters-glass".to_string()
 }
 
+/// The quality a fresh install starts on. The desktop starts on Auto, as
+/// twitch.tv does; the phones' "best" has always been their Auto. A saved file
+/// always names its quality, so this never reaches an existing install.
+fn first_run_quality() -> String {
+    if cfg!(mobile) { "best" } else { "auto" }.to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            quality: "best".to_string(),
+            quality: first_run_quality(),
             chat_placement: "right".to_string(),
             accounts: vec![],
             current_account: "".to_string(),
@@ -2359,6 +2366,24 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).expect("parses");
         assert_eq!(parsed.chat_design.message_entrance, "none");
         assert_eq!(parsed.chat_design.deleted_message_style, "strikethrough");
+    }
+
+    /// A fresh desktop install starts on Auto; the phones keep "best", their
+    /// Auto. A saved file keeps whatever quality it names, "best" included.
+    #[test]
+    fn a_fresh_install_starts_on_auto_and_a_saved_best_stays_best() {
+        let fresh = Settings::default();
+        assert_eq!(fresh.quality, if cfg!(mobile) { "best" } else { "auto" });
+
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["quality"] = serde_json::json!("best");
+        let parsed: Settings = serde_json::from_value(value).expect("parses");
+        assert_eq!(parsed.quality, "best");
+
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["quality"] = serde_json::json!("720p60");
+        let parsed: Settings = serde_json::from_value(value).expect("parses");
+        assert_eq!(parsed.quality, "720p60");
     }
 
     /// Frontend-managed preference groups the struct doesn't model (highlight

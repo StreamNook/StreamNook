@@ -4633,11 +4633,28 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
 /* `focus-within` as well as hover, so keyboard seeking gets the same bar the
    pointer does. Re-declaring the track-height token here rather than only the
    height is what keeps Plyr's own thumb-centring arithmetic correct while the
-   track is grown — it reads the variable live. */
+   track is grown: it reads the variable live. A fine drag (`sn-scrubbing`)
+   holds it too, wherever the pointer goes. */
 .video-player-container .plyr__progress:hover input[type="range"],
-.video-player-container .plyr__progress:focus-within input[type="range"] {
+.video-player-container .plyr__progress:focus-within input[type="range"],
+.video-player-container .plyr__progress.sn-scrubbing input[type="range"] {
   --plyr-range-track-height: var(--scrub-track-h-hover);
   height: var(--scrub-track-h-hover);
+}
+
+/* While a fine drag is slowed, "1/4 speed" follows the time in whichever tip
+   is showing it: Plyr's, its storyboard preview's, or the chapter tip. The
+   label comes from --sn-scrub-speed on the bar; unset, the `content` is
+   invalid and no ::after is drawn. */
+.video-player-container .plyr__progress .plyr__tooltip::after,
+.video-player-container .plyr__progress .plyr__preview-thumb__time-container > span:first-child::after,
+.video-player-container .plyr__progress .sn-chapter-tip__time::after {
+  content: ' · ' var(--sn-scrub-speed);
+}
+/* Plyr caps its seek tooltip at 120px (for marker labels, unused here), and
+   "1:46:28 · 1/16 speed" ran past the tooltip's own background. */
+.video-player-container .plyr__progress.sn-scrubbing .plyr__tooltip {
+  max-width: none;
 }
 
 .video-player-container .plyr__progress__buffer {
@@ -4687,8 +4704,11 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
   transform: scaleY(1);
 }
 /* Held: bigger, and with a shadow that says it has been picked up off the
-   track rather than merely brightened. */
-.video-player-container .plyr__progress input[type="range"]:active::-webkit-slider-thumb {
+   track rather than merely brightened. `sn-scrubbing` is a fine drag on a
+   VOD (plyrFineScrub.ts), which takes the press from the range, so :active
+   never applies and a slowed drag pulls the pointer off the bar. */
+.video-player-container .plyr__progress input[type="range"]:active::-webkit-slider-thumb,
+.video-player-container .plyr__progress.sn-scrubbing input[type="range"]::-webkit-slider-thumb {
   opacity: 1;
   transform: scale(1.6);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3),
@@ -7888,11 +7908,11 @@ html[data-os="linux"] .sn-chat-overlay-frame {
    band underneath it disappears - the same lesson as `.sn-timeline__band`.
 
    `left: 0; right: 0` is deliberate and must not be "corrected" to match the
-   input's box. Plyr widens that input by one thumb height and offsets it half
-   a thumb left precisely so the thumb CENTRE travels this element's content
-   box, which makes this box the real 0-100% playhead space. The visible track
-   overhangs 6.5px at each end for thumb clearance; that is Plyr's own
-   track-vs-thumb offset, not a bug here.
+   input's box. The input is widened by one thumb WIDTH and offset half a
+   thumb left (see the range geometry above) precisely so the thumb CENTRE
+   travels this element's content box, which makes this box the real 0-100%
+   playhead space. The visible track overhangs half the capsule (2px) at each
+   end for thumb clearance; that is the track-vs-thumb offset, not a bug here.
 
    Clipped to the track height so the 13px thumb still reads above and below.
    Unlayered, at the end - a cascade layer here loses to Tailwind preflight and

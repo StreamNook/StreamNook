@@ -2271,6 +2271,24 @@
   {
    "page": "notifications",
    "section": "Notify me about",
+   "title": "Whispers",
+   "paths": [
+    "live_notifications.show_whisper_notifications"
+   ],
+   "nested": false,
+   "detail": "When someone whispers you",
+   "logo": null,
+   "aliases": [
+    "whispers",
+    "direct messages",
+    "dms",
+    "whisper notifications"
+   ],
+   "needs": "alert:whispers"
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
    "title": "Drops",
    "paths": [
     "live_notifications.show_drops_notifications"

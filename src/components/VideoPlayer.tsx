@@ -27,9 +27,11 @@ import { useVodProgressReporter } from '../hooks/useVodProgressReporter';
 import { useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
 import { formatVodTime } from '../utils/vodProgress';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
+import { isCodecFailure } from '../utils/codecFailure';
 import BroadcastTimeline from './BroadcastTimeline';
 import VodMutedMarks from './VodMutedMarks';
-import { injectPlyrControl } from '../utils/plyrControls';
+import { exactSeekPointer, injectPlyrControl } from '../utils/plyrControls';
+import { attachFineScrub } from '../utils/plyrFineScrub';
 import { pickStoryboardVariant, storyboardToPlyrThumbnails, type PlyrThumbnailSet } from '../utils/storyboard';
 import { useCurrentChapter } from '../hooks/useCurrentChapter';
 import VodChapterMarks from './VodChapterMarks';
@@ -37,7 +39,8 @@ import VodChaptersMenu from './VodChaptersMenu';
 import { Tooltip } from './ui/Tooltip';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
-import { qualitiesEquivalent } from '../utils/quality';
+import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
+import { createStallReporter, reportSegment } from '../utils/linkAdapt';
 
 import { Logger } from '../utils/logger';
 import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
@@ -548,6 +551,8 @@ const VideoPlayer = () => {
   const onFirstPlayingRef = useRef<(() => void) | null>(null);
   const onPlayingFlagRef = useRef<(() => void) | null>(null);
   const onTimeUpdateRef = useRef<(() => void) | null>(null);
+  // What this player tells Rust's link governor (stalls), torn down with it.
+  const linkReportRef = useRef<{ stalls: ReturnType<typeof createStallReporter>; listeners: AbortController } | null>(null);
   const lastPlayheadRef = useRef<number>(0);
 
   // Follow + subscribe state and actions for the current channel. Shared with
@@ -681,7 +686,10 @@ const VideoPlayer = () => {
     // not the saved preference (settings.quality). They diverge whenever the
     // resolver fell back to the closest available quality because the
     // saved preference wasn't offered for this stream.
-    const displayedQuality = activeQuality ?? settings.quality;
+    // "Auto" adapting to the link is still "auto" in the menu, whatever
+    // rendition it plays right now (Rust names that in `autoQuality`).
+    const autoNow = useAppStore.getState().autoQuality;
+    const displayedQuality = autoNow ? 'auto' : (activeQuality ?? settings.quality);
 
     Logger.debug('[Quality] Setting up menu with available qualities:', availableQualities);
     Logger.debug('[Quality] Active quality:', activeQuality, 'saved preference:', settings.quality);
@@ -713,7 +721,7 @@ const VideoPlayer = () => {
       }
 
       // Determine the display value - use the actual quality being streamed
-      const currentQualityDisplay = displayedQuality.charAt(0).toUpperCase() + displayedQuality.slice(1);
+      const currentQualityDisplay = qualityLabel(displayedQuality, autoNow);
 
       // Create quality menu item in main settings
       const settingsHome = settingsMenu.querySelector('[role="menu"]');
@@ -760,7 +768,7 @@ const VideoPlayer = () => {
               role="menuitemradio"
               aria-checked="${quality.toLowerCase() === displayedQuality.toLowerCase() ? 'true' : 'false'}"
             >
-              <span>${quality.charAt(0).toUpperCase() + quality.slice(1)}</span>
+              <span>${qualityLabel(quality)}</span>
             </button>
           `).join('')}
         `;
@@ -798,7 +806,7 @@ const VideoPlayer = () => {
             // Update value in main menu (with capitalization)
             const qualityValueSpan = settingsHome.querySelector('[data-plyr="quality"] .plyr__menu__value');
             if (qualityValueSpan) {
-              qualityValueSpan.textContent = selectedQuality.charAt(0).toUpperCase() + selectedQuality.slice(1);
+              qualityValueSpan.textContent = qualityLabel(selectedQuality);
             }
 
             // Close menu
@@ -1727,6 +1735,15 @@ const VideoPlayer = () => {
         }
       });
 
+      // A codec the probe passed can still fail here. Rust then drops it from
+      // selection and says whether restarting gets away from it, so the stream
+      // comes back on a tier this device plays instead of looping on the
+      // error. hls.js names the failed type only in the non-fatal add-codec
+      // error just before the fatal one. Asked once per start; Rust refuses a
+      // second restart for the same codec on one channel, so this cannot loop.
+      let failedCodecMime: string | null = null;
+      let codecReported = false;
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         Logger.error('[HLS] Error:', JSON.stringify({ type: data.type, details: data.details, fatal: data.fatal }));
         // hls.js packs the precise reason into data.error.message — for a
@@ -1740,6 +1757,9 @@ const VideoPlayer = () => {
 
         // Handle non-fatal errors with improved recovery
         if (!data.fatal) {
+          if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
+            failedCodecMime = data.mimeType ?? null;
+          }
           const now = Date.now();
 
           // Handle buffer stalled errors with active recovery
@@ -1909,6 +1929,23 @@ const VideoPlayer = () => {
             return;
           }
 
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details)) {
+            codecReported = true;
+            invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })
+              .catch(() => false)
+              .then(async (restart) => {
+                if (hlsRef.current !== hls) return; // the stream moved on meanwhile
+                if (!restart) {
+                  hls.recoverMediaError();
+                  return;
+                }
+                Logger.warn('[HLS] codec failed to decode; restarting on a tier this device plays');
+                await useAppStore.getState().restartStream({ quiet: true });
+                useAppStore.getState().addToast('Switched to a quality this device can play', 'info');
+              });
+            return;
+          }
+
           const now = Date.now();
 
           // Reset error count if enough time has passed since last error
@@ -2005,6 +2042,21 @@ const VideoPlayer = () => {
           Logger.debug(`[HLS] Fragment loaded: sn=${data.frag.sn} dur=${data.frag.duration.toFixed(1)}s`);
         }
       });
+
+      // Rust's link governor ("Auto" on a struggling connection) judges the
+      // link by the whole segments this player downloads and the stalls it
+      // sees. Parts come from the relay over loopback and say nothing about
+      // the link, so the parts path reports stalls only.
+      if (!isVodPlayback && !isLowLatencyChannel) {
+        hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+          if (data.part || hlsRef.current !== hls) return;
+          const { loaded, loading } = data.frag.stats;
+          reportSegment(loaded, loading.end - loading.start, undefined, {
+            cc: data.frag.cc,
+            durationMs: data.frag.duration * 1000,
+          });
+        });
+      }
 
       // ──── Cold-Start Buffer Gate + live-sync snap ────
       // Twitch segments are ~2s. Wait for a little buffer so a cold start doesn't
@@ -2225,6 +2277,24 @@ const VideoPlayer = () => {
       onPlayingFlagRef.current = onPlayingFlag;
       video.addEventListener('waiting', onWaiting);
       video.addEventListener('playing', onPlayingFlag);
+
+      // Stalls for the link governor: a freeze while playing, not a pause, a
+      // seek or the cold start.
+      linkReportRef.current?.listeners.abort();
+      linkReportRef.current?.stalls.cancel();
+      linkReportRef.current = null;
+      if (!isVodPlayback) {
+        const stalls = createStallReporter();
+        const listeners = new AbortController();
+        const opts = { signal: listeners.signal };
+        video.addEventListener('waiting', () => {
+          if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
+        }, opts);
+        video.addEventListener('playing', () => stalls.end(), opts);
+        video.addEventListener('pause', () => stalls.cancel(), opts);
+        video.addEventListener('seeking', () => stalls.cancel(), opts);
+        linkReportRef.current = { stalls, listeners };
+      }
 
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS support (Safari)
@@ -2471,6 +2541,9 @@ const VideoPlayer = () => {
         if (waitingHandler) videoElement.removeEventListener('waiting', waitingHandler);
         if (playingFlagHandler) videoElement.removeEventListener('playing', playingFlagHandler);
       }
+      linkReportRef.current?.listeners.abort();
+      linkReportRef.current?.stalls.cancel();
+      linkReportRef.current = null;
       const debouncer = volumeDebounceRef.current;
       const gateTimeout = bufferGateTimeoutRef.current;
       if (debouncer) clearTimeout(debouncer);
@@ -2694,6 +2767,15 @@ const VideoPlayer = () => {
     };
   }, [showOsd]);
 
+  // Plyr's seek bar reads whole-pixel mouse coordinates; hand it the exact
+  // pointer so a drop lands on the thumb at every display scale. On the
+  // container, so it outlives every player rebuild.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    return exactSeekPointer(container);
+  }, []);
+
   // Build the quality menu once BOTH the quality list and the player are ready,
   // in whichever order they arrive. `playerReady` is state, so this re-runs when
   // Plyr is created (a ref wouldn't), and the list can now arrive instantly.
@@ -2702,6 +2784,15 @@ const VideoPlayer = () => {
       updateQualityMenu();
     }
   }, [availableQualities, playerReady, updateQualityMenu]);
+
+  // Rust moved "Auto" to another rendition: only the label changes, so an
+  // open menu stays where it is.
+  const autoQuality = useAppStore((s) => s.autoQuality);
+  useEffect(() => {
+    const value = containerRef.current?.querySelector('[data-plyr="quality"] .plyr__menu__value');
+    if (!value) return;
+    value.textContent = qualityLabel(autoQuality ? 'auto' : (activeQuality ?? settings.quality), autoQuality);
+  }, [autoQuality, activeQuality, settings.quality]);
 
   // Inject a "Stats" toggle into the Plyr settings (gear) menu, alongside Quality
   // and Speed, so the latency panel is opened from there (not a floating button).
@@ -2754,22 +2845,28 @@ const VideoPlayer = () => {
     () => !!containerRef.current?.querySelector('.plyr__menu [aria-expanded="true"]'),
     [],
   );
+  // The seek bar is held: a fine drag on a VOD, or Plyr's own range mid-drag.
+  // Someone holding still to read a frame has not walked away.
+  const isSeekHeld = useCallback(
+    () => !!containerRef.current?.querySelector('.plyr__progress.sn-scrubbing, .plyr__progress input:active'),
+    [],
+  );
 
   const startOverlayHideTimer = useCallback(() => {
     if (overlayTimerRef.current) {
       clearTimeout(overlayTimerRef.current);
     }
     overlayTimerRef.current = setTimeout(() => {
-      // Never time the overlay out from under an open menu: the menu lives
-      // inside the overlay, so hiding it mid-interaction cancels whatever the
-      // user was in the middle of choosing.
-      if (isPlayerMenuOpen()) {
+      // Never time the overlay out from under an open menu or a held seek
+      // bar: both live inside the overlay, so hiding it mid-interaction
+      // cancels whatever the user was in the middle of choosing.
+      if (isPlayerMenuOpen() || isSeekHeld()) {
         startOverlayHideTimer();
         return;
       }
       setShowOverlay(false);
     }, OVERLAY_HIDE_DELAY);
-  }, [isPlayerMenuOpen]);
+  }, [isPlayerMenuOpen, isSeekHeld]);
 
   // Snap the playhead back to the live edge (used by the stats panel's "Go Live"
   // button and after scrubbing into the DVR window). Never seek to an unbuffered
@@ -2901,6 +2998,14 @@ const VideoPlayer = () => {
   // One "Resumed from" toast per VOD: StrictMode runs mount effects twice.
   const resumeToastedRef = useRef<string | null>(null);
   const timelineAnchor = liveRewindAnchor ?? currentStream?.started_at ?? null;
+
+  // Fine scrubbing on a VOD's bar (slowed drag, wheel nudge), the live
+  // timeline's two gestures. Re-attached to every bar Plyr rebuilds.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!timelineHost || !isVodTimeline || !video) return;
+    return attachFineScrub(timelineHost, video);
+  }, [timelineHost, isVodTimeline]);
 
   const goLive = useCallback(() => {
     const hls = hlsRef.current;

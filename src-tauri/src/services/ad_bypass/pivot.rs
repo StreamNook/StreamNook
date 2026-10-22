@@ -218,7 +218,18 @@ async fn run(generation: u64) {
         return;
     }
 
-    match crate::services::stream_server::swap_upstream(resolved.url.clone()).await {
+    // The new relay's master is a new ladder: "Auto" keeps adapting on it,
+    // never on the old relay's renditions, and starts below what the link
+    // just failed to hold.
+    let serve = crate::services::link_adapt::begin(
+        crate::services::link_adapt::SOLO,
+        &crate::services::twitch_resolver::playable_variants(&resolved.master, &resolved.status.channel),
+        &resolved.url,
+        crate::commands::streaming::is_auto_quality(&resolved.quality),
+        crate::services::stream_server::solo_twitch_route(),
+    )
+    .map_or_else(|| resolved.url.clone(), |rung| rung.url);
+    match crate::services::stream_server::swap_upstream(serve).await {
         Ok(()) => {
             crate::services::auth_proxy::set_status(resolved.status.clone());
             {

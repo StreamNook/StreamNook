@@ -100,6 +100,7 @@ pub mod emote_picker;
 pub mod emote_prefetch_service;
 pub mod emote_service;
 pub mod emote_set_cache;
+pub mod eventsub_budget;
 pub mod eventsub_moderation;
 pub mod eventsub_service;
 pub mod ffz_room_badges;

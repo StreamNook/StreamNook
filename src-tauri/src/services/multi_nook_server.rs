@@ -81,9 +81,41 @@ struct StreamInstance {
     /// to the solo player. `None` until `set_promotion` runs, and for a tile
     /// that failed to resolve at all.
     promotion: Option<TilePromotion>,
+    /// Codec families this tile already restarted to get away from. A second
+    /// failure on one of them means its re-resolve found nothing else to play,
+    /// so restarting again would only loop.
+    codec_steps: Vec<&'static str>,
 }
 
 pub struct MultiNookServer;
+
+/// A Twitch tile as `link_adapt` moves it (`MultiNookServer::adapt_tile`). Its
+/// player reports whole segments only on the whole-segment path, where they
+/// come straight from the CDN through a `vseg/` redirect.
+struct TwitchTileRoute {
+    stream_id: String,
+}
+
+impl crate::services::link_adapt::Route for TwitchTileRoute {
+    fn switch(&self, to: crate::services::link_adapt::Rung, same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
+        let id = self.stream_id.clone();
+        Box::pin(async move { MultiNookServer::adapt_tile(&id, &to.url, same_decoder).await })
+    }
+
+    fn player_measures_link(&self) -> bool {
+        true
+    }
+
+    fn segment_secs(&self) -> Option<f64> {
+        Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS)
+    }
+}
+
+pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt::Route> {
+    Arc::new(TwitchTileRoute {
+        stream_id: stream_id.to_string(),
+    })
+}
 
 /// Registry of all active stream proxy instances, keyed by stream_id
 static STREAM_REGISTRY: Lazy<Arc<Mutex<HashMap<String, StreamInstance>>>> =
@@ -158,6 +190,7 @@ impl MultiNookServer {
                     Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default()));
                 let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
                 origin.set_window(sync_window());
+                origin.set_adapt_id(stream_id);
 
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
                 let proxy_url_clone = proxy_url.clone();
@@ -201,6 +234,7 @@ impl MultiNookServer {
                         refresher,
                         resign_lock: Arc::new(Mutex::new(())),
                         promotion: None,
+                        codec_steps: Vec::new(),
                     },
                 );
                 (port, origin)
@@ -260,6 +294,9 @@ impl MultiNookServer {
 
     /// Stop a specific stream's proxy server
     pub async fn stop_instance(stream_id: &str) -> Result<()> {
+        // Every tile kind adapts, including the ones served by an adapter's own
+        // relay and so never registered here.
+        crate::services::link_adapt::end(stream_id);
         let mut registry = STREAM_REGISTRY.lock().await;
 
         if let Some(instance) = registry.remove(stream_id) {
@@ -283,6 +320,7 @@ impl MultiNookServer {
 
     /// Stop all stream proxy servers (cleanup on exit or mode switch)
     pub async fn stop_all() -> Result<()> {
+        crate::services::link_adapt::end_tiles();
         let mut registry = STREAM_REGISTRY.lock().await;
         let count = registry.len();
 
@@ -330,6 +368,28 @@ impl MultiNookServer {
         Some((upstream, promotion))
     }
 
+    /// The CODECS of the rendition this tile's resolve picked, when known.
+    pub async fn tile_codecs(stream_id: &str) -> Option<String> {
+        let registry = STREAM_REGISTRY.lock().await;
+        registry.get(stream_id)?.promotion.as_ref()?.codecs.clone()
+    }
+
+    /// Record that this tile restarts to get away from `family`. False when it
+    /// already did once for that family, is not in the registry, or is not a
+    /// Twitch tile (only the Twitch resolver honors the codec list, so another
+    /// platform's re-resolve would land on the same codec).
+    pub async fn take_codec_step(stream_id: &str, family: &'static str) -> bool {
+        let mut registry = STREAM_REGISTRY.lock().await;
+        let Some(instance) = registry.get_mut(stream_id) else {
+            return false;
+        };
+        if instance.profile != TileProfile::Twitch || instance.codec_steps.contains(&family) {
+            return false;
+        }
+        instance.codec_steps.push(family);
+        true
+    }
+
     /// The quality menu this tile's resolve discovered. `None` for a tile that
     /// is not in the registry or has not finished resolving.
     pub async fn tile_qualities(stream_id: &str) -> Option<Vec<String>> {
@@ -365,6 +425,55 @@ impl MultiNookServer {
     pub async fn active_count() -> usize {
         let registry = STREAM_REGISTRY.lock().await;
         registry.len()
+    }
+
+    /// Move a Twitch tile to another rendition of the same broadcast for
+    /// `link_adapt`. Spliced into the playlist its player already polls when
+    /// the whole-segment projection serves it and the decoder stays the same
+    /// (no reload; the renditions share sequence numbers and timestamps).
+    /// Otherwise the relay restarts on the rendition, keeping its port, and the
+    /// returned URL is the one the tile reloads on.
+    pub async fn adapt_tile(stream_id: &str, playlist_url: &str, same_decoder: bool) -> Result<Option<String>> {
+        let (proxy_url, ad_state, origin, port, profile, refresher) = {
+            let registry = STREAM_REGISTRY.lock().await;
+            let inst = registry
+                .get(stream_id)
+                .ok_or_else(|| anyhow::anyhow!("no relay session for tile '{stream_id}'"))?;
+            (
+                inst.proxy_url.clone(),
+                inst.ad_state.clone(),
+                inst.ll_origin.clone(),
+                inst.port,
+                inst.profile,
+                inst.refresher.clone(),
+            )
+        };
+        let splice = same_decoder && ll_origin::engine_disabled() && !origin.is_active();
+        if splice {
+            crate::services::hls_projection::begin_switch(stream_id);
+            *proxy_url.lock().await = Some(playlist_url.to_string());
+            // Record the new rendition's segments now rather than at the next
+            // poll, so a fetch in between already gets them. Not during an ad
+            // break: the next poll records them through the ad filter.
+            if !ad_state.lock().unwrap().ads_present {
+                if let Ok(res) = HTTP_CLIENT.get(playlist_url).send().await {
+                    if let Ok(text) = res.text().await {
+                        let base = crate::services::hls_projection::base_url_of(playlist_url);
+                        let _ = crate::services::hls_projection::stabilize(stream_id, &text, &base);
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        crate::services::hls_projection::reset(stream_id);
+        Self::start_proxy(stream_id, playlist_url.to_string(), profile, refresher).await?;
+        let low_latency = Self::is_low_latency(stream_id).await;
+        Ok(Some(format!(
+            "http://localhost:{}/stream.m3u8?t={}{}",
+            port,
+            chrono::Utc::now().timestamp_millis(),
+            if low_latency { "&ll=1" } else { "" }
+        )))
     }
 
     /// Replace a tile's upstream playlist with one a resolution-owning plugin

@@ -10,6 +10,11 @@
 //!
 //! Only `raid_go_v2` is acted on. `raid_update_v2` repeats through the
 //! countdown, and a raid can still be cancelled until it goes.
+//!
+//! The same connection carries the solo player's channel while the watch
+//! EventSub socket cannot subscribe (the account's socket limit is taken by
+//! other devices; see `eventsub_budget`). Its raid then goes down the solo
+//! path, `watch_session::on_raid`, exactly as `channel.raid` would.
 
 use crate::rt::AppHandle;
 use crate::services::twitch_limits::{
@@ -33,10 +38,31 @@ const PUBSUB_URL: &str = "wss://pubsub-edge.twitch.tv";
 /// a connection lost silently is noticed within two minutes rather than five.
 const PING_EVERY: Duration = Duration::from_secs(60);
 
-/// The Twitch user ids of the grid's tiles. The socket task follows this set:
-/// it LISTENs to what was added, UNLISTENs what was removed and closes when it
-/// empties.
+/// The Twitch user ids whose raids this connection carries: the grid's tiles
+/// and, while it stands in for the watch socket, the solo channel. The socket
+/// task follows this set: it LISTENs to what was added, UNLISTENs what was
+/// removed and closes when it empties.
 static CHANNELS: OnceLock<watch::Sender<HashSet<String>>> = OnceLock::new();
+
+/// Who the carried channels are for.
+#[derive(Default)]
+struct Wanted {
+    grid: HashSet<String>,
+    solo: Option<String>,
+}
+
+static WANTED: once_cell::sync::Lazy<std::sync::Mutex<Wanted>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Wanted::default()));
+
+fn wanted() -> std::sync::MutexGuard<'static, Wanted> {
+    WANTED.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Where a raid out of `source_id` goes: the grid's tile card, the solo
+/// player's raid follow, or both when the same channel is in each.
+fn routes(wanted: &Wanted, source_id: &str) -> (bool, bool) {
+    (wanted.grid.contains(source_id), wanted.solo.as_deref() == Some(source_id))
+}
 
 /// One raid out of a tile, as the tile's card draws it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -69,16 +95,42 @@ struct RaidBody {
     target_profile_image: String,
     #[serde(default)]
     target_stream_name: String,
+    #[serde(default)]
+    viewer_count: i64,
 }
 
 /// Replace the set of channels whose raids reach the grid. Starts the socket
 /// task on first use; an empty set closes the connection.
 pub fn set_channels(app: &AppHandle, channel_ids: Vec<String>) {
-    let wanted: HashSet<String> = channel_ids
+    let grid: HashSet<String> = channel_ids
         .into_iter()
         .filter(|id| !id.is_empty())
-        .take(PUBSUB_MAX_TOPICS_PER_CONNECTION)
+        .take(PUBSUB_MAX_TOPICS_PER_CONNECTION - 1)
         .collect();
+    wanted().grid = grid;
+    carry(app);
+}
+
+/// Carry the solo player's raids on this connection (`Some`), or stop
+/// (`None`: the watch socket's `channel.raid` has them).
+pub fn set_solo(app: &AppHandle, channel_id: Option<String>) {
+    let solo = channel_id.filter(|id| !id.is_empty());
+    {
+        let mut w = wanted();
+        if w.solo == solo {
+            return;
+        }
+        w.solo = solo;
+    }
+    carry(app);
+}
+
+/// Send the union of what the grid and the solo player want to the task.
+fn carry(app: &AppHandle) {
+    let wanted: HashSet<String> = {
+        let w = wanted();
+        w.grid.iter().cloned().chain(w.solo.clone()).collect()
+    };
     let tx = CHANNELS.get_or_init(|| {
         let (tx, rx) = watch::channel(HashSet::new());
         tauri::async_runtime::spawn(run(app.clone(), rx));
@@ -94,8 +146,8 @@ pub fn set_channels(app: &AppHandle, channel_ids: Vec<String>) {
 }
 
 /// The raid a PubSub `data.message` string announces, if it is a raid going
-/// out right now.
-fn parse_raid_go(message: &str) -> Option<(String, TileRaid)> {
+/// out right now, with the raiding party's size.
+fn parse_raid_go(message: &str) -> Option<(String, TileRaid, i64)> {
     let parsed: RaidMessage = serde_json::from_str(message).ok()?;
     if parsed.kind != "raid_go_v2" {
         return None;
@@ -106,6 +158,7 @@ fn parse_raid_go(message: &str) -> Option<(String, TileRaid)> {
     // CDN serves the same image at 300 px under the same name.
     let image = non_empty(raid.target_profile_image).map(|u| u.replace("-70x70.", "-300x300."));
     let name = non_empty(raid.target_display_name).unwrap_or_else(|| raid.target_login.clone());
+    let viewers = raid.viewer_count;
     Some((
         raid.id,
         TileRaid {
@@ -116,7 +169,22 @@ fn parse_raid_go(message: &str) -> Option<(String, TileRaid)> {
             target_image: image,
             target_title: non_empty(raid.target_stream_name),
         },
+        viewers,
     ))
+}
+
+/// The solo player's raid, as `channel.raid` would have delivered it. PubSub
+/// names no source login; the watch session matches by id.
+fn solo_raid(raid: &TileRaid, viewers: i64) -> crate::services::eventsub_service::RaidEvent {
+    crate::services::eventsub_service::RaidEvent {
+        from_broadcaster_user_id: raid.source_id.clone(),
+        from_broadcaster_user_login: String::new(),
+        from_broadcaster_user_name: String::new(),
+        to_broadcaster_user_id: raid.target_id.clone(),
+        to_broadcaster_user_login: raid.target_login.clone(),
+        to_broadcaster_user_name: raid.target_name.clone(),
+        viewers: viewers.clamp(0, i32::MAX as i64) as i32,
+    }
 }
 
 async fn run(app: AppHandle, mut rx: watch::Receiver<HashSet<String>>) {
@@ -220,7 +288,7 @@ async fn session(app: &AppHandle, rx: &mut watch::Receiver<HashSet<String>>) -> 
                             }
                         }
                         Some("MESSAGE") => {
-                            let Some((raid_id, raid)) =
+                            let Some((raid_id, raid, viewers)) =
                                 frame["data"]["message"].as_str().and_then(parse_raid_go)
                             else {
                                 continue;
@@ -236,7 +304,15 @@ async fn session(app: &AppHandle, rx: &mut watch::Receiver<HashSet<String>>) -> 
                                 "[MultiNook raids] {} raided {}",
                                 raid.source_id, raid.target_login
                             );
-                            let _ = app.emit("multi-nook://raid", &raid);
+                            let (to_grid, to_solo) = routes(&self::wanted(), &raid.source_id);
+                            if to_grid {
+                                let _ = app.emit("multi-nook://raid", &raid);
+                            }
+                            if to_solo {
+                                let event = solo_raid(&raid, viewers);
+                                let _ = app.emit("eventsub://raid", &event);
+                                crate::services::watch_session::on_raid(app, &event);
+                            }
                         }
                         _ => {}
                     }
@@ -258,8 +334,9 @@ mod tests {
 
     #[test]
     fn a_raid_going_out_becomes_a_tile_raid() {
-        let (id, raid) = parse_raid_go(GO).expect("raid_go_v2 parses");
+        let (id, raid, viewers) = parse_raid_go(GO).expect("raid_go_v2 parses");
         assert_eq!(id, "e54dfc27-08c4-4061-acaa-f57966991add");
+        assert_eq!(viewers, 4882);
         assert_eq!(
             raid,
             TileRaid {
@@ -271,6 +348,28 @@ mod tests {
                 target_title: Some("FINALLY HERE EARLY".into()),
             }
         );
+    }
+
+    #[test]
+    fn a_solo_raid_reads_as_channel_raid() {
+        let (_, raid, viewers) = parse_raid_go(GO).unwrap();
+        let event = solo_raid(&raid, viewers);
+        assert_eq!(event.from_broadcaster_user_id, "451786566");
+        assert_eq!(event.to_broadcaster_user_login, "bigex");
+        assert_eq!(event.to_broadcaster_user_name, "BigEx");
+        assert_eq!(event.viewers, 4882);
+    }
+
+    #[test]
+    fn a_raid_goes_where_its_channel_is_carried_for() {
+        let mut w = Wanted::default();
+        w.grid.insert("1".into());
+        w.solo = Some("2".into());
+        assert_eq!(routes(&w, "1"), (true, false), "a tile's card");
+        assert_eq!(routes(&w, "2"), (false, true), "the solo player's follow");
+        assert_eq!(routes(&w, "3"), (false, false));
+        w.grid.insert("2".into());
+        assert_eq!(routes(&w, "2"), (true, true));
     }
 
     #[test]

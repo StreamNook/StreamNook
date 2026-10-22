@@ -7373,8 +7373,9 @@ mod history_notice_tests {
 /// Chat frames for the iPhone app's replay fixtures, made by the same parse and
 /// stamp path the socket uses, from real emote, badge and paint data and raw
 /// IRC lines in `ios/Tests/Fixtures/chat-inputs.json`. Always checks the frames;
-/// with `SN_WRITE_CHAT_FIXTURES=<path>` it also writes them there.
-#[cfg(test)]
+/// with `SN_WRITE_CHAT_FIXTURES=<path>` it also writes them there. Only where
+/// the tree carries `ios/` (build.rs sets `sn_ios_fixtures`).
+#[cfg(all(test, sn_ios_fixtures))]
 mod chat_fixture_tests {
     use super::*;
     use crate::models::chat_layout::ViewSpan;

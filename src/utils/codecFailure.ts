@@ -7,21 +7,13 @@ export const UNSUPPORTED_CODEC = new Set<string>([
   Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR,
 ]);
 
-/** `MediaError` codes, named here so this also runs where that global is absent. */
-const MEDIA_ERR_DECODE = 3;
-const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
-
 /**
- * Whether a fatal media error is the codec failing on this machine: an
- * unsupported-codec error, or a decode failure before the first frame (after
- * one, a decode error is more likely a bad segment than the codec).
+ * Whether a fatal media error means the codec cannot play here: the
+ * unsupported-codec errors only. A decode error is a bad segment as often as a
+ * bad codec, so it takes the normal media recovery on the same codec and never
+ * steps away from it. The verdict reads nothing about the player's past, so a
+ * reload cannot change it.
  */
-export function isCodecFailure(
-  details: string,
-  video: Pick<HTMLVideoElement, 'error'>,
-  everPlayed: boolean,
-): boolean {
-  if (UNSUPPORTED_CODEC.has(details)) return true;
-  const code = video.error?.code;
-  return !everPlayed && (code === MEDIA_ERR_DECODE || code === MEDIA_ERR_SRC_NOT_SUPPORTED);
+export function isCodecFailure(details: string): boolean {
+  return UNSUPPORTED_CODEC.has(details);
 }

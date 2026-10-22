@@ -8,6 +8,7 @@ import { useAppStore, type WhisperImportProgress, type SettingsTab } from './sto
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
 import { primeClientConfig } from './services/clientConfig';
+import { lastUpdateStatus, type BundleUpdateStatus } from './services/updateStatus';
 import TitleBar from './components/TitleBar';
 import DynamicIsland from './components/DynamicIsland';
 import ChannelAboutReveal from './components/ChannelAboutReveal';
@@ -36,6 +37,7 @@ import PluginUiHost from './plugins-ui/PluginUiHost';
 import PluginUpdatesChecker from './components/plugins/PluginUpdatesChecker';
 import PluginOverlayOutlet from './plugins-ui/PluginOverlayOutlet';
 import { usemultiNookStore } from './stores/multiNookStore';
+import { isSoloAdapt, type PlaybackAdapt } from './utils/linkAdapt';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
 import DeviceLoginOverlay from './components/DeviceLoginOverlay';
@@ -693,6 +695,19 @@ function App() {
         if (url) useAppStore.getState().applyAdPivot(url, region);
       }
     );
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // Rust's link governor moved a stream in "Auto" (`link_adapt`): the solo
+  // player or one grid tile names the rendition it plays, and reloads when
+  // its relay restarted on another one.
+  useEffect(() => {
+    const unlistenPromise = listen<PlaybackAdapt>('playback-adapt', (event) => {
+      if (isSoloAdapt(event.payload)) useAppStore.getState().applyLinkAdapt(event.payload);
+      else usemultiNookStore.getState().applyTileAdapt(event.payload);
+    });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
@@ -1803,26 +1818,35 @@ function App() {
 
   // The title-bar update indicator follows Rust's periodic check
   // (services/update_watch.rs): shortly after start, then every half hour.
+  // This window may have mounted after a check went out (reopened from the
+  // tray, a slow start), so it also reads the last answer Rust kept; an event
+  // that arrives first is newer and wins.
   useEffect(() => {
     let active = true;
+    let heard = false;
     let unlisten: (() => void) | undefined;
-    void listen<{ status: { update_available: boolean; current_version: string; latest_version: string; releases_behind?: number | null } }>(
-      'update://status',
-      (event) => {
-        const { status } = event.payload;
-        useAppStore.getState().setUpdateInfo(
-          status.update_available
-            ? {
-                current_version: status.current_version,
-                latest_version: status.latest_version,
-                releases_behind: status.releases_behind ?? null,
-              }
-            : null,
-        );
-      },
-    ).then((fn) => {
-      if (active) unlisten = fn;
-      else fn();
+    const show = (status: BundleUpdateStatus) => {
+      useAppStore.getState().setUpdateInfo(
+        status.update_available
+          ? {
+              current_version: status.current_version,
+              latest_version: status.latest_version,
+              releases_behind: status.releases_behind ?? null,
+            }
+          : null,
+      );
+    };
+    void listen<{ status: BundleUpdateStatus }>('update://status', (event) => {
+      heard = true;
+      show(event.payload.status);
+    }).then(async (fn) => {
+      if (!active) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      const last = await lastUpdateStatus(false);
+      if (active && !heard && last) show(last.status);
     });
     return () => {
       active = false;

@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use log::debug;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
@@ -944,11 +945,6 @@ pub fn get_universal_cache_stats() -> Result<UniversalCacheStats> {
 pub fn clear_universal_cache() -> Result<()> {
     let cache_dir = get_universal_cache_dir()?;
 
-    if cache_dir.exists() {
-        fs::remove_dir_all(&cache_dir).context("Failed to remove universal cache directory")?;
-        fs::create_dir_all(&cache_dir).context("Failed to recreate universal cache directory")?;
-    }
-
     // CRITICAL: drop the in-memory manifest mirror too. Without this, stale
     // `file:<id>` entries with paths to now-deleted files (or files with the
     // wrong extension after a code change) keep getting served back to the
@@ -956,6 +952,10 @@ pub fn clear_universal_cache() -> Result<()> {
     // appear to do nothing — the disk was wiped but the in-memory paths
     // outlived it. Also clear the dirty flag so the next debounced flush
     // doesn't write the stale snapshot back to disk.
+    //
+    // Done BEFORE the delete: on Windows `remove_dir_all` stops at the first
+    // file another process holds open, after deleting the ones before it, and
+    // returning there used to keep every entry for the files already gone.
     if let Ok(mut guard) = MANIFEST_MEMORY.write() {
         *guard = UniversalCacheManifest {
             version: CACHE_VERSION,
@@ -964,6 +964,14 @@ pub fn clear_universal_cache() -> Result<()> {
         };
     }
     MANIFEST_DIRTY.store(false, Ordering::Release);
+    if let Ok(mut verified) = VERIFIED_TYPES.lock() {
+        verified.clear();
+    }
+
+    if cache_dir.exists() {
+        fs::remove_dir_all(&cache_dir).context("Failed to remove universal cache directory")?;
+        fs::create_dir_all(&cache_dir).context("Failed to recreate universal cache directory")?;
+    }
 
     Ok(())
 }
@@ -1706,6 +1714,7 @@ pub fn get_all_cached_items_by_type(
     // them away. Mobile calls this on the Rewards screen, where the manifest is
     // almost entirely badges, so the discarded half of that clone was the
     // expensive half.
+    drop_missing_files(&cache_type);
     let guard = MANIFEST_MEMORY
         .read()
         .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
@@ -1758,9 +1767,102 @@ fn usable_file_path<'a>(cache_type: &CacheType, entry: &'a UniversalCacheEntry) 
     entry.data.get("local_path").and_then(|p| p.as_str())
 }
 
+/// Cache types whose file entries were checked against the disk this session,
+/// by folder name. See `drop_missing_files`.
+static VERIFIED_TYPES: Lazy<StdMutex<HashSet<&'static str>>> = Lazy::new(|| StdMutex::new(HashSet::new()));
+
+/// Whether `path` is on disk. `present` is a listing of `type_dir` (None when
+/// it could not be read), so the common case costs no stat of its own.
+fn file_present(path: &Path, type_dir: &Path, present: Option<&HashSet<OsString>>) -> bool {
+    match (present, path.parent(), path.file_name()) {
+        (Some(names), Some(parent), Some(name)) if parent == type_dir => names.contains(name),
+        _ => path.exists(),
+    }
+}
+
+/// The `file:` entries of `cache_type` whose file is not on disk.
+fn missing_file_keys(
+    entries: &HashMap<String, UniversalCacheEntry>,
+    cache_type: &CacheType,
+    type_dir: &Path,
+    present: Option<&HashSet<OsString>>,
+) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|(key, entry)| key.starts_with("file:") && entry.cache_type == *cache_type)
+        .filter_map(|(key, entry)| {
+            let path = entry.data.get("local_path")?.as_str()?;
+            (!file_present(Path::new(path), type_dir, present)).then(|| key.clone())
+        })
+        .collect()
+}
+
+/// Drop this type's file entries whose file is gone, once per session.
+///
+/// The manifest can outlive its files: the folder cleaned while the app ran
+/// (the in-memory copy is then flushed back over the cleaned one), a clear that
+/// stopped partway, a data folder copied from another profile. Every such entry
+/// was handed to the windows as cached, so they never asked for it again, drew
+/// nothing, and every render asked the asset protocol for the missing file: one
+/// error line each, thousands an hour, until the log rotated away everything
+/// else. Dropping the entry lets the next request download the file again.
+///
+/// One directory listing per type rather than a stat per entry, because the
+/// emote folder can hold tens of thousands of files.
+fn drop_missing_files(cache_type: &CacheType) {
+    let dir_name = cache_type.dir_name();
+    let first_this_session = VERIFIED_TYPES.lock().map(|mut v| v.insert(dir_name)).unwrap_or(false);
+    if !first_this_session {
+        return;
+    }
+    let Ok(type_dir) = get_universal_cache_dir().map(|d| d.join(dir_name)) else {
+        return;
+    };
+    let present: Option<HashSet<OsString>> = match fs::read_dir(&type_dir) {
+        Ok(listing) => Some(listing.flatten().map(|e| e.file_name()).collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(HashSet::new()),
+        Err(_) => None,
+    };
+    let missing = {
+        let Ok(guard) = MANIFEST_MEMORY.read() else {
+            return;
+        };
+        missing_file_keys(&guard.entries, cache_type, &type_dir, present.as_ref())
+    };
+    if missing.is_empty() {
+        return;
+    }
+
+    // Same locking as `upsert_cached_entry`. Re-checked under the lock: a
+    // download may have written one of these files since the listing.
+    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut dropped = 0usize;
+    if let Ok(mut guard) = MANIFEST_MEMORY.write() {
+        for key in &missing {
+            let gone = guard
+                .entries
+                .get(key)
+                .and_then(|e| e.data.get("local_path"))
+                .and_then(|p| p.as_str())
+                .is_some_and(|p| !Path::new(p).exists());
+            if gone && guard.entries.remove(key).is_some() {
+                dropped += 1;
+            }
+        }
+    }
+    if dropped > 0 {
+        MANIFEST_DIRTY.store(true, Ordering::Release);
+        ensure_flush_task();
+        log::info!(
+            "[UniversalCache] {dropped} cached {dir_name} file(s) were missing on disk; dropped so they download again"
+        );
+    }
+}
+
 /// The cached files among `ids` (id -> path), by the same rule as the listing.
 /// Reads the in-memory manifest only.
 pub fn cached_file_paths(cache_type: CacheType, ids: &[String]) -> HashMap<String, String> {
+    drop_missing_files(&cache_type);
     let Ok(guard) = MANIFEST_MEMORY.read() else {
         return HashMap::new();
     };
@@ -1777,6 +1879,7 @@ pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<Stri
     //     "[UniversalCache] Getting cached files list for {:?}",
     //     cache_type
     // );
+    drop_missing_files(&cache_type);
     // Filtered under the read lock. `load_manifest()` clones every entry of
     // every kind first, which cost ~150 ms per call on a 70k-entry cache to
     // return a few hundred badge paths.
@@ -1881,9 +1984,13 @@ pub fn manifest_len() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        badge_date_key, is_still_paint_entry, usable_file_path, webp_is_animated, CacheMetadata, CacheType,
-        UniversalCacheEntry,
+        badge_date_key, is_still_paint_entry, missing_file_keys, usable_file_path, webp_is_animated, CacheMetadata,
+        CacheType, UniversalCacheEntry,
     };
+    use std::collections::{HashMap, HashSet};
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn file_entry(cache_type: CacheType, age_days: u64) -> UniversalCacheEntry {
         UniversalCacheEntry {
@@ -1898,6 +2005,46 @@ mod tests {
             },
             position: None,
         }
+    }
+
+    #[test]
+    fn entries_whose_file_is_gone_are_found() {
+        let dir = std::env::temp_dir().join(format!("sn-cache-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("twitch-moderator_1.png"), b"png").unwrap();
+        let elsewhere = dir.join("elsewhere.png");
+        fs::write(&elsewhere, b"png").unwrap();
+
+        let entry = |id: &str, cache_type: CacheType, path: PathBuf| {
+            let mut e = file_entry(cache_type, 1);
+            e.id = id.into();
+            e.data = serde_json::json!({ "local_path": path.to_string_lossy() });
+            (id.to_string(), e)
+        };
+        let entries: HashMap<String, UniversalCacheEntry> = [
+            entry("file:twitch-moderator/1", CacheType::Badge, dir.join("twitch-moderator_1.png")),
+            entry("file:twitch-vip/1", CacheType::Badge, dir.join("twitch-vip_1.png")),
+            // A copied profile: a path outside the folder, checked on its own.
+            entry("file:twitch-old/1", CacheType::Badge, PathBuf::from("C:/Users/someone-else/x.png")),
+            entry("file:twitch-moved/1", CacheType::Badge, elsewhere.clone()),
+            // Another type's missing file is not this listing's business.
+            entry("file:emote-gone", CacheType::Emote, dir.join("gone.webp")),
+        ]
+        .into_iter()
+        .collect();
+
+        let listing: HashSet<OsString> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        let mut from_listing = missing_file_keys(&entries, &CacheType::Badge, &dir, Some(&listing));
+        from_listing.sort();
+        assert_eq!(from_listing, vec!["file:twitch-old/1".to_string(), "file:twitch-vip/1".to_string()]);
+
+        // An unreadable folder falls back to a stat per file, same answer.
+        let mut by_stat = missing_file_keys(&entries, &CacheType::Badge, &dir, None);
+        by_stat.sort();
+        assert_eq!(by_stat, from_listing);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

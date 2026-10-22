@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bell, BellOff, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle, AtSign, Reply, Highlighter } from 'lucide-react';
@@ -16,6 +16,8 @@ import { isProviderId } from '../types/providers';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
+import { lastUpdateStatus, type BundleUpdateStatus } from '../services/updateStatus';
+import { settingsOnceLoaded } from '../utils/settingsOnceLoaded';
 import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { IS_MOBILE } from '../utils/platform';
@@ -185,16 +187,6 @@ interface LiveNotificationFromBackend {
     merge_into: string | null;
     /** The streamer's 7TV cosmetics id, keyed by Rust for their platform. */
     seventv_id?: string | null;
-}
-
-interface BundleUpdateStatus {
-    update_available: boolean;
-    current_version: string;
-    latest_version: string;
-    download_url: string | null;
-    bundle_name: string | null;
-    download_size: string | null;
-    releases_behind?: number | null;
 }
 
 interface DropClaimedEvent {
@@ -556,7 +548,6 @@ const DynamicIsland = () => {
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
     const showLiveNotifications = settings.live_notifications?.show_live_notifications ?? true;
     const showFavoriteLiveNotifications = settings.live_notifications?.show_favorite_live_notifications ?? true;
-    const showUpdateNotifications = settings.live_notifications?.show_update_notifications ?? true;
     const showDropsNotifications = settings.live_notifications?.show_drops_notifications ?? true;
     const showFavoriteDropsNotifications = settings.live_notifications?.show_favorite_drops_notifications ?? true;
     const showChannelPointsNotifications = settings.live_notifications?.show_channel_points_notifications ?? true;
@@ -937,43 +928,57 @@ const DynamicIsland = () => {
     }, [addNotification, notificationsEnabled, useDynamicIsland]);
 
     // Updates: Rust checks shortly after start and every half hour
-    // (services/update_watch.rs) and says when a version is new enough to
-    // announce (once per version, across restarts). The title-bar indicator is
-    // App's listener; this adds the notification-centre entry.
-    useEffect(() => {
-        const unlisten = listen<{ status: BundleUpdateStatus; announce: boolean }>('update://status', (event) => {
-            const { status, announce } = event.payload;
-            if (!announce || !notificationsEnabled || !showUpdateNotifications) return;
-            if (useDynamicIsland) {
-                addNotification({
-                    id: `update-${status.latest_version}-${Date.now()}`,
-                    type: 'update',
-                    timestamp: Date.now(),
-                    read: false,
-                    data: {
-                        current_version: status.current_version,
-                        latest_version: status.latest_version,
-                        has_update: true,
-                    } as UpdateNotificationData,
-                });
-            }
-            // No toast for available updates: the title-bar cog turning into a
-            // download button is the quieter signal the user acts on.
-            if (soundEnabled) {
-                playNotificationSound();
-            }
-            mirrorNotification({
-                kind: 'update',
-                title: 'Update available',
-                body: `StreamNook v${status.latest_version} is ready to download`,
-                action: { label: 'See what\'s new', run: () => requestChangelog(status.latest_version) },
-                target: { type: 'changelog', version: status.latest_version },
+    // (services/update_watch.rs). The title-bar indicator is App's listener;
+    // this adds the notification-centre entry. Rust decides whether a version
+    // is news (once per version across restarts, update notifications on) and
+    // hands that to the one window that claims it, so an update found while
+    // this window was closed to the tray, or not mounted yet, is announced
+    // when it opens instead of never.
+    const announceUpdate = useEffectEvent((status: BundleUpdateStatus) => {
+        if (useDynamicIsland) {
+            addNotification({
+                id: `update-${status.latest_version}-${Date.now()}`,
+                type: 'update',
+                timestamp: Date.now(),
+                read: false,
+                data: {
+                    current_version: status.current_version,
+                    latest_version: status.latest_version,
+                    has_update: true,
+                } as UpdateNotificationData,
             });
+        }
+        // No toast for available updates: the title-bar cog turning into a
+        // download button is the quieter signal the user acts on.
+        if (soundEnabled) {
+            playNotificationSound();
+        }
+        mirrorNotification({
+            kind: 'update',
+            title: 'Update available',
+            body: `StreamNook v${status.latest_version} is ready to download`,
+            action: { label: 'See what\'s new', run: () => requestChangelog(status.latest_version) },
+            target: { type: 'changelog', version: status.latest_version },
         });
+    });
+    useEffect(() => {
+        // A claim is spent even if this effect is torn down before it answers,
+        // so the answer is always shown, never dropped on `active`.
+        const claim = () => {
+            void lastUpdateStatus(true).then((last) => {
+                if (last?.announce) announceUpdate(last.status);
+            });
+        };
+        const unlisten = listen<{ status: BundleUpdateStatus }>('update://status', (event) => {
+            if (event.payload.status.update_available) claim();
+        });
+        // Wait for real settings, so the island and sound choices are the
+        // user's and not the defaults.
+        void settingsOnceLoaded().then(claim);
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [notificationsEnabled, showUpdateNotifications, addNotification, soundEnabled, playNotificationSound, useDynamicIsland, mirrorNotification]);
+    }, []);
 
     // Listen for live notifications
     useEffect(() => {

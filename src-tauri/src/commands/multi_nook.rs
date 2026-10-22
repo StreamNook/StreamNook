@@ -58,6 +58,8 @@ pub async fn start_multi_nook(
 ) -> Result<String, String> {
     let provider = provider.unwrap_or_else(|| "twitch".to_string());
     let cap = cap_for(&state, small)?;
+    // "Auto" is the tile's own pick, before the small-tile cap names a height.
+    let auto = crate::commands::streaming::is_auto_quality(&quality);
     let quality = tile_quality(&quality, cap);
     debug!(
         "[MultiNook] start_multi_nook called: id='{}', provider='{}', url='{}', quality='{}'",
@@ -73,7 +75,7 @@ pub async fn start_multi_nook(
     }
 
     if provider != "twitch" {
-        let proxy_url = start_provider_tile(&stream_id, &provider, &url, &quality, cap).await?;
+        let proxy_url = start_provider_tile(&stream_id, &provider, &url, &quality, cap, auto).await?;
         if let Some(channel) = provider_channel_from_url(&provider, &url) {
             register_tile_watch(&state, &stream_id, &provider, &channel);
         }
@@ -83,7 +85,19 @@ pub async fn start_multi_nook(
     let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
     let codecs = variant_codecs(&r.master, &r.url, &r.quality);
 
-    let port = MultiNookServer::start_proxy(&stream_id, r.url, TileProfile::Twitch, None)
+    // The tile's session ("Auto" only), within what this machine decodes and
+    // never above what the tile's size chose. A tile never moves its own rung:
+    // the grid shares one link, so a tile's share of it says nothing about the
+    // whole, and it starts where its pick puts it.
+    crate::services::link_adapt::begin(
+        &stream_id,
+        &tr::playable_variants(&r.master, &channel),
+        &r.url,
+        auto,
+        crate::services::multi_nook_server::twitch_tile_route(&stream_id),
+    );
+
+    let port = MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -217,10 +231,11 @@ pub async fn retier_multi_nook_tile(
         return Ok(Retier::Restart);
     };
     let cap = cap_for(&state, small)?;
+    let auto = crate::commands::streaming::is_auto_quality(&quality);
     let quality = tile_quality(&quality, cap);
     let was_low_latency = MultiNookServer::is_low_latency(&stream_id).await;
 
-    let (_, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
+    let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
     let codecs = variant_codecs(&r.master, &r.url, &r.quality);
     if !same_codec_family(current.codecs.as_deref(), codecs.as_deref()) {
         debug!("[MultiNook] '{stream_id}' changes codec at its new size; restarting it");
@@ -229,6 +244,14 @@ pub async fn retier_multi_nook_tile(
 
     // The new rendition has its own segment URLs; drop the old projection map.
     crate::services::hls_projection::reset(&stream_id);
+    // The new size has its own ceiling: the link adapts below it from here.
+    crate::services::link_adapt::begin(
+        &stream_id,
+        &tr::playable_variants(&r.master, &channel),
+        &r.url,
+        auto,
+        crate::services::multi_nook_server::twitch_tile_route(&stream_id),
+    );
     MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None)
         .await
         .map_err(|e| e.to_string())?;
@@ -356,6 +379,7 @@ async fn start_provider_tile(
     url: &str,
     quality: &str,
     cap: Option<u32>,
+    auto: bool,
 ) -> Result<String, String> {
     // The frontend addresses tiles by URL, so recover the channel from it rather
     // than inventing a second addressing scheme. Note NO lowercasing here: the
@@ -374,13 +398,78 @@ async fn start_provider_tile(
         .await
         .map_err(|e| e.to_string())?;
 
+    // TikTok's tiers carry no reliable bitrate and its relay pulls one live
+    // feed, so there is nothing to measure a ladder by; it keeps its pick.
+    if provider != "tiktok" {
+        let route = std::sync::Arc::new(ProviderTileRoute {
+            stream_id: stream_id.to_string(),
+            provider: provider.to_string(),
+            channel: channel.clone(),
+            cap,
+            direct: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(resolved.kind == PlaybackKind::Hls)),
+        });
+        crate::services::link_adapt::begin_named(stream_id, &resolved.qualities, &resolved.quality, auto, route);
+    }
+    serve_provider_tile(stream_id, provider, &channel, quality, cap, resolved).await
+}
+
+/// A Kick or YouTube tile as `link_adapt` moves it: the adapter resolves the
+/// rung by name and the tile is served again, so its player reloads. A tile on
+/// the tile relay fetches its segments straight from the CDN, which measures
+/// the link; YouTube's 1440p and up come from the adapter's own relay, which
+/// reports its fetches instead.
+struct ProviderTileRoute {
+    stream_id: String,
+    provider: String,
+    channel: String,
+    cap: Option<u32>,
+    /// Served through the tile relay (segments straight from the CDN) rather
+    /// than by the adapter's own relay. Follows each switch.
+    direct: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl crate::services::link_adapt::Route for ProviderTileRoute {
+    fn switch(&self, to: crate::services::link_adapt::Rung, _same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
+        let (id, provider, channel, cap) =
+            (self.stream_id.clone(), self.provider.clone(), self.channel.clone(), self.cap);
+        let direct = self.direct.clone();
+        Box::pin(async move {
+            let source = crate::services::providers::registry()
+                .await
+                .get_source(&provider)
+                .ok_or_else(|| anyhow::anyhow!("no {provider} source"))?;
+            let resolved = source.resolve_playback(&id, &channel, &to.name).await?;
+            let on_relay = resolved.kind == PlaybackKind::Hls;
+            let url = serve_provider_tile(&id, &provider, &channel, &to.name, cap, resolved)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            direct.store(on_relay, std::sync::atomic::Ordering::Relaxed);
+            Ok(Some(url))
+        })
+    }
+
+    fn player_measures_link(&self) -> bool {
+        self.direct.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Serve a provider tile's resolved stream: on the tile relay, or as is when
+/// the adapter already serves it from localhost.
+async fn serve_provider_tile(
+    stream_id: &str,
+    provider: &str,
+    channel: &str,
+    quality: &str,
+    cap: Option<u32>,
+    resolved: crate::services::providers::source::ResolvedPlayback,
+) -> Result<String, String> {
     match resolved.kind {
         PlaybackKind::Hls => {
             let port = MultiNookServer::start_proxy(
                 stream_id,
                 resolved.url,
                 TileProfile::GenericHls,
-                kick_refresher(provider, &channel, quality),
+                kick_refresher(stream_id, provider, channel, quality),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -434,15 +523,17 @@ async fn start_provider_tile(
 /// the request most likely to be refused by Kick's bot defense, and a refused
 /// payload has no `stream` object, so it parses identically to a broadcast that
 /// genuinely ended. Other providers get None (nothing to re-sign).
-fn kick_refresher(provider: &str, channel: &str, quality: &str) -> Option<TileRefresher> {
+fn kick_refresher(stream_id: &str, provider: &str, channel: &str, quality: &str) -> Option<TileRefresher> {
     if provider != "kick" {
         return None;
     }
+    let id = stream_id.to_string();
     let ch = channel.to_string();
     let q = quality.to_string();
     Some(std::sync::Arc::new(move || {
         let ch = ch.clone();
-        let q = q.clone();
+        // The rung playing now, so a re-sign never undoes a step "Auto" took.
+        let q = crate::services::link_adapt::current_quality(&id).unwrap_or_else(|| q.clone());
         Box::pin(async move {
             match crate::services::providers::kick_media::KickSource::new()
                 .resign(&ch, &q)
@@ -697,6 +788,20 @@ pub async fn promote_multi_nook_tile(
         .await
         .map_err(|e| e.to_string())?;
 
+    // The tile's rung and what it learned about the link carry over, so "Auto"
+    // keeps adapting (and can climb back) on the solo player. A provider
+    // tile's adapter needs its channel to switch, which the promotion does not
+    // carry: it stays on what it plays until the next start.
+    if status.is_some() {
+        crate::services::link_adapt::handover(
+            &stream_id,
+            crate::services::link_adapt::SOLO,
+            crate::services::stream_server::solo_twitch_route(),
+        );
+    } else {
+        crate::services::link_adapt::end(&stream_id);
+    }
+
     // Serving now, so the grid can go. Everything EXCEPT the tile we just
     // promoted still has a relay to stop.
     crate::services::youtube_dash::stop_all_except(crate::services::stream_server::SOLO_STREAM_ID)
@@ -811,6 +916,33 @@ pub fn set_multi_nook_slot_audio_boost(
     };
     slot.audio_boost = boost.map(AudioBoostSettings::clamped);
     crate::commands::settings::write_settings_to_disk(&settings)
+}
+
+/// A tile's player could not decode its stream, though the probe said this
+/// machine plays that codec. The codec leaves selection for the session (every
+/// tile and the solo player resolve without it), and the answer says whether
+/// restarting this tile now gets away from it. `mime_type` is the SourceBuffer
+/// type the player failed to create, when it got that far; without it the
+/// tile's own served codec counts. H.264, or a tile that already restarted for
+/// this codec, answers false: there is nothing better to play.
+#[tauri::command]
+pub async fn report_multi_nook_tile_codec_failure(stream_id: String, mime_type: Option<String>) -> bool {
+    // The rung Auto has the tile on now, else the one its resolve picked.
+    let serving = match crate::services::link_adapt::playing_family(&stream_id) {
+        Some(family) => Some(family),
+        None => MultiNookServer::tile_codecs(&stream_id).await,
+    };
+    // The ban is scoped to the tile's channel, never the whole app.
+    let channel = MultiNookServer::promotion_target(&stream_id)
+        .await
+        .and_then(|(_, p)| p.status.map(|s| s.channel))
+        .unwrap_or_else(|| stream_id.clone());
+    let Some(family) = tr::fail_codec(&channel, mime_type.as_deref(), serving.as_deref()) else {
+        return false;
+    };
+    let restart = MultiNookServer::take_codec_step(&stream_id, family).await;
+    debug!("[MultiNook] '{stream_id}' could not decode {family}; restart={restart}");
+    restart
 }
 
 /// The quality menu for one tile, so every tile in the grid can offer its own
