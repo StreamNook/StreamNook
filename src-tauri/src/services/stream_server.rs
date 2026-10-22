@@ -210,10 +210,18 @@ pub fn ad_state() -> AdDetectionState {
 /// it (`adapt_upstream`).
 static SOLO_STABILIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether a playlist request for a parked origin comes from a player that is
+/// loading (and so wants the stream downloading again).
+fn wakes_parked_origin(apple: bool, msn: Option<u64>) -> bool {
+    !apple || msn.is_none()
+}
+
 fn reset_ad_state() {
     SOLO_STABILIZED.store(false, std::sync::atomic::Ordering::Relaxed);
     *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
+    // No park carries over to the next stream.
+    crate::services::earning_gate::reset_main_park();
     crate::services::ll_origin::stop();
     crate::services::relay_probe::reset();
     // Drop the stable-projection segment map for the old stream so a synthetic
@@ -996,6 +1004,15 @@ impl StreamServer {
             if request_path == "stream.m3u8" || request_path.is_empty() {
                 let msn = parse_directive(&raw_query, "_HLS_msn");
                 let part = parse_directive(&raw_query, "_HLS_part");
+                // hls.js asks only while it loads; AVPlayer's first load carries no
+                // directives. A paused AVPlayer's blocking reloads do not count.
+                if crate::services::ll_origin::is_parked() && wakes_parked_origin(apple, msn) {
+                    crate::services::earning_gate::relay_wake();
+                    // Unconditional too: if the gate is no longer Parked (a teardown
+                    // report landed first), relay_wake does nothing, and a loading
+                    // player must never meet a parked origin. Idempotent.
+                    crate::services::ll_origin::unpark();
+                }
                 // Serve-side timing: hls.js reports levelLoadTimeOut pairs before
                 // stalls even though the blocking hold is bounded well under its
                 // budget; this measures whether the server ever actually exceeds
@@ -1430,6 +1447,13 @@ impl StreamServer {
 #[cfg(test)]
 mod relay_rewrite_tests {
     use super::*;
+
+    #[test]
+    fn only_a_loading_player_wakes_a_parked_origin() {
+        assert!(wakes_parked_origin(false, Some(1)));
+        assert!(wakes_parked_origin(true, None));
+        assert!(!wakes_parked_origin(true, Some(1)));
+    }
 
     #[test]
     fn the_plain_playlist_carries_the_target_never_under_three_targets() {

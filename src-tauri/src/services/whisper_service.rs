@@ -12,7 +12,6 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::services::eventsub_service::{EventSubService, LiveSession, PendingSession, SeenMessages, SocketOwner};
 use crate::services::twitch_service::TwitchService;
 
-const EVENTSUB_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 /// Wait before retrying a failed connect; doubles per failure up to the max.
 const RETRY_MIN_SECS: u64 = 5;
@@ -224,7 +223,7 @@ async fn listen(user_id: String, app_handle: AppHandle) {
 
 async fn run_session(user_id: &str, token: &str, app_handle: &AppHandle) -> Ended {
     debug!("[WhisperService] Connecting to Twitch EventSub for whispers...");
-    let (ws_stream, session) = match EventSubService::open_session(EVENTSUB_URL.to_string()).await {
+    let (ws_stream, session) = match EventSubService::open_session(crate::services::eventsub_service::session_url()).await {
         Ok(conn) => conn,
         Err(e) => {
             error!("[WhisperService] Failed to connect to EventSub: {}", e);

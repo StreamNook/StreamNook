@@ -16,6 +16,10 @@
 //! - `teardown`: the player went away; a pending pause is dropped and nothing
 //!   is reported, since a late pause would gate the NEXT stream off. A real
 //!   stop clears the heartbeat with drops monitoring.
+//!
+//! On the phones the main player's pause also parks the stream: 30 s into a
+//! pause the low-latency relay stops downloading (ll_origin::park), and a play
+//! or a loading player's playlist request starts it again at the live edge.
 
 use crate::models::settings::AppState;
 use crate::rt::AppHandle;
@@ -25,6 +29,9 @@ use std::time::Duration;
 use tauri::Manager;
 
 const PAUSE_GRACE: Duration = Duration::from_secs(6);
+/// A phone's main player paused this long stops downloading (the shells keep the
+/// same mark for jumping back to live: pausePolicy.ts, SNKit `PausePark`).
+pub const PARK_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
@@ -63,6 +70,88 @@ struct Gate {
     generation: u64,
     /// The generation of the pause waiting out its grace, per player.
     pending: HashMap<String, u64>,
+    /// The phones' main player only.
+    park: ParkGate,
+}
+
+/// Where the main player's stream stands on parking: downloading, a pause
+/// counting down to the park (its generation), or parked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Park {
+    #[default]
+    Active,
+    Pending(u64),
+    Parked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParkStep {
+    Arm(u64),
+    Park,
+    Unpark,
+    Rewake(u64),
+    Clear,
+    /// A new stream or a stop: forget the park (the origin is being stopped anyway).
+    Forget,
+    Nothing,
+}
+
+#[derive(Debug, Default)]
+struct ParkGate {
+    generation: u64,
+    state: Park,
+}
+
+impl ParkGate {
+    fn arm(&mut self) -> u64 {
+        self.generation += 1;
+        self.state = Park::Pending(self.generation);
+        self.generation
+    }
+
+    fn step(&mut self, s: PlayerState) -> ParkStep {
+        match (s, self.state) {
+            (PlayerState::Playing, Park::Parked) => {
+                self.state = Park::Active;
+                ParkStep::Unpark
+            }
+            (PlayerState::Playing, _) => {
+                self.state = Park::Active;
+                ParkStep::Nothing
+            }
+            (PlayerState::Paused | PlayerState::PausedNow, Park::Active) => ParkStep::Arm(self.arm()),
+            (PlayerState::Teardown, Park::Parked) => {
+                self.state = Park::Active;
+                ParkStep::Clear
+            }
+            (PlayerState::Teardown, _) => {
+                self.state = Park::Active;
+                ParkStep::Nothing
+            }
+            // Hidden; a repeat pause keeps its first deadline.
+            _ => ParkStep::Nothing,
+        }
+    }
+
+    fn expire(&mut self, generation: u64) -> ParkStep {
+        if self.state == Park::Pending(generation) {
+            self.state = Park::Parked;
+            ParkStep::Park
+        } else {
+            ParkStep::Nothing
+        }
+    }
+
+    fn relay_wake(&mut self) -> ParkStep {
+        if self.state == Park::Parked { ParkStep::Rewake(self.arm()) } else { ParkStep::Nothing }
+    }
+
+    fn reset(&mut self) -> ParkStep {
+        let was = self.state == Park::Parked;
+        self.generation += 1;
+        self.state = Park::Active;
+        if was { ParkStep::Forget } else { ParkStep::Nothing }
+    }
 }
 
 impl Gate {
@@ -106,7 +195,14 @@ fn key(slot: &Option<String>) -> String {
 /// A player's state. `slot` names a MultiNook tile; none is the main player.
 pub fn report(app: &AppHandle, slot: Option<String>, state: PlayerState) {
     let player = key(&slot);
-    match with_gate(|g| g.step(&player, state)) {
+    let (step, park) = with_gate(|g| {
+        let step = g.step(&player, state);
+        // Phones, main player only: desktop playback is unchanged.
+        let park = if cfg!(mobile) && slot.is_none() { g.park.step(state) } else { ParkStep::Nothing };
+        (step, park)
+    });
+    apply_park(park);
+    match step {
         Step::Apply(playing) => apply(app, &slot, playing),
         Step::ArmPause(generation) => {
             let app = app.clone();
@@ -120,6 +216,56 @@ pub fn report(app: &AppHandle, slot: Option<String>, state: PlayerState) {
         }
         Step::Nothing => {}
     }
+}
+
+/// A player asked the relay for a parked origin's playlist (stream_server).
+pub fn relay_wake() {
+    apply_park(with_gate(|g| g.park.relay_wake()));
+}
+
+/// A new upstream or a stop (stream_server::reset_ad_state): no park carries over.
+pub fn reset_main_park() {
+    apply_park(with_gate(|g| g.park.reset()));
+}
+
+fn apply_park(step: ParkStep) {
+    use crate::services::{app_presence, ll_origin};
+    match step {
+        ParkStep::Arm(generation) => arm_park_timer(generation),
+        // The flag says what really happened: a VOD, a non-LL relay or an
+        // inactive origin parks nothing, and the shells must not jump to live.
+        ParkStep::Park => app_presence::set_main_parked(ll_origin::park()),
+        ParkStep::Unpark => {
+            ll_origin::unpark();
+            app_presence::set_main_parked(false);
+        }
+        ParkStep::Rewake(generation) => {
+            ll_origin::unpark();
+            app_presence::set_main_parked(false);
+            arm_park_timer(generation);
+        }
+        // Teardown while parked: a player rebuilt on the same origin (a swap
+        // that skips stop_stream) must find it downloading, never stuck parked.
+        ParkStep::Clear => {
+            ll_origin::unpark();
+            app_presence::set_main_parked(false);
+        }
+        // reset_ad_state stops the origin right after; restarting its reader
+        // first would only start a download to abort.
+        ParkStep::Forget => app_presence::set_main_parked(false),
+        ParkStep::Nothing => {}
+    }
+}
+
+fn arm_park_timer(generation: u64) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(PARK_AFTER).await;
+        let step = with_gate(|g| g.park.expire(generation));
+        if step == ParkStep::Park {
+            log::info!("[EarningGate] paused {}s; the stream stops downloading", PARK_AFTER.as_secs());
+        }
+        apply_park(step);
+    });
 }
 
 /// The main player feeds the Twitch heartbeat and StreamNook watch time; a
@@ -146,6 +292,63 @@ fn apply(app: &AppHandle, slot: &Option<String>, playing: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pause_parks_after_the_window_and_play_unparks() {
+        let mut p = ParkGate::default();
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!("a pause arms the park") };
+        assert_eq!(p.expire(generation), ParkStep::Park);
+        assert_eq!(p.step(PlayerState::Playing), ParkStep::Unpark);
+    }
+
+    #[test]
+    fn a_play_inside_the_window_cancels_the_park() {
+        let mut p = ParkGate::default();
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.step(PlayerState::Playing), ParkStep::Nothing);
+        assert_eq!(p.expire(generation), ParkStep::Nothing);
+    }
+
+    #[test]
+    fn a_repeat_pause_keeps_the_first_deadline() {
+        let mut p = ParkGate::default();
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.step(PlayerState::PausedNow), ParkStep::Nothing);
+        assert_eq!(p.expire(generation), ParkStep::Park);
+    }
+
+    #[test]
+    fn a_relay_wake_downloads_again_and_rearms() {
+        let mut p = ParkGate::default();
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.expire(generation), ParkStep::Park);
+        let ParkStep::Rewake(again) = p.relay_wake() else { panic!("a parked wake rearms") };
+        assert_eq!(p.expire(again), ParkStep::Park);
+        assert_eq!(p.relay_wake(), ParkStep::Rewake(again + 1));
+    }
+
+    #[test]
+    fn teardown_clears_and_reset_forgets_the_park() {
+        let mut p = ParkGate::default();
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.expire(generation), ParkStep::Park);
+        assert_eq!(p.step(PlayerState::Teardown), ParkStep::Clear);
+        assert_eq!(p.relay_wake(), ParkStep::Nothing);
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.expire(generation), ParkStep::Park);
+        assert_eq!(p.reset(), ParkStep::Forget);
+        assert_eq!(p.reset(), ParkStep::Nothing);
+    }
+
+    #[test]
+    fn hidden_never_parks_or_unparks() {
+        let mut p = ParkGate::default();
+        assert_eq!(p.step(PlayerState::Hidden), ParkStep::Nothing);
+        let ParkStep::Arm(generation) = p.step(PlayerState::Paused) else { panic!() };
+        assert_eq!(p.step(PlayerState::Hidden), ParkStep::Nothing);
+        assert_eq!(p.expire(generation), ParkStep::Park);
+        assert_eq!(p.step(PlayerState::Hidden), ParkStep::Nothing);
+    }
 
     #[test]
     fn playing_counts_at_once_and_a_pause_waits_out_the_grace() {

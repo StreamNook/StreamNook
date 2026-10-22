@@ -65,6 +65,9 @@ pub struct WatchHeartbeatService {
     /// The last result of each report, so a release log says it once per change.
     drops_outcome: AtomicU8,
     points_outcome: AtomicU8,
+    /// Woken whenever what the segment traffic follows may have changed
+    /// (target or playing), so drop_playback waits instead of polling.
+    follow_changed: tokio::sync::Notify,
 }
 
 /// A report's outcome, for the once-per-change log.
@@ -91,7 +94,13 @@ impl WatchHeartbeatService {
             loop_started: AtomicBool::new(false),
             drops_outcome: AtomicU8::new(OUTCOME_UNKNOWN),
             points_outcome: AtomicU8::new(OUTCOME_UNKNOWN),
+            follow_changed: tokio::sync::Notify::new(),
         }
+    }
+
+    /// The main player is playing (earning), as the earning gate last said.
+    pub fn is_playing(&self) -> bool {
+        self.playing.load(Ordering::SeqCst)
     }
 
     /// Spawns the 60-second tick loop (idempotent). Ticks no-op while there
@@ -138,6 +147,7 @@ impl WatchHeartbeatService {
             });
         }
         self.playing.store(true, Ordering::SeqCst);
+        self.follow_changed.notify_one();
         previous
     }
 
@@ -145,7 +155,9 @@ impl WatchHeartbeatService {
     /// was being watched, if any.
     pub async fn clear_target(&self) -> Option<String> {
         self.playing.store(false, Ordering::SeqCst);
-        self.target.write().await.take().map(|t| t.channel_id)
+        let previous = self.target.write().await.take().map(|t| t.channel_id);
+        self.follow_changed.notify_one();
+        previous
     }
 
     /// Player playback state: true on playing, false on pause. Heartbeats
@@ -154,6 +166,7 @@ impl WatchHeartbeatService {
         // Logged on each flip: watching earns nothing while this is false.
         if self.playing.swap(playing, Ordering::SeqCst) != playing {
             info!("[Heartbeat] main player playing={playing}");
+            self.follow_changed.notify_one();
         }
     }
 
@@ -484,5 +497,9 @@ impl WatchHeartbeatService {
 impl crate::services::drop_playback::Follow for WatchHeartbeatService {
     async fn following(&self) -> Option<String> {
         self.playing_login().await
+    }
+
+    async fn changed(&self) {
+        self.follow_changed.notified().await
     }
 }

@@ -44,6 +44,15 @@ const PUSHER_APP_TTL: Duration = Duration::from_secs(30 * 60);
 // Pusher's idle activity timeout is ~120s; ping before then.
 const READ_TIMEOUT_SECS: u64 = 100;
 const RECONNECT_DELAY_SECS: u64 = 3;
+const RECONNECT_MAX_SECS: u64 = 60;
+/// A session that lived this long resets the backoff.
+const HEALTHY_SESSION: Duration = Duration::from_secs(60);
+
+/// The wait before the next reconnect after `failures` short sessions in a row:
+/// 3 s doubling to a minute, so a dead network cannot spin a reconnect every 3 s.
+fn reconnect_delay(failures: u32) -> Duration {
+    Duration::from_secs((RECONNECT_DELAY_SECS << failures.min(5)).min(RECONNECT_MAX_SECS))
+}
 
 static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -1107,15 +1116,18 @@ fn pusher_url(key: &str, cluster: &str) -> String {
 /// Connect + stream forever, reconnecting on drop, until the task is aborted.
 async fn run_connection(slug: String, chatroom_id: u64) {
     let channel_key = key::make_key("kick", &slug);
+    let mut failures = 0u32;
     loop {
         // The channel-scoped socket (follows / host / stream-live) keys off the
         // channel record id, captured into the meta during resolve. Re-read it each
         // attempt so a late-populating resolve is still picked up.
         let channel_id = channel_meta(&slug).and_then(|m| m.channel_id);
+        let started = Instant::now();
         if let Err(e) = connect_and_stream(chatroom_id, channel_id, &channel_key).await {
             log::warn!("[Kick] '{}' stream error: {}", slug, e);
         }
-        tokio::time::sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+        failures = if started.elapsed() >= HEALTHY_SESSION { 0 } else { failures.saturating_add(1) };
+        tokio::time::sleep(reconnect_delay(failures)).await;
     }
 }
 
@@ -2099,6 +2111,15 @@ fn push_text_run(segments: &mut Vec<MessageSegment>, plain: &mut String, text: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kick_reconnects_back_off_to_a_minute() {
+        assert_eq!(reconnect_delay(0), Duration::from_secs(3));
+        assert_eq!(reconnect_delay(1), Duration::from_secs(6));
+        assert_eq!(reconnect_delay(4), Duration::from_secs(48));
+        assert_eq!(reconnect_delay(5), Duration::from_secs(60));
+        assert_eq!(reconnect_delay(40), Duration::from_secs(60));
+    }
 
     #[test]
     fn parses_text_and_emotes() {

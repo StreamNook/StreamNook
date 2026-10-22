@@ -222,6 +222,12 @@ fn default_background_mode() -> String {
     "pip".to_string()
 }
 
+/// A fresh install keeps the audio going on lock or Home when the video cannot
+/// float (Background play on). An older file without the key stays on "pip".
+fn first_run_background_mode() -> String {
+    "audio".to_string()
+}
+
 fn default_wheel_volume_step() -> f32 {
     0.05
 }
@@ -244,7 +250,7 @@ impl Default for VideoPlayerSettings {
             ll_target_latency: None,
             ad_bypass_enabled: true,
             ad_bypass_proxies: String::new(),
-            background_mode: default_background_mode(),
+            background_mode: first_run_background_mode(),
             scroll_volume: true,
             scroll_about_reveal: true,
             middle_click_mute: true,
@@ -2389,6 +2395,12 @@ mod backup_persistence_tests {
 
     /// The first-run chat look reaches only a fresh install. A file that
     /// predates a field (or the whole block) keeps the look it always had.
+    #[test]
+    fn a_fresh_install_keeps_audio_and_old_files_keep_pip() {
+        assert_eq!(Settings::default().video_player.background_mode, "audio");
+        assert_eq!(default_background_mode(), "pip");
+    }
+
     #[test]
     fn first_run_chat_look_reaches_only_a_fresh_install() {
         let fresh = Settings::default().chat_design;

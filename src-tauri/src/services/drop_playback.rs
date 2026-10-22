@@ -21,8 +21,6 @@ const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
 const RESOLVE_EVERY: Duration = Duration::from_secs(10 * 60);
 /// Segment URIs remembered, so a segment is HEADed once.
 const SEEN_CAP: usize = 256;
-/// How often an idle loop looks for a channel to follow.
-const IDLE_POLL: Duration = Duration::from_secs(2);
 
 const ACCESS_TOKEN_QUERY: &str = "query PlaybackAccessToken($login: String!) { streamPlaybackAccessToken(channelName: $login, params: { platform: \"web\", playerBackend: \"mediaplayer\", playerType: \"site\" }) { value signature } }";
 
@@ -30,17 +28,19 @@ const ACCESS_TOKEN_QUERY: &str = "query PlaybackAccessToken($login: String!) { s
 /// plays, or `None`.
 pub trait Follow: Send + Sync + 'static {
     fn following(&self) -> impl std::future::Future<Output = Option<String>> + Send;
+    /// Resolves when what `following` answers may have changed.
+    fn changed(&self) -> impl std::future::Future<Output = ()> + Send;
 }
 
 /// Runs for the life of the app. Follows whatever `follow` names, switching
-/// within a couple of seconds of a channel change, pause or close.
+/// as soon as a channel change, pause or close is reported (no idle polling).
 pub async fn run<F: Follow>(client: Client, follow: std::sync::Arc<F>) {
     let mut failures: u32 = 0;
     let mut failed_on: Option<String> = None;
     loop {
         let Some(login) = follow.following().await else {
             failures = 0;
-            tokio::time::sleep(IDLE_POLL).await;
+            follow.changed().await;
             continue;
         };
         if failed_on.as_deref() != Some(login.as_str()) {
@@ -79,7 +79,7 @@ pub async fn run<F: Follow>(client: Client, follow: std::sync::Arc<F>) {
 async fn wait_while_following<F: Follow>(follow: &F, login: &str, max: Duration) {
     let until = Instant::now() + max;
     while Instant::now() < until {
-        tokio::time::sleep(IDLE_POLL.min(until - Instant::now())).await;
+        let _ = tokio::time::timeout(until.saturating_duration_since(Instant::now()), follow.changed()).await;
         if follow.following().await.as_deref() != Some(login) {
             return;
         }
