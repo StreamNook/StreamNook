@@ -43,7 +43,6 @@ import ToastManager from './components/ToastManager';
 import DeviceLoginOverlay from './components/DeviceLoginOverlay';
 import EntitlementUnlockNote from './components/EntitlementUnlockNote';
 import AnnouncementsBanner from './components/AnnouncementsBanner';
-import { TooltipManager } from './components/ui/TooltipManager';
 import { Tooltip } from './components/ui/Tooltip';
 import DropProgressController from './components/plugins/DropProgressController';
 import EmoteSpotlight from './components/EmoteSpotlight';
@@ -2536,7 +2535,6 @@ function App() {
       <ToastManager />
       <DeviceLoginOverlay />
       <EntitlementUnlockNote />
-      <TooltipManager />
       {commandPaletteEverOpened && <Suspense fallback={null}><CommandPalette /></Suspense>}
       <InputContextMenuHost />
       {clipModalEverOpened && <Suspense fallback={null}><ClipModal /></Suspense>}

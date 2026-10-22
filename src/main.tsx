@@ -4,6 +4,7 @@ import './devReactInstrumentation';
 import React, { lazy, Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MotionScope } from './components/MotionScope.tsx';
+import { TooltipManager } from './components/ui/TooltipManager';
 // Side-effect import: starts the settings IPC now, before the lazy route
 // imports below, so it overlaps chunk loading.
 import './bootPreload';
@@ -194,6 +195,10 @@ root.render(
             gets it; a window that cannot be resized renders nothing. */}
         {IS_LINUX && <LinuxResizeEdges />}
       </Suspense>
+      {/* The one tooltip layer for this window. Every window page is its own
+          React tree with its own TooltipStore, and a <Tooltip> with no
+          manager in its window draws nothing. Phones have no hover. */}
+      {!IS_MOBILE && <TooltipManager />}
     </MotionScope>
   </React.StrictMode>,
 );
