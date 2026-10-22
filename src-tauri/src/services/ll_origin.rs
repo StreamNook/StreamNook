@@ -957,14 +957,14 @@ pub fn set_target_gap(gap: Option<f32>) {
 
 /// Seconds to add to (or take off) the default hold-back so AVPlayer rides the
 /// viewer's target gap, or at Auto the same gap as the desktop and Android: never
-/// under the spec's two part targets.
+/// under three part targets (LL-HLS: PART-HOLD-BACK SHOULD be at least 3x).
 fn apple_gap_adjust(target: f64, hold_parts: u64) -> f64 {
     gap_adjust(TARGET_GAP_MS.load(Ordering::Relaxed), target, hold_parts)
 }
 
 fn gap_adjust(ms: u64, target: f64, hold_parts: u64) -> f64 {
     let gap = if ms == 0 { AUTO_LL_GAP_SECS } else { ms as f64 / 1000.0 };
-    let wanted = (gap - LL_EDGE_DELAY_SECS - APPLE_BEHIND_OVER_HOLD).max(target * 2.0);
+    let wanted = (gap - LL_EDGE_DELAY_SECS - APPLE_BEHIND_OVER_HOLD).max(target * 3.0);
     wanted - target * hold_parts as f64
 }
 
@@ -3847,11 +3847,11 @@ http://127.0.0.1:9/seg/50.ts\n\
 
     #[test]
     fn the_target_gap_moves_the_apple_hold_back() {
-        // Auto rides the desktop's 1.5 s behind live: a 0.65 s hold-back.
-        assert!((gap_adjust(0, 0.312, 3) - (0.65 - 0.936)).abs() < 1e-9);
+        // Auto: three part targets, the default hold-back.
+        assert!(gap_adjust(0, 0.312, 3).abs() < 1e-9);
         assert!((gap_adjust(3000, 0.312, 3) - (2.15 - 0.936)).abs() < 1e-9);
-        // Never under two part targets, however low the gap.
-        assert!((gap_adjust(500, 0.312, 3) + 0.312).abs() < 1e-9);
+        // Never under three part targets, however low the gap.
+        assert!(gap_adjust(500, 0.312, 3).abs() < 1e-9);
     }
 
     #[test]

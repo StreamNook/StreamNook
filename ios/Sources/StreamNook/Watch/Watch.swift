@@ -829,11 +829,9 @@ final class Watch {
         if start.url.contains("/audio.m3u8") || !start.url.contains("/stream.m3u8") { return .direct }
         guard asked == .auto else { return asked }
         let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
-        if lowLatency { return .ll }
-        // A low-latency broadcast the parts origin did not take rides its in-progress segments, as
-        // on the desktop and Android (the relay's prefetch probe).
-        let promoted = (try? await core.invoke("get_stream_prefetch_present", args: [:], as: Bool.self)) ?? false
-        return promoted ? .promote : .plain
+        // Whole published segments otherwise, as Android and the desktop's hls.js ride them. The
+        // promote route fed broadcast-paced downloads to the link governor as link speed.
+        return lowLatency ? .ll : .plain
     }
 
     /// The low-latency playlist failed to play (AVPlayer refuses some part layouts outright):

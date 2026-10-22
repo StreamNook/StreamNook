@@ -36,7 +36,9 @@ import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../
 import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
 import { isCodecFailure } from '../../utils/codecFailure';
-import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
+import { createStallReporter, reportSegment } from './linkAdapt';
+import { SEAM_MAX_SECS, learnedLLCushion, rememberLLCushion } from '../../utils/llCushion';
+import { streamProvider } from '../../utils/streamProvider';
 
 // The earning gate (drops progress, channel points, watch time) is Rust's
 // (services/earning_gate.rs): the player only says what its video does. A
@@ -104,7 +106,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     let detachVideo: (() => void) | null = null;
     let gateTimer: number | null = null;
     let stopLoadTimer: number | null = null;
-    let cushionTimer: number | null = null;
     let startGiveUpTimer: number | null = null;
     let stallGiveUpTimer: number | null = null;
     let reloadTimer: number | null = null;
@@ -113,10 +114,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     // from low latency, and how many rebuilds this URL has had since it last
     // played. All per URL: a new URL starts the count again.
     let lowLatency = false;
-    // A low-latency broadcast the parts origin did not take (Twitch's PREFETCH
-    // hints on whole segments): the relay promotes its in-progress segments,
-    // so it rides closer than a normal-latency one, as on the desktop.
-    let promoted = false;
     let fellBack = false;
     let reloads = 0;
     // Whether the core was already told this URL's codec failed to decode:
@@ -143,10 +140,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       startGiveUpTimer = null;
       clearTimer(stallGiveUpTimer);
       stallGiveUpTimer = null;
-      if (cushionTimer !== null) {
-        window.clearInterval(cushionTimer);
-        cushionTimer = null;
-      }
       stalls.cancel();
       loadStopped = false;
       if (stopGovernor) {
@@ -238,13 +231,15 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       // The viewer's chosen distance behind live. On the parts path the edge
       // trails the broadcaster by a measured delay, so the edge target sits
       // that much lower to land on what they actually asked for.
-      // The same three paths as the desktop: parts, a promoted low-latency
-      // broadcast on whole segments, or a normal-latency one.
-      const llTargetDisplayed = resolveLiveEdgeGap(
-        current?.ll_target_latency,
-        ll ? 'll' : promoted ? 'promotion' : 'plain',
-      );
+      // Parts, or whole published segments. Nothing promotes in-progress
+      // segments for hls.js, so a low-latency broadcast off the parts route
+      // rides the plain gap.
+      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, ll ? 'll' : 'plain');
       const llTargetRaw = ll ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
+      // The channel's learned cushion, as the desktop player keeps it.
+      const playing = useAppStore.getState().currentStream;
+      const login = playing?.user_login;
+      const isTwitch = streamProvider(playing) === 'twitch';
 
       const hls = new Hls({
         enableWorker: true,
@@ -259,10 +254,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         nudgeOffset: 0.2,
         nudgeMaxRetry: 3,
         maxFragLookUpTolerance: 0.5,
-        liveSyncDuration: llTargetRaw + linkCushion(),
+        liveSyncDuration: isTwitch ? learnedLLCushion(login, llTargetRaw) : llTargetRaw,
         liveMaxLatencyDuration: vodStart ? undefined : 60,
-        // The core owns the stall reaction (link_adapt's cushion), so hls.js's
-        // own one-second-per-stall ramp stays off, as on the desktop.
+        // The stall reaction is the learned cushion below, as on the desktop,
+        // so hls.js's own one-second-per-stall ramp stays off.
         liveSyncOnStallIncrease: 0,
         // hls.js's own catch-up stays off on both paths: its rate steps are
         // quantized coarsely enough to be audible. The governor below does it
@@ -280,7 +275,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         levelLoadingRetryDelay: 1000,
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 1000,
+        fragLoadingRetryDelay: ll ? 250 : 1000,
         startLevel: current?.start_quality ?? -1,
         abrEwmaDefaultEstimate: 1_500_000,
         abrEwmaFastLive: 3.0,
@@ -306,13 +301,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           });
         });
       }
-      // Where the cushion lives in hls.js (its start and resync position, and
-      // the whole-segment governor's target), kept in step with the core.
-      cushionTimer = window.setInterval(() => {
-        if (!live()) return;
-        hls.config.liveSyncDuration = llTargetRaw + linkCushion();
-      }, 2000);
-
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!live()) return;
         // Only the low-latency path starts here. hls.js positions the playhead
@@ -402,6 +390,36 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         if (!data.fatal) {
           if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
             failedCodecMime = data.mimeType ?? null;
+          }
+          // The desktop's stall ramp on the parts path: a real stall (not a
+          // seam the player skips by itself) adds half a second, up to the
+          // target plus 2 s, remembered per channel.
+          if (
+            data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR &&
+            ll &&
+            isTwitch &&
+            !frozen &&
+            !useAppStore.getState().isRestartingStream
+          ) {
+            const info = data.bufferInfo;
+            const seamSecs =
+              info && typeof info.nextStart === 'number' && info.nextStart > video.currentTime
+                ? info.nextStart - video.currentTime
+                : null;
+            if (seamSecs == null || seamSecs > SEAM_MAX_SECS) {
+              const cur =
+                typeof hls.config.liveSyncDuration === 'number' && Number.isFinite(hls.config.liveSyncDuration)
+                  ? hls.config.liveSyncDuration
+                  : llTargetRaw;
+              const cap = llTargetRaw + 2;
+              if (cur < cap) {
+                hls.config.liveSyncDuration = Math.min(cap, cur + 0.5);
+                Logger.debug(
+                  `[MobilePlayer] stall: cushion ${cur.toFixed(1)}s -> ${hls.config.liveSyncDuration.toFixed(1)}s`,
+                );
+                rememberLLCushion(login, hls.config.liveSyncDuration);
+              }
+            }
           }
           return;
         }
@@ -583,8 +601,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             // Read live rather than captured, so moving the gap slider applies
             // without rebuilding the player.
             // Both in seconds behind the broadcaster as heard, like the desktop.
-            // Plus the core's extra cushion after stalls on a poor link.
-            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll') + linkCushion(),
+            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll'),
             getLatency: () =>
               typeof hls.latency === 'number' && hls.latency > 0 ? behindLiveFromEdge(hls.latency) : null,
             gain: 0.12,
@@ -592,7 +609,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             // defaults (1.05, buffer-aware engage). Phones hit the unbacked
             // catch-up failure more than desktop, and the buffer-aware engage
             // span is exactly the fix for it, so no mobile override here.
-            band: 0.1,
+            // The desktop's band: it clears part delivery jitter, so the rate
+            // rests at 1.0 instead of hunting.
+            band: 0.75,
             floor: 0.8,
             slowRate: 0.97,
             tickMs: 500,
@@ -660,18 +679,6 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
           /* command unavailable or the stream went away */
         }
       }
-      // The second relay fact, as the desktop reads it: a low-latency broadcast
-      // (PREFETCH hints) that the parts origin did not take over.
-      if (!vodStart && !isLowLatencyChannel) {
-        try {
-          promoted = await invoke<boolean>('get_stream_prefetch_present');
-        } catch {
-          /* command unavailable or the stream went away */
-        }
-      }
-      // Extra distance from the edge the core keeps after stalls on a poor
-      // link (Rust link_adapt); zero on a good one.
-      await refreshLinkCushion();
       // A newer stream (or teardown) owns the element now; building here would
       // leave a zombie player attached to it.
       if (cancelled || seq !== seqRef.current) return;

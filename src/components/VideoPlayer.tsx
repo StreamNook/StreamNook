@@ -42,6 +42,7 @@ import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
 import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
 import { createStallReporter, reportSegment } from '../utils/linkAdapt';
+import { SEAM_MAX_SECS, learnedLLCushion, rememberLLCushion } from '../utils/llCushion';
 
 import { Logger } from '../utils/logger';
 import { claimPlayerFullscreen, handOffPlayerFullscreen, PLYR_FULLSCREEN_I18N, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
@@ -82,11 +83,6 @@ const COLD_START_SNAP_MIN_SECS = 0.3;
 const COLD_START_SNAP_RESERVE_SECS = 1.0;
 /** How long after the first frame the snap keeps waiting for enough buffer. */
 const COLD_START_SNAP_WINDOW_MS = 8000;
-/** A stall whose buffered media resumes within this many seconds past the
- *  playhead is a SEAM (a segment whose tail never arrived, so its successor
- *  starts a few frames later), not a delivery drought. Observed seams run
- *  70 ms to 1.8 s; a whole missing 2 s segment is a drought and stays out. */
-const SEAM_MAX_SECS = 1.95;
 const NO_CHAPTERS: VodChapter[] = [];
 /** The Chapters control's markup (lucide `list-video`); the label is
  *  written afterwards, so this stays static. */
@@ -116,20 +112,6 @@ import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { recoverFromSequenceMismatch } from '../utils/hlsSequenceMismatch';
 
-// Per-channel learned cushion (LL path), relative to the viewer's chosen target. The
-// `base` is the user's target latency converted to the real (raw) cushion. The
-// stall-adaptive cushion proves a channel's delivery wobbliness during a session;
-// remembering it means a wobbly channel pays its stalls ONCE ever instead of once per
-// session, while clean channels keep the user's tight target. The learned value relaxes
-// by 0.5s per day, so one bad night doesn't tax a channel forever, and it is clamped to
-// [base, base + 2] so it never drops below the user's target nor runs away above it.
-// Version the store: when a stall-causing pipeline bug is fixed, cushions learned from
-// those stalls are poisoned lessons; bump to orphan and re-learn.
-// Namespaced by PLATFORM: a Kick "xqc" and a Twitch "xqc" are different streams
-// with different segment lengths, and a shared key would hand one the other's
-// learned cushion.
-const llCushionKey = (channel: string, provider = 'twitch') =>
-  `streamnook.ll-cushion.v4.${provider}.${channel.toLowerCase()}`;
 /** Segments back from the live edge to sit on a non-Twitch stream, and the bounds
  *  that keeps it inside. hls.js's own default is 3, which is the right shape: it
  *  scales with the platform's segment length instead of assuming Twitch's. */
@@ -155,38 +137,6 @@ function providerLiveSync(targetDuration: number | undefined): number {
   }
   const want = targetDuration * PROVIDER_LIVE_SYNC_SEGMENTS;
   return Math.min(PROVIDER_LIVE_SYNC_MAX, Math.max(PROVIDER_LIVE_SYNC_MIN, want));
-}
-
-function learnedLLCushion(
-  channel: string | undefined,
-  base: number,
-  provider = 'twitch',
-  headroom = 2,
-): number {
-  if (!channel) return base;
-  try {
-    const raw = localStorage.getItem(llCushionKey(channel, provider));
-    if (!raw) return base;
-    const { c, t } = JSON.parse(raw) as { c: number; t: number };
-    if (!Number.isFinite(c) || !Number.isFinite(t)) return base;
-    // Decay back toward the base half a second per day, so a channel that was
-    // once unstable is retried rather than permanently penalised.
-    const days = Math.max(0, (Date.now() - t) / 86_400_000);
-    return Math.max(base, Math.min(base + headroom, c - 0.5 * days));
-  } catch {
-    return base;
-  }
-}
-function rememberLLCushion(channel: string | undefined, cushion: number, provider = 'twitch') {
-  if (!channel) return;
-  try {
-    localStorage.setItem(
-      llCushionKey(channel, provider),
-      JSON.stringify({ c: cushion, t: Date.now() }),
-    );
-  } catch {
-    /* storage full/blocked: the session keeps its in-memory value */
-  }
 }
 
 const VideoPlayer = () => {
