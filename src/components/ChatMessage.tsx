@@ -179,8 +179,8 @@ const wrapWithEmoteEffects = (
   return (
     <span
       key={key}
-      className={`inline-block align-middle ${noSpace ? 'mr-0.5' : 'mx-0.5'}`}
-      style={noSpace ? { marginLeft: '-4px' } : undefined}
+      className={`inline-block align-middle ${noSpace ? 'mr-0.5' : ''}`}
+      style={noSpace ? { marginLeft: '-4px' } : EMOTE_SIDE_MARGINS}
     >
       {out}
     </span>
@@ -203,6 +203,14 @@ const SubGiftIcon = () => {
 
 const GIANT_EMOTE_HEIGHT = 'calc(8em * var(--sn-emote-scale, 1))';
 const GIANT_EMOTE_MAX_WIDTH = 'calc(24em * var(--sn-emote-scale, 1))';
+// Inline emote sizing, shared by a lone emote and a stacked group (zero-width
+// overlays, modifiers) so nothing changes size when another emote sits on it.
+const INLINE_EMOTE_HEIGHT = 'calc(2em * var(--sn-emote-scale, 1))';
+const INLINE_EMOTE_MAX_WIDTH = 'calc(9em * var(--sn-emote-scale, 1))';
+const EMOTE_SIDE_MARGINS = {
+  marginLeft: 'var(--sn-emote-margin, 0.125rem)',
+  marginRight: 'var(--sn-emote-margin, 0.125rem)',
+};
 
 // Best 4x-equivalent CDN URL per provider. Twitch `default` serves the
 // animated variant automatically; BTTV tops out at 3x; FFZ /4 may fail for
@@ -340,9 +348,9 @@ const parseTextWithEmoteSets = (text: string, emotes?: EmoteSet | null): EmoteSe
   words.forEach((word, i) => {
     if (i > 0) segments.push({ type: 'text', content: ' ' });
 
-    // Per-set name index (twitch > 7tv > bttv > ffz > kick > youtube,
-    // first-wins: a Twitch emote is never replaced by a same-name
-    // third-party one, as in Rust's parser). Kick/YouTube
+    // Per-set name index (twitch, then channel 7tv > ffz > bttv, then their
+    // globals, then kick > youtube; first-wins, the order Rust's parser draws
+    // a shared name in: a Twitch emote is never replaced). Kick/YouTube
     // matter here because a Kick reply preview arrives as plain text with its
     // emote tokens already reduced to names. This runs per word of every reply
     // preview, so the old six-array linear scan was O(words x set size).
@@ -446,7 +454,7 @@ interface ChatMessageProps {
   ) => void;
   onReplyClick?: (parentMsgId: string) => void;
   isHighlighted?: boolean;
-  moderationContext?: { type: 'timeout' | 'ban' | 'deleted'; duration?: number } | null; // Moderation context from CLEARMSG/CLEARCHAT
+  moderationContext?: { type: 'timeout' | 'ban' | 'deleted'; duration?: number; by?: string; reason?: string } | null; // Moderation context from CLEARMSG/CLEARCHAT, named by EventSub for moderators
   onEmoteRightClick?: (emoteName: string) => void;
   onMessageCopy?: (content: string) => void;
   onUsernameRightClick?: (messageId: string, username: string) => void;
@@ -672,7 +680,9 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
   // from CSS :nth-child, so the row no longer needs the index at all.
   if (prevProps.isHighlighted !== nextProps.isHighlighted) return false;
   if (prevProps.moderationContext?.type !== nextProps.moderationContext?.type ||
-      prevProps.moderationContext?.duration !== nextProps.moderationContext?.duration) return false;
+      prevProps.moderationContext?.duration !== nextProps.moderationContext?.duration ||
+      prevProps.moderationContext?.by !== nextProps.moderationContext?.by ||
+      prevProps.moderationContext?.reason !== nextProps.moderationContext?.reason) return false;
   // The emote set DOES affect output: a row rendered before the channel's set
   // resolved shows emote codes as plain text and would otherwise never repaint.
   // Safe to compare by identity and cheap to include — useChannelEmotes returns
@@ -1029,6 +1039,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       ...modTarget(),
       action: durationSeconds == null ? { kind: 'ban' } : { kind: 'timeout', seconds: durationSeconds },
       useSavedReason: true,
+      onePress: true,
     });
 
   const modDelete = (messageId: string) =>
@@ -1494,22 +1505,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         className: `inline-block w-auto cursor-pointer ${inGrid ? '' : 'align-middle'} hover:scale-110 transition-transform ${isOverlay ? 'z-10 drop-shadow-[0_0_2px_rgba(0,0,0,0.5)] hover:drop-shadow-[0_0_4px_color-mix(in_srgb,var(--color-warning)_80%,transparent)]' : ''}`,
         style: {
           ...gridStyle,
-          // In chat, size emotes in `em` so they scale with the message font;
-          // the picker grid keeps its fixed rem size.
-          height: giant
-            ? GIANT_EMOTE_HEIGHT
-            : inGrid
-              ? 'calc(1.75rem * var(--sn-emote-scale, 1))'
-              : 'calc(2em * var(--sn-emote-scale, 1))',
-          maxWidth: giant
-            ? GIANT_EMOTE_MAX_WIDTH
-            : inGrid
-              ? 'calc(128px * var(--sn-emote-scale, 1))'
-              : 'calc(9em * var(--sn-emote-scale, 1))',
-          ...(inGrid ? {} : { marginLeft: 'var(--sn-emote-margin, 0.125rem)', marginRight: 'var(--sn-emote-margin, 0.125rem)' }),
+          // Sized in `em` so emotes scale with the message font. A stacked
+          // group draws at the same size, so a base never shrinks when a
+          // zero-width emote or modifier sits on it.
+          height: giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT,
+          maxWidth: giant ? GIANT_EMOTE_MAX_WIDTH : INLINE_EMOTE_MAX_WIDTH,
+          ...(inGrid ? {} : EMOTE_SIDE_MARGINS),
           // Must come last: a rotated emote is squared off first, exactly as
           // BetterTTV does it, so the turned image cannot spill vertically.
-          ...(mods?.rotated ? { maxWidth: giant ? GIANT_EMOTE_HEIGHT : 'calc(1.75rem * var(--sn-emote-scale, 1))' } : {}),
+          ...(mods?.rotated ? { maxWidth: giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT } : {}),
         },
         referrerPolicy: 'no-referrer',
         onClick: () => {
@@ -1593,12 +1597,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const imgElement = mods?.wideX ? (
         <WideEmoteImg
           {...imgProps}
-          baseHeight={giant ? GIANT_EMOTE_HEIGHT : 'calc(1.75rem * var(--sn-emote-scale, 1))'}
+          baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
         />
       ) : mods?.growX ? (
         <GrowXEmoteImg
           {...imgProps}
-          baseHeight={giant ? GIANT_EMOTE_HEIGHT : 'calc(1.75rem * var(--sn-emote-scale, 1))'}
+          baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
         />
       ) : (
         <img {...imgProps} />
@@ -1797,17 +1801,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           revealedGifs.has(gifKey));
       if (!reveal) {
         return (
-          <button
-            key={key}
-            type="button"
-            title={label}
-            onClick={() => setRevealedGifs((prev) => new Set(prev).add(gifKey))}
-            className={`inline-flex max-w-[16rem] items-center gap-1 rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-textSecondary hover:bg-white/10 ${inGrid ? '' : 'align-middle'} ${marginClass}`}
-            style={gridStyle}
-          >
-            <span className="font-semibold tracking-wide">GIF</span>
-            <span className="truncate">{label}</span>
-          </button>
+          <Tooltip key={key} content={label} describe requirePointerMove>
+            <button
+              type="button"
+              onClick={() => setRevealedGifs((prev) => new Set(prev).add(gifKey))}
+              className={`inline-flex max-w-[16rem] items-center gap-1 rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-textSecondary hover:bg-white/10 ${inGrid ? '' : 'align-middle'} ${marginClass}`}
+              style={gridStyle}
+            >
+              <span className="font-semibold tracking-wide">GIF</span>
+              <span className="truncate">{label}</span>
+            </button>
+          </Tooltip>
         );
       }
       return (
@@ -2007,7 +2011,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const gridSpan = (
         <span
           key={effectBits ? undefined : `group-${index}`}
-          className={`inline-grid items-center justify-items-center ${effectBits ? '' : 'align-middle mx-0.5'}`}
+          className={`inline-grid items-center justify-items-center ${effectBits ? '' : 'align-middle'}`}
+          style={effectBits ? undefined : EMOTE_SIDE_MARGINS}
         >
           {group.map((seg, innerIndex) => {
             const hiddenModifier =
@@ -3767,6 +3772,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             <HoverModButtons
               provider={parsed.provider ?? 'twitch'}
               targetName={modTarget().targetName ?? parsed.username}
+              target={modTarget()}
               canPunish={canActOnChatter}
               canDelete={!!thisMessageId}
               lengthsOpen={timeoutLengthsOpen}
@@ -3776,7 +3782,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   prefillModCommand(seconds);
                   return;
                 }
-                void modBan(seconds);
+                return modBan(seconds);
               }}
               onDelete={() => {
                 if (thisMessageId) void modDelete(thisMessageId);
