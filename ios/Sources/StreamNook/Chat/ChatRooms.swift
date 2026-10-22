@@ -23,6 +23,8 @@ final class ChatRooms {
     @ObservationIgnored weak var toasts: Toasts?
     /// Your Kick account, which a Kick room's composer needs to send.
     @ObservationIgnored weak var kick: KickAccount?
+    /// The app's settings, for choices a chat surface writes (the Images tab's upload host).
+    @ObservationIgnored weak var settings: SettingsStore?
 
     private(set) var state = ChatTabsState()
     private(set) var sessions: [String: ChatSession] = [:]

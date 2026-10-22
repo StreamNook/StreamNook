@@ -22,6 +22,8 @@ final class EmotePickerModel {
     var query = "" {
         didSet {
             guard query != oldValue else { return }
+            // Images has no search field.
+            if section == .images { return }
             // In GIFs the field searches GIPHY (trending with nothing typed), as on Android.
             if section == .gifs {
                 searchGifs(debounce: true)
@@ -50,9 +52,11 @@ final class EmotePickerModel {
     private var open = false
     private var loadTask: Task<Void, Never>?
 
-    /// The bottom bar's sections: emotes, or Twitch chat GIFs.
-    enum Section { case emotes, gifs }
+    /// The bottom bar's sections: emotes, Twitch chat GIFs, or a picture to upload.
+    enum Section { case emotes, gifs, images }
     private(set) var section = Section.emotes
+    /// The Images section: the host, the upload in flight and the uploads by host.
+    let images: ImageUploadModel
     /// Twitch's answer about GIFs in this channel; nil (no GIFs section) until it answers, and
     /// when the question failed (signed out, offline), as on Android.
     private(set) var gifStatus: GifPickerStatus?
@@ -69,8 +73,15 @@ final class EmotePickerModel {
 
     init(session: ChatSession) {
         self.session = session
+        images = ImageUploadModel(core: session.core) { [weak session] in session?.rooms?.settings }
         tab = PickerTabs.defaultTab(provider: session.provider)
     }
+
+    /// Images is offered where the setting has it on, except TikTok, whose chat drops links.
+    var showsImages: Bool { session.style.showImageUploads && session.provider != "tiktok" }
+
+    /// The section the body shows: Images falls back to the emotes once it is turned off.
+    var shownSection: Section { section == .images && !showsImages ? .emotes : section }
 
     /// The tabs in order: Favorites, Emoji, then the room's emote tabs.
     var tabs: [String] {
@@ -124,6 +135,8 @@ final class EmotePickerModel {
         let core = session.core
         Task { _ = try? await core.invoke("asset_cache_set_burst", args: ["active": on]) }
         if on {
+            // Images is a detour, as on Android: every open starts back on the emotes.
+            if section == .images { section = .emotes }
             reload(debounce: false)
             loadGifStatus()
         }
@@ -145,7 +158,12 @@ final class EmotePickerModel {
         guard next != section else { return }
         section = next
         resetToken += 1
-        if next == .gifs { searchGifs(debounce: false) } else { reload(debounce: false) }
+        switch next {
+        case .gifs: searchGifs(debounce: false)
+        case .emotes: reload(debounce: false)
+        // The pane reads its own panel when it shows.
+        case .images: break
+        }
     }
 
     /// Trending with nothing typed, else a search 250 ms after the last key.
@@ -322,35 +340,46 @@ struct ChatEmotePicker: View {
     private var picker: EmotePickerModel { model.picker }
 
     var body: some View {
-        @Bindable var picker = picker
         VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ComposerInk.quiet)
-                TextField("", text: $picker.query,
-                          prompt: Text(picker.section == .gifs ? "Search GIFs..." : "Search emotes...").foregroundStyle(ComposerInk.quiet))
-                    .font(.sn(13))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+            // Images has no search and no tabs, as on Android.
+            if picker.shownSection != .images {
+                searchField
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(SN.surface, in: .rect(cornerRadius: 10))
-            .simultaneousGesture(swipeDown)
-            if picker.section == .emotes {
+            if picker.shownSection == .emotes {
                 tabRow
                     .simultaneousGesture(swipeDown)
             }
-            if picker.section == .gifs { gifGrid } else { grid }
-            // Emotes and GIFs, as Android's bar: only where the channel has GIFs on.
-            if picker.gifStatus?.showsSection == true { sectionBar }
+            switch picker.shownSection {
+            case .gifs: gifGrid
+            case .images: ChatImageUploadPane(model: model)
+            case .emotes: grid
+            }
+            // Emotes, GIFs and Images, as Android's bar: GIFs only where the channel has them on.
+            if picker.gifStatus?.showsSection == true || picker.showsImages { sectionBar }
         }
         .padding(8)
         // In the keyboard's place: the composer sizes it; flat, with the hairline a keyboard has.
         .frame(maxHeight: .infinity, alignment: .top)
         .background(SN.background)
         .overlay(alignment: .top) { Rectangle().fill(SN.borderSubtle).frame(height: 1) }
+    }
+
+    private var searchField: some View {
+        @Bindable var picker = picker
+        return HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ComposerInk.quiet)
+            TextField("", text: $picker.query,
+                      prompt: Text(picker.section == .gifs ? "Search GIFs..." : "Search emotes...").foregroundStyle(ComposerInk.quiet))
+                .font(.sn(13))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(SN.surface, in: .rect(cornerRadius: 10))
+        .simultaneousGesture(swipeDown)
     }
 
     private var swipeDown: some Gesture {
@@ -426,12 +455,19 @@ struct ChatEmotePicker: View {
             sectionButton(.emotes, label: "Emotes") {
                 Image(systemName: "face.smiling").font(.system(size: 13, weight: .medium))
             }
-            sectionButton(.gifs, label: "GIFs") {
-                Text("GIF")
-                    .font(.system(size: 8.5, weight: .heavy))
-                    .tracking(0.4)
-                    .padding(.horizontal, 3)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1))
+            if picker.gifStatus?.showsSection == true {
+                sectionButton(.gifs, label: "GIFs") {
+                    Text("GIF")
+                        .font(.system(size: 8.5, weight: .heavy))
+                        .tracking(0.4)
+                        .padding(.horizontal, 3)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1))
+                }
+            }
+            if picker.showsImages {
+                sectionButton(.images, label: "Images") {
+                    Image(systemName: "photo").font(.system(size: 13, weight: .medium))
+                }
             }
         }
         .padding(.top, 6)
@@ -440,7 +476,7 @@ struct ChatEmotePicker: View {
 
     private func sectionButton<Icon: View>(_ section: EmotePickerModel.Section, label: String,
                                            @ViewBuilder icon: () -> Icon) -> some View {
-        let active = picker.section == section
+        let active = picker.shownSection == section
         return Button {
             picker.pick(section: section)
         } label: {

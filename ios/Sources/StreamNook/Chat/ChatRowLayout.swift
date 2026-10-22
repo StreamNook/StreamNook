@@ -840,6 +840,7 @@ struct ChatRowLayoutBuilder {
     }
 
     /// Every card is this tall, read or still pending, so a held card never changes the row's height.
+    /// A picture link is the one exception: once read it takes its picture's own shape.
     static let cardHeight: CGFloat = 66
     static let discordBlurple = ChatTheme.color("#5865F2")!
     static let discordGreen = ChatTheme.color("#23A55A")!
@@ -873,6 +874,29 @@ struct ChatRowLayoutBuilder {
                                              rect: CGRect(x: left, y: top + pad + 19 + CGFloat(i) * 14, width: textWidth * share, height: 8)))
             }
             return built
+        }
+
+        // A picture link: the picture alone at its own shape (16:9 when its size is unknown), at
+        // most 380 by 220 points and never blown up past twice its pixel size. The picture fills
+        // its box, so a box at the picture's own aspect shows it whole and undistorted.
+        if preview.kind == "image", let image = preview.image, !ImagePipeline.shared.hasFailed(image) {
+            let maxW = min(width - 2 * sideInset, 380)
+            let maxH: CGFloat = 220
+            let aspect: CGFloat = {
+                if let w = preview.width, let h = preview.height, w > 0, h > 0 { return CGFloat(w) / CGFloat(h) }
+                return 16.0 / 9.0
+            }()
+            var h = min(maxH, maxW / aspect)
+            if let ph = preview.height, ph > 0 { h = min(h, CGFloat(ph) / scale * 2) }
+            h = max(1, h.rounded())
+            let box = CGRect(x: sideInset, y: top, width: max(1, (h * aspect).rounded()), height: h)
+            var shown = BuiltCard(bottom: box.maxY)
+            shown.shapes.append(RowShape(kind: .card(radius: 12), rect: box))
+            shown.attachments.append(RowAttachment(kind: .preview, url: image, pixelHeight: Int(box.height * scale), rect: box,
+                                                   overlays: [], effects: 0, animate: style.animatesEmotes, radius: 12))
+            if let url = URL(string: card.url) { shown.taps.append(RowTap(rect: box, action: .link(url))) }
+            shown.words = "Image"
+            return shown
         }
 
         if preview.kind == "discord" {

@@ -84,6 +84,8 @@ enum SettingIcons {
         "chat_input.inbox_button_side": "tray",
         "chat_input.emote_tab_complete_enabled": "text.badge.plus",
         "chat_input.emote_tab_complete_include_chatters": "person.2",
+        "chat_input.image_uploader.show_in_menu": "photo",
+        "chat_input.image_uploader.preset": "icloud.and.arrow.up",
         "auto_claim_points_watching": "shippingbox",
         "chat_design.deleted_message_style": "trash",
         "chat_design.hide_shared_chat": "rectangle.2.swap",
@@ -155,5 +157,6 @@ enum SettingIcons {
         "Import": "square.and.arrow.down",
         "Languages": "globe",
         "Counts as a mention": "checklist",
+        "Test upload": "paperplane",
     ]
 }

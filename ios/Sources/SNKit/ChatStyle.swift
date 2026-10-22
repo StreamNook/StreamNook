@@ -98,6 +98,8 @@ public struct ChatStyle: Sendable, Equatable {
     public var showRoomModes = true
     /// The suggestion strip over the composer (chat_input.emote_tab_complete_enabled).
     public var suggestionsEnabled = true
+    /// The emote panel's Images section (chat_input.image_uploader.show_in_menu).
+    public var showImageUploads = true
     /// Chat event kinds turned off, as `provider:category` (chat_events.hidden_provider_events).
     public var hiddenEvents: Set<String> = []
     /// Wallet balance is Hidden (chat_input.hide_points_balance).
@@ -143,6 +145,9 @@ public struct ChatStyle: Sendable, Equatable {
             if let side = i["inbox_button_side"] as? String { inboxRight = side == "right" }
             showRoomModes = i["show_room_modes"] as? Bool ?? showRoomModes
             suggestionsEnabled = i["emote_tab_complete_enabled"] as? Bool ?? suggestionsEnabled
+            if let uploader = i["image_uploader"] as? [String: Any] {
+                showImageUploads = uploader["show_in_menu"] as? Bool ?? showImageUploads
+            }
             hidePointsBalance = i["hide_points_balance"] as? Bool ?? hidePointsBalance
             pointsBalanceInline = i["show_points_balance_inline"] as? Bool ?? pointsBalanceInline
             if let gains = i["wallet_gains"] as? String { walletGainsChestOnly = gains == "chest" }

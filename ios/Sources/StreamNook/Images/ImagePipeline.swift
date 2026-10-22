@@ -239,6 +239,11 @@ final class ImagePipeline: @unchecked Sendable {
                   let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return .gone }
             return .data(data)
         }
+        // A file the core keeps on this phone (an upload's kept copy): read in place, not cached.
+        if url.hasPrefix("file://") {
+            guard let local = URL(string: url), local.isFileURL else { return nil }
+            return try? Data(contentsOf: local)
+        }
         let file = disk.appending(path: ImageCacheKey.fileName(for: url))
         if let data = try? Data(contentsOf: file), !data.isEmpty { return .data(data) }
         guard let remote = URL(string: url) else { return .gone }

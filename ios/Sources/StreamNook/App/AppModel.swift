@@ -120,6 +120,7 @@ final class AppModel {
         chat.toasts = toasts
         chat.kick = kick
         chat.mentions = mentions
+        chat.settings = settingsStore
         let home = home
         let signIn = signIn
         OwnAccount.user = { signIn.user }
