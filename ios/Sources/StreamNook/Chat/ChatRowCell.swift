@@ -593,7 +593,9 @@ final class ChatRowCell: UIView {
         guard let layout else { return }
         showGlint(layout)
         showWash(layout, scale: layer.contentsScale)
-        for (attachment, group) in zip(layout.attachments, groupLayers) { applyEffects(attachment.effects, to: group) }
+        for (attachment, group) in zip(layout.attachments, groupLayers) {
+            applyEffects(attachment.effects, to: group, moving: effectsMove(attachment))
+        }
         var i = 0
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count

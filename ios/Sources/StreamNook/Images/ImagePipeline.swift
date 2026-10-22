@@ -241,8 +241,8 @@ final class ImagePipeline: @unchecked Sendable {
         }
         // A file the core keeps on this phone (an upload's kept copy): read in place, not cached.
         if url.hasPrefix("file://") {
-            guard let local = URL(string: url), local.isFileURL else { return nil }
-            return try? Data(contentsOf: local)
+            guard let local = URL(string: url), local.isFileURL, let data = try? Data(contentsOf: local) else { return .gone }
+            return .data(data)
         }
         let file = disk.appending(path: ImageCacheKey.fileName(for: url))
         if let data = try? Data(contentsOf: file), !data.isEmpty { return .data(data) }
