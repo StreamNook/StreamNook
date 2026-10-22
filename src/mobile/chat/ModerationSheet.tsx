@@ -1,5 +1,6 @@
 // The room's moderation in one place, from the chat menu's "Moderation" row:
-// what AutoMod is holding (Allow or Deny), what moderators did lately (with
+// what AutoMod is holding (Allow or Deny), who is asking to be unbanned
+// (Approve or Deny, with an optional reply), what moderators did lately (with
 // Unban on a ban or timeout), blocking a phrase, stopping a running /nuke, and
 // the way into Manage channel for chat modes and Shield Mode. The same sheet
 // as the iPhone's. Rust keeps the held queue (`get_automod_queue`) and the room
@@ -15,6 +16,7 @@ import { listen } from '@tauri-apps/api/event';
 import { ArrowUp, CaretRight, Flag, SlidersHorizontal, StopCircle } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useAutomodStore, type HeldMessage } from '../../stores/automodStore';
+import { UNBAN_REPLY_MAX, useUnbanRequests, type UnbanRequest } from '../../components/chat/unbanRequests';
 import { moderateChatter } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
 
@@ -62,6 +64,12 @@ interface Decided {
   index: number;
 }
 
+interface DecidedUnban {
+  request: UnbanRequest;
+  outcome: 'Approved' | 'Denied';
+  index: number;
+}
+
 export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, channelLogin, onManageChannel }) => {
   const channel = channelLogin.toLowerCase();
   const held = useAutomodStore((s) => s.held[channel]);
@@ -79,6 +87,10 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
   const [decided, setDecided] = useState<Record<string, Decided>>({});
   /** The Unban or Lift waiting for its confirmation. */
   const [liftPending, setLiftPending] = useState<string | null>(null);
+  const { rows: unbanRequests, resolve: resolveUnban } = useUnbanRequests(channelId, channel, open && !!channelId);
+  const [unbanNote, setUnbanNote] = useState<string | null>(null);
+  const [unbanReplies, setUnbanReplies] = useState<Record<string, string>>({});
+  const [unbanDecided, setUnbanDecided] = useState<Record<string, DecidedUnban>>({});
 
   const reload = useCallback(async () => {
     setIncoming([]);
@@ -135,6 +147,37 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
     setDecided((cur) => ({ ...cur, [id]: { message, outcome: allow ? 'Allowed' : 'Denied', index: Math.max(0, index) } }));
     setTimeout(() => {
       setDecided((cur) => {
+        const next = { ...cur };
+        delete next[id];
+        return next;
+      });
+    }, DECIDED_MS);
+  };
+
+  // Same as a held message: an answered request keeps its place a moment.
+  const unbanRows = useMemo(() => {
+    const rows: { request: UnbanRequest; outcome?: DecidedUnban['outcome'] }[] = unbanRequests.map((request) => ({
+      request,
+      outcome: unbanDecided[request.id]?.outcome,
+    }));
+    for (const d of Object.values(unbanDecided).sort((a, b) => a.index - b.index)) {
+      if (rows.some((r) => r.request.id === d.request.id)) continue;
+      rows.splice(Math.min(d.index, rows.length), 0, { request: d.request, outcome: d.outcome });
+    }
+    return rows;
+  }, [unbanRequests, unbanDecided]);
+
+  const answerUnban = async (request: UnbanRequest, approve: boolean) => {
+    setBusy(request.id);
+    const index = unbanRequests.findIndex((r) => r.id === request.id);
+    const failure = await resolveUnban(request.id, approve, unbanReplies[request.id] ?? '');
+    setBusy(null);
+    setUnbanNote(failure);
+    if (failure) return;
+    const id = request.id;
+    setUnbanDecided((cur) => ({ ...cur, [id]: { request, outcome: approve ? 'Approved' : 'Denied', index: Math.max(0, index) } }));
+    setTimeout(() => {
+      setUnbanDecided((cur) => {
         const next = { ...cur };
         delete next[id];
         return next;
@@ -249,6 +292,61 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
         </div>
         {heldNote && <p className={note}>{heldNote}</p>}
 
+        <div className={heading}>{unbanRows.length > 0 ? `Unban requests · ${unbanRows.length}` : 'Unban requests'}</div>
+        <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
+          {unbanRows.length === 0 ? (
+            <p className="px-3 py-3 text-[13px] text-textMuted">No one is asking to be unbanned right now.</p>
+          ) : (
+            unbanRows.map(({ request: r, outcome }) => (
+              <div key={r.id} className="px-3 py-2.5">
+                <div className="flex items-baseline gap-2">
+                  <span className="min-w-0 truncate text-[14px] font-bold text-textPrimary">{r.user_name || r.user_login}</span>
+                  <span className="shrink-0 text-[12px] text-textMuted">{r.age}</span>
+                </div>
+                {r.text && (
+                  <p className="mt-0.5 text-[14px] leading-snug text-textPrimary [overflow-wrap:anywhere]">{r.text}</p>
+                )}
+                {outcome ? (
+                  <div className={`mt-2 flex h-[34px] items-center justify-center text-[14px] font-semibold ${outcome === 'Approved' ? 'text-success' : 'text-error'}`}>
+                    {outcome}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      value={unbanReplies[r.id] ?? ''}
+                      onChange={(e) => setUnbanReplies((cur) => ({ ...cur, [r.id]: e.target.value }))}
+                      maxLength={UNBAN_REPLY_MAX}
+                      placeholder="Reply they'll see (optional)"
+                      enterKeyHint="done"
+                      aria-label={`Reply to ${r.user_name || r.user_login}`}
+                      className="mt-2 h-9 w-full min-w-0 rounded-[10px] bg-white/[0.06] px-3 text-[14px] text-textPrimary outline-none placeholder:text-textMuted"
+                    />
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        disabled={busy != null}
+                        onClick={() => void answerUnban(r, true)}
+                        className="h-[34px] flex-1 rounded-[10px] bg-success/15 text-[14px] font-semibold text-success disabled:opacity-60"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy != null}
+                        onClick={() => void answerUnban(r, false)}
+                        className="h-[34px] flex-1 rounded-[10px] bg-error/15 text-[14px] font-semibold text-[color-mix(in_srgb,var(--color-error)_70%,white)] disabled:opacity-60"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+        {unbanNote && <p className={note}>{unbanNote}</p>}
+
         <div className={`${heading} flex items-baseline justify-between`}>
           Recent actions
           {incoming.length > 0 && (
@@ -282,7 +380,7 @@ export const ModerationSheet: React.FC<Props> = ({ open, onClose, channelId, cha
                     onClick={() => setLiftPending(e.id)}
                     className="shrink-0 px-1 py-1 text-[13px] font-semibold text-accent disabled:opacity-50"
                   >
-                    {e.action === 'timeout' ? 'Lift' : 'Unban'}
+                    {e.action === 'timeout' ? 'Lift timeout' : 'Unban'}
                   </button>
                 )}
                 {liftPending === e.id && (

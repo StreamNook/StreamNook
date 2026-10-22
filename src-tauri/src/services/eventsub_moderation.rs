@@ -151,14 +151,17 @@ enum ModEnded {
 /// Every topic subscribed per moderated channel. `channel.moderate` is the
 /// gate: a 403 there means "not a mod" and prunes the channel. The others
 /// need scopes older tokens may lack (`moderator:manage:automod`,
-/// `moderator:read:suspicious_users`); a 401/403 on them skips the topic
-/// for this session without touching the channel.
+/// `moderator:read:suspicious_users`, `moderator:manage:unban_requests`); a
+/// 401/403 on them skips the topic for this session without touching the
+/// channel. Unban requests subscribe only `create`: `channel.moderate`
+/// already reports approve / deny, which saves a subscription per channel.
 const TOPICS: &[(&str, &str)] = &[
     ("channel.moderate", "2"),
     ("automod.message.hold", "2"),
     ("automod.message.update", "2"),
     ("channel.suspicious_user.message", "1"),
     ("channel.suspicious_user.update", "1"),
+    ("channel.unban_request.create", "1"),
 ];
 
 /// Subscribe every topic for one channel. Returns the created ids, or
@@ -510,6 +513,11 @@ fn handle_text(txt: &str, app_handle: &AppHandle, seen: &mut SeenMessages) -> Op
                     let _ = app_handle.emit("eventsub://channel-moderate", event);
                     // The phones' Moderation sheet reads the room's log from Rust.
                     crate::services::room_mod_log::on_moderate_event(event);
+                    // An approve, deny or unban settles a pending unban request.
+                    crate::services::unban_requests::on_moderate(event);
+                }
+                "channel.unban_request.create" => {
+                    crate::services::unban_requests::on_create(event);
                 }
                 "automod.message.hold" => {
                     if let Some(row) = crate::services::automod_queue::AutomodQueue::from_hold_event(event) {
