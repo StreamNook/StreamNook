@@ -760,6 +760,43 @@ async fn the_template_reads_the_room_it_was_typed_in() {
 }
 
 #[tokio::test]
+async fn a_custom_command_that_names_a_command_runs_it() {
+    let fake = Fake::new();
+    with_commands(&fake, json!([{ "trigger": "tt", "expansion": "/timeout {1} 600 spam", "enabled": true, "require_slash": true }]));
+    let o = run(&fake, "/tt bob").await;
+    assert!(o.send.is_none(), "never sent to chat as text");
+    assert_eq!(
+        fake.calls("ban_user"),
+        vec![json!({ "broadcasterId": "42", "targetUserId": "7", "duration": 600, "reason": "spam" })]
+    );
+}
+
+#[tokio::test]
+async fn a_custom_command_for_a_confirmed_command_confirms_when_typed_again() {
+    let fake = Fake::new();
+    // Its own room and chatter: confirmations are process-wide and the
+    // /editor test above confirms "editroom|editor:bob" in parallel.
+    fake.login_as("edalias");
+    with_commands(&fake, json!([{ "trigger": "ed", "expansion": "/editor {1}", "enabled": true, "require_slash": true }]));
+    let o = run_in(&fake, "edalias", "/ed carol").await;
+    assert!(fake.calls("slash_editor").is_empty());
+    assert_eq!(
+        o.notices,
+        vec!["Editors can change your stream title, category, ads and more. Make carol an editor? Run the same command again within 20 seconds to confirm."]
+    );
+    run_in(&fake, "edalias", "/ed carol").await;
+    assert_eq!(fake.calls("slash_editor"), vec![json!({ "broadcasterId": "42", "target": "carol", "add": true })]);
+}
+
+#[tokio::test]
+async fn a_custom_command_that_names_itself_expands_once() {
+    let fake = Fake::new();
+    with_commands(&fake, json!([{ "trigger": "loop", "expansion": "/loop", "enabled": true, "require_slash": true }]));
+    let o = run(&fake, "/loop").await;
+    assert_eq!(o.send.as_deref(), Some("/loop"));
+}
+
+#[tokio::test]
 async fn plain_text_triggers_expand_and_may_start_a_command() {
     let fake = Fake::new();
     with_commands(

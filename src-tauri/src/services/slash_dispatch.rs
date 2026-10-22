@@ -1017,6 +1017,13 @@ fn merge(o: &mut Outcome, s: ScriptOut) {
 /// Run one typed line in `ctx`'s room. `depth` counts how deep inside
 /// `/chain`, `/foreach`, `/timer` or `/runin` it runs (0 when typed).
 pub fn dispatch(ctx: Ctx, text: String, depth: u32) -> BoxFut<'static, Outcome> {
+    dispatch_with(ctx, text, depth, true)
+}
+
+/// `dispatch`, with `allow_custom` false for a custom command's expansion: it
+/// runs the built-in it names, so `/timeout {1} 600` really times out and an
+/// expansion can never call back into a custom command.
+fn dispatch_with(ctx: Ctx, text: String, depth: u32, allow_custom: bool) -> BoxFut<'static, Outcome> {
     Box::pin(async move {
         if !text.starts_with('/') {
             return plain_text(&ctx, &text, depth).await;
@@ -1033,7 +1040,7 @@ pub fn dispatch(ctx: Ctx, text: String, depth: u32) -> BoxFut<'static, Outcome> 
         let settings = ctx.b.settings();
 
         // Saved custom commands, where they win the name.
-        if custom_command_wins(&typed) {
+        if allow_custom && custom_command_wins(&typed) {
             if let Some(uc) = find_user_command(&typed, &user_commands(&settings), true) {
                 let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
                 let tctx = template_context(&*ctx.b, &ctx.channel, &ctx.broadcaster_id, a, &uc.expansion).await;
@@ -1049,6 +1056,15 @@ pub fn dispatch(ctx: Ctx, text: String, depth: u32) -> BoxFut<'static, Outcome> 
                 if ex.text.is_empty() {
                     o.err(format!("/{typed} expanded to an empty message"));
                     return o;
+                }
+                // Twitch runs no slash command sent as chat text (only /me), so
+                // an expansion that names a command runs it here, at the same
+                // depth: a confirm prompt still confirms when typed again.
+                if ex.text.starts_with('/') {
+                    let inner = dispatch_with(ctx.clone(), ex.text.clone(), depth, false).await;
+                    if inner.handled {
+                        return inner;
+                    }
                 }
                 o.send = Some(ex.text);
                 return o;
@@ -1414,7 +1430,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 _ => ("NO_TREATMENT", format!("Unrestricted {username}")),
             };
             on_user(c, o, &username, "update_suspicious_user_status", |u| {
-                json!({ "broadcasterId": id, "targetUserId": u.id, "status": status })
+                json!({ "broadcasterId": id, "targetUserId": u.id, "status": status, "channel": c.ctx.channel })
             }, done)
             .await?;
         }
