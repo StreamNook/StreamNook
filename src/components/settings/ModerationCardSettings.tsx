@@ -1,10 +1,11 @@
 // Settings > Moderation on the phone: swiping a message to moderate it (on or
 // off, its look, its reach and its steps), the four timeout lengths on a user
 // card (the desktop hover dock's first four, so one edit changes both) and the
-// viewer's own card buttons. Rust keeps every list (`edit_mod_slider_timeouts`,
+// viewer's own card buttons. Desktop's Moderation page mounts the user card
+// part on its own. Rust keeps every list (`edit_mod_slider_timeouts`,
 // `set_card_timeout_length`, `edit_settings_list`, one change at a time) and
 // reads typed lengths (`parse_mod_timeout`).
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -15,6 +16,7 @@ import { Toggle } from '../ui/Toggle';
 import { parseModTimeout } from '../../services/moderation';
 import { EntryInput } from './entryInput';
 import { useSettingReset } from './settingReset';
+import { IS_MOBILE } from '../../utils/platform';
 
 const PATH = 'moderation.card_actions';
 const DEFAULT_LENGTHS = [1, 600, 3600, 86400];
@@ -145,6 +147,7 @@ function SwipeModerateSettings() {
   const timeouts = design?.mod_slider_timeouts ?? [60, 300, 600, 1800, 3600, 86400, 604800];
   const withDelete = design?.mod_slider_delete ?? true;
   const withBan = design?.mod_slider_ban ?? true;
+  const confirmBans = useAppStore((s) => s.settings.moderation?.confirm_bans ?? false);
   const [adding, setAdding] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const edit = async (op: 'add' | 'remove', seconds: number) => {
@@ -266,6 +269,12 @@ function SwipeModerateSettings() {
         control={<Toggle enabled={hold} onChange={() => void setFields({ 'chat_design.mod_hold_buttons': !hold })} />}
         onReset={resetFor(['chat_design.mod_hold_buttons', true])}
       />
+      <SettingsRow
+        title="Ban confirmation"
+        description="Ban on a user card waits for a second tap, so a slip never bans anyone. Swipe already asks for a hold."
+        control={<Toggle enabled={confirmBans} onChange={() => void setFields({ 'moderation.confirm_bans': !confirmBans })} />}
+        onReset={resetFor(['moderation.confirm_bans', false])}
+      />
     </SettingsSection>
   );
 }
@@ -281,10 +290,37 @@ async function editActions(edit: Record<string, unknown>): Promise<StoredAction[
   }
 }
 
-const selectClass =
-  'h-8 rounded-lg bg-surface px-2 text-[13px] font-medium text-textPrimary outline-none';
+// The phone draws filled fields; desktop draws its glass inputs, as the rows
+// around this section do.
+const selectClass = IS_MOBILE
+  ? 'h-9 rounded-lg bg-surface px-2 text-[13px] font-medium text-textPrimary outline-none'
+  : 'glass-input h-9 px-2.5 text-[13px] font-medium text-textPrimary';
+const fieldClass = IS_MOBILE
+  ? 'h-9 rounded-lg bg-surface px-2.5 text-[13px] text-textPrimary outline-none placeholder:text-textMuted'
+  : 'glass-input h-9 px-3 text-[13px] text-textPrimary placeholder-textSecondary';
 
-const ModerationCardSettings = () => {
+/** A field with its name above it. */
+const FieldLabel = ({ text, children }: { text: string; children: ReactNode }) => (
+  <label className="block min-w-0">
+    <span className="mb-1.5 block text-[12px] font-medium text-textSecondary">{text}</span>
+    {children}
+  </label>
+);
+const lengthClass = IS_MOBILE
+  ? 'h-9 min-w-0 flex-1 appearance-none rounded-[10px] bg-surface text-center text-[14px] font-semibold text-textPrimary outline-none'
+  : 'glass-input h-8 min-w-0 flex-1 appearance-none text-center text-xs font-semibold text-textPrimary';
+
+/** Settings > Moderation on the phone: the swipe, then the user card's
+ *  buttons. Desktop mounts only the card section (`UserCardSettings`). */
+const ModerationCardSettings = () => (
+  <div className="space-y-6">
+    <SwipeModerateSettings />
+    <UserCardSettings />
+  </div>
+);
+
+/** User Cards: the card's four timeout lengths and the viewer's own buttons. */
+export const UserCardSettings = () => {
   const moderation = useAppStore((s) => s.settings.moderation);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -314,10 +350,15 @@ const ModerationCardSettings = () => {
   };
 
   return (
-    <div className="space-y-6">
-    <SwipeModerateSettings />
-    <SettingsSection label="User Cards" description="The buttons on a user card in channels you moderate.">
-      <SettingsRow title="Timeout lengths" description="Tap one to change it. Every quick timeout uses the same four.">
+    <SettingsSection
+      id="settings-section-user-cards"
+      label="User Cards"
+      description="The buttons on a user card in channels you moderate. Ban, and Warn when your sign-in allows it, always follow the lengths."
+    >
+      <SettingsRow
+        title="Timeout lengths"
+        description={`${IS_MOBILE ? 'Tap' : 'Pick'} one to change it. Every quick timeout uses the same four.`}
+      >
         <div className="flex gap-[7px]">
           {four.map((seconds, index) => (
             <LengthSelect
@@ -326,7 +367,7 @@ const ModerationCardSettings = () => {
               value={seconds}
               taken={four}
               onPick={(next) => void setLength(index, next)}
-              className="h-9 min-w-0 flex-1 appearance-none rounded-[10px] bg-surface text-center text-[14px] font-semibold text-textPrimary outline-none"
+              className={lengthClass}
             />
           ))}
         </div>
@@ -336,55 +377,67 @@ const ModerationCardSettings = () => {
         title="Card buttons"
         description="Your own buttons under the lengths: a timeout, ban, unban or warning, with a reason sent along."
       >
-        <div className="space-y-2">
+        <div className="space-y-3">
           {actions.map((a) => (
-            <div key={a.id} className="glass-panel space-y-2 p-2.5">
-              <div className="flex items-center gap-2">
-                <EntryInput
-                  value={a.label ?? ''}
-                  save={saveField(a.id, 'label')}
-                  maxLength={24}
-                  placeholder="Label, like Spoilers"
-                  className="h-8 min-w-0 flex-1 rounded-lg bg-surface px-2.5 text-[13px] text-textPrimary outline-none placeholder:text-textMuted"
-                />
+            <div key={a.id} className="glass-panel space-y-3 p-3.5">
+              {/* Every field named above it: three bare boxes read as a puzzle. */}
+              <div className="flex items-start gap-3">
+                <div
+                  className={`min-w-0 flex-1 grid gap-3 ${
+                    IS_MOBILE ? 'grid-cols-2 [&>*:first-child]:col-span-2' : 'grid-cols-[minmax(0,1fr)_auto_auto]'
+                  }`}
+                >
+                  <FieldLabel text="Button label">
+                    <EntryInput
+                      value={a.label ?? ''}
+                      save={saveField(a.id, 'label')}
+                      maxLength={24}
+                      placeholder="For example, Spoilers"
+                      className={`${fieldClass} w-full`}
+                    />
+                  </FieldLabel>
+                  <FieldLabel text="What it does">
+                    <select
+                      value={a.kind}
+                      onChange={(e) => void editActions({ op: 'update', id: a.id, patch: { kind: e.target.value } })}
+                      className={`${selectClass} w-full`}
+                    >
+                      {KINDS.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </FieldLabel>
+                  {a.kind === 'timeout' && (
+                    <FieldLabel text="Length">
+                      <LengthSelect
+                        label="Timeout length"
+                        value={a.seconds ?? 600}
+                        onPick={(next) => void editActions({ op: 'update', id: a.id, patch: { seconds: next } })}
+                        className={`${selectClass} w-full min-w-[96px]`}
+                      />
+                    </FieldLabel>
+                  )}
+                </div>
                 <button
                   type="button"
                   aria-label="Remove this button"
                   onClick={() => void editActions({ op: 'remove', id: a.id })}
-                  className="p-1.5 text-textMuted active:text-textPrimary"
+                  className="mt-[22px] rounded-md p-2 text-textMuted transition-colors hover:bg-white/5 hover:text-error active:text-textPrimary"
                 >
                   <Trash2 size={15} />
                 </button>
               </div>
-              <div className="flex items-center gap-2">
-                <select
-                  aria-label="What it does"
-                  value={a.kind}
-                  onChange={(e) => void editActions({ op: 'update', id: a.id, patch: { kind: e.target.value } })}
-                  className={selectClass}
-                >
-                  {KINDS.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-                {a.kind === 'timeout' && (
-                  <LengthSelect
-                    label="Timeout length"
-                    value={a.seconds ?? 600}
-                    onPick={(next) => void editActions({ op: 'update', id: a.id, patch: { seconds: next } })}
-                    className={`${selectClass} w-[84px]`}
-                  />
-                )}
-              </div>
-              <EntryInput
-                value={a.reason ?? ''}
-                save={saveField(a.id, 'reason')}
-                maxLength={500}
-                placeholder={a.kind === 'warn' ? 'Reason (asked each time when empty)' : 'Reason (optional)'}
-                className="h-8 w-full rounded-lg bg-surface px-2.5 text-[13px] text-textPrimary outline-none placeholder:text-textMuted"
-              />
+              <FieldLabel text={a.kind === 'warn' ? 'Reason they see (asked each time when empty)' : 'Reason they see (optional)'}>
+                <EntryInput
+                  value={a.reason ?? ''}
+                  save={saveField(a.id, 'reason')}
+                  maxLength={500}
+                  placeholder="For example, no spoilers please"
+                  className={`${fieldClass} w-full`}
+                />
+              </FieldLabel>
             </div>
           ))}
           {actions.length < MAX_BUTTONS && (
@@ -400,7 +453,6 @@ const ModerationCardSettings = () => {
         </div>
       </SettingsRow>
     </SettingsSection>
-    </div>
   );
 };
 

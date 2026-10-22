@@ -2,57 +2,29 @@
 // four timeout lengths and Ban or Unban, then the viewer's own buttons) and
 // History in a channel the viewer moderates; then the note and name color only
 // the viewer sees. Rust decides all of it (services/chatter_card.rs): who may
-// be moderated, which buttons, what each runs, and the history's words. Every
-// button goes through the one mod door, `moderate_chatter`.
+// be moderated, which buttons, what each runs, the low-trust line and its
+// treatments, and the history's words. Every button goes through the one mod
+// door, `moderate_chatter`; the desktop card shares the same helpers
+// (utils/cardActions).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowCounterClockwise, Check, ChatText, Clock, Prohibit, Trash, Warning } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
+import { armedFor, moderateChatter } from '../../services/moderation';
+import {
+  HISTORY_PREVIEW,
+  loadCardTools,
+  REASON_MAX,
+  requestFor,
+  setLowTrust,
+  shownHistory,
+  undoFor,
+  type CardButton,
+  type CardTools,
+  type HistoryEntry,
+  type LowTrustAction,
+} from '../../utils/cardActions';
 import { SectionHeader } from './IdentityParts';
-
-interface CardButton {
-  id: string;
-  label: string;
-  kind: 'timeout' | 'ban' | 'unban' | 'warn';
-  /** What `moderate_chatter` takes as `action`, passed through untouched. */
-  action: Record<string, unknown>;
-  reason: string | null;
-  asks_reason: boolean;
-  danger: boolean;
-  spoken: string;
-}
-
-interface HistoryEntry {
-  id: string;
-  kind: 'ban' | 'timeout' | 'unban' | 'untimeout' | 'warn' | 'acknowledged' | 'deleted' | 'comment';
-  title: string;
-  by: string | null;
-  at_ms: number;
-  when: string;
-  quote: string | null;
-}
-
-interface ModHistory {
-  status: 'available' | 'no_access' | 'signed_out' | 'failed';
-  entries: HistoryEntry[];
-  current: { permanent: boolean; label: string } | null;
-  note: string | null;
-}
-
-interface CardTools {
-  note: string | null;
-  nickname: string | null;
-  color: string | null;
-  swatches: string[];
-  moderate: { buttons: CardButton[]; custom: CardButton[]; history: ModHistory } | null;
-}
-
-interface ModOutcome {
-  message: string;
-  undoable: boolean;
-}
-
-const HISTORY_PREVIEW = 3;
 
 const KIND_MARK: Record<HistoryEntry['kind'], { Icon: typeof Clock; tone: string }> = {
   ban: { Icon: Prohibit, tone: 'text-error bg-error/15' },
@@ -84,19 +56,15 @@ export function ChatterTools({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [note, setNote] = useState('');
   const savedNote = useRef('');
-  const [armedBan, setArmedBan] = useState<string | null>(null);
   const [warnFor, setWarnFor] = useState<CardButton | null>(null);
+  // A Ban waiting for its second tap (Ban confirmation on).
+  const [armedBan, setArmedBan] = useState<string | null>(null);
   const [warnReason, setWarnReason] = useState('');
 
   const load = useCallback(async () => {
     if (!userId) return;
     try {
-      const answer = await invoke<CardTools>('get_chatter_card_tools', {
-        provider: 'twitch',
-        channel: channelName ?? null,
-        channelId: channelId ?? null,
-        userId,
-      });
+      const answer = await loadCardTools({ channel: channelName ?? null, channelId: channelId ?? null, userId });
       setTools(answer);
       savedNote.current = answer.note ?? '';
       setNote(answer.note ?? '');
@@ -109,41 +77,23 @@ export function ChatterTools({
     void load();
   }, [load]);
 
-  // A Ban tap arms it; a second tap within 3 s bans. The armed state is the
-  // visible "are you sure", and waiting it out is the cancel.
-  useEffect(() => {
-    if (!armedBan) return;
-    const t = window.setTimeout(() => setArmedBan(null), 3000);
-    return () => window.clearTimeout(t);
-  }, [armedBan]);
-
   const run = async (button: CardButton, reason?: string) => {
     if (running || !channelId) return;
     setRunning(button.id);
     try {
-      const outcome = await invoke<ModOutcome>('moderate_chatter', {
-        request: {
-          provider: 'twitch',
-          broadcasterId: channelId,
-          targetUserId: userId,
-          targetName: displayName,
-          action: button.action,
-          ...((reason ?? button.reason)?.trim() ? { reason: (reason ?? button.reason)!.trim() } : {}),
-        },
-      });
-      const undo: CardButton | null = outcome.undoable
-        ? {
-            id: 'undo',
-            label: 'Undo',
-            kind: 'unban',
-            action: { kind: 'unban', timeout: button.kind === 'timeout' },
-            reason: null,
-            asks_reason: false,
-            danger: false,
-            spoken: 'Undo',
-          }
-        : null;
-      setResult({ text: outcome.message, undo });
+      const outcome = await moderateChatter(
+        requestFor(button, { broadcasterId: channelId, userId, name: displayName }, reason),
+      );
+      if (outcome.confirmMs) {
+        // Nothing happened yet. A tap too soon after the first has no words
+        // of its own, so the first prompt stays.
+        if (outcome.message) setResult({ text: outcome.message, undo: null });
+        setArmedBan(button.id);
+        window.setTimeout(() => setArmedBan((a) => (a === button.id ? null : a)), armedFor(outcome));
+        return;
+      }
+      setArmedBan(null);
+      setResult({ text: outcome.message, undo: outcome.undoable ? undoFor(button) : null });
       // The history and Ban or Unban follow what is now in force.
       await load();
     } catch (err) {
@@ -154,17 +104,29 @@ export function ChatterTools({
   };
 
   const tap = (button: CardButton) => {
-    if (button.danger && armedBan !== button.id) {
-      setArmedBan(button.id);
-      return;
-    }
-    setArmedBan(null);
+    // A tap acts at once (the result line offers Undo); only a warning,
+    // which Twitch refuses without a reason, asks for one first.
     if (button.asks_reason) {
       setWarnReason('');
       setWarnFor(button);
       return;
     }
     void run(button);
+  };
+
+  const treat = async (action: LowTrustAction) => {
+    if (running || !channelId) return;
+    setRunning(action.id);
+    try {
+      await setLowTrust(action, channelId, userId, channelName ?? undefined);
+      setResult({ text: `${displayName}: ${action.done}`, undo: null });
+      // Rust recorded the new standing, so asking again shows it.
+      await load();
+    } catch (err) {
+      setResult({ text: typeof err === 'string' ? err : 'Twitch did not take that change', undo: null });
+    } finally {
+      setRunning(null);
+    }
   };
 
   const saveNote = () => {
@@ -194,7 +156,7 @@ export function ChatterTools({
             type="button"
             disabled={running != null}
             onClick={() => tap(b)}
-            aria-label={armed ? `Confirm: ${b.spoken}` : b.spoken}
+            aria-label={armed ? `Tap again to ban ${displayName}` : b.spoken}
             className={`flex h-[38px] min-w-0 flex-1 items-center justify-center truncate rounded-xl border px-1 text-[14px] font-semibold transition-colors active:scale-[0.97] disabled:opacity-60 ${
               b.danger
                 ? armed
@@ -203,7 +165,7 @@ export function ChatterTools({
                 : 'border-white/[0.06] bg-surface text-textPrimary'
             }`}
           >
-            {running === b.id ? '…' : armed ? 'Tap to ban' : b.label}
+            {running === b.id ? '…' : armed ? 'Tap again to ban' : b.label}
           </button>
         );
       })}
@@ -213,7 +175,8 @@ export function ChatterTools({
   );
 
   const history = moderate?.history;
-  const shownHistory = history ? (historyOpen ? history.entries : history.entries.slice(0, HISTORY_PREVIEW)) : [];
+  const shown = shownHistory(history, historyOpen);
+  const lowTrust = moderate ? tools.low_trust : null;
 
   return (
     <>
@@ -221,7 +184,10 @@ export function ChatterTools({
         <div className="mt-5">
           <SectionHeader title="Moderate" className="mb-2" />
           <div className="flex flex-col gap-[7px]">
-            {buttonRow(moderate.buttons)}
+            {buttonRow(moderate.buttons.filter((b) => b.kind === 'timeout'))}
+            {/* Ban or Unban with Warn, sharing the row: six in one row cut
+                "Lift timeout" short. */}
+            {buttonRow(moderate.buttons.filter((b) => b.kind !== 'timeout'))}
             {Array.from({ length: Math.ceil(moderate.custom.length / 3) }, (_, row) =>
               <div key={`custom-${row}`}>{buttonRow(moderate.custom.slice(row * 3, row * 3 + 3), 3)}</div>,
             )}
@@ -231,6 +197,7 @@ export function ChatterTools({
               <input
                 autoFocus
                 value={warnReason}
+                maxLength={REASON_MAX}
                 onChange={(e) => setWarnReason(e.target.value)}
                 placeholder="Reason they will see"
                 className="min-w-0 flex-1 rounded-xl bg-surface px-3 text-[14px] text-textPrimary outline-none placeholder:text-textMuted"
@@ -270,6 +237,37 @@ export function ChatterTools({
         </div>
       )}
 
+      {lowTrust && (
+        <div className="mt-5">
+          <SectionHeader title="Low trust" className="mb-2" />
+          <p
+            className={`mb-2 text-[13px] ${
+              lowTrust.status === 'restricted'
+                ? 'font-semibold text-error'
+                : lowTrust.status === 'monitored'
+                  ? 'font-semibold text-warning'
+                  : 'text-textMuted'
+            }`}
+          >
+            {lowTrust.line ?? 'Twitch has not flagged them while you were here.'}
+          </p>
+          <div className="flex gap-[7px]">
+            {lowTrust.actions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                disabled={running != null}
+                onClick={() => void treat(a)}
+                aria-label={a.spoken}
+                className="flex h-[38px] min-w-0 flex-1 items-center justify-center truncate rounded-xl border border-white/[0.06] bg-surface px-1 text-[14px] font-semibold text-textPrimary transition-colors active:scale-[0.97] disabled:opacity-60"
+              >
+                {running === a.id ? '…' : a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {history && (
         <div className="mt-5">
           <SectionHeader title="History" detail={history.entries.length ? String(history.entries.length) : null} className="mb-2" />
@@ -285,7 +283,7 @@ export function ChatterTools({
             <p className="text-[12.5px] text-textMuted">Nothing on record here.</p>
           ) : (
             <div className="glass-panel divide-y divide-white/[0.06] overflow-hidden">
-              {shownHistory.map((e) => {
+              {shown.map((e) => {
                 const { Icon, tone } = KIND_MARK[e.kind] ?? KIND_MARK.comment;
                 const meta = [e.by ? `by ${e.by}` : null, e.when || null].filter(Boolean).join(' · ');
                 return (

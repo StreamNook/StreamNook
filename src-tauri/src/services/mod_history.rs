@@ -98,6 +98,9 @@ pub enum HistoryStatus {
     /// No twitch.tv session in the app.
     SignedOut,
     Failed,
+    /// Not asked for yet: the card's quick first answer, which a second call
+    /// with the history replaces.
+    NotLoaded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -113,12 +116,17 @@ pub struct ModHistory {
 impl ModHistory {
     fn empty(status: HistoryStatus) -> Self {
         let note = match status {
-            HistoryStatus::Available => None,
+            HistoryStatus::Available | HistoryStatus::NotLoaded => None,
             HistoryStatus::NoAccess => Some("Only moderators of this channel can see its history.".to_string()),
             HistoryStatus::SignedOut => Some("Sign in to Twitch to see moderation history.".to_string()),
             HistoryStatus::Failed => Some("Twitch did not answer. Try again in a moment.".to_string()),
         };
         ModHistory { status, entries: Vec::new(), current: None, note }
+    }
+
+    /// A history that was not fetched: no entries, no ban in force known.
+    pub fn not_loaded() -> Self {
+        Self::empty(HistoryStatus::NotLoaded)
     }
 }
 

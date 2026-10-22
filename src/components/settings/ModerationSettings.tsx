@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { MOD_LOG_CATEGORIES, MOD_LOG_STYLES, highlightContainerStyle } from '../../utils/modLogCategories';
@@ -9,6 +10,7 @@ import { connectModRoomConsent, clearModeratedCache, loadModeratedChannelIds } f
 import { useSettingDefault, useSettingReset } from './settingReset';
 import { ModHoverPreview, ModLinePreview, ModSliderPreview } from './ChatPreview';
 import { HoverTimeoutsEditor, ModSliderStepsEditor } from './ModSliderSteps';
+import { UserCardSettings } from './ModerationCardSettings';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -47,6 +49,7 @@ const EDGE_DESCRIPTION: Record<ModEdge, string> = {
 const ModerationSettings = () => {
   const { settings, updateSettings } = useAppStore();
   const mod = settings.moderation ?? {};
+  const confirmBans = mod.confirm_bans ?? false;
   const resetFor = useSettingReset();
 
   // Mod-room scoped consent: which account it belongs to, and the two actions.
@@ -259,7 +262,24 @@ const ModerationSettings = () => {
             </>
           )}
         </SettingsRow>
+        <SettingsRow
+          title="Ban confirmation"
+          onReset={resetFor(['moderation.confirm_bans', false])}
+          description="Ban waits for a second press, so a slip never bans anyone. Covers the user card, the hover buttons, the line buttons and the B key; dragging the slider to Ban is already deliberate."
+          control={
+            <Toggle
+              enabled={confirmBans}
+              onChange={() =>
+                void invoke('set_settings_fields', { changes: { 'moderation.confirm_bans': !confirmBans } }).catch((err) =>
+                  Logger.warn('[Moderation] Ban confirmation not saved:', err),
+                )
+              }
+            />
+          }
+        />
       </SettingsSection>
+
+      <UserCardSettings />
 
       <SettingsSection
         id="settings-section-mod-reasons"
