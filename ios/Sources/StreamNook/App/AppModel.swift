@@ -85,7 +85,7 @@ final class AppModel {
         mentions = MentionsStore(core: core)
         whispers = WhispersStore(core: core)
         let watch = watch
-        watch.nowPlaying.onPlay = { watch.player.play() }
+        watch.nowPlaying.onPlay = { watch.resume() }
         watch.nowPlaying.onPause = { watch.player.pause() }
         watch.nowPlaying.onStop = { [weak self] in self?.stopWatching() }
         watch.nowPlaying.onSeek = { watch.seekVod(to: $0) }
@@ -95,7 +95,7 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
-        watch.pip.onCloseToAudio = { watch.player.play() }
+        watch.pip.onCloseToAudio = { watch.resume() }
         watch.onRow = { [weak self] row in
             guard let self else { return }
             self.nav.refresh(row)
@@ -163,6 +163,11 @@ final class AppModel {
             }.value
             startMS = Int((ContinuousClock.now - clock) / .milliseconds(1))
             started = true
+            // One consumer sends every Low Power report, so quick toggles reach the core in order.
+            let (lowPower, report) = AsyncStream<Bool>.makeStream()
+            Task { for await on in lowPower { await core.setLowPower(on) } }
+            report.yield(PowerState.shared.lowPower)
+            PowerState.shared.onChange = { on in report.yield(on) }
             log.notice("core started (\(core.kind, privacy: .public)) in \(self.startMS ?? 0) ms, codecs \(codecs.joined(separator: ","), privacy: .public)")
             return true
         } catch {
@@ -376,6 +381,7 @@ final class AppModel {
         }
         let login = vod.channelLogin ?? watch.stream?.userLogin ?? ""
         replay = ChatSession(channel: login, core: core, source: .replay, roomID: watch.stream?.userID)
+        replay?.pipeline.setSuspended(!replayOnScreen)
         replayShown = true
     }
 
@@ -502,6 +508,22 @@ final class AppModel {
         }
     }
 
+    /// The VOD's recorded chat can be seen (`MainShell.replayChatSeen`).
+    @ObservationIgnored private var replayOnScreen = false
+
+    /// Whether a live room's chat can be seen: off, every room keeps its rows as text and draws
+    /// nothing until one shows again.
+    func liveChatSeen(_ seen: Bool) {
+        chat.setOnScreen(seen)
+    }
+
+    /// Whether the VOD's recorded chat can be seen (the player's chat showing Replay): off, it
+    /// keeps its rows as text.
+    func replayChatSeen(_ seen: Bool) {
+        replayOnScreen = seen
+        replay?.pipeline.setSuspended(!seen)
+    }
+
     func stopWatching() {
         watch.close(core: core)
         nav.close()
@@ -528,6 +550,8 @@ final class AppModel {
             whispers.setInFront(false)
         }
         if state == "foreground" {
+            // A Low Power Mode change while suspended may not have been posted.
+            PowerState.shared.refresh()
             whispers.setInFront(true)
             Task { await signIn.refresh() }
             Task { await home.resumed() }

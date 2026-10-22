@@ -26,6 +26,12 @@ final class LLPlaylistLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
         session = URLSession(configuration: config)
     }
 
+    /// A URLSession holds its delegate queue and connections until it is invalidated; each new
+    /// item makes a new loader, so the old one lets its session go.
+    deinit {
+        session.invalidateAndCancel()
+    }
+
     func resourceLoader(
         _ resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource request: AVAssetResourceLoadingRequest

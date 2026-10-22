@@ -15,13 +15,18 @@ struct ChatRoomsPanel: View {
     /// The drop being earned on the watched stream, a card of the stack at the top of chat.
     var drop: WatchDropModel?
     var onProfile: (ProfileTarget) -> Void = { _ in }
+    /// The chat is laid out but not shown (the player's chat while mini, or in landscape with
+    /// chat off): its lists stop drawing and its decoration holds still, once the hiding
+    /// transition has played.
+    var hidden = false
+    @State private var resting = false
 
     var body: some View {
         VStack(spacing: 0) {
             if let replay, let replayShown {
                 ReplaySwitch(shown: replayShown, at: replayAt)
                 if replayShown.wrappedValue {
-                    ChatPanel(session: replay, overlay: true, onProfile: onProfile)
+                    ChatPanel(session: replay, overlay: true, onProfile: onProfile, covered: hidden)
                         .id(ObjectIdentifier(replay))
                 } else {
                     roomsBody
@@ -29,6 +34,13 @@ struct ChatRoomsPanel: View {
             } else {
                 roomsBody
             }
+        }
+        .transformEnvironment(\.snStill) { if resting { $0 = true } }
+        // Nothing stops mid-fade: the decoration rests after the transition (the lists wait as long).
+        .task(id: hidden) {
+            guard hidden else { return resting = false }
+            try? await Task.sleep(for: .milliseconds(350))
+            if !Task.isCancelled { resting = true }
         }
         .sheet(isPresented: Binding(get: { rooms.addOpen }, set: { rooms.addOpen = $0 })) {
             AddChatSheet(rooms: rooms)
@@ -43,7 +55,8 @@ struct ChatRoomsPanel: View {
                 ChatTabStrip(rooms: rooms)
             }
             if let session = rooms.activeSession {
-                ChatPanel(session: session, overlay: overlay, rooms: rooms, drop: drop, onProfile: onProfile)
+                ChatPanel(session: session, overlay: overlay, rooms: rooms, drop: drop, onProfile: onProfile,
+                          covered: hidden)
                     .id(ObjectIdentifier(session))
             } else {
                 Color.clear

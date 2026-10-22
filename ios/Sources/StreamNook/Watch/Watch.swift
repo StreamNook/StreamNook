@@ -132,6 +132,22 @@ final class Watch {
     /// whole-segment route); it answers with `playback-adapt`.
     private var link = LinkReporter()
     private let linkEpoch = ContinuousClock.now
+    /// When the player paused (nil while it plays): past `PausePark.after` a live stream plays
+    /// again from the live edge.
+    private var pausedAt: ContinuousClock.Instant?
+    /// The app is in the background: the watch loop asks the core less often.
+    private var inBackground = false
+    /// Which latency samples earn a log line.
+    private var latencyLog = LatencyLogGate()
+    /// The core parked the relay during a pause (its `app-presence` flag).
+    @ObservationIgnored private var mainParked = false
+    @ObservationIgnored private var presence: Task<Void, Never>?
+    /// Every latency sample and the relay's fetch lines are logged on drives (`SN_DRIVE`) unless
+    /// `SN_LOG=quiet`; otherwise only changes and a heartbeat (`LatencyLogGate`).
+    static let verboseLatency: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["SN_DRIVE"] != nil && environment["SN_LOG"] != "quiet"
+    }()
 
     init() {
         // KVO reports on whichever thread changed the value, so these are not main-actor code.
@@ -156,7 +172,7 @@ final class Watch {
                     .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
                 MainActor.assumeIsolated {
                     guard let self, self.stream != nil, type == .ended, options.contains(.shouldResume) else { return }
-                    self.player.play()
+                    self.resume()
                 }
             },
             // iOS restarted its media services: every player item is dead. The stream comes back on
@@ -175,9 +191,23 @@ final class Watch {
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                                    queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    self?.inBackground = true
                     guard let self, self.stream != nil else { return }
                     self.reportState("hidden")
+                    // Picture in Picture comes first; when the video cannot float (locked, or PiP
+                    // unavailable) Background play decides: on keeps the audio, off pauses.
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .milliseconds(1200))
+                        guard let self, self.inBackground, self.stream != nil, !self.paused,
+                              !self.pip.active, !self.pip.keepsAudio else { return }
+                        log.notice("left the app with no PiP and Background play off; pausing")
+                        self.player.pause()
+                    }
                 }
+            },
+            NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil,
+                                                   queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.inBackground = false }
             },
         ]
     }
@@ -198,6 +228,7 @@ final class Watch {
         if self.stream?.rowKey == stream.rowKey, room == nil, error == nil, playingVod == nil { return }
         close(core: core, stopping: false)
         self.core = core
+        listenForPresence(core)
         self.stream = stream
         opened = .now
         status = "Resolving"
@@ -209,7 +240,66 @@ final class Watch {
     // MARK: Controls
 
     func togglePlay() {
-        if paused { player.play() } else { player.pause() }
+        if paused { resume() } else { player.pause() }
+    }
+
+    /// Plays (the center button, the lock screen, an interruption ending, PiP closing to audio):
+    /// past the park window a live stream goes back to the live edge.
+    func resume() {
+        if !resumeAfterPause() { player.play() }
+    }
+
+    /// Ends a pause; true when it jumped to the edge.
+    private func resumeAfterPause() -> Bool {
+        let since = pausedAt.map { ContinuousClock.now - $0 }
+        pausedAt = nil
+        let live = playingVod == nil && room == nil
+        guard PausePark.jumpsToLive(pausedFor: since, live: live) || (mainParked && live), startURL != nil else {
+            return false
+        }
+        jumpToLive()
+        return true
+    }
+
+    /// The core parked the relay during the pause: the player reloads at the edge once the core
+    /// hears it play. In Picture in Picture (where a new item closes the window) it plays on and
+    /// seeks to the edge once the playlist moves again.
+    private func jumpToLive() {
+        guard let core, let url = startURL, let route = playing, let id = stream?.id else { return player.play() }
+        log.notice("paused past the park window; back to the live edge")
+        if pip.active {
+            player.play()
+            Task { [weak self] in
+                _ = try? await core.invoke("report_player_state", args: ["state": "playing"])
+                try? await Task.sleep(for: .seconds(1.5))
+                guard let self, self.stream?.id == id, let item = self.player.currentItem,
+                      let edge = item.seekableTimeRanges.last?.timeRangeValue.end, edge.isNumeric else { return }
+                let rec = item.recommendedTimeOffsetFromLive.seconds
+                let hold = max(rec.isFinite ? rec : 0, 1.5)
+                await self.player.seek(to: edge - CMTime(seconds: hold, preferredTimescale: 600))
+            }
+            return
+        }
+        reloading()
+        Task { [weak self] in
+            _ = try? await core.invoke("report_player_state", args: ["state": "playing"])
+            guard let self, self.stream?.id == id, self.startURL == url else { return }
+            self.load(url, route: route)
+        }
+    }
+
+    /// The core parks the relay 30 s into a pause (earning_gate::PARK_AFTER); its flag closes the
+    /// gap between that timer and this class's own pause clock. One listener for the app's life.
+    private func listenForPresence(_ core: CoreBridge) {
+        guard presence == nil else { return }
+        presence = Task { [weak self] in
+            for await event in core.events.stream("app-presence") {
+                struct Presence: Decodable { let main_parked: Bool }
+                guard let data = event.payloadJSON.data(using: .utf8),
+                      let p = try? JSONDecoder().decode(Presence.self, from: data) else { continue }
+                self?.mainParked = p.main_parked
+            }
+        }
     }
 
     func toggleMute() {
@@ -565,6 +655,12 @@ final class Watch {
             ScreenAwake.hold("player", false)
             return
         }
+        if paused {
+            if pausedAt == nil { pausedAt = .now }
+        } else if status != .paused, pausedAt != nil {
+            // Played from somewhere this class does not route (the PiP window's own button).
+            _ = resumeAfterPause()
+        }
         nowPlaying.playing(!paused)
         ScreenAwake.hold("player", !paused)
         if paused, playingVod != nil { reportVodPosition() }
@@ -698,6 +794,7 @@ final class Watch {
         behindSpoken = nil
         firstPlayMS = nil
         stalls = 0
+        pausedAt = nil
         quality = nil
         error = nil
         status = "Idle"
@@ -891,10 +988,12 @@ final class Watch {
         ]
     }
 
-    /// Checks four times a second for the first play, and once a second asks the core how far
-    /// behind its edge the player sits, logs it, and applies the catch-up rate.
+    /// Checks four times a second for the first play (then once a second), and asks the core how
+    /// far behind its edge the player sits, logs it, and applies the catch-up rate: every second
+    /// on screen or in Picture in Picture, every 5 s heard in the background, never while paused
+    /// (`MeasureCadence`).
     private func measure(core: CoreBridge) async {
-        var tick = 0
+        var lastSample: ContinuousClock.Instant?
         var waiting = false
         while !Task.isCancelled {
             if firstPlayMS == nil, player.timeControlStatus == .playing, let opened {
@@ -915,7 +1014,10 @@ final class Watch {
                     report(stall, core: core)
                 }
             }
-            if let failure = player.currentItem?.error, error == nil {
+            // A paused item may fail its reloads while the core holds the relay parked; playing
+            // again loads a fresh one at the edge, so nothing shows.
+            let parked = pausedAt.map { ContinuousClock.now - $0 >= PausePark.after } ?? false
+            if let failure = player.currentItem?.error, error == nil, !parked {
                 let ns = failure as NSError
                 let reason = player.currentItem?.errorLog()?.events.last?.errorComment ?? "\(ns.domain) \(ns.code)"
                 for event in player.currentItem?.errorLog()?.events ?? [] {
@@ -944,11 +1046,12 @@ final class Watch {
                 let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
                 log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public) info \(String(describing: ns.userInfo), privacy: .public)")
             }
-            if tick % 4 == 0, let item = player.currentItem {
+            if let every = MeasureCadence.sampleEvery(paused: paused, background: inBackground, pip: pip.active),
+               lastSample.map({ ContinuousClock.now - $0 >= every }) ?? true, let item = player.currentItem {
+                lastSample = .now
                 await sample(item, core: core)
             }
-            tick += 1
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: MeasureCadence.tick(loading: firstPlayMS == nil))
         }
     }
 
@@ -978,18 +1081,21 @@ final class Watch {
         if catchUpTargetMS != nil, player.timeControlStatus == .playing, player.rate != Float(distance.rate) {
             player.rate = Float(distance.rate)
         }
-        let ahead = Self.bufferedAhead(item)
         let behind = distance.behindMs ?? -1
+        let rate = player.rate
+        let state = player.timeControlStatus.rawValue
+        let at = Double((ContinuousClock.now - linkEpoch) / .milliseconds(1)) / 1000
+        guard Self.verboseLatency || latencyLog.shouldLog(behind: behind, state: state, rate: rate, at: at) else { return }
+        let ahead = Self.bufferedAhead(item)
         let newest = distance.behindNewestMs ?? -1
         let edge = "\(distance.edgeSn ?? -1)/\(distance.edgePart ?? -1)"
         let age = distance.edgeAgeMs ?? -1
-        let rate = player.rate
         let recommended = Self.ms(item.recommendedTimeOffsetFromLive)
         let configured = Self.ms(item.configuredTimeOffsetFromLive)
         let dated = pdt == nil ? "none" : "ok"
-        let state = player.timeControlStatus.rawValue
         let fast = item.canPlayFastForward
         log.notice("behind \(behind) newest \(newest) edge \(edge, privacy: .public) age \(age) buf \(ahead) rate \(rate) rec \(recommended) cfg \(configured) pdt \(dated, privacy: .public) state \(state) ff \(fast)")
+        guard Self.verboseLatency else { return }
         for chunk in stride(from: 0, to: distance.fetches.count, by: 14) {
             let slice = distance.fetches[chunk..<min(chunk + 14, distance.fetches.count)]
             log.notice("fetch \(slice.joined(separator: " | "), privacy: .public)")

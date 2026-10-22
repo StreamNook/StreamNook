@@ -47,8 +47,8 @@ struct PlayerPanel: View {
                       detail: "A stream starts playing as soon as it opens, with no need to press play.")
             ToggleRow(title: "Background play", path: "video_player.background_mode",
                       detailFor: { audio in
-                          audio ? "Leaving the app floats the video in Picture in Picture. Close the window and the audio keeps playing, with its controls on the Lock Screen."
-                                : "Leaving the app floats the video in Picture in Picture. Closing the window ends the stream."
+                          audio ? "Leaving the app floats the video in Picture in Picture. Close the window or lock the phone and the audio keeps playing, with its controls on the Lock Screen."
+                                : "Leaving the app floats the video in Picture in Picture. Closing the window ends the stream; locking the phone pauses it."
                       },
                       write: { ["video_player.background_mode": $0 ? "audio" : "pip"] },
                       isOn: { $0.string("video_player.background_mode", "pip") == "audio" })

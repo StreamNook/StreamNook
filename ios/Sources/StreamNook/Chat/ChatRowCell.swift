@@ -106,7 +106,7 @@ final class ChatRowCell: UIView {
     private func showWash(_ layout: ChatRowLayout, scale: CGFloat) {
         guard let wash, let look = layout.decor.atmosphere else { return }
         wash.show(look, cologne: layout.decor.cologne, size: CGSize(width: layout.width, height: layout.height), scale: scale,
-                  animate: !UIAccessibility.isReduceMotionEnabled && Look.shared.motion == .full)
+                  animate: MotionGate.decor)
     }
 
     private func rebuildImages(_ layout: ChatRowLayout, scale: CGFloat) {
@@ -293,7 +293,9 @@ final class ChatRowCell: UIView {
         if effects & (Modifier.rotate90 | Modifier.rotateRight) != 0 { transform = CATransform3DRotate(transform, .pi / 2, 0, 0, 1) }
         if effects & Modifier.rotateLeft != 0 { transform = CATransform3DRotate(transform, -.pi / 2, 0, 0, 1) }
         group.transform = transform
-        guard moving else { return }
+        // Built again on resume, so a Reduce Motion or Low Power change starts or stops them.
+        for key in ["spin", "shake", "bounce", "jam"] { group.removeAnimation(forKey: key) }
+        guard moving, !MotionGate.still else { return }
         if effects & Modifier.rotate != 0 {
             let spin = CABasicAnimation(keyPath: "transform.rotation.z")
             spin.fromValue = 0
@@ -301,6 +303,7 @@ final class ChatRowCell: UIView {
             spin.duration = 1.5
             spin.repeatCount = .infinity
             spin.isAdditive = true
+            spin.preferredFrameRateRange = FrameRate.decor
             group.add(spin, forKey: "spin")
         }
         if effects & (Modifier.shake | Modifier.bttvShake) != 0 {
@@ -309,6 +312,7 @@ final class ChatRowCell: UIView {
             shake.duration = 0.5
             shake.repeatCount = .infinity
             shake.isAdditive = true
+            shake.preferredFrameRateRange = FrameRate.decor
             group.add(shake, forKey: "shake")
         }
         if effects & Modifier.bounce != 0 {
@@ -317,6 +321,7 @@ final class ChatRowCell: UIView {
             bounce.duration = 0.6
             bounce.repeatCount = .infinity
             bounce.isAdditive = true
+            bounce.preferredFrameRateRange = FrameRate.decor
             group.add(bounce, forKey: "bounce")
         }
         if effects & Modifier.jam != 0 {
@@ -325,6 +330,7 @@ final class ChatRowCell: UIView {
             jam.duration = 0.6
             jam.repeatCount = .infinity
             jam.isAdditive = true
+            jam.preferredFrameRateRange = FrameRate.decor
             group.add(jam, forKey: "jam")
         }
     }
@@ -332,10 +338,10 @@ final class ChatRowCell: UIView {
     /// The live highlight flash: the row's color under its text, tint and bar, stepping down to
     /// clear over two seconds as desktop's keyframes do. Only the layer's opacity animates, on
     /// the render server, so the row never redraws and the list keeps its frame rate. Motion off
-    /// (as desktop's) and Reduce Motion leave the row still.
+    /// (as desktop's), Reduce Motion and Low Power Mode leave the row still.
     func flash() {
         guard let flash = layout?.decor.flash, flash.alphas.count > 1, Look.shared.motion != .off,
-              !UIAccessibility.isReduceMotionEnabled else { return }
+              !MotionGate.still else { return }
         let overlay = flashLayer ?? CALayer()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -353,6 +359,7 @@ final class ChatRowCell: UIView {
         // CSS `ease-out`, applied to each step as a keyframe animation does.
         fade.timingFunctions = Array(repeating: CAMediaTimingFunction(controlPoints: 0, 0, 0.58, 1), count: steps)
         fade.duration = RowFlash.duration
+        fade.preferredFrameRateRange = FrameRate.decor
         overlay.add(fade, forKey: "flash")
     }
 
@@ -367,7 +374,7 @@ final class ChatRowCell: UIView {
         }
         stopGlint()
         let motion = Look.shared.motion
-        guard let glint = layout.decor.glint, layout.live, motion != .off, !UIAccessibility.isReduceMotionEnabled,
+        guard let glint = layout.decor.glint, layout.live, motion != .off, !MotionGate.still,
               size.width > 0, size.height > 0 else { return }
         let loop = glint.loop && !motion.stopsLoops
         if !loop {
@@ -525,6 +532,7 @@ final class ChatRowCell: UIView {
         }
         animation.beginTime = start
         animation.fillMode = .backwards
+        animation.preferredFrameRateRange = FrameRate.decor
         light.add(animation, forKey: "glint")
 
         guard !loop else { return }
@@ -534,6 +542,7 @@ final class ChatRowCell: UIView {
         life.values = [1, 1, 0]
         life.keyTimes = glint.kind == .chase && glint.onRing ? [0, 0.8, 1] : [0, 0.99, 1]
         life.duration = delay + animation.duration
+        life.preferredFrameRateRange = FrameRate.decor
         holder.add(life, forKey: "life")
         holder.opacity = 0
     }
@@ -565,6 +574,7 @@ final class ChatRowCell: UIView {
         group.animations = [opacity, move]
         group.duration = duration
         group.timingFunction = curve
+        group.preferredFrameRateRange = FrameRate.decor
         layer.add(group, forKey: "arrive")
     }
 
@@ -578,11 +588,12 @@ final class ChatRowCell: UIView {
     }
 
     /// Hands the images back to the clock when the row returns to the screen, and starts the
-    /// glint and the Atmosphere's motion again.
+    /// glint, the Atmosphere's motion and the emote modifiers again (as the motion state now allows).
     func resume() {
         guard let layout else { return }
         showGlint(layout)
         showWash(layout, scale: layer.contentsScale)
+        for (attachment, group) in zip(layout.attachments, groupLayers) { applyEffects(attachment.effects, to: group) }
         var i = 0
         for attachment in layout.attachments {
             let count = 1 + attachment.overlays.count

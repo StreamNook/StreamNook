@@ -862,7 +862,9 @@ enum SoundPlayer {
 
     static func play(_ path: String?) {
         guard let path else { return }
-        try? AVAudioSession.sharedInstance().setCategory(.ambient, options: .mixWithOthers)
+        // Over a playing stream the session stays .playback (switching it off kills background audio).
+        let session = AVAudioSession.sharedInstance()
+        if session.category != .playback { try? session.setCategory(.ambient, options: .mixWithOthers) }
         player = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
         player?.play()
     }

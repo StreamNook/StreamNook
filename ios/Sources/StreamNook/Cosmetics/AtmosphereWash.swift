@@ -140,6 +140,7 @@ final class AtmosphereWashLayer: CALayer {
         group.duration = n == 1 ? 9 : 12
         group.repeatCount = .infinity
         group.timingFunction = CAMediaTimingFunction(name: .linear)
+        group.preferredFrameRateRange = FrameRate.decor
         return group
     }
 
@@ -151,6 +152,7 @@ final class AtmosphereWashLayer: CALayer {
         o.duration = n == 1 ? 9 : 12
         o.repeatCount = .infinity
         o.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        o.preferredFrameRateRange = FrameRate.decor
         return o
     }
 
@@ -176,6 +178,7 @@ final class AtmosphereWashLayer: CALayer {
                 move.toValue = NSValue(cgSize: CGSize(width: -tile, height: -tile))
                 move.duration = 32
                 move.repeatCount = .infinity
+                move.preferredFrameRateRange = FrameRate.slowDecor
                 curtain1.add(move, forKey: "drift")
             }
         }
