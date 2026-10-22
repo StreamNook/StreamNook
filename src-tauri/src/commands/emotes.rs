@@ -266,17 +266,28 @@ pub async fn match_emote_tokens(
     // emotes (provider `user`); a colon word names none (`chatter_rows`).
     // A word too short for the emote list names no chatter either.
     if request.chatters && !(typing && emote_match::is_short_word(&query)) {
-        let recent = crate::services::chat_history::ChatHistory::recent_chatters(&channel, 0);
-        let chatters = emote_match::chatter_rows(&query, &rows, emote_match::contains_mode(), &recent);
+        let provider = provider.as_deref().unwrap_or("twitch");
+        let recent = crate::services::chat_history::ChatHistory::recent_chatters(
+            &emote_match::history_room(provider, &channel),
+            0,
+        );
+        // The streamer leads the chatters, whether or not they have chatted.
+        let owner = room_owner(provider, &channel, channel_id.as_deref(), &recent);
+        let chatters = emote_match::chatter_rows(
+            &query,
+            &rows,
+            emote_match::contains_mode(),
+            &emote_match::owner_first(owner, recent),
+        );
         rows.extend(chatters);
     }
 
     Ok(EmoteMatchResult { rows, total, ready, counts })
 }
 
-/// Display names of subscription emote owners, kept for the life of the
-/// process. An id Helix did not answer is not asked again; its section keeps
-/// the "Channel <id>" title.
+/// Display names of subscription emote owners (and of the streamers the `@`
+/// list leads with), kept for the life of the process. An id Helix did not
+/// answer is not asked again; its section keeps the "Channel <id>" title.
 type OwnerNames = (HashMap<String, String>, HashSet<String>);
 
 fn owner_names() -> &'static std::sync::Mutex<OwnerNames> {
@@ -306,6 +317,79 @@ async fn resolve_owner_names(ids: Vec<String>) -> HashMap<String, String> {
     }
     let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
     ids.into_iter().filter_map(|id| guard.0.get(&id).map(|n| (id, n.clone()))).collect()
+}
+
+/// Twitch user `id`'s display name from the owner-name cache, without waiting.
+/// A miss asks Helix once in the background, so the next keystroke has it.
+fn owner_name_now(id: &str) -> Option<String> {
+    {
+        let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(name) = guard.0.get(id) {
+            return Some(name.clone());
+        }
+        if guard.1.contains(id) {
+            return None;
+        }
+    }
+    static ASKING: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+    let asking = ASKING.get_or_init(Default::default);
+    if asking.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string()) {
+        let id = id.to_string();
+        tauri::async_runtime::spawn(async move {
+            resolve_owner_names(vec![id.clone()]).await;
+            asking.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        });
+    }
+    None
+}
+
+/// The room's streamer as a chatter `(login, user_id, display)`, so every
+/// chatter list can lead with them: their own row once they have chatted, else
+/// in a Twitch room the room's login with the cached display name (the login
+/// until Helix answers). A Kick or YouTube room names its streamer only once
+/// they chat: a Kick room key is its slug, which need not be the username, and
+/// a YouTube room key is a channel id.
+fn room_owner(
+    provider: &str,
+    channel: &str,
+    channel_id: Option<&str>,
+    recent: &[(String, String, String)],
+) -> Option<(String, String, String)> {
+    let login = channel.trim().trim_start_matches('#').to_lowercase();
+    if let Some(owner) = emote_match::find_owner(&login, channel_id, recent) {
+        return Some(owner);
+    }
+    if provider != "twitch" || login.is_empty() {
+        return None;
+    }
+    let id = channel_id.unwrap_or_default().to_string();
+    let display = if id.is_empty() { None } else { owner_name_now(&id) };
+    let display = display.unwrap_or_else(|| login.clone());
+    Some((login, id, display))
+}
+
+/// The composer's `@` list for a room: its streamer first, then its recent
+/// chatters, newest first, whose login, shown name or nickname starts with
+/// `query`. A command's username argument (`command_arg`, as in /ban or
+/// /timeout) keeps plain recency: most of those cannot act on the streamer.
+#[tauri::command]
+pub async fn mention_suggestions(
+    provider: Option<String>,
+    channel: String,
+    channel_id: Option<String>,
+    query: String,
+    command_arg: Option<bool>,
+) -> Vec<emote_match::MentionRow> {
+    let provider = provider.as_deref().unwrap_or("twitch");
+    let channel_id = channel_id.filter(|id| !id.is_empty());
+    let recent =
+        crate::services::chat_history::ChatHistory::recent_chatters(&emote_match::history_room(provider, &channel), 0);
+    let owner = if command_arg.unwrap_or(false) {
+        None
+    } else {
+        room_owner(provider, &channel, channel_id.as_deref(), &recent)
+    };
+    emote_match::mention_rows(provider, &query, &emote_match::owner_first(owner, recent), emote_match::MENTION_LIMIT)
 }
 
 /// Saved favorite emote ids, in the order they were saved.
@@ -440,8 +524,8 @@ fn overrides_in(set: &EmoteSet, personal: &HashMap<String, Emote>) -> Vec<Person
     let mut out: Vec<PersonalOverride> = set
         .seven_tv
         .iter()
-        .chain(&set.bttv)
         .chain(&set.ffz)
+        .chain(&set.bttv)
         .filter_map(|e| {
             let mine = personal.get(&e.name)?;
             // Already the same emote: nothing changes when it is typed.

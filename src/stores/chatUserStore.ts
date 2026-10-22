@@ -30,7 +30,6 @@ import {
   resolveBttvProUrl,
   withBttvPro,
 } from '../services/bttvProBadge';
-import { snapshotOverrides } from '../utils/userChatOverrides';
 import { onePerCategory } from '../utils/chatterBadges';
 import { IS_MOBILE } from '../utils/platform';
 
@@ -97,10 +96,7 @@ interface ChatUserStore {
   
   /** Get a user by username (case-insensitive) */
   getUserByUsername: (username: string, provider?: ProviderId) => ChatUser | undefined;
-  
-  /** Get users matching a search query (prefix match on username/displayName) */
-  getMatchingUsers: (query: string, limit?: number) => ChatUser[];
-  
+
   /** Clear all users (call when switching channels) */
   clearUsers: () => void;
 }
@@ -656,22 +652,6 @@ function pushCologne(memberId: string, chatKey: string, cosmetics: CologneCosmet
 // clone volume proportionally. Desktop keeps 8000 unchanged.
 const MAX_TRACKED_USERS = IS_MOBILE ? 1500 : 8000;
 const USER_EVICT_SLACK = 1000;
-const MATCH_SCAN_CAP = 200;
-
-// Lowercased name pairs, keyed by user-object identity. Identity changes
-// (rename, color) replace the ChatUser object via the identity coalescer, so a
-// stale entry can never be served; the in-place lastSeen bump never touches
-// names. Kills the 2-per-user toLowerCase() allocations the autocomplete scan
-// paid on every keystroke.
-const lowerNameCache = new WeakMap<ChatUser, { u: string; d: string }>();
-function lowerNames(user: ChatUser): { u: string; d: string } {
-  let l = lowerNameCache.get(user);
-  if (!l) {
-    l = { u: user.username.toLowerCase(), d: user.displayName.toLowerCase() };
-    lowerNameCache.set(user, l);
-  }
-  return l;
-}
 
 function evictStaleUsers(
   users: Map<string, ChatUser>,
@@ -748,7 +728,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         return;
       }
       // Metadata-only bump. lastSeen has NO reactive readers (only call-time
-      // sorts: eviction, @-autocomplete, command palette), so mutate in place —
+      // sorts: eviction, command palette), so mutate in place —
       // no Map clones, no subscriber fan-out. This bypassing of setState is
       // deliberate; do not "fix" it back into a store update.
       existingUser!.lastSeen = Date.now();
@@ -853,37 +833,6 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       if (other) return users.get(other);
     }
     return undefined;
-  },
-  
-  getMatchingUsers: (query: string, limit = 5) => {
-    const { users } = get();
-    const queryLower = query.toLowerCase();
-    const overrides = snapshotOverrides();
-
-    // Filter users whose username, displayName, or (user-set) nickname starts
-    // with the query. Inserting an @mention still uses user.username (the real
-    // Twitch login) because Twitch IRC doesn't resolve nicknames.
-    const matches: ChatUser[] = [];
-    for (const user of users.values()) {
-      const nick = overrides[user.userId]?.nickname?.toLowerCase();
-      const lower = lowerNames(user);
-      if (
-        lower.u.startsWith(queryLower) ||
-        lower.d.startsWith(queryLower) ||
-        (nick && nick.startsWith(queryLower))
-      ) {
-        matches.push(user);
-        // Runs per keystroke over up to ~9k users. Cap the collect: past this
-        // many matches (single-letter queries), the top-`limit` by recency is
-        // close enough for autocomplete and the full sort isn't worth it.
-        if (matches.length >= MATCH_SCAN_CAP) break;
-      }
-    }
-
-    // Sort by recency (most recent first)
-    matches.sort((a, b) => b.lastSeen - a.lastSeen);
-
-    return matches.slice(0, limit);
   },
   
   clearUsers: () => {
