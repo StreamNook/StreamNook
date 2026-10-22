@@ -22,6 +22,7 @@ pub mod sounds;
 pub mod chat_identity;
 pub mod chat_query;
 pub mod moderation_tools;
+pub mod image_upload;
 pub mod components;
 pub mod cosmetics_cache;
 pub mod diagnostic_logging;

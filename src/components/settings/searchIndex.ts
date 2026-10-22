@@ -1175,15 +1175,22 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
-    title: 'Paste upload',
-    description: 'Paste a screenshot into the chat box and StreamNook uploads it to a host you pick (nuuls, catbox, Litterbox, uguu or your own) and inserts the link. Previously "Paste images to upload".'
+    title: 'Images tab',
+    description: 'Upload a picture from the emote menu and its link goes in your message. Photo, picture, screenshot, send image, attach image, upload.'
   },
   {
     tab: 'Chat',
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
-    title: 'Image host',
-    description: 'Choose where pasted images are uploaded: i.nuuls.com, catbox.moe, Litterbox (72 h), uguu.se (3 h), or a custom multipart uploader. Includes a one-click test upload.'
+    title: 'Paste upload',
+    description: 'Paste a screenshot into the chat box and StreamNook uploads it to the host you pick and inserts the link. Previously "Paste images to upload".'
+  },
+  {
+    tab: 'Chat',
+    section: 'Image Uploads',
+    sectionId: 'settings-section-image-uploads',
+    title: 'Where images go',
+    description: 'Choose where your pictures are uploaded: i.nuuls.com, kappa.lol, imgdrip.com, catbox.moe, Litterbox (72 h), uguu.se (3 h), or your own uploader. Image host. Previously "Image host".'
   },
   {
     tab: 'Chat',
@@ -1575,7 +1582,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
     title: 'Custom host',
-    parent: 'Paste upload',
+    parent: 'Where images go',
     description: 'Upload address, file field name, extra form fields and where the link sits in the reply, for your own image host. Host details, self-hosted uploader.'
   },
   {
@@ -1583,7 +1590,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Image Uploads',
     sectionId: 'settings-section-image-uploads',
     title: 'Test upload',
-    parent: 'Paste upload',
     description: 'Sends a 1-pixel test image to the host you picked and shows the link it came back with. Try it.'
   },
   // === Moderation ===
@@ -1636,6 +1642,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
+    title: 'Ban confirmation',
+    description: 'Ban waits for a second press, so a slip never bans anyone: the user card, the hover buttons, the line buttons and the B key. The slider is never asked. Also called confirm ban, ban twice, are you sure, accidental ban.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
     title: 'Message edge',
     description: 'What sits at the left edge of a message you can act on. Slider: drag it right through Delete, timeouts from short to long, then Ban, and let go to apply. Line buttons: Delete, timeouts and Ban as small buttons on every line, one click each. Off: nothing. No ban or timeout on your own messages, the owner\'s, or other mods\'. Also called mod slider, swipe to moderate, drag to moderate, grab handle, inline mod buttons, one-click moderation. Previously "Slider", "Tiles" and "Method: Drag".'
   },
@@ -1673,6 +1685,27 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Steps',
     parent: 'Message edge',
     description: 'Which steps the slider offers: turn Delete and Ban on or off and pick the timeout lengths, or type your own (45m, 1h30m, 2d). They always run from mildest to harshest.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'User Cards',
+    sectionId: 'settings-section-user-cards',
+    title: 'User Cards',
+    description: 'The moderator buttons on a user card: four timeout lengths, Ban or Unban, Warn when your sign-in allows it, and your own buttons. Also called viewer card, mod card or card actions.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'User Cards',
+    sectionId: 'settings-section-user-cards',
+    title: 'Timeout lengths',
+    description: 'The four timeout lengths on a user card, shared with the first four hover button lengths. Pick one to change it.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'User Cards',
+    sectionId: 'settings-section-user-cards',
+    title: 'Card buttons',
+    description: 'Up to six of your own user card buttons, each a timeout, ban, unban or warning with an optional reason sent along. A warning with no saved reason asks for one each time. Also called custom mod buttons.'
   },
   {
     tab: 'Moderation',
@@ -2004,6 +2037,26 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    title: 'Uploaded images',
+    description: 'Pictures chatters send with StreamNook draw in the message instead of their link. Images on stream, picture links.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'From',
+    parent: 'Uploaded images',
+    description: 'Whose pictures draw on your overlay: trusted chatters (the streamer, mods, VIPs and subscribers) or everyone.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'Size',
+    parent: 'Uploaded images',
+    description: 'How tall uploaded pictures draw on your overlay, from half to three times their usual size.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
     title: 'Personal emotes',
     description: "Show or hide 7TV personal emotes on the overlay. A subscriber's own set works in every channel, so chatters show emotes your channel never added. Unknown emotes, random emotes, emotes not in my channel. Previously \"7TV personal emotes\"."
   },
@@ -2198,7 +2251,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Overlay',
     section: 'Behavior',
     title: 'Restore on reload',
-    description: 'Bring back the last on-screen messages after an OBS browser source reload instead of clearing. Off by default: clear on reload, OBS refresh, restart, stream start, keep buffer, persistence, blank overlay. Previously "Restore chat on reload".'
+    description: 'Bring back the last on-screen messages after an OBS browser source reload instead of clearing. Off by default: clear on reopen, restart, stream start; a mid-stream reload (refresh, scene switch) within 2 minutes keeps them anyway. Keep buffer, persistence, blank overlay. Previously "Restore chat on reload".'
   },
   {
     tab: 'Overlay',

@@ -29,7 +29,7 @@ const TAB_FILES: Record<string, string[]> = {
     'RemindersSettings',
     'UserOverridesSettings',
   ],
-  Moderation: ['ModerationSettings'],
+  Moderation: ['ModerationSettings', 'ModerationCardSettings'],
   Notifications: ['NotificationsSettings'],
   Cache: ['CacheSettings', 'EmotePrefetchSection'],
   Backup: ['BackupSettings'],
@@ -47,6 +47,7 @@ const UNINDEXED: Record<string, { sections?: string[]; titles?: string[] }> = {
   Player: { sections: ['Discover'], titles: ['Background play'] },
   Support: { titles: ['Log export'] },
   Notifications: { titles: ['Gift sub preview', 'Reward preview'] },
+  Moderation: { sections: ['Moderating Messages'] },
 };
 
 // Entries that describe a feature rather than one row (how to start a poll,

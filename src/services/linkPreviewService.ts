@@ -43,6 +43,9 @@ export interface LinkPreview {
   // "discord" kind only: live online + total member counts.
   online_count: number | null;
   member_count: number | null;
+  // "image" kind: the picture's pixel size, when the backend could read it.
+  width?: number | null;
+  height?: number | null;
 }
 
 // Registrable domains we auto-expand (the same list as TRUSTED_BASE_DOMAINS in
@@ -76,11 +79,13 @@ export const TRUSTED_BASE_DOMAINS: readonly string[] = [
   'steampowered.com',
   'steamcommunity.com',
   'instagram.com',
-  // Image hosts StreamNook can upload to (utils/imageUploadHosts): their
+  // Image hosts StreamNook can upload to (services/image_upload.rs): their
   // links must render as image cards, for the sender and everyone else.
   'nuuls.com',
   'catbox.moe',
   'uguu.se',
+  'kappa.lol',
+  'imgdrip.com',
   // Widened to auto-expand as a generic card (OG-friendly, well-known).
   'bsky.app',
   'vimeo.com',

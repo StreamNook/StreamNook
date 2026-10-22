@@ -37,7 +37,11 @@ use commands::chat_query::{
 use commands::moderation_tools::{
     get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
     get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
-    update_channel_info, upload_image,
+    update_channel_info,
+};
+use commands::image_upload::{
+    accept_image_upload_host, delete_image_upload, image_upload_hosts, image_upload_panel, open_image_uploads_folder,
+    reupload_image, test_image_upload, upload_chat_image,
 };
 use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
@@ -2017,7 +2021,14 @@ pub fn run() {
             get_user_pronouns,
             get_user_note,
             set_user_note,
-            upload_image,
+            upload_chat_image,
+            image_upload_panel,
+            accept_image_upload_host,
+            image_upload_hosts,
+            test_image_upload,
+            reupload_image,
+            delete_image_upload,
+            open_image_uploads_folder,
             start_multi_chat,
             provider_chat_connect,
             chat_bridge_port,
@@ -2116,6 +2127,8 @@ pub fn run() {
             cancel_raid,
             add_blocked_term,
             remove_blocked_term,
+            list_blocked_terms,
+            remove_blocked_term_by_id,
             create_poll,
             get_active_poll,
             end_poll,
@@ -2219,6 +2232,8 @@ pub fn run() {
             get_badge_standing,
             get_badge_wall,
             get_badge_window,
+            get_evolution_board,
+            equip_evolution_lane,
             get_badge_drop_campaign,
             get_badge_earn_guide,
             // Badge Metadata commands
@@ -2439,6 +2454,7 @@ pub fn run() {
             fetch_channel_emotes,
             get_emote_by_name,
             match_emote_tokens,
+            mention_suggestions,
             emote_credit,
             personal_emote_overrides,
             parse_text_segments,
@@ -2658,6 +2674,8 @@ pub fn run() {
             services::touch_mod_slider::get_touch_mod_slider,
             services::touch_mod_slider::edit_mod_slider_timeouts,
             services::room_mod_log::get_room_mod_log,
+            services::unban_requests::get_unban_requests,
+            services::unban_requests::resolve_unban_request,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only

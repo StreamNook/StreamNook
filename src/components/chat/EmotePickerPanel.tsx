@@ -6,8 +6,9 @@
 // Everything that goes INTO a message lives here, as sections picked from a
 // switcher along the BOTTOM, right above the message box and the smiley that
 // opened it (where phone keyboards keep theirs): Emotes (the source tabs),
-// GIFs (Twitch, once Twitch says whether this channel allows them) and
-// Commands (the browsable list, where the host passes one). Bits is not here:
+// GIFs (Twitch, once Twitch says whether this channel allows them), Images
+// (upload a picture, its link goes in the box) and Commands (the browsable
+// list, where the host passes one). Bits is not here:
 // spending lives in the channel wallet (chat/ChannelWallet). A host with only
 // Emotes gets no switcher at all. The menu grows upward, so a short window
 // shrinks it from the top (useFitAbove) and the switcher never gets cut off.
@@ -15,7 +16,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { Clock, ExternalLink, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
+import { Clock, ExternalLink, Image as ImageIcon, Lock, Settings, Smile, SquareSlash, Star } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
 import { invoke } from '@tauri-apps/api/core';
@@ -67,12 +68,14 @@ import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
 import { SearchField } from '../../mobile/ui/SearchField';
 import { CommandBrowser, type CommandBrowserProps } from './CommandMenu';
+import ImageUploadSection from './ImageUploadSection';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
 import { fitAmount } from '../../utils/fitNumber';
 import { fitHeaderDensity } from './fitHeaderDensity';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
 /** While searching, the tabs filter the results: `all` is every source. */
@@ -549,17 +552,20 @@ export interface EmotePickerPanelProps {
   /** The GIFs section. Off where there is no channel to post into (the mod
    *  room); on Twitch it still waits for Twitch's eligibility answer. */
   gifs?: boolean;
+  /** The Images section (upload a picture, its link goes in the box). Off
+   *  where there is no message to put it in (the mod room). */
+  images?: boolean;
 }
 
 /** The popover's height when the room above the message box allows it. */
 const PANEL_MAX_PX = 520;
 // The same frosted surface as the Tools menu and the command list's dialog
-// (`.sn-popover`: blur plus a tint that rides the Glassiness slider and goes
-// solid at 0%), so every menu over the message box reads as one family.
+// (`.glass-flyout`, solid at Glassiness 0%), so every menu over the message box
+// reads as one family. `!p-0`: the header and grid run edge to edge.
 // z-50: above a pinned prediction or poll (z-40), which otherwise covered the
 // top of the open menu, where search results land.
 const DEFAULT_PANEL_CLASS =
-  'sn-popover absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom z-50';
+  'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom z-50';
 /** A host that places the menu itself (the phone) keeps the plain fill. */
 const HOST_PANEL_FILL =
   'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)';
@@ -581,14 +587,17 @@ export function EmotePickerPanel({
   className,
   commands,
   gifs: gifsSection = true,
+  images = false,
 }: EmotePickerPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [fullyClosed, setFullyClosed] = useState(!open);
   // Opening mounts the panel and cancels "fully closed" during render
   // (adjust-state-on-prop-change), so the first open frame already has it.
   const [seenOpen, setSeenOpen] = useState(open);
-  // Commands is a detour: every open starts back on the emotes.
-  const [detour, setDetour] = useState<'commands' | null>(null);
+  // Commands and Images are detours: every open starts back on the emotes.
+  const [detour, setDetour] = useState<'commands' | 'images' | null>(null);
+  const showImages = useAppStore((s) => s.settings.chat_input?.image_uploader?.show_in_menu) ?? true;
+  const imagesOn = images && showImages;
   if (open !== seenOpen) {
     setSeenOpen(open);
     if (open) {
@@ -971,16 +980,26 @@ export function EmotePickerPanel({
   const tabClass = (active: boolean) =>
     IS_MOBILE
       ? `flex-1 min-w-0 py-1.5 flex flex-col items-center justify-center gap-0.5 ${active ? 'bg-white/[0.08] text-white [&_.sn-emote-tab-count]:text-white' : 'text-textMuted'}`
-      : `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
+      : `flex-1 h-7 flex items-center justify-center gap-1 ${active ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`}`;
   /** A tab's number. On the phone it sits under the mark, white when selected. */
   const countClass = IS_MOBILE ? 'sn-emote-tab-count text-[10px] leading-3 tabular-nums' : 'sn-emote-tab-count text-[10px] opacity-70';
   /** Sections stack closer on the phone and start at the top, as the iPhone's. */
   const listClass = IS_MOBILE ? 'flex flex-col gap-2' : 'flex flex-col gap-4 pt-2';
-  /** Inline color for an active tab; undefined leaves the class-driven default. */
-  const tabStyle = (active: boolean, key?: string): React.CSSProperties => ({
-    borderRadius: '8px',
-    ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
-  });
+  /** Inline color for an active tab; undefined leaves the class-driven default.
+   *  On desktop the chosen capsule is filled with its source's brand color
+   *  (mixed into black like `ACCENT_FILL`, so the white mark stays readable). */
+  const tabStyle = (active: boolean, key?: string): React.CSSProperties | undefined => {
+    if (!IS_MOBILE) {
+      if (!active) return undefined;
+      return key && TAB_ACCENT[key]
+        ? { background: `color-mix(in srgb, ${TAB_ACCENT[key]} 55%, black)` }
+        : ACCENT_FILL;
+    }
+    return {
+      borderRadius: '8px',
+      ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
+    };
+  };
 
   // While searching, the tabs filter the ranked results and count the hits in
   // each source; otherwise they pick a source and count what Rust says it holds.
@@ -1000,15 +1019,17 @@ export function EmotePickerPanel({
     return rustTabCount(tab);
   };
 
-  type Section = 'emotes' | 'gifs' | 'commands';
+  type Section = 'emotes' | 'gifs' | 'images' | 'commands';
   const section: Section =
     detour === 'commands' && commands
       ? 'commands'
-      : selectedProvider === 'gifs'
-        ? 'gifs'
-        : 'emotes';
+      : detour === 'images' && imagesOn
+        ? 'images'
+        : selectedProvider === 'gifs'
+          ? 'gifs'
+          : 'emotes';
   const pickSection = (next: Section) => {
-    setDetour(next === 'commands' ? next : null);
+    setDetour(next === 'commands' || next === 'images' ? next : null);
     if (next === 'gifs' && selectedProvider !== 'gifs') {
       setLastEmoteTab(selectedProvider);
       setSelectedProvider('gifs');
@@ -1035,13 +1056,18 @@ export function EmotePickerPanel({
           hint: gifStatus.can_use ? undefined : 'GIFs (Tier 2 or Tier 3 subscribers)',
         }]
       : []),
+    ...(imagesOn
+      ? [{ key: 'images' as const, label: 'Images', icon: <ImageIcon size={15} className="flex-shrink-0" aria-hidden /> }]
+      : []),
     ...(commands
       ? [{ key: 'commands' as const, label: 'Commands', icon: <SquareSlash size={15} className="flex-shrink-0" aria-hidden /> }]
       : []),
   ];
 
+  // Inside the desktop flyout the heading takes the flyout's own fill; a
+  // host that places the menu itself (the phone) keeps the plain one.
   const sectionHeadingStyle: React.CSSProperties = {
-    backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)',
+    background: 'var(--flyout-heading-fill, color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent))',
   };
 
   const renderEmojiButton = (emoji: string, key: string) => (
@@ -1192,13 +1218,14 @@ export function EmotePickerPanel({
       }}
     >
       {section === 'commands' && commands && <CommandBrowser {...commands} onClose={onClose} />}
-      {/* Kept mounted (only hidden) under Commands, so the grid's scroll
-          listener and lazy blocks survive a trip there and back. */}
+      {section === 'images' && <ImageUploadSection onInsert={onInsert} />}
+      {/* Kept mounted (only hidden) under Commands and Images, so the grid's
+          scroll listener and lazy blocks survive a trip there and back. */}
       <div
         className="flex min-h-0 flex-1 flex-col"
-        style={section === 'commands' ? { display: 'none' } : undefined}
+        style={section === 'commands' || section === 'images' ? { display: 'none' } : undefined}
       >
-      <div className={IS_MOBILE ? 'px-2 pt-2 pb-1.5' : 'p-2 border-b border-borderSubtle'}>
+      <div className={IS_MOBILE ? 'px-2 pt-2 pb-1.5' : 'p-2 border-b border-white/[0.06]'}>
         <div className="flex items-center gap-1.5">
           {IS_MOBILE ? (
             // The phone's search field at the iPhone panel's 32px, so the
@@ -1224,8 +1251,7 @@ export function EmotePickerPanel({
               <button
                 onClick={onPopOut}
                 aria-label="Pop out the emote menu"
-                className="shrink-0 glass-button p-1.5 text-textSecondary hover:text-white transition-colors"
-                style={{ borderRadius: '8px' }}
+                className={`${GLAZE_PILL} shrink-0 inline-flex h-7 w-7 items-center justify-center`}
               >
                 <ExternalLink size={15} />
               </button>
@@ -1238,8 +1264,7 @@ export function EmotePickerPanel({
                   onClose();
                   onManageEmotes();
                 }}
-                className="shrink-0 glass-button p-1.5 text-textSecondary hover:text-white transition-colors"
-                style={{ borderRadius: '8px' }}
+                className={`${GLAZE_PILL} shrink-0 inline-flex h-7 w-7 items-center justify-center`}
               >
                 <Settings size={15} />
               </button>
@@ -1250,14 +1275,14 @@ export function EmotePickerPanel({
         <div ref={setTabRowEl} className={`sn-emote-tabs flex gap-1 ${IS_MOBILE ? 'mt-1.5' : 'mt-2'}`}>
           {searching && (
             <Tooltip content={`Everything (${tabCount('all')})`} side="top">
-              <button onClick={() => setSearchScope('all')} className={tabClass(activeTab === 'all')} style={{ borderRadius: '8px' }}>
+              <button onClick={() => setSearchScope('all')} className={tabClass(activeTab === 'all')} style={tabStyle(activeTab === 'all')}>
                 <span className="text-[11px] font-semibold leading-4">All</span>
                 <span className={countClass}>{fitAmount(tabCount('all'))}</span>
               </button>
             </Tooltip>
           )}
           <Tooltip content={`Favorites (${tabCount('favorites')})`} side="top">
-            <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={{ borderRadius: '8px' }}>
+            <button onClick={() => pickTab('favorites')} className={tabClass(activeTab === 'favorites')} style={tabStyle(activeTab === 'favorites')}>
               {/* On the phone the star is yellow only while selected, as the
                   provider marks take their color. */}
               {/* A pointed glyph needs a size more to look as big as the logos. */}
@@ -1266,7 +1291,7 @@ export function EmotePickerPanel({
             </button>
           </Tooltip>
           <Tooltip content="Emoji" side="top">
-            <button onClick={() => pickTab('emoji')} aria-label="Emoji" className={tabClass(activeTab === 'emoji')} style={{ borderRadius: '8px' }}>
+            <button onClick={() => pickTab('emoji')} aria-label="Emoji" className={tabClass(activeTab === 'emoji')} style={tabStyle(activeTab === 'emoji')}>
               {IS_MOBILE ? (
                 // The phone's marks stay quiet until selected, as the iPhone's.
                 <Smile size={16} strokeWidth={2} className={activeTab === 'emoji' ? 'text-accent' : ''} aria-hidden />
@@ -1383,27 +1408,27 @@ export function EmotePickerPanel({
                 // the scroll position stable while previews stream in.
                 <div className="grid grid-cols-2 gap-2 px-1">
                   {gifs.map((gif) => (
-                    <button
-                      key={gif.id}
-                      onClick={() => void onPickGif(gif)}
-                      disabled={!!sendingGifId}
-                      title={gif.title || 'GIF'}
-                      className={`relative overflow-hidden rounded-md border border-borderSubtle bg-black/20 h-24 transition-opacity hover:border-white/25 ${sendingGifId && sendingGifId !== gif.id ? 'opacity-40' : ''}`}
-                    >
-                      <img
-                        src={gif.preview_url}
-                        alt={gif.title || 'GIF'}
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        className="h-full w-full object-cover"
-                      />
-                      {sendingGifId === gif.id && (
-                        <span className="absolute inset-0 flex items-center justify-center bg-black/60 text-[11px] font-semibold">
-                          Sending...
-                        </span>
-                      )}
-                    </button>
+                    <Tooltip key={gif.id} content={gif.title || 'GIF'}>
+                      <button
+                        onClick={() => void onPickGif(gif)}
+                        disabled={!!sendingGifId}
+                        className={`relative overflow-hidden rounded-md border border-borderSubtle bg-black/20 h-24 transition-opacity hover:border-white/25 ${sendingGifId && sendingGifId !== gif.id ? 'opacity-40' : ''}`}
+                      >
+                        <img
+                          src={gif.preview_url}
+                          alt={gif.title || 'GIF'}
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          className="h-full w-full object-cover"
+                        />
+                        {sendingGifId === gif.id && (
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/60 text-[11px] font-semibold">
+                            Sending...
+                          </span>
+                        )}
+                      </button>
+                    </Tooltip>
                   ))}
                 </div>
               )}
@@ -1424,7 +1449,7 @@ export function EmotePickerPanel({
               {emojiSections.map(([category, filteredCategoryEmojis]) => {
                 return (
                   <div key={category} className="flex flex-col">
-                    <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>{category}</h3>
+                    <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={sectionHeadingStyle}>{category}</h3>
                     {/* Lazy blocks like the emote tabs: all ~1,870 emoji at once was
                         1,870 buttons, tooltips and images on every open. */}
                     {chunkArray(filteredCategoryEmojis, EMOJI_COLS * EMOJI_BLOCK_ROWS).map((block, bi) => (
@@ -1465,7 +1490,7 @@ export function EmotePickerPanel({
           <div className={listClass}>
             {groups.map((group) => ({ groupKey: group.key, group: { name: group.title, emotes: group.emotes } })).map(({ groupKey, group }) => (
               <div key={groupKey} className="flex flex-col">
-                <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={sectionHeadingStyle}>
                   {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={groupKey} />}
                   <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
                 </h3>
@@ -1571,7 +1596,7 @@ export function EmotePickerPanel({
               .map((g) => ({ label: g.title, key: g.key, emotes: g.emotes, cols: g.columns, gridCols: GRID_COLS[g.columns] ?? 'grid-cols-7' }))
               .map((group) => (
                 <div key={group.key} className="flex flex-col">
-                  <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
+                  <h3 className={`text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra${IS_MOBILE ? ' flex items-center gap-1.5' : ''}`} style={sectionHeadingStyle}>
                     {IS_MOBILE && <SectionMark tab={selectedProvider} sectionKey={group.key} />}
                     <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
                   </h3>

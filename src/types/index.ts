@@ -153,6 +153,7 @@ export interface DropsSettings {
   priority_channels?: PriorityChannel[]; // Channels to prioritize for channel points automation
   prefer_favorites?: boolean; // Collect your live favorited channels instead of the priority list (default: false)
   prefer_missing_badges?: boolean; // Work first on campaigns that award a badge you're missing (default: true)
+  auto_pick_evolution?: boolean; // Equip a Pokémon line to evolve when none is equipped (default: true)
   // Recovery settings
   recovery_settings?: RecoverySettings;
 }
@@ -747,26 +748,98 @@ export interface ChatRenderSettings {
 }
 
 export interface ImageUploaderSettings {
+  // Paste upload (desktop): an image pasted into the message box uploads.
   enabled?: boolean;
-  // A preset id from utils/imageUploadHosts (nuuls, catbox, litterbox, uguu)
-  // or "custom" for the fields below.
+  // The emote menu's Images section. Default true.
+  show_in_menu?: boolean;
+  // A preset id from Rust services/image_upload.rs (nuuls, kappa, imgdrip,
+  // catbox, litterbox, uguu) or "custom" for the fields below.
   preset?: string;
   // Extra text form fields some hosts require, url-encoded "k=v&k2=v2".
   extra_fields?: string;
-  // Multipart POST target. Chatterino's default is https://i.nuuls.com/upload.
+  // Multipart POST target for a custom host.
   url?: string;
-  // Form field name for the file (nuuls: "attachment").
+  // Form field name for the file.
   form_field?: string;
-  // Dotted path into a JSON response for the link; empty = the body is the link.
+  // Where the link is in the reply: empty = the body is the link, a dotted
+  // JSON path (data.link) or a {field} template ({link}{ext}).
   response_path?: string;
+  // How the Images tab shows uploads: "grid" (pictures) or "list" (details).
+  view?: 'grid' | 'list';
+}
+
+/** One upload (`upload_chat_image`, `reupload_image`, the panel's groups). */
+export interface UploadedImage {
+  url: string;
+  width: number;
+  height: number;
+  /** The host key it went to. */
+  host: string;
+  /** When its link stops working (ms since the epoch), if it does. */
+  expires_ms?: number;
+  /** "2 days left", "Expired"; absent for a link that lasts. */
+  time_left?: string;
+  expired: boolean;
+  /** A kept copy can be sent again for a fresh link. */
+  can_reupload: boolean;
+  /** The kept copy on disk, drawn in place of a dead link. */
+  copy_path?: string;
+  /** The small picture on disk, which is what the Images section draws. */
+  thumb_path?: string;
+  /** Less than a day left on the link. */
+  urgent: boolean;
+  uploaded_ms: number;
+  /** "2 hours ago". */
+  uploaded: string;
+  /** "Oct 21, 3:40 PM". */
+  uploaded_at: string;
+  /** "Expires Oct 23, 3:40 PM (2 days left)", "Kept indefinitely", ... */
+  expiry: string;
+  /** "1920 × 1080 · PNG · 1.4 MB". */
+  details: string;
+}
+
+/** One image host StreamNook can upload to (`image_upload_hosts`). */
+export interface UploadHost {
+  id: string;
+  label: string;
+  /** The name on the Images tab's host tabs. */
+  short: string;
+  note: string;
+  max_mb: number;
+  /** Deleting an upload deletes the file there too. */
+  deletes_from_host: boolean;
+  /** Its links stop working after a while. */
+  expires: boolean;
+  /** How long its links last, when the host says (Litterbox 72, uguu 3). */
+  lifetime_hours?: number | null;
+}
+
+/** The uploads to one host, newest first. */
+export interface UploadGroup {
+  host: UploadHost;
+  items: UploadedImage[];
+}
+
+/** The emote menu's Images section (`image_upload_panel`). */
+export interface ImageUploadPanel {
+  /** Where the next upload goes. */
+  host: UploadHost;
+  hosts: UploadHost[];
+  needs_consent: boolean;
+  /** Uploads by host, the host used most recently first. */
+  groups: UploadGroup[];
+  /** "48 MB on this device": what the kept files take. */
+  storage: string;
+  /** The folder can be shown in the file manager (desktop). */
+  can_open_folder: boolean;
 }
 
 export interface ChatInputSettings {
   // Append an invisible suffix when sending the same message twice in a row,
   // so Twitch's duplicate-message rejection doesn't eat the second send.
   bypass_duplicate?: boolean;
-  // Paste an image into the composer to upload it and insert the link. Off by
-  // default: it sends the image to a third-party host you choose.
+  // Image uploads: the emote menu's Images section, paste upload and the host.
   image_uploader?: ImageUploaderSettings;
   // Ctrl+Enter sends the message AND keeps it in the input box. Plain Enter
   // still sends + clears like normal.
@@ -1532,8 +1605,9 @@ export interface RecentPollEntry {
 }
 
 export interface ModerationSettings {
-  // Surface CLEARCHAT / CLEARMSG IRC events as system rows even for non-mods.
-  // Mods see them by default; this lets curious viewers see "X was timed out".
+  // Surface timeouts, bans and deletions (IRC CLEARCHAT / CLEARMSG) as system
+  // rows in chat. Off by default for everyone, moderators included. A
+  // moderator's rows name who acted and why (EventSub channel.moderate).
   show_mod_messages?: boolean;
   // When a mod runs /clear, suppress the local visual wipe so the user's
   // backlog stays readable. Inverse of the /clearmessages user command.
@@ -1556,6 +1630,9 @@ export interface ModerationSettings {
   // The viewer's own buttons on a user card in channels they moderate
   // (Rust services/chatter_card.rs reads them; at most six are shown).
   card_actions?: ModCardAction[];
+  // A Ban from one press (the user card, the hover buttons, the line buttons,
+  // the B key) waits for a second press first. Off by default; Rust reads it.
+  confirm_bans?: boolean;
 }
 
 export interface ModCardAction {
