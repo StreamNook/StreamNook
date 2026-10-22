@@ -172,6 +172,9 @@ const FIELDS: &[(&str, Kind)] = &[
     ("giantEmoteAlign", Kind::Choice(&["left", "center", "right", "inline"])),
     ("showGifs", Kind::Bool),
     ("gifScale", Kind::Num { min: 0.5, max: 2.0, step: 0.0 }),
+    ("showUploadedImages", Kind::Bool),
+    ("uploadedImageScale", Kind::Num { min: 0.5, max: 3.0, step: 0.0 }),
+    ("uploadedImagesFrom", Kind::Choice(&["trusted", "everyone"])),
 ];
 
 fn has_control(s: &str) -> bool {

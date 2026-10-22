@@ -30,6 +30,7 @@ import {
 } from './overlayConfig';
 import type { OverlayMessage } from './sampleMessages';
 import { ProviderIcon } from './ProviderIcon';
+import { isTrustedSender, isUploadedImage } from './uploadedImage';
 import { AtmosphereChatWash } from './AtmosphereChatWash';
 import { convertMoneyInText, loadRates, ratesReady } from './currency';
 import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../../utils/giftBombCollapse';
@@ -545,7 +546,9 @@ const renderTextWithEmoji = (text: string, style: string): ReactNode => {
   return out;
 };
 
-const OverlaySegment = ({ segment, style, emoteScale, giant = false }: { segment: MessageSegment; style: OverlayStyle; emoteScale?: number; giant?: boolean }) => {
+/** `images`: this message may draw uploaded pictures (the Uploaded images
+ *  switch and its From choice, decided once per message). */
+const OverlaySegment = ({ segment, style, emoteScale, giant = false, images = false }: { segment: MessageSegment; style: OverlayStyle; emoteScale?: number; giant?: boolean; images?: boolean }) => {
   const scale = emoteScale ?? style.emoteScale;
   const emojiStyle = style.emojiStyle;
   if (segment.type === 'emote') {
@@ -580,6 +583,20 @@ const OverlaySegment = ({ segment, style, emoteScale, giant = false }: { segment
     return <GifImg segment={segment} emoteScale={scale} gifScale={style.gifScale ?? 1} />;
   }
   if (segment.type === 'link') {
+    // A picture on one of StreamNook's upload hosts draws in place of its link.
+    // A link that fails to load hides rather than leaving a broken image.
+    if (images && isUploadedImage(segment.url)) {
+      return (
+        <img
+          src={segment.url}
+          alt=""
+          referrerPolicy="no-referrer"
+          className="inline-block align-bottom"
+          style={{ maxHeight: `calc(6em * ${style.uploadedImageScale ?? 1})`, maxWidth: '100%', borderRadius: 6, margin: '0.125rem 0' }}
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+      );
+    }
     // 'plain' inherits the body color from the container, so a link reads as
     // ordinary text; underlining is independent of the color choice.
     return (
@@ -865,6 +882,9 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
   // the broadcaster "badge" (the owner signal from the service) is dropped from the
   // rendered set and only used to detect the owner for the pill below.
   const isYtOwner = provider === 'youtube' && (message.badges ?? []).some((b) => b.name === 'broadcaster');
+  // Uploaded pictures: on, and either from everyone or this sender is trusted.
+  const imagesHere =
+    style.showUploadedImages === true && (style.uploadedImagesFrom === 'everyone' || isTrustedSender(message.badges));
   // Twitch badges also obey the per-category hide list (predictions, bits, ...),
   // matched by badge set id. Other platforms reuse names like 'subscriber', so
   // the categories apply to Twitch rows only.
@@ -1283,7 +1303,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
                 <span aria-hidden="true" style={{ flexShrink: 0, width: '2px', borderRadius: '1px', background: 'color-mix(in srgb, currentColor 45%, transparent)' }} />
                 <span style={{ minWidth: 0 }}>
                   {message.segments!.map((seg, i) => (
-                    <OverlaySegment key={i} segment={seg} style={style} />
+                    <OverlaySegment key={i} segment={seg} style={style} images={imagesHere} />
                   ))}
                 </span>
               </div>
@@ -1379,7 +1399,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
           const overlays = zw.attached.get(i);
           return overlays
             ? <StackedEmote key={i} segs={[seg, ...overlays.map((o) => bodySegs[o])]} style={style} giant={giant} />
-            : <OverlaySegment key={i} segment={seg} style={style} giant={giant} />;
+            : <OverlaySegment key={i} segment={seg} style={style} giant={giant} images={imagesHere} />;
         })}
       </span>
     </div>
