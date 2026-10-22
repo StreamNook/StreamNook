@@ -100,6 +100,7 @@ async fn collect_badges() -> Vec<OutItem> {
                 &badge.badge_set_id,
                 &badge.badge_version,
                 enrichment,
+                badge.date_info.as_deref(),
             )
             .await;
         }

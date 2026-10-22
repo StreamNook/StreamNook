@@ -389,7 +389,7 @@ pub fn announce_new_favorite_campaigns(
 
 /// Letters and digits only, lowercased, so a badge's set id ("wsci-2026"), its
 /// title ("WSCI 2026") and its campaign's name compare equal.
-fn badge_key(name: &str) -> String {
+pub(crate) fn badge_key(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
@@ -510,6 +510,31 @@ pub fn campaign_for_badge<'a>(
     });
     let only = ends_with_title.next()?;
     ends_with_title.next().is_none().then_some(only)
+}
+
+/// The campaign, and its tier, whose untyped reward is the badge itself, by
+/// exact name. Twitch's reward-campaign list (the Poké Balls, the Apple TV
+/// badges) carries no distribution type, so `campaign_for_badge` never sees
+/// it; a pool's rewards there are named as the badge is ("Pichu"). Exact names
+/// only: an in-game item is typed, and a near name is no evidence.
+pub fn untyped_reward_for<'a>(
+    campaigns: &'a [DropCampaign],
+    title: &str,
+) -> Option<(&'a DropCampaign, &'a crate::models::drops::TimeBasedDrop)> {
+    let key = badge_key(title);
+    if key.is_empty() {
+        return None;
+    }
+    campaigns.iter().find_map(|c| {
+        c.time_based_drops
+            .iter()
+            .find(|d| {
+                d.benefit_edges
+                    .iter()
+                    .any(|b| b.distribution_type.is_none() && badge_reward_key(&b.name) == key)
+            })
+            .map(|d| (c, d))
+    })
 }
 
 pub fn overview(
@@ -788,5 +813,21 @@ mod tests {
             badge_campaign("b", "Fall Cup", "Fall Cup Gold Badge", Some("BADGE")),
         ];
         assert!(campaign_for_badge(&campaigns, "gold", Some("Gold")).is_none());
+    }
+
+    #[test]
+    fn a_reward_list_badge_is_found_by_its_exact_name() {
+        let campaigns = vec![
+            badge_campaign("item", "Ghost Week", "Gastly", Some("DIRECT_ENTITLEMENT")),
+            badge_campaign("ball", "Pokémon Night Out", "Gastly", None),
+        ];
+        // The untyped reward is invisible to the typed matcher.
+        assert!(campaign_for_badge(&campaigns, "gastly", Some("Gastly")).is_none());
+        let (campaign, tier) = untyped_reward_for(&campaigns, "Gastly").unwrap();
+        assert_eq!(campaign.id, "ball");
+        assert_eq!(tier.required_subs, 1);
+        // A near name is not the badge.
+        assert!(untyped_reward_for(&campaigns, "Gast").is_none());
+        assert!(untyped_reward_for(&campaigns, "").is_none());
     }
 }

@@ -157,6 +157,11 @@ static TRAILING_YEAR: Lazy<Regex> = Lazy::new(|| re(r"^,?\s*([0-9]{4})".into()))
 static ONGOING: Lazy<Regex> = Lazy::new(|| {
     re(r"(?i)\b(?:available|earnable|obtainable)\s+(?:while|as\s+long\s+as|until\s+further\s+notice)\b".into())
 });
+/// "available until January 30, 2027": a dated deadline. "until further
+/// notice" never matches, because a day and a year must follow the month.
+static AVAILABLE_UNTIL: Lazy<Regex> = Lazy::new(|| {
+    re(format!(r"(?i)\bavailable\s+until\s+{MONTH_WORD}\.?\s+{DAY},?\s+([0-9]{{4}})"))
+});
 static YEAR: Lazy<Regex> = Lazy::new(|| re(r"\b(20[0-9]{2})\b".into()));
 static NUMERIC_ENTITY: Lazy<Regex> = Lazy::new(|| re(r"&#([0-9]+);".into()));
 static HEX_ENTITY: Lazy<Regex> = Lazy::new(|| re(r"&#x([0-9a-fA-F]+);".into()));
@@ -572,8 +577,31 @@ pub(crate) fn resolve_with_year(
     if let Some(w) = parse_date_range(copy, current_year) {
         return Some(ResolvedWindow { runs: vec![w], source: WindowSource::Prose });
     }
+    if let Some(w) = available_until(copy) {
+        return Some(w);
+    }
 
     ongoing_window(copy)
+}
+
+/// A deadline with no start: "Pokémon badge Evolution is available until
+/// January 30, 2027". Open until the end of that local day. The year is
+/// required, so the deadline cannot re-match every year.
+fn available_until(copy: &str) -> Option<ResolvedWindow> {
+    let c = AVAILABLE_UNTIL.captures(copy)?;
+    let month0 = month_num(&c[1])?;
+    let end = local_ms(num(&c[3]) as i32, month0, num(&c[2]), 23, 59, 59)?;
+    Some(ResolvedWindow {
+        runs: vec![WindowRun { start_ms: None, end_ms: Some(end) }],
+        source: WindowSource::Prose,
+    })
+}
+
+/// The two stamps of an ISO `A - B` range, the shape the relay's `date_info`
+/// carries when it carries a window at all.
+pub(crate) fn iso_range(text: &str) -> Option<(String, String)> {
+    let c = ISO_RANGE.captures(text)?;
+    Some((c[1].to_string(), c[2].to_string()))
 }
 
 /// A badge the copy calls available on an ongoing condition, with no dates.
@@ -879,6 +907,38 @@ mod tests {
         // Dates, when present, still win over the condition.
         let dated = resolve(Some("Available while the event runs, Event duration: Jul 23 - Jul 25 2026"), None).unwrap();
         assert_eq!(dated.source, WindowSource::Prose);
+    }
+
+    // The Pokémon Evolution badges, as badgebase words them: no dates but the
+    // deadline. They read as not available before.
+    const PIKACHU: &str = "Pikachu is a limited-time global chat badge introduced as part of the the Evolving Pokémon campaign. Pikachu is an evolved form of the Pichu global chat badge.\nStep 2: Evolve Pichu\nWatch participating channels for at least 20 minutes a day on 3 different days before January 30, 2027.\nPokémon badge Evolution is available until January 30, 2027.";
+
+    #[test]
+    fn a_stated_deadline_is_open_until_the_end_of_that_day() {
+        let w = resolve(Some(PIKACHU), None).unwrap();
+        assert_eq!(w.source, WindowSource::Prose);
+        assert_eq!(w.runs[0].start_ms, None);
+        let e = end(&w.runs[0]);
+        assert_eq!((e.year(), e.month(), e.day(), e.hour()), (2027, 1, 30, 23));
+        assert_eq!(status_at(&w.runs, at("2026-10-21T12:00:00Z")), WindowStatus::Available);
+        assert_eq!(status_at(&w.runs, at("2027-02-02T12:00:00Z")), WindowStatus::Expired);
+    }
+
+    #[test]
+    fn a_deadline_needs_a_date_and_a_year() {
+        assert_eq!(resolve(Some("The badge is available until further notice."), None), None);
+        assert_eq!(resolve(Some("Evolution is available until January 30."), None), None);
+    }
+
+    #[test]
+    fn an_iso_range_yields_its_two_stamps() {
+        assert_eq!(
+            iso_range("2026-10-20T19:00:00Z - 2026-11-03T07:59:00Z"),
+            Some(("2026-10-20T19:00:00Z".into(), "2026-11-03T07:59:00Z".into()))
+        );
+        // A date added is not a window.
+        assert_eq!(iso_range("7 October 2026"), None);
+        assert_eq!(iso_range("2026-10-07T00:00:00Z"), None);
     }
 
     #[test]

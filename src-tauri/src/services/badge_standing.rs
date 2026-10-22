@@ -426,7 +426,7 @@ pub(crate) struct CatalogueBadge {
 }
 
 impl CatalogueBadge {
-    fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         format!("{}/{}", self.set_id, self.version)
     }
 }
@@ -438,7 +438,7 @@ pub(crate) struct BadgeMeta {
     pub enrichment: Option<serde_json::Value>,
 }
 
-async fn load_catalogue() -> Vec<CatalogueBadge> {
+pub(crate) async fn load_catalogue() -> Vec<CatalogueBadge> {
     let response = match crate::commands::badges::get_cached_global_badges().await {
         Ok(Some(r)) if !r.data.is_empty() => Some(r),
         // Nothing cached yet (first run): fetch it once. This shares the
@@ -491,7 +491,7 @@ fn meta_from_entry(entry: &universal_cache_service::UniversalCacheEntry) -> Badg
 
 /// Metadata for every catalogue badge, keyed `set_id/version`. One read of the
 /// cache under its lock.
-fn load_metadata(catalogue: &[CatalogueBadge]) -> HashMap<String, BadgeMeta> {
+pub(crate) fn load_metadata(catalogue: &[CatalogueBadge]) -> HashMap<String, BadgeMeta> {
     let keys: Vec<String> = catalogue
         .iter()
         .map(|b| metadata_key(&b.set_id, &b.version))
@@ -555,13 +555,17 @@ fn campaign_fills(
     if campaigns.is_empty() {
         return fills;
     }
+    use crate::services::drops_overview::{badge_tier_for, campaign_for_badge, untyped_reward_for};
     for badge in catalogue {
-        let Some(campaign) =
-            crate::services::drops_overview::campaign_for_badge(campaigns, &badge.set_id, Some(&badge.title))
-        else {
+        // A typed badge reward first, then the reward-campaign list, whose
+        // rewards carry no type.
+        let found = match campaign_for_badge(campaigns, &badge.set_id, Some(&badge.title)) {
+            Some(c) => Some((c, badge_tier_for(c, Some(&badge.title)))),
+            None => untyped_reward_for(campaigns, &badge.title).map(|(c, d)| (c, Some(d))),
+        };
+        let Some((campaign, tier)) = found else {
             continue;
         };
-        let tier = crate::services::drops_overview::badge_tier_for(campaign, Some(&badge.title));
         let mut steps = Vec::new();
         if let Some(d) = tier {
             if d.required_subs > 0 {
@@ -649,6 +653,13 @@ fn build_standing_with(
 
     let mut missing_now: Vec<MissingBadge> = Vec::new();
     if state == CollectionState::Complete && catalogue_ready {
+        use crate::services::drops_overview::badge_key;
+        // Every catalogue title by its comparable key, and whether any badge of
+        // that title is owned.
+        let mut titles: HashMap<String, bool> = HashMap::new();
+        for b in catalogue {
+            *titles.entry(badge_key(&b.title)).or_default() |= owned_set.contains(b.key().as_str());
+        }
         for badge in catalogue {
             let key = badge.key();
             if owned_set.contains(key.as_str()) {
@@ -662,10 +673,26 @@ fn build_standing_with(
             }
             let meta = metadata.get(&key);
             let enrichment = meta.and_then(|m| m.enrichment.as_ref());
-            let mut earn = crate::services::badge_earn::earn_path(
-                enrichment,
-                meta.and_then(|m| m.more_info.as_deref()),
-            );
+            let more_info = meta.and_then(|m| m.more_info.as_deref());
+            // An evolved badge is earned from the one it evolves from, so it is
+            // not earnable now for an account missing that badge.
+            if let Some(base) = crate::services::badge_earn::evolves_from(enrichment, more_info) {
+                if titles.get(&badge_key(&base)) == Some(&false) {
+                    continue;
+                }
+            }
+            // The relay has filed one badge's writeup under its sibling (Witch
+            // Hat carried Witchspire Logo's "watch 60 minutes"). A headline that
+            // names another catalogue badge means these steps are not this one's.
+            let foreign = enrichment
+                .and_then(|e| string_field(e, "headline"))
+                .map(|h| badge_key(&h))
+                .is_some_and(|h| h != badge_key(&badge.title) && titles.contains_key(&h));
+            let mut earn = if foreign {
+                crate::services::badge_earn::earn_path(None, None)
+            } else {
+                crate::services::badge_earn::earn_path(enrichment, more_info)
+            };
             let mut category = enrichment
                 .and_then(|e| e.get("requirement"))
                 .and_then(|r| string_field(r, "category"))
@@ -927,15 +954,34 @@ async fn active_campaigns(app: &crate::rt::AppHandle) -> Vec<crate::models::drop
     campaigns
 }
 
-/// One badge's earn window, for a surface that shows a single badge.
-pub async fn window_for(set_id: &str, version: &str) -> Option<Vec<WindowRun>> {
-    let entry =
-        universal_cache_service::peek_cached_entry(&metadata_key(set_id, version)).ok()??;
-    if entry.cache_type != CacheType::Badge {
-        return None;
+/// One badge's earn window, for a surface that shows a single badge. Falls back
+/// to the live campaign that awards it exactly as the standing does, so the
+/// badge page and the gallery never disagree.
+pub async fn window_for(
+    app: &crate::rt::AppHandle,
+    set_id: &str,
+    version: &str,
+) -> Option<Vec<WindowRun>> {
+    let own = universal_cache_service::peek_cached_entry(&metadata_key(set_id, version))
+        .ok()
+        .flatten()
+        .filter(|entry| entry.cache_type == CacheType::Badge)
+        .and_then(|entry| {
+            let meta = meta_from_entry(&entry);
+            badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref())
+        })
+        .map(|w| w.runs);
+    if own.is_some() {
+        return own;
     }
-    let meta = meta_from_entry(&entry);
-    badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref()).map(|w| w.runs)
+    let badge = load_catalogue()
+        .await
+        .into_iter()
+        .find(|b| b.set_id == set_id && b.version == version)?;
+    let key = badge.key();
+    campaign_fills(&[badge], &active_campaigns(app).await)
+        .remove(&key)
+        .map(|f| f.runs)
 }
 
 #[cfg(test)]
@@ -1199,5 +1245,75 @@ mod tests {
         let mut stale = collection(&["a/1"], CollectionState::Complete);
         stale.stale = true;
         assert!(stale.is_due(NOW + INCOMPLETE_TTL_MS));
+    }
+
+    #[test]
+    fn an_evolved_badge_waits_for_the_badge_it_evolves_from() {
+        let catalogue = vec![
+            badge("pichu", "1", "Pichu"),
+            badge("pikachu", "1", "Pikachu"),
+            badge("bulbasaur", "1", "Bulbasaur"),
+            badge("ivysaur", "1", "Ivysaur"),
+            badge("venusaur", "1", "Venusaur"),
+        ];
+        let evolves = |base: &str| BadgeMeta {
+            more_info: Some(format!(
+                "An evolved form of the {base} global chat badge. Evolution is available until January 30, 2099."
+            )),
+            enrichment: None,
+        };
+        let mut meta = HashMap::new();
+        meta.insert("pikachu/1".to_string(), evolves("Pichu"));
+        meta.insert("ivysaur/1".to_string(), evolves("Bulbasaur"));
+        meta.insert("venusaur/1".to_string(), evolves("Ivysaur"));
+        let c = collection(&["pichu/1", "bulbasaur/1"], CollectionState::Complete);
+        let s = build_standing(None, Some(&c), false, &catalogue, &meta, NOW);
+        let keys: Vec<&str> = s.missing_now.iter().map(|m| m.key.as_str()).collect();
+        // Venusaur needs Ivysaur, which this account does not hold yet.
+        assert_eq!(keys, vec!["ivysaur/1", "pikachu/1"]);
+        // The gallery still reads all three as open.
+        assert!(s.windows.contains_key("venusaur/1"));
+    }
+
+    #[test]
+    fn the_relays_stated_base_counts_where_its_prose_dropped_the_sentence() {
+        let catalogue = vec![badge("gastly", "1", "Gastly"), badge("haunter", "1", "Haunter")];
+        let mut haunter = window(NOW - HOUR, NOW + 48 * HOUR);
+        haunter.more_info = Some("Haunter continues the line that began with Gastly.".into());
+        haunter.enrichment.as_mut().unwrap()["evolves_from"] = json!("Gastly");
+        let mut meta = HashMap::new();
+        meta.insert("haunter/1".to_string(), haunter);
+        let without = collection(&["other/1"], CollectionState::Complete);
+        let s = build_standing(None, Some(&without), false, &catalogue, &meta, NOW);
+        assert!(s.missing_now.is_empty(), "Gastly is not held, so Haunter cannot be started");
+        let with = collection(&["gastly/1"], CollectionState::Complete);
+        let s = build_standing(None, Some(&with), false, &catalogue, &meta, NOW);
+        assert_eq!(s.missing_now.len(), 1);
+    }
+
+    #[test]
+    fn a_writeup_filed_under_a_sibling_badge_gives_no_steps() {
+        use crate::services::badge_earn::EarnStep;
+        let catalogue = vec![
+            badge("witch-hat", "1", "Witch Hat"),
+            badge("witchspire-logo", "1", "Witchspire Logo"),
+            badge("ultramarine", "1", "Ultramarine"),
+        ];
+        let writeup = |headline: &str| {
+            let mut m = window(NOW - HOUR, NOW + 24 * HOUR);
+            let e = m.enrichment.as_mut().unwrap();
+            e["headline"] = json!(headline);
+            e["action"] = json!("Watch 60 minutes of any livestream.");
+            m
+        };
+        let mut meta = HashMap::new();
+        meta.insert("witch-hat/1".to_string(), writeup("Witchspire Logo"));
+        // A headline worded differently still names this badge.
+        meta.insert("ultramarine/1".to_string(), writeup("Ultramarine Badge"));
+        let c = collection(&["other/1"], CollectionState::Complete);
+        let s = build_standing(None, Some(&c), false, &catalogue, &meta, NOW);
+        let steps = |key: &str| s.missing_now.iter().find(|m| m.key == key).unwrap().earn.steps.clone();
+        assert_eq!(steps("witch-hat/1"), vec![EarnStep::Other]);
+        assert!(matches!(steps("ultramarine/1").as_slice(), [EarnStep::Watch { .. }]));
     }
 }

@@ -567,8 +567,11 @@ fn tile(v: &Version, runs: Option<&Vec<WindowRun>>, now: i64) -> (BadgeTile, u32
         }
         .to_string()
     });
-    let blurb = field("more_info").unwrap_or(v.description);
-    let (prose, window, caveat) = split_blurb(blurb);
+    // Without the relay's written-up paragraph an older stored copy still opens with.
+    let blurb = field("more_info")
+        .map(|m| crate::commands::badge_metadata::without_blurb(m, data.and_then(|d| d.get("enrichment"))))
+        .unwrap_or_else(|| v.description.to_string());
+    let (prose, window, caveat) = split_blurb(&blurb);
     let tile = BadgeTile {
         key: format!("{}-{}", v.set_id, v.version),
         keys: vec![format!("{}/{}", v.set_id, v.version)],

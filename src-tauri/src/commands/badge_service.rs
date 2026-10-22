@@ -392,10 +392,31 @@ pub async fn get_badge_wall(
 /// One badge's earn window, for a surface that shows a single badge.
 #[tauri::command]
 pub async fn get_badge_window(
+    app_handle: crate::rt::AppHandle,
     set_id: String,
     version: String,
 ) -> Result<Option<Vec<crate::services::badge_window::WindowRun>>, String> {
-    Ok(crate::services::badge_standing::window_for(&set_id, &version).await)
+    Ok(crate::services::badge_standing::window_for(&app_handle, &set_id, &version).await)
+}
+
+/// The Pokémon evolution lines, which one is equipped, and each stage's
+/// progress (services/evolution.rs). Empty when there is nothing to evolve.
+#[tauri::command]
+pub async fn get_evolution_board(
+    app_handle: crate::rt::AppHandle,
+    force: Option<bool>,
+) -> Result<crate::services::evolution::EvolutionBoard, String> {
+    Ok(crate::services::evolution::board(&app_handle, force.unwrap_or(false)).await)
+}
+
+/// Equip an evolution line on Twitch, as twitch.tv's Drops panel does.
+#[tauri::command]
+pub async fn equip_evolution_lane(
+    app_handle: crate::rt::AppHandle,
+    track: String,
+    lane: String,
+) -> Result<(), String> {
+    crate::services::evolution::equip(&app_handle, &track, &lane).await
 }
 
 /// The live Drops campaign that awards a badge, when one is running, so a
@@ -521,6 +542,7 @@ async fn apply_drop(
             &badge.badge_set_id,
             &badge.badge_version,
             enrichment,
+            badge.date_info.as_deref(),
         )
         .await;
     }
@@ -546,6 +568,12 @@ pub(crate) async fn heal_enrichment(
         return false;
     };
     let key = format!("metadata:{}-v{}", badge.badge_set_id, badge.badge_version);
+    // The window line the store would write now: a copy kept by an older build
+    // can lack the window the drop's `date_info` carries.
+    let window_line = crate::commands::badge_metadata::enrichment_duration_line(
+        enrichment,
+        badge.date_info.as_deref(),
+    );
     // The same enrichment, not just any: a lost write could also be an update
     // (the relay adding a window to a drop it first sent without one), leaving
     // the older copy in place.
@@ -554,6 +582,13 @@ pub(crate) async fn heal_enrichment(
             crate::services::universal_cache_service::peek_cached_entry(&key),
             Ok(Some(entry)) if entry.metadata.source == crate::commands::badge_metadata::ENRICHMENT_SOURCE
                 && entry.data.get("enrichment") == Some(enrichment)
+                && window_line.as_deref().map_or(true, |line| {
+                    entry
+                        .data
+                        .get("more_info")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|m| m.contains(line))
+                })
         )
     };
     if kept() {
@@ -563,6 +598,7 @@ pub(crate) async fn heal_enrichment(
         &badge.badge_set_id,
         &badge.badge_version,
         enrichment,
+        badge.date_info.as_deref(),
     )
     .await;
     // An enrichment with nothing in it is skipped by the store; reporting it

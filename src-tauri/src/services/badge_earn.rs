@@ -239,6 +239,27 @@ pub fn earn_path(enrichment: Option<&serde_json::Value>, more_info: Option<&str>
     }
 }
 
+static EVOLVES_FROM: Lazy<Regex> =
+    Lazy::new(|| re(r"(?i)\bevolved form of the (.+?) global chat badge"));
+
+/// The badge this one evolves from. The relay states it outright
+/// (`enrichment.evolves_from`, read off badgebase's own page); otherwise the
+/// copy names it ("Pikachu is an evolved form of the Pichu global chat badge").
+/// The relay's prose rewrites that sentence away, which is why the field
+/// comes first. Evolving needs that badge.
+pub fn evolves_from(enrichment: Option<&serde_json::Value>, more_info: Option<&str>) -> Option<String> {
+    let stated = enrichment
+        .and_then(|e| e.get("evolves_from"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(name) = stated {
+        return Some(name.to_string());
+    }
+    let c = EVOLVES_FROM.captures(more_info?)?;
+    Some(c[1].trim().to_string()).filter(|s| !s.is_empty())
+}
+
 /// A live Drops campaign's requirement in the relay's `requirement` shape, so
 /// a badge page reads one shape whichever source answered.
 pub fn campaign_requirement(
