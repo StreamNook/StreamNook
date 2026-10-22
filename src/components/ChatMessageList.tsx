@@ -5,6 +5,7 @@ import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
 import { ModerationContext } from '../hooks/useTwitchChat';
+import { sameModerationContext } from './chat/moderationTagText';
 import { useAppStore } from '../stores/AppStore';
 import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
@@ -116,8 +117,7 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
     if (prev.message.automodHeld !== next.message.automodHeld) return false;
   }
   if (prev.isHighlighted !== next.isHighlighted) return false;
-  if (prev.moderationContext?.type !== next.moderationContext?.type ||
-      prev.moderationContext?.duration !== next.moderationContext?.duration) return false;
+  if (!sameModerationContext(prev.moderationContext, next.moderationContext)) return false;
   if (prev.emotes !== next.emotes) return false;
   if (prev.isModerator !== next.isModerator) return false;
   if (prev.broadcasterId !== next.broadcasterId) return false;

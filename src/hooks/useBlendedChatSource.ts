@@ -278,8 +278,10 @@ export function useBlendedChatSource<T extends ChatSource>(
     }
     const deletedSame =
       deleted.size === cache.deleted.size && [...deleted].every((id) => cache.deleted.has(id));
+    // By value too: naming the moderator (or a second timeout) replaces the
+    // entry under the same chatter.
     const clearedSame =
-      cleared.size === cache.cleared.size && [...cleared.keys()].every((k) => cache.cleared.has(k));
+      cleared.size === cache.cleared.size && [...cleared].every(([k, v]) => cache.cleared.get(k) === v);
     if (!deletedSame) cache.deleted = deleted;
     if (!clearedSame) cache.cleared = cleared;
 
