@@ -2761,10 +2761,10 @@ impl LlOrigin {
                     }
                 })
                 .await;
-            // Parked: nothing new will arrive until the player plays, so the
-            // paused player gets the held playlist back after the hold (one
-            // loopback request per hold, no network) instead of a fall-through
-            // to the upstream relay path.
+            // A hold that runs out answers with the held playlist (wait_for is
+            // true at its deadline), parked or not, so a paused player costs one
+            // loopback request per hold and never reaches the upstream relay.
+            // Only an edge that went away falls through.
             if !held && !self.is_parked() {
                 return None;
             }
@@ -3860,14 +3860,14 @@ mod tests {
 
     #[test]
     fn a_parked_origin_answers_a_timed_out_apple_reload() {
-        // A paused AVPlayer keeps making blocking reloads. Unparked, a reload the
-        // edge never satisfies times out to None (the relay falls through); parked,
-        // it gets the held playlist back so the relay never goes upstream.
+        // A paused AVPlayer keeps making blocking reloads. One the edge never
+        // satisfies runs out its hold and gets the held playlist back, parked or
+        // not, so the relay never goes upstream for it.
         let origin = LlOrigin::new(6);
         *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         let unparked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
-        assert!(unparked.is_none());
+        assert!(unparked.is_some());
         assert!(origin.park());
         let parked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
         assert!(parked.is_some());
