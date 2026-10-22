@@ -1,3 +1,35 @@
+## [8.8.15] - 2026-10-21
+
+## 🎉 New: Send pictures in chat
+> The emote menu has a new Images tab. Pick a picture and it uploads to the host you choose, then its link lands in your message box. You can also drop a picture onto chat, or paste one with paste upload turned on. StreamNook asks once before your first upload to a host and removes location and camera details before a picture leaves your PC.
+
+---
+
+### ✨ Features
+- The Images tab keeps your uploads, grouped by host, as a grid or a list. Each one shows when its link expires, and you can send it again for a fresh link, copy it or delete it (on kappa.lol, deleting removes the file too). kappa.lol and imgdrip.com are new hosts, and picture links in chat show at their full size as soon as they arrive.
+- Evolve your Pokémon badges from StreamNook. The Badges page lists each evolution line with its next stage and your days of progress, and you can pick a line and claim it without opening twitch.tv.
+- Typing @ puts the streamer at the top of the list, even before they've said anything.
+- Moderators get a full user card on desktop with the chatter's moderation history, their low trust status (monitor, restrict or clear it) and Warn when your sign-in allows it. Card buttons act on the first click, and Shift-click puts the command in the chat box instead.
+- Unban requests show up in chat, where moderators can approve or deny them with an optional reply.
+- The channel tools menu has a Blocked terms page that lists every blocked term, with search, and lets you add or remove them.
+- Timed-out and deleted messages name the moderator and the length, with the reason on hover. Actions from a Shared Chat partner say whose chat they happened in.
+- Alt-click Ban or a timeout on the hover buttons to pick a saved reason. The mod log offers Unban or Lift timeout on each chatter's latest ban.
+- Ban confirmation (Settings > Moderation) makes Ban ask for a second press, so a slip never bans anyone.
+- Menus and popovers across the app use the same glass as the title bar, and so does the update button. When the window loses focus the glass dims instead of disappearing.
+
+### 🐛 Bug Fixes
+- Badges you can earn right now show in Available Now, including the Apple TV badges, the Pokémon evolutions and reward campaign badges, and a badge's page shows the same dates as the gallery. An evolved badge waits until you own the one it evolves from, and a badge no longer shows another badge's earn steps.
+- Custom commands that run another command, like /tt for /timeout, now run it.
+- When two providers have an emote with the same name, the emote menu, reply previews and Kick and YouTube messages pick the one chat shows.
+- An emote with a zero-width emote on top keeps its full size.
+- Tooltips look the same everywhere. They show on turned-off buttons (often the ones explaining why) and in popped-out windows like the emote palette and the chat overlay, and screen readers keep each button's visible name.
+- Tab completion of chatter names works in Kick, YouTube and TikTok chats.
+- Removing a blocked term works in channels with more than 100 of them.
+- The command list keeps its category heading pinned while you scroll.
+
+### 🔧 Maintenance
+- Updated the list of trusted security certificates, removing one whose key was compromised.
+
 ## [8.8.14] - 2026-10-20
 
 ### ✨ Features
