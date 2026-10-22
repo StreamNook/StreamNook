@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
 import { getBadgeStanding, refetchDelay, windowStatusAt, type BadgeStanding } from '../services/badgeStanding';
 import { MissingNowStrip } from './badge/MissingNowStrip';
+import { EvolutionPicker } from './badge/EvolutionPicker';
 import { getProfileFromMemoryCache, getFullProfileWithFallback } from '../services/cosmeticsCache';
 import { getUlidTimestamp, getFormattedCreationDate } from '../utils/ulid';
 import { Tooltip } from './ui/Tooltip';
@@ -1547,6 +1548,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
 
           {!loading && !error && (
             <>
+              {isAuthenticated && !searchQuery && <EvolutionPicker />}
               {isAuthenticated && !searchQuery && (
                 <MissingNowStrip
                   standing={standing}

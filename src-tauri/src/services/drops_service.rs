@@ -967,6 +967,32 @@ impl DropsService {
         Self::fetch_active_campaigns(&self.client, &self.device_id, &self.session_id).await
     }
 
+    /// Twitch's second drops list on its own, reused when this fresh. Never the
+    /// standard list: re-reading that resets the live progress map the title bar
+    /// shows, which a badge surface has no business doing.
+    pub(crate) async fn reward_campaigns(&self, max_age_secs: u64) -> Result<Vec<DropCampaign>> {
+        if let Some(campaigns) = crate::services::reward_drops::cached_within(max_age_secs) {
+            return Ok(campaigns);
+        }
+        let token = DropsAuthService::get_token().await?;
+        crate::services::reward_drops::fetch(&self.client, &token, &self.device_id, &self.session_id).await
+    }
+
+    /// One GQL request with the Drops credential, answered as JSON.
+    pub(crate) async fn post_gql(&self, body: serde_json::Value) -> Result<serde_json::Value> {
+        let token = DropsAuthService::get_token().await?;
+        Ok(self
+            .client
+            .post("https://gql.twitch.tv/gql")
+            .headers(self.create_gql_headers(&token))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await?
+            .json()
+            .await?)
+    }
+
     /// The cached active campaigns at any age, without fetching and without
     /// touching the live progress map. After a claim the Drops page rebuilds
     /// from these: a re-fetch would reset the progress map and make the title

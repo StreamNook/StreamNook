@@ -22,6 +22,7 @@ import { MobileSheet } from '../ui/MobileSheet';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { badgeGalleryIsWarm, followBadgeSync, loadBadgeGallery, useBadgeGallery } from '../rewards/badgeGalleryStore';
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
+import { MobileEvolution } from '../rewards/MobileEvolution';
 import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
 import { ScreenHeader } from '../ui/ScreenHeader';
 import { TitleSegments } from '../ui/TitleControls';
@@ -380,6 +381,7 @@ export const RewardsScreen: React.FC = () => {
                   its own heading. */}
               {wall && (
                 <div className="pt-2">
+                  <MobileEvolution />
                   <MobileMissingNow missing={wall.missing} onOpen={openMissing} />
                 </div>
               )}
