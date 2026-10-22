@@ -142,6 +142,16 @@ import Testing
         #expect(ImageTier.url("https://example.com/a.png", pixelHeight: 84) == "https://example.com/a.png")
     }
 
+    @Test func ffzFallsBackToSmallerSizes() {
+        #expect(ImageTier.ffzFallbacks("https://cdn.frankerfacez.com/emote/1/4")
+            == ["https://cdn.frankerfacez.com/emote/1/2", "https://cdn.frankerfacez.com/emote/1/1"])
+        #expect(ImageTier.ffzFallbacks("https://cdn.frankerfacez.com/emote/1/animated/4")
+            == ["https://cdn.frankerfacez.com/emote/1/animated/2", "https://cdn.frankerfacez.com/emote/1/animated/1"])
+        #expect(ImageTier.ffzFallbacks("https://cdn.frankerfacez.com/emote/1/2") == ["https://cdn.frankerfacez.com/emote/1/1"])
+        #expect(ImageTier.ffzFallbacks("https://cdn.frankerfacez.com/emote/1/1").isEmpty)
+        #expect(ImageTier.ffzFallbacks("https://cdn.betterttv.net/emote/abc/3x").isEmpty)
+    }
+
     @Test func theCacheEvictsTheLeastRecentlyUsedByCost() {
         let cache = CostCache<String, Int>(limit: 100)
         cache.insert(1, for: "a", cost: 40)

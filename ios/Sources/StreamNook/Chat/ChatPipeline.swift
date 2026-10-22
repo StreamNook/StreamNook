@@ -45,6 +45,9 @@ final class ChatPipeline: @unchecked Sendable {
     /// when it is loaded, so the rows wearing it are drawn again when it lands.
     private var paintImages: Set<String> = []
     private var failureObserver: NSObjectProtocol?
+    private var recoveryObserver: NSObjectProtocol?
+    /// A relayout for images that failed or came back is waiting (on `queue`).
+    private var imageRelayoutQueued = false
     private var themeObserver: NSObjectProtocol?
     private var atmosphereObserver: NSObjectProtocol?
 
@@ -66,6 +69,13 @@ final class ChatPipeline: @unchecked Sendable {
                                                                  object: nil, queue: nil) { [weak self] note in
             guard let url = note.userInfo?["url"] as? String else { return }
             self?.dropBadge(url)
+            self?.imageFailed(url)
+        }
+        // An image that had failed loads after all: rows reading an emote's name draw it again.
+        recoveryObserver = NotificationCenter.default.addObserver(forName: ImagePipeline.recoveredNotification,
+                                                                  object: nil, queue: nil) { [weak self] note in
+            guard let url = note.userInfo?["url"] as? String else { return }
+            self?.imageRecovered(url)
         }
         // A new theme redoes every row in the new colours.
         themeObserver = NotificationCenter.default.addObserver(forName: ChatTheme.changed, object: nil, queue: nil) { [weak self] _ in
@@ -80,6 +90,7 @@ final class ChatPipeline: @unchecked Sendable {
 
     deinit {
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        if let recoveryObserver { NotificationCenter.default.removeObserver(recoveryObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let atmosphereObserver { NotificationCenter.default.removeObserver(atmosphereObserver) }
     }
@@ -326,6 +337,34 @@ final class ChatPipeline: @unchecked Sendable {
             }
             let batch = Batch(updated: wearing.map { layout($0, bitmap: true) })
             ready.withLock { $0.append(batch) }
+        }
+    }
+
+    /// An image that failed: rows laid out with it are laid out again, an emote as its name.
+    private func imageFailed(_ url: String) {
+        scheduleImageRelayout()
+    }
+
+    /// An image that had failed and now loads: rows standing in for it draw it again.
+    private func imageRecovered(_ url: String) {
+        scheduleImageRelayout()
+    }
+
+    /// One relayout of every row for images that failed or came back, at most every 250 ms
+    /// however many change (an outage fails hundreds at once). A room not on screen forgets its
+    /// layouts instead, so it lays out afresh when shown.
+    private func scheduleImageRelayout() {
+        queue.async { [self] in
+            guard !imageRelayoutQueued else { return }
+            imageRelayoutQueued = true
+            queue.asyncAfter(deadline: .now() + .milliseconds(250)) { [self] in
+                imageRelayoutQueued = false
+                guard visible else {
+                    layouts.removeAll()
+                    return
+                }
+                relayoutAll()
+            }
         }
     }
 

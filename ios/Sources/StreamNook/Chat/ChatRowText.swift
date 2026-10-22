@@ -226,6 +226,12 @@ struct RowText {
                 }
                 let pixelHeight = Double(emoteHeight * builder.scale)
                 let url = Self.emoteURL(emote.url, pixelHeight: pixelHeight)
+                // An emote whose image is failing reads as its name, never an empty box; the
+                // row draws the picture again once it loads (ChatPipeline).
+                if ImagePipeline.shared.hasFailed(url) {
+                    append(emote.code, body, color, extra: common)
+                    continue
+                }
                 var h = emoteHeight
                 var w = h * CGFloat(emote.aspect ?? EmoteAspects.shared.aspect(url) ?? 1)
                 let rotated = effects & (Modifier.rotateLeft | Modifier.rotateRight | Modifier.rotate90) != 0

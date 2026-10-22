@@ -476,12 +476,14 @@ final class ChatPreviewRowsView: UIView {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(redo), name: ChatTheme.changed, object: nil)
         center.addObserver(self, selector: #selector(redo), name: ImagePipeline.failedNotification, object: nil)
+        center.addObserver(self, selector: #selector(redo), name: ImagePipeline.recoveredNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// A new theme or a badge that failed to load: the rows are laid out again (a failed badge
-    /// gives its slot back). Image failures post from any thread.
+    /// A new theme, or an image that failed to load or came back: the rows are laid out again (a
+    /// failed badge gives its slot back, a failed emote reads as its name). Image changes post
+    /// from any thread.
     @objc nonisolated private func redo() {
         Task { @MainActor [weak self] in
             guard let self else { return }

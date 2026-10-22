@@ -38,7 +38,16 @@ final class ImagePipeline: @unchecked Sendable {
     private let decodeQueue = OperationQueue()
     private let lock = NSLock()
     private var inFlight: [String: [@Sendable (DecodedImage?) -> Void]] = [:]
-    private var failed: Set<String> = []
+    /// Images that failed, with the time before which they are not fetched again: a missing
+    /// file (HTTP 404 or 410) never, anything else (offline, a server error, a bad decode)
+    /// after `retryAfter`. An entry stays until the image loads, so whatever draws a stand-in
+    /// keeps it rather than an empty box while a retry runs.
+    private var failed: [String: Failure] = [:]
+    /// Failed images something drew a stand-in for since their last try, so worth trying again.
+    private var asked: Set<String> = []
+    /// Failed images with a retry waiting or running.
+    private var retrying: Set<String> = []
+    private let retryAfter: TimeInterval = 30
     /// The newest decode of each URL, whatever its size, for surfaces that draw one where
     /// another surface already decoded it.
     private var newest: [String: String] = [:]
@@ -62,16 +71,68 @@ final class ImagePipeline: @unchecked Sendable {
         }
     }
 
-    /// Posted (from any thread) the first time an image fails to load, with its URL as
-    /// `userInfo["url"]`, so surfaces that kept room for it can give that room back.
+    /// Posted (from any thread) when an image starts failing, with its URL as `userInfo["url"]`,
+    /// so surfaces that kept room for it can give that room back or draw a stand-in.
     static let failedNotification = Notification.Name("app.streamnook.image.failed")
+    /// Posted (from any thread) when an image that had failed loads after all, with its URL as
+    /// `userInfo["url"]`, so surfaces drawing a stand-in can draw the image again.
+    static let recoveredNotification = Notification.Name("app.streamnook.image.recovered")
+
+    private struct Failure {
+        var until: Date
+        /// The load that failed, for the retry.
+        let pixelHeight: Int
+        let animated: Bool
+    }
+
+    /// What fetching an image's file came to.
+    private enum Fetched {
+        case data(Data)
+        /// The server says the file does not exist (HTTP 404 or 410), or the URL cannot work.
+        case gone
+        /// Anything else: offline, a timeout, a server error. Worth trying again later.
+        case failed
+    }
 
     var memoryCost: Int { memory.totalCost }
     var memoryCount: Int { memory.count }
 
-    /// True once `url` failed to load or decode; it is not tried again this run.
+    /// True while `url` is failing: from its failure until it loads again. Draw a stand-in (an
+    /// emote's name, no badge) meanwhile. A missing file is never tried again this run; any
+    /// other failure is retried 30 s on, or as soon as it is asked about after that, while
+    /// something still draws a stand-in for it, and `recoveredNotification` says when it loads.
     func hasFailed(_ url: String) -> Bool {
-        lock.withLock { failed.contains(url) }
+        let (failing, retry) = lock.withLock { () -> (Bool, Failure?) in
+            guard let entry = failed[url] else { return (false, nil) }
+            asked.insert(url)
+            // A window that ran out with no retry waiting: one starts now.
+            if entry.until <= Date(), !retrying.contains(url) {
+                retrying.insert(url)
+                return (true, entry)
+            }
+            return (true, nil)
+        }
+        if let retry { load(url, pixelHeight: retry.pixelHeight, animated: retry.animated) { _ in } }
+        return failing
+    }
+
+    /// The end of a failed image's window: tried again when something drew a stand-in for it
+    /// meanwhile, else left until something asks (`hasFailed`).
+    private func windowEnded(_ url: String) {
+        let retry: Failure? = lock.withLock {
+            guard asked.remove(url) != nil, let entry = failed[url], entry.until <= Date() else {
+                retrying.remove(url)
+                return nil
+            }
+            return entry
+        }
+        if let retry { load(url, pixelHeight: retry.pixelHeight, animated: retry.animated) { _ in } }
+    }
+
+    /// Whether `url` is inside a failure window now (the lock held).
+    private func skipping(_ url: String) -> Bool {
+        guard let entry = failed[url] else { return false }
+        return entry.until > Date()
     }
 
     private static func key(_ url: String, _ pixelHeight: Int, _ animated: Bool) -> String {
@@ -98,7 +159,7 @@ final class ImagePipeline: @unchecked Sendable {
             return
         }
         let start: Bool = lock.withLock {
-            if failed.contains(url) { return false }
+            if skipping(url) { return false }
             if inFlight[key] != nil {
                 inFlight[key]?.append { image in Task { @MainActor in done(image) } }
                 return false
@@ -107,53 +168,135 @@ final class ImagePipeline: @unchecked Sendable {
             return true
         }
         guard start else {
-            if lock.withLock({ failed.contains(url) }) { Task { @MainActor in done(nil) } }
+            if lock.withLock({ skipping(url) }) { Task { @MainActor in done(nil) } }
             return
         }
         Task.detached(priority: .userInitiated) { [self] in
-            let data = await self.bytes(url)
+            let fetched = await self.bytes(url)
+            let data: Data?
+            if case .data(let bytes) = fetched { data = bytes } else { data = nil }
+            let gone: Bool
+            if case .gone = fetched { gone = true } else { gone = false }
             let image: DecodedImage? = await withCheckedContinuation { continuation in
                 self.decodeQueue.addOperation {
                     continuation.resume(returning: data.flatMap { self.decode($0, pixelHeight: pixelHeight, animated: animated) })
                 }
             }
             if let image { self.memory.insert(image, for: key, cost: image.cost) }
-            let (waiters, newlyFailed) = self.lock.withLock { () -> ([@Sendable (DecodedImage?) -> Void], Bool) in
-                var newlyFailed = false
-                if image == nil { newlyFailed = self.failed.insert(url).inserted } else { self.newest[url] = key }
-                return (self.inFlight.removeValue(forKey: key) ?? [], newlyFailed)
+            // A file that will not decode is fetched afresh next time rather than read again.
+            if data != nil, image == nil { self.forget(url) }
+            let (waiters, didFail, recovered) = self.lock.withLock {
+                () -> ([@Sendable (DecodedImage?) -> Void], Bool, Bool) in
+                self.retrying.remove(url)
+                var didFail = false
+                var recovered = false
+                if image == nil {
+                    // A failure of a load that started before another one's window: that window stands.
+                    if !self.skipping(url) {
+                        let until = gone ? Date.distantFuture : Date().addingTimeInterval(self.retryAfter)
+                        self.failed[url] = Failure(until: until, pixelHeight: pixelHeight, animated: animated)
+                        if !gone { self.retrying.insert(url) }
+                        didFail = true
+                    }
+                } else {
+                    self.newest[url] = key
+                    recovered = self.failed.removeValue(forKey: url) != nil
+                    self.asked.remove(url)
+                }
+                return (self.inFlight.removeValue(forKey: key) ?? [], didFail, recovered)
             }
             waiters.forEach { $0(image) }
-            if newlyFailed {
+            if didFail {
+                // Every failure, a retry's too, so the surfaces drawing a stand-in say they still
+                // want the image (they ask `hasFailed` as they lay out again).
                 NotificationCenter.default.post(name: Self.failedNotification, object: nil, userInfo: ["url": url])
+                if !gone {
+                    Task.detached(priority: .utility) { [self] in
+                        try? await Task.sleep(for: .seconds(self.retryAfter))
+                        self.windowEnded(url)
+                    }
+                }
+            }
+            if recovered {
+                NotificationCenter.default.post(name: Self.recoveredNotification, object: nil, userInfo: ["url": url])
             }
         }
     }
 
-    /// The original file: from disk when cached there, else fetched once and kept.
-    private func bytes(_ url: String) async -> Data? {
-        if let bundled = HouseArt.data(url) { return bundled }
+    /// Drops `url`'s file from the disk cache.
+    private func forget(_ url: String) {
+        try? FileManager.default.removeItem(at: disk.appending(path: ImageCacheKey.fileName(for: url)))
+    }
+
+    /// The original file: from disk when cached there, else fetched once and kept. A FrankerFaceZ
+    /// size the CDN does not have falls back to the next smaller one, kept under the URL asked for.
+    private func bytes(_ url: String) async -> Fetched {
+        if let bundled = HouseArt.data(url) { return .data(bundled) }
+        if url.hasPrefix(HouseArt.scheme) { return .gone }
         // A picture the core finished itself (a badge painted onto its colour) carries its bytes.
         if url.hasPrefix("data:") {
-            guard let comma = url.firstIndex(of: ","), url[..<comma].hasSuffix(";base64") else { return nil }
-            return Data(base64Encoded: String(url[url.index(after: comma)...]))
+            guard let comma = url.firstIndex(of: ","), url[..<comma].hasSuffix(";base64"),
+                  let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return .gone }
+            return .data(data)
         }
         let file = disk.appending(path: ImageCacheKey.fileName(for: url))
-        if let data = try? Data(contentsOf: file), !data.isEmpty { return data }
-        guard let remote = URL(string: url) else { return nil }
+        if let data = try? Data(contentsOf: file), !data.isEmpty { return .data(data) }
+        guard let remote = URL(string: url) else { return .gone }
+        var outcome = await fetch(remote)
+        if case .httpError(let status) = outcome {
+            // FFZ serves only the sizes an emote was uploaded with: try the smaller ones.
+            var smallerFailed = false
+            for smaller in ImageTier.ffzFallbacks(url) {
+                guard let next = URL(string: smaller) else { continue }
+                let tried = await fetch(next)
+                if case .data = tried {
+                    outcome = tried
+                    break
+                }
+                if case .httpError(let code) = tried, Self.missing(code) { continue }
+                smallerFailed = true
+            }
+            if case .httpError = outcome {
+                return Self.missing(status) && !smallerFailed ? .gone : .failed
+            }
+        }
+        switch outcome {
+        case .data(let data):
+            try? data.write(to: file, options: .atomic)
+            return .data(data)
+        case .httpError(let status):
+            return Self.missing(status) ? .gone : .failed
+        case .unreachable:
+            return .failed
+        }
+    }
+
+    private enum Download {
+        case data(Data)
+        /// The server answered without the file (any status outside 2xx, or an empty body as 0).
+        case httpError(Int)
+        /// No answer: offline, a timeout, a dropped connection.
+        case unreachable
+    }
+
+    /// One file over the network, a dropped connection tried once more.
+    private func fetch(_ remote: URL) async -> Download {
         for attempt in 0..<2 {
             do {
                 let (data, response) = try await session.data(from: remote)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else {
-                    return nil
-                }
-                try? data.write(to: file, options: .atomic)
-                return data
+                guard let http = response as? HTTPURLResponse else { return .httpError(0) }
+                guard (200..<300).contains(http.statusCode), !data.isEmpty else { return .httpError(http.statusCode) }
+                return .data(data)
             } catch {
                 if attempt == 0 { try? await Task.sleep(for: .milliseconds(400)) }
             }
         }
-        return nil
+        return .unreachable
+    }
+
+    /// The statuses that say a file does not exist, rather than that it could not be had now.
+    private static func missing(_ status: Int) -> Bool {
+        status == 404 || status == 410
     }
 
     /// Decodes every frame (or the first) downsampled to `pixelHeight`, forcing the decode here so

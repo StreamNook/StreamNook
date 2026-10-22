@@ -134,7 +134,10 @@ final class ChatRowCell: UIView {
                 imageLayers.append(image)
                 load(url, into: image, attachment: attachment, isBase: i == 0)
             }
-            applyEffects(attachment.effects, to: group)
+            let moving = effectsMove(attachment)
+            // Before the flips and turns: a layer's frame cannot be set once it has a transform.
+            let outer = Self.travel(group, effects: attachment.effects, moving: moving)
+            applyEffects(attachment.effects, to: group, moving: moving)
             if let outline = attachment.mask {
                 // Only the name's letters show the moving paint.
                 let mask = CAShapeLayer()
@@ -156,10 +159,71 @@ final class ChatRowCell: UIView {
                     group.borderColor = ring.cgColor
                 }
             }
-            layer.addSublayer(group)
-            groupLayers.append(group)
+            layer.addSublayer(outer)
+            groupLayers.append(outer)
         }
         CATransaction.commit()
+    }
+
+    /// Whether an emote's modifier effects move (spin, shake, slide, rainbow and the rest): with
+    /// its picture (the chat's animate setting), and only at the app's full motion without
+    /// Reduce Motion, as desktop stops them under reduced motion.
+    private func effectsMove(_ attachment: RowAttachment) -> Bool {
+        moves(attachment) && Look.shared.motion == .full && !UIAccessibility.isReduceMotionEnabled
+    }
+
+    /// FFZ's Slide (across the emote's box and round again, clipped to it), Arrive and Leave (in
+    /// from the left, out to the right, once) on a layer of their own outside the flips and turns,
+    /// as desktop nests them. Leave ends gone, as desktop's fill holds it. Returns the outermost
+    /// layer, `group` itself when nothing travels.
+    private static func travel(_ group: CALayer, effects: UInt32, moving: Bool) -> CALayer {
+        guard moving, effects & (Modifier.slide | Modifier.appear | Modifier.leave) != 0 else { return group }
+        let box = group.frame
+        let w = box.width
+        let mover = CALayer()
+        mover.actions = ["position": NSNull(), "bounds": NSNull(), "opacity": NSNull(), "transform": NSNull()]
+        mover.frame = box
+        group.frame = mover.bounds
+        mover.addSublayer(group)
+        if effects & Modifier.slide != 0 {
+            let slide = CABasicAnimation(keyPath: "transform.translation.x")
+            slide.fromValue = -w
+            slide.toValue = w
+            slide.duration = 2
+            slide.timingFunction = CAMediaTimingFunction(name: .linear)
+            slide.repeatCount = .infinity
+            slide.isAdditive = true
+            mover.add(slide, forKey: "slide")
+        }
+        func pass(from: CGFloat, to: CGFloat, fade: (Float, Float), curve: CAMediaTimingFunctionName) -> CAAnimation {
+            let move = CABasicAnimation(keyPath: "transform.translation.x")
+            move.fromValue = from
+            move.toValue = to
+            move.isAdditive = true
+            let opacity = CABasicAnimation(keyPath: "opacity")
+            opacity.fromValue = fade.0
+            opacity.toValue = fade.1
+            let both = CAAnimationGroup()
+            both.animations = [move, opacity]
+            both.duration = 0.5
+            both.timingFunction = CAMediaTimingFunction(name: curve)
+            return both
+        }
+        if effects & Modifier.appear != 0 {
+            mover.add(pass(from: -w, to: 0, fade: (0, 1), curve: .easeOut), forKey: "appear")
+        }
+        if effects & Modifier.leave != 0 {
+            mover.add(pass(from: 0, to: w, fade: (1, 0), curve: .easeIn), forKey: "leave")
+            mover.opacity = 0
+        }
+        guard effects & Modifier.slide != 0 else { return mover }
+        let clip = CALayer()
+        clip.actions = ["position": NSNull(), "bounds": NSNull()]
+        clip.frame = box
+        clip.masksToBounds = true
+        mover.frame = clip.bounds
+        clip.addSublayer(mover)
+        return clip
     }
 
     /// Whether an attachment moves: emotes follow the chat's animate setting, badges always do
@@ -179,20 +243,49 @@ final class ChatRowCell: UIView {
         let revision = layout?.revision
         let id = layout?.id
         let unsized = attachment.kind == .emote || attachment.kind == .gif
+        let effects = attachment.effects
+        let moving = effectsMove(attachment)
+        let tinted = EmoteFilter.applies(effects, moving: moving)
+        let tintKey = EmoteFilter.key(url, effects: effects, moving: moving, pixelHeight: attachment.pixelHeight, animated: animate)
         if let hit = ImagePipeline.shared.cached(url, pixelHeight: attachment.pixelHeight, animated: animate) {
-            image.show(hit, animate: animate)
+            if tinted {
+                tint(hit, key: tintKey, effects: effects, moving: moving, into: image, animate: animate)
+            } else {
+                image.show(hit, animate: animate)
+            }
             return
         }
         ImagePipeline.shared.load(url, pixelHeight: attachment.pixelHeight, animated: animate) { [weak self, weak image] decoded in
             guard let self, let image, self.layout?.id == id, self.layout?.revision == revision else { return }
             if unsized, isBase, let decoded { EmoteAspects.shared.note(url, aspect: Double(decoded.aspect)) }
-            image.show(decoded, animate: animate)
+            if tinted, let decoded {
+                self.tint(decoded, key: tintKey, effects: effects, moving: moving, into: image, animate: animate)
+            } else {
+                image.show(decoded, animate: animate)
+            }
+        }
+    }
+
+    /// Shows an emote (or one of its overlays) with its colour modifiers drawn in, drawing them
+    /// first when no row has yet.
+    private func tint(_ decoded: DecodedImage, key: String, effects: UInt32, moving: Bool, into image: AnimatedImageLayer,
+                      animate: Bool) {
+        if let done = EmoteFilter.cached(key) {
+            image.show(done, animate: animate)
+            return
+        }
+        let revision = layout?.revision
+        let id = layout?.id
+        EmoteFilter.filter(decoded, key: key, effects: effects, moving: moving) { [weak self, weak image] drawn in
+            guard let self, let image, self.layout?.id == id, self.layout?.revision == revision else { return }
+            image.show(drawn, animate: animate)
         }
     }
 
     /// Flips and turns as transforms on the emote's group, and the moving effects as layer
-    /// animations. Colour filters have no Core Animation equivalent on iOS and draw unfiltered.
-    private func applyEffects(_ effects: UInt32, to group: CALayer) {
+    /// animations when `moving`. Colour modifiers are drawn into the frames (`EmoteFilter`);
+    /// Slide, Arrive and Leave travel on a layer outside the group (`travel`).
+    private func applyEffects(_ effects: UInt32, to group: CALayer, moving: Bool) {
         guard effects != 0 else { return }
         var transform = CATransform3DIdentity
         if effects & Modifier.flipX != 0 { transform = CATransform3DScale(transform, -1, 1, 1) }
@@ -200,7 +293,7 @@ final class ChatRowCell: UIView {
         if effects & (Modifier.rotate90 | Modifier.rotateRight) != 0 { transform = CATransform3DRotate(transform, .pi / 2, 0, 0, 1) }
         if effects & Modifier.rotateLeft != 0 { transform = CATransform3DRotate(transform, -.pi / 2, 0, 0, 1) }
         group.transform = transform
-        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        guard moving else { return }
         if effects & Modifier.rotate != 0 {
             let spin = CABasicAnimation(keyPath: "transform.rotation.z")
             spin.fromValue = 0

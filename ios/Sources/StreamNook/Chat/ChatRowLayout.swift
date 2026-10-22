@@ -433,9 +433,12 @@ struct ChatRowLayoutBuilder {
             }
         }
         var giant: ChatViewEmote?
+        let giantHeight = (8 * fontSize * CGFloat(style.emoteScale)).rounded()
+        // A giant emote whose big image is failing stays in the line at its usual size.
         if msgID == "gigantified-emote-message", style.giantEmotes, style.giantEmoteAlign != "inline",
            let last = spans.lastIndex(where: { if case .emote = $0 { return true } else { return false } }),
-           case .emote(let emote, _, _) = spans[last] {
+           case .emote(let emote, _, _) = spans[last],
+           !ImagePipeline.shared.hasFailed(ImageTier.url(Self.giantURL(emote.url), pixelHeight: Double(giantHeight * scale))) {
             giant = emote
             spans.remove(at: last)
         }
@@ -465,7 +468,7 @@ struct ChatRowLayoutBuilder {
         }
 
         if let giant {
-            let h = (8 * fontSize * CGFloat(style.emoteScale)).rounded()
+            let h = giantHeight
             let w = min(h * CGFloat(giant.aspect ?? 1), 24 * fontSize * CGFloat(style.emoteScale), width - 2 * sideInset)
             let x: CGFloat
             switch style.giantEmoteAlign {
