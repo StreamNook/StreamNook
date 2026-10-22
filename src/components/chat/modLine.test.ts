@@ -68,6 +68,7 @@ describe('line buttons', () => {
         targetName: 'Spammer',
         action: { kind: 'timeout', seconds: 600 },
         useSavedReason: true,
+        onePress: true,
       },
       name: 'Time out 10m',
       label: '10m',

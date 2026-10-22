@@ -177,6 +177,8 @@ export function lineRequest(
       targetName: d.n,
       action,
       useSavedReason: action.kind !== 'delete',
+      // One click; Rust asks for a second on a Ban when Ban confirmation is on.
+      onePress: true,
     },
     name: button.name,
   };
