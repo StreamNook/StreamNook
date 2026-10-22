@@ -168,6 +168,17 @@ import Testing
         #expect(Dial.tenth(0.29) == 2)
         #expect(Dial.tenth(0.3) == 3)
     }
+
+    @Test func theTopAndBottomEdgesNeverStartADial() {
+        #expect(Dial.canStart(y: 200, height: 400))
+        #expect(!Dial.canStart(y: 10, height: 400))
+        #expect(!Dial.canStart(y: 395, height: 400))
+        #expect(Dial.canStart(y: 44, height: 400))
+        #expect(Dial.canStart(y: 356, height: 400))
+        // A safe area larger than a fingertip widens that edge's strip.
+        #expect(!Dial.canStart(y: 50, height: 400, edgeTop: 60))
+        #expect(!Dial.canStart(y: 345, height: 400, edgeBottom: 60))
+    }
 }
 
 @Suite struct TogetherTests {

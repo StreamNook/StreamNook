@@ -70,4 +70,15 @@ public enum Dial {
 
     /// Brightness never goes under 2 percent, so it can always be dialled back.
     public static let brightnessFloor = 0.02
+
+    /// The quiet strip along the top and bottom of the picture, where the system's own pulls start
+    /// (Notification and Control Center down from the top, the home bar up from the bottom): about
+    /// a fingertip, the 44 pt touch minimum. Android's twin is `dialZone.ts` (48 dp).
+    public static let edgeGuard = 44.0
+
+    /// Whether a swipe that started `y` points down a picture `height` tall may turn a dial. Each
+    /// strip is `edgeGuard`, or the safe area on that edge when that is larger.
+    public static func canStart(y: Double, height: Double, edgeTop: Double = 0, edgeBottom: Double = 0) -> Bool {
+        y >= max(edgeGuard, edgeTop) && y <= height - max(edgeGuard, edgeBottom)
+    }
 }
