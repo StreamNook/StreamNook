@@ -9,8 +9,8 @@ import { formatVodTime } from '../utils/vodProgress';
  * its box art, start time and length. Opened from the Chapters control in the
  * player bar; a row seeks the player to that chapter.
  *
- * An opaque plate, not glass: menus over video are opaque on purpose so
- * their rows stay legible whatever plays underneath.
+ * The menu glass, whose plate stays near-opaque at every glassiness, so its
+ * rows stay legible whatever plays underneath.
  */
 const VodChaptersMenu = forwardRef<
   HTMLDivElement,
@@ -34,9 +34,9 @@ const VodChaptersMenu = forwardRef<
       data-no-wheel-volume
       role="menu"
       aria-label="Chapters"
-      className="player-fs-popover stats-hud absolute bottom-16 left-3 z-[60] w-80 max-h-[60%] overflow-y-auto scrollbar-thin rounded-xl p-2"
+      className="player-fs-popover glass-flyout absolute bottom-16 left-3 z-[60] w-80 max-h-[60%] overflow-y-auto scrollbar-thin rounded-xl"
     >
-      <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-textSecondary">
+      <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
         Chapters
       </div>
       {chapters.map((c) => {
@@ -47,8 +47,8 @@ const VodChaptersMenu = forwardRef<
             type="button"
             role="menuitem"
             onClick={() => onSeek(c.start_secs)}
-            className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors ${
-              active ? 'bg-accent/15' : 'hover:bg-white/10'
+            className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors ${
+              active ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
             }`}
           >
             {c.box_art_url ? (
@@ -66,7 +66,7 @@ const VodChaptersMenu = forwardRef<
               </div>
             )}
             <div className="min-w-0 flex-1">
-              <div className={`truncate text-[13px] font-medium ${active ? 'text-accent' : 'text-textPrimary'}`}>
+              <div className="truncate text-[13px] font-medium text-textPrimary">
                 {c.title}
               </div>
               <div className="text-[12px] tabular-nums text-textSecondary">

@@ -4,6 +4,7 @@ import { ProviderLogo } from '../ProviderLogo';
 import { makeKey } from '../../utils/providerKey';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { Tooltip } from '../ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL } from '../ui/glazeButtons';
 import { TabLiveLabel } from '../chat/TabLiveLabel';
 import { useTabLive } from '../../hooks/useTabLive';
 import { liveWord, type LiveSource } from '../../utils/tabLive';
@@ -30,10 +31,10 @@ const MultiNookChatSwitcher: React.FC = () => {
 
   if (slots.length <= 1) return null; // Only show if multiple streams exist
 
-  // `no-live-blur` on the chips: the strip's own blur makes it their backdrop
-  // root, so theirs could only re-blur the strip, and a backdrop filter nested
-  // in another one is what WebView2 paints stale. No transition class either:
-  // `.glass-button` and `.glass-input` already list theirs.
+  // The `--flat` glaze on the chips: the strip's own blur makes it their
+  // backdrop root, so theirs could only re-blur the strip, and a backdrop filter
+  // nested in another one is what WebView2 paints stale. The chosen chip is the
+  // filled accent capsule, like the MultiChat window's tab strip.
   return (
     <div className="flex-shrink-0 flex items-center gap-2 p-2 px-3 overflow-x-auto scrollbar-thin border-b border-borderSubtle bg-glass/30 backdrop-blur-sm shadow-sm" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
       <div className="flex items-center gap-1.5 min-w-max">
@@ -56,12 +57,12 @@ const MultiNookChatSwitcher: React.FC = () => {
                 onClick={() => setActiveChatChannelId(key)}
                 aria-label={state ? `${name}, ${state}` : name}
                 className={`
-                  no-live-blur px-3 py-1.5 text-xs font-bold tracking-wide flex items-center gap-1.5
+                  px-3 py-1.5 text-xs font-bold tracking-wide flex items-center gap-1.5
                   ${isActive
-                    ? 'glass-input text-emerald-400 font-extrabold'
-                    : 'glass-button text-textSecondary hover:text-white'}
+                    ? `${ACCENT_BUTTON} !text-xs font-extrabold`
+                    : 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textSecondary hover:text-white'}
                 `}
-                style={{ borderRadius: '8px' }}
+                style={isActive ? ACCENT_FILL : undefined}
               >
                 {slot.provider && slot.provider !== 'twitch' && (
                   <ProviderLogo provider={slot.provider} size={11} className="shrink-0" />
@@ -83,10 +84,10 @@ const MultiNookChatSwitcher: React.FC = () => {
           onClick={toggleChatPinned}
           aria-pressed={isChatPinned}
           aria-label={isChatPinned ? 'Unpin chat' : 'Pin chat'}
-          className={`no-live-blur shrink-0 p-1.5 ${
-            isChatPinned ? 'glass-input text-emerald-400' : 'glass-button text-textSecondary hover:text-white'
+          className={`shrink-0 p-1.5 ${
+            isChatPinned ? ACCENT_BUTTON : 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textSecondary hover:text-white'
           }`}
-          style={{ borderRadius: '8px' }}
+          style={isChatPinned ? ACCENT_FILL : undefined}
         >
           {isChatPinned ? <Pin size={13} /> : <PinOff size={13} />}
         </button>

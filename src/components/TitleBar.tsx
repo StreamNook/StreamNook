@@ -1081,7 +1081,7 @@ const TitleBar = () => {
                 >
                   <button
                     onClick={handleStartUpdate}
-                    className="update-pill flex items-center gap-1.5 h-[26px] pl-2.5 pr-3 rounded-full whitespace-nowrap"
+                    className="update-pill chrome-glaze chrome-glaze--control flex items-center gap-1.5 h-[26px] pl-2.5 pr-3 whitespace-nowrap"
                   >
                     <Download size={13} strokeWidth={2.5} />
                     <span className="text-xs font-semibold tracking-wide">

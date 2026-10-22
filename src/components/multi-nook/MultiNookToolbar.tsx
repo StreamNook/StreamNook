@@ -345,13 +345,9 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
             {/* Smart list — live following on open, instant filter + Twitch search while typing */}
             {isSearchOpen && (
               <div className="absolute right-0 top-full mt-2 w-72 z-50">
-                {/* Frosted glass surface — explicit opaque base because this menu floats directly
-                    over the (bright) video grid with no dimming scrim, where the glass-strength
-                    tint alone reads as see-through. */}
-                <div
-                  className="liquid-glass-panel overflow-hidden"
-                  style={{ backgroundColor: 'color-mix(in srgb, rgb(16 16 20) 92%, var(--glass-under, transparent))' }}
-                >
+                {/* The menu glass: its plate stays near-opaque at every glassiness, since
+                    this menu floats directly over the (bright) video grid with no dimming scrim. */}
+                <div className="glass-flyout no-live-blur rounded-xl !p-0 overflow-hidden">
                   <div ref={listRef} className="max-h-80 overflow-y-auto custom-scrollbar p-1.5">
 
                     {/* Live following (instant, from cache) */}
@@ -359,7 +355,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                       <>
                         <div className="px-2.5 pt-1.5 pb-1 flex items-center gap-1.5">
                           <Radio size={11} className="text-red-500" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
                             {query ? 'Following · live' : 'Live now'}
                           </span>
                         </div>
@@ -385,7 +381,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                       <>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                           <span aria-hidden className="h-[7px] w-[7px] rounded-full border-[1.5px] border-textMuted" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">Offline</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">Offline</span>
                         </div>
                         <div className="space-y-0.5">
                           {offlineItems.map((item, i) => {
@@ -412,7 +408,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                       <>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                           <Search size={11} className="text-textMuted" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
                             All channels
                           </span>
                           {isSearching && <Loader2 size={11} className="text-accent animate-spin ml-auto" />}

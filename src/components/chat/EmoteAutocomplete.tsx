@@ -5,6 +5,7 @@ import { EmoteTabCandidate } from '../../utils/chatInputWord';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteThumb from './EmoteThumb';
 import EmoteProviderLogo from './EmoteProviderLogo';
+import { GLAZE_PILL } from '../ui/glazeButtons';
 
 interface EmoteAutocompleteProps {
   current: EmoteTabCandidate;
@@ -70,7 +71,7 @@ const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backward
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
       transition={{ duration: 0.12, ease: 'easeOut' }}
-      className="sn-popover absolute z-[60] left-0 right-0 mb-2"
+      className="glass-flyout rounded-xl !p-0 absolute z-[60] left-0 right-0 mb-2"
       style={{
         bottom: '100%',
       }}
@@ -87,7 +88,7 @@ const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backward
         </div>
 
         <div
-          className="px-3 py-1.5 rounded-md flex items-center justify-center bg-white/10 border border-white/15 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]"
+          className="px-3 py-1.5 rounded-lg flex items-center justify-center bg-white/[0.08]"
         >
           <CandidateThumb tok={current} size={52} />
         </div>
@@ -102,7 +103,7 @@ const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backward
         </div>
       </div>
 
-      <div className="px-3.5 py-2 border-t border-white/5 flex items-center justify-between">
+      <div className="px-3.5 py-2 border-t border-white/[0.06] flex items-center justify-between">
         <span className="text-[12px] font-semibold text-white/85 truncate pr-2">
           {current.name}
           {current.emote && (
@@ -121,19 +122,20 @@ const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backward
             <span className="text-[10px] text-white">cycle</span>
           </span>
           {onSwitchToList && (
-            <button
-              type="button"
-              title="Make Tab open the emote list instead"
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] leading-none text-white/60 hover:text-textPrimary hover:bg-white/[0.07] transition-colors"
-              // mousedown, not click: the textarea keeps focus and its caret.
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onSwitchToList();
-              }}
-            >
-              <List className="w-3.5 h-3.5" />
-              List
-            </button>
+            <Tooltip content="Make Tab open the emote list instead" describe>
+              <button
+                type="button"
+                className={`${GLAZE_PILL} inline-flex h-6 items-center gap-1 px-2.5 text-[11px] leading-none`}
+                // mousedown, not click: the textarea keeps focus and its caret.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onSwitchToList();
+                }}
+              >
+                <List className="w-3.5 h-3.5" />
+                List
+              </button>
+            </Tooltip>
           )}
         </span>
       </div>

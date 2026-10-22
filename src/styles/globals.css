@@ -98,44 +98,33 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Title-bar "Update available" pill. Green glass: a frosted green fill with a
-   crisp inner bevel and a soft outer glow that gently breathes to draw the eye.
-   The glow pulse pauses on hover, where a brighter static glow takes over. */
+/* Title-bar "Update available" pill. It wears the title bar glaze (the
+   element also carries .chrome-glaze .chrome-glaze--control), lit green: the
+   glaze takes its rim and tint from the accent, so a local accent turns the
+   same material into the update signal instead of a drawn border. The soft
+   outer glow breathes on the element shadow, which the glaze leaves free, and
+   pauses on hover, where a brighter static glow takes over. */
 @keyframes update-pill-glow {
   0%, 100% {
-    box-shadow:
-      0 0 10px rgba(132, 255, 87, 0.22),
-      inset 0 0 8px rgba(132, 255, 87, 0.08),
-      inset 1px 1px 0 0 rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 10px rgba(132, 255, 87, 0.22);
   }
   50% {
-    box-shadow:
-      0 0 17px rgba(132, 255, 87, 0.42),
-      inset 0 0 11px rgba(132, 255, 87, 0.14),
-      inset 1px 1px 0 0 rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 17px rgba(132, 255, 87, 0.42);
   }
 }
 
 .update-pill {
+  --color-accent: rgb(132, 255, 87);
   color: #aaffb0;
-  background: linear-gradient(180deg, rgba(132, 255, 87, 0.18) 0%, rgba(132, 255, 87, 0.1) 100%);
-  border: 1px solid rgba(132, 255, 87, 0.4);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   animation: update-pill-glow 2.6s ease-in-out infinite;
-  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+  transition: color 0.25s ease;
 }
 
 .update-pill:hover {
   color: #c8ffc0;
-  background: linear-gradient(180deg, rgba(132, 255, 87, 0.28) 0%, rgba(132, 255, 87, 0.16) 100%);
-  border-color: rgba(132, 255, 87, 0.6);
   /* Stronger steady glow; stop the breathing so hover feels deliberate. */
   animation: none;
-  box-shadow:
-    0 0 20px rgba(132, 255, 87, 0.5),
-    inset 0 0 12px rgba(132, 255, 87, 0.18),
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 20px rgba(132, 255, 87, 0.5);
 }
 
 /* Honor the global motion-off / glass-off switches. */
@@ -226,7 +215,7 @@ html[data-motion="off"] .update-pill { animation: none; }
      Chrome overrides this to 1 below — the split is deliberate:
        chrome at full strength, nested components at three quarters. */
   opacity: var(--glaze-opacity, 0.75);
-  transition: box-shadow 0.2s ease, background-color 0.18s ease;
+  transition: box-shadow 0.2s ease, background-color 0.18s ease, opacity 0.2s ease;
 }
 
 /* The specular is always the same layer doing the same job, so its mask and
@@ -288,14 +277,19 @@ html[data-motion="off"] .update-pill { animation: none; }
     inset 0 0 3px 1px color-mix(in srgb, var(--color-accent) var(--glaze-spec-soft), transparent);
 }
 
-/* Unfocused window. The specular streak goes entirely and the edge keeps only
-   its dark contour, so a background window reads as unlit glass instead of a
-   lit control nobody is using. Driven by TitleBar via Tauri onFocusChanged. */
-body[data-window-blurred="true"] .chrome-glaze::after {
-  display: none;
+/* Unfocused window. The light dims rather than going out: the rim and the
+   inner glow drop to about half and the specular streak to a third, so a
+   background window reads as the same glass in shade instead of losing the
+   material altogether (switching the layers off left only the flat tint, which
+   read as the glaze vanishing). Driven by TitleBar via Tauri onFocusChanged. */
+body[data-window-blurred="true"] .chrome-glaze {
+  --glaze-ring: 5%;
+  --glaze-inner: 3%;
+  --glaze-lift: 0%;
 }
-body[data-window-blurred="true"] .chrome-glaze::before {
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.38);
+body[data-window-blurred="true"] .chrome-glaze::after,
+body[data-window-blurred="true"] .glaze-inset::after {
+  opacity: calc(var(--glaze-opacity, 0.75) * 0.35);
 }
 
 /* ===== Glaze inset — glass INSIDE glass =====
@@ -392,10 +386,8 @@ body[data-window-blurred="true"] .chrome-glaze::before {
     inset 0 0 3px 1px rgba(255, 255, 255, 0.11);
 }
 
-/* Unlit with everything else when the window goes to the background. */
-body[data-window-blurred="true"] .glaze-inset::after {
-  display: none;
-}
+/* Dims with everything else when the window goes to the background (see the
+   unfocused-window rule under .chrome-glaze). */
 
 /* ===== Nav flipper =====
    Back and forward as one control, in its own glazed pill beside the cluster
@@ -2775,7 +2767,7 @@ body {
   gap: 0.3em;
   padding: 0.12em 0.55em 0.12em 0.42em;
   border-radius: 999px;
-  font-size: 0.78em;
+  font-size: 0.84em;
   font-style: normal;
   font-weight: 600;
   line-height: 1.3;
@@ -2948,6 +2940,11 @@ body {
    soft one. At Glassiness 0% the global data-glass override strips the blur and
    the flyout degrades to a plain solid panel like everything else. */
 .glass-flyout {
+  /* What a sticky heading inside the flyout paints (a `background` value),
+     so a heading pinned over scrolling rows matches the panel instead of a
+     darker band: the panel's own two layers with the base made solid, since
+     rows scroll under it and the secondary layer alone is see-through. */
+  --flyout-heading-fill: linear-gradient(var(--color-background-secondary), var(--color-background-secondary)), var(--color-background-tertiary);
   /* Readability does NOT ride the Glassiness slider, the same call .stats-hud
      makes for the telemetry panel: this menu opens over live video, and a menu
      you cannot read is not a minimal menu, it is a broken one. Fading the base
@@ -4887,10 +4884,7 @@ html[data-watching] .automation-pulse-shift {
 
 html[data-watching] .update-pill {
   animation: none;
-  box-shadow:
-    0 0 13px rgba(132, 255, 87, 0.32),
-    inset 0 0 9px rgba(132, 255, 87, 0.11),
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 13px rgba(132, 255, 87, 0.32);
 }
 
 /* The badge already carries this shadow statically, so only the pulse stops. */
@@ -8252,6 +8246,13 @@ html[data-os="linux"] .sn-chat-overlay-frame {
 .glass-flyout .glass-input {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+/* A flyout with no blur of its own (switched off, or opened inside a surface
+   that is already frosted, where its blur could only ever sample that surface)
+   paints its base solid. Without blur any tint below 100% lets the text behind
+   it read through crisp, the same rule the static popovers follow. */
+.glass-flyout.no-live-blur {
+  background-color: var(--color-background-tertiary);
 }
 
 /* One blur per stack. A light control (8-16px) inside a heavily blurred

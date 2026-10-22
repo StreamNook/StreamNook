@@ -10,6 +10,8 @@ import { X } from 'lucide-react';
 import { useCheerPromptStore, useCheerDraft } from '../../stores/cheerPromptStore';
 import { checkCheer, formatBits, openBitsWindow, type CheerCheck } from '../../services/bitsService';
 import { Logger } from '../../utils/logger';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
+import { Tooltip } from '../ui/Tooltip';
 
 interface Props {
   /** Bare login of the channel this box sends to (Twitch only). */
@@ -99,16 +101,18 @@ export function CheerBar({ channelLogin, channelId, text, onSetText }: Props) {
   return (
     <div
       role="status"
-      className="sn-popover absolute bottom-full left-0 right-0 z-[60] mb-2 flex items-center gap-2 px-2.5 py-1.5 text-[12.5px]"
+      className="glass-flyout rounded-xl absolute bottom-full left-0 right-0 z-[60] mb-2 flex items-center gap-2 !px-2.5 !py-1.5 text-[12.5px]"
     >
       {shown.icon_url && <img src={shown.icon_url} alt="" className="h-[18px] w-[18px] flex-shrink-0 object-contain" />}
       <span className="min-w-0 flex-1 truncate">
         {status?.kind === 'sending' ? (
           <span className="text-textSecondary">Cheering {bitsWord(shown.total)}...</span>
         ) : problem ? (
-          <span className="text-warning" title={problem}>
-            {problem}
-          </span>
+          <Tooltip content={problem}>
+            <span className="text-warning">
+              {problem}
+            </span>
+          </Tooltip>
         ) : (
           <>
             <span className="font-semibold text-textPrimary">Cheering {bitsWord(shown.total)}</span>
@@ -120,7 +124,7 @@ export function CheerBar({ channelLogin, channelId, text, onSetText }: Props) {
         <button
           type="button"
           onClick={() => void openBitsWindow().catch((err) => Logger.warn('[Cheer] Get Bits failed:', err))}
-          className="glass-button flex-shrink-0 rounded-md px-2 py-0.5 text-[12px] text-textPrimary"
+          className={`${GLAZE_PILL} h-5 flex-shrink-0 px-2.5 text-[12px]`}
         >
           Get bits
         </button>
@@ -132,7 +136,8 @@ export function CheerBar({ channelLogin, channelId, text, onSetText }: Props) {
             onSetText('');
             void send(status.check, true);
           }}
-          className="glass-button-active flex-shrink-0 rounded-md px-2 py-0.5 text-[12px] font-semibold text-accent"
+          className={`${ACCENT_BUTTON} h-5 flex-shrink-0 px-2.5 !text-[12px]`}
+          style={ACCENT_FILL}
         >
           Cheer without the message
         </button>
@@ -141,21 +146,23 @@ export function CheerBar({ channelLogin, channelId, text, onSetText }: Props) {
         <button
           type="button"
           onClick={() => void send(status.check)}
-          className="glass-button-active flex-shrink-0 rounded-md px-2 py-0.5 text-[12px] font-semibold text-accent"
+          className={`${ACCENT_BUTTON} h-5 flex-shrink-0 px-2.5 !text-[12px]`}
+          style={ACCENT_FILL}
         >
           Cheer {formatBits(status.check.total)}
         </button>
       )}
       {status?.kind !== 'sending' && (
-        <button
-          type="button"
-          onClick={close}
-          aria-label={status ? 'Close' : 'Remove the cheer'}
-          title={status ? undefined : 'Remove the cheer'}
-          className="flex-shrink-0 rounded-md p-0.5 text-textSecondary transition-colors hover:bg-white/5 hover:text-textPrimary"
-        >
-          <X size={14} />
-        </button>
+        <Tooltip content={status ? undefined : 'Remove the cheer'}>
+          <button
+            type="button"
+            onClick={close}
+            aria-label={status ? 'Close' : 'Remove the cheer'}
+            className={`${GLAZE_PILL} grid h-5 w-5 flex-shrink-0 place-items-center`}
+          >
+            <X size={14} />
+          </button>
+        </Tooltip>
       )}
     </div>
   );

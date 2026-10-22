@@ -1,6 +1,6 @@
 import { X, ExternalLink, ChevronDown, Github, Heart, Check, Download, AlertCircle, RefreshCw } from 'lucide-react';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
+import { useEffect, useRef, useState } from 'react';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from './ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import type { Changelog, ChangelogRelease } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -58,8 +58,7 @@ const DiscordIcon = ({ size = 14 }: { size?: number }) => (
 
 // Sign-off + community links. Closes the notes as their last word, where
 // someone who just read about a change is most likely to have something to say.
-const communityLink =
-  'glass-button-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-medium text-textSecondary hover:text-textPrimary';
+const communityLink = `${GLAZE_PILL} inline-flex items-center gap-1.5 px-3 py-1.5 text-[12.5px]`;
 
 const SignOff = () => (
   <div className="flex flex-col items-center text-center pt-2">
@@ -210,10 +209,9 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.14 }}
-                    className="sn-popover absolute top-full left-1/2 -ml-[108px] mt-2 w-[216px] z-20 p-1.5"
-                    // Near-opaque: this menu opens over the notes, and a menu is
-                    // something you read, so the text behind must not show through.
-                    style={{ '--sn-popover-tint': '96%' } as CSSProperties}
+                    // The menu glass stays near-opaque: this opens over the notes,
+                    // and a menu is something you read.
+                    className="glass-flyout no-live-blur rounded-xl absolute top-full left-1/2 -ml-[108px] mt-2 w-[216px] z-20"
                   >
                     <div role="listbox" className="max-h-72 overflow-y-auto custom-scrollbar">
                       {releases!.map((r) => {
@@ -229,10 +227,10 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
                               setSelectedTag(tag);
                               setMenuOpen(false);
                             }}
-                            className={`w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                            className={`w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${
                               active
                                 ? 'bg-white/[0.08] text-textPrimary'
-                                : 'text-textSecondary hover:bg-white/[0.05] hover:text-textPrimary'
+                                : 'text-textSecondary hover:bg-white/[0.06] hover:text-textPrimary'
                             }`}
                           >
                             <span className="w-3.5 shrink-0">
@@ -313,7 +311,7 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
                   type="button"
                   onClick={update.runCheck}
                   disabled={update.checking}
-                  className="glass-button-secondary shrink-0 px-3 py-1.5 text-[12.5px] font-medium text-textSecondary hover:text-textPrimary"
+                  className={`${GLAZE_PILL} shrink-0 px-3 py-1.5 text-[12.5px]`}
                 >
                   {update.checking ? 'Checking…' : 'Try again'}
                 </button>

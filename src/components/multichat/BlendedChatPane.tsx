@@ -573,7 +573,7 @@ export function BlendedChatPane({
             <button
               type="button"
               onClick={handleResume}
-              className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-white shadow-lg glass-button"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white shadow-lg chrome-glaze chrome-glaze--control chrome-glaze--frosted"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -643,9 +643,9 @@ export function BlendedChatPane({
             {pickerOpen && (
               <>
                 <div
-                  className="glass-panel absolute bottom-full z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-borderLight py-1 shadow-2xl scrollbar-thin"
-                  // Opaque themed surface: a live backdrop-blur flickers over chat.
-                  style={{ backgroundColor: 'var(--color-background-tertiary)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
+                  className="glass-flyout no-live-blur absolute bottom-full z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-xl scrollbar-thin"
+                  // No live blur: it flickers over chat. The flyout's base is near-opaque on its own.
+                  style={{ backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
                 >
                   {groups.map((g) => {
                     const allOn = g.chans.every(isOn);
@@ -655,7 +655,7 @@ export function BlendedChatPane({
                         <button
                           type="button"
                           onClick={() => toggleProvider(g.provider)}
-                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs font-semibold text-textPrimary transition-colors hover:bg-white/5"
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-semibold text-textPrimary transition-colors hover:bg-white/[0.06]"
                         >
                           <Check checked={allOn} indeterminate={!allOn && someOn} />
                           <ProviderLogo provider={g.provider} size={14} />
@@ -666,7 +666,7 @@ export function BlendedChatPane({
                           return (
                             <div
                               key={sourceKey(c)}
-                              className="flex w-full items-center gap-2 py-1.5 pl-8 pr-2.5 text-xs transition-colors hover:bg-white/5"
+                              className="flex w-full items-center gap-2 rounded-lg py-2 pl-8 pr-2 text-xs transition-colors hover:bg-white/[0.06]"
                             >
                               <button
                                 type="button"

@@ -4,13 +4,14 @@
 // you get, and it follows the size slider as it moves. The choice is a setting
 // Rust keeps (settings.multi_nook_layout); the store's setLayout saves it.
 //
-// Surfaces are the house glass primitives (`glass-flyout`, `glass-button`,
-// `glass-button-active`), which follow the Glassiness setting and go solid at
-// 0%.
+// The body is the menu glass (`glass-flyout`); the choices are the glazed
+// capsules, the chosen one filled with the accent. Both go solid at 0%
+// Glassiness.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LayoutGrid, PanelBottom, PanelRight } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import { useAppStore } from '../../stores/AppStore';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { DEFAULT_MULTI_NOOK_LAYOUT, type MultiNookLayoutMode } from '../../types';
@@ -143,28 +144,29 @@ export default function MultiNookLayoutPicker() {
             {MODES.map(({ mode, label, detail }) => {
               const on = layout.mode === mode;
               return (
-                <button
-                  key={mode}
-                  role="radio"
-                  aria-checked={on}
-                  aria-label={`${label}: ${detail}`}
-                  title={detail}
-                  onClick={() => void setLayout({ mode })}
-                  className={`flex flex-col items-center gap-2 rounded-lg px-1.5 pb-2 pt-2.5 text-[11px] font-medium transition-colors ${
-                    on ? 'glass-button-active text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'
-                  }`}
-                >
-                  <span className={on ? 'text-accent' : 'text-textMuted'}>
-                    <LayoutPreview mode={mode} count={previewCount} share={share} />
-                  </span>
-                  {label}
-                </button>
+                <Tooltip key={mode} content={detail}>
+                  <button
+                    role="radio"
+                    aria-checked={on}
+                    aria-label={`${label}: ${detail}`}
+                    onClick={() => void setLayout({ mode })}
+                    className={`flex flex-col items-center gap-2 !rounded-xl px-1.5 pb-2 pt-2.5 ${
+                      on ? `${ACCENT_BUTTON} !text-[11px]` : `${GLAZE_PILL} text-[11px]`
+                    }`}
+                    style={on ? ACCENT_FILL : undefined}
+                  >
+                    <span className={on ? 'text-white' : 'text-textMuted'}>
+                      <LayoutPreview mode={mode} count={previewCount} share={share} />
+                    </span>
+                    {label}
+                  </button>
+                </Tooltip>
               );
             })}
           </div>
 
           {mainLayout && (
-            <div className="mt-3 space-y-3.5 border-t border-borderSubtle pt-3">
+            <div className="mt-3 space-y-3.5 border-t border-white/[0.06] pt-3">
               <div>
                 <div className="flex items-baseline justify-between">
                   <label htmlFor="nook-strip-share" className="text-xs font-medium text-textPrimary">
@@ -202,9 +204,10 @@ export default function MultiNookLayoutPicker() {
                         role="radio"
                         aria-checked={on}
                         onClick={() => void setLayout({ small_quality_cap: value })}
-                        className={`rounded-md py-1.5 text-[11px] font-semibold transition-colors ${
-                          on ? 'glass-button-active text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'
+                        className={`py-1.5 ${
+                          on ? `${ACCENT_BUTTON} !text-[11px]` : `${GLAZE_PILL} text-[11px]`
                         }`}
+                        style={on ? ACCENT_FILL : undefined}
                       >
                         {label}
                       </button>

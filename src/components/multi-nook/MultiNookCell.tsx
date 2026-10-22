@@ -601,7 +601,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     );
   };
 
-  const glassButton = `flex items-center justify-center ${full ? 'p-1.5' : 'p-1'} glass-button rounded-lg`;
+  const glassButton = `flex items-center justify-center ${full ? 'p-1.5' : 'p-1'} aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted`;
 
   return (
     <motion.div
@@ -746,7 +746,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                   }
                 }}
                 disabled={addingRaidTarget}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-accent hover:text-white text-xs font-semibold disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3 py-1.5 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-accent hover:text-white text-xs font-semibold disabled:opacity-60"
               >
                 {addingRaidTarget ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                 Add to MultiNook
@@ -755,7 +755,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
             <Tooltip content="Show this tile's stream again" delay={300} side="bottom">
               <button
                 onClick={() => dismissSlotRaid(id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-textSecondary hover:text-white text-xs font-semibold"
+                className="flex items-center gap-1.5 px-3 py-1.5 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textSecondary hover:text-white text-xs font-semibold"
               >
                 Dismiss
               </button>
@@ -777,8 +777,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
             <div className="absolute left-1/2 -translate-x-1/2 top-1.5 z-20">
               <Tooltip content="Drag to reposition stream" delay={500} side="top">
                 <div
-                  className={`cursor-grab active:cursor-grabbing flex items-center justify-center ${full ? 'px-3 py-1' : 'px-2 py-0.5'} glass-button rounded-lg text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab`}
-                  style={{ backgroundColor: 'color-mix(in srgb, rgb(16 185 129) 20%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+                  className={`cursor-grab active:cursor-grabbing flex items-center justify-center ${full ? 'px-3 py-1' : 'px-2 py-0.5'} chrome-glaze chrome-glaze--control chrome-glaze--frosted text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab`}
+                  style={{ backgroundImage: 'linear-gradient(rgb(16 185 129 / 0.2), rgb(16 185 129 / 0.2))' }}
                   {...attributes}
                   {...listeners}
                 >
@@ -865,7 +865,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                     onClick={handleFollowClick}
                     disabled={followLoading || checkingFollowStatus}
                     className={`${glassButton} ${followLoading || checkingFollowStatus ? 'opacity-60 cursor-wait' : ''}`}
-                    style={{ backdropFilter: 'blur(16px)' }}
                   >
                     {followLoading || checkingFollowStatus ? (
                       <Loader2 className="w-4 h-4 animate-spin text-textSecondary" />
@@ -894,7 +893,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                   <button
                     onClick={handleSubscribeClick}
                     className={glassButton}
-                    style={{ backdropFilter: 'blur(16px)' }}
                   >
                     {subscriberBadgeUrl ? (
                       <img
@@ -918,7 +916,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 <button
                   onClick={() => makeMainSlot(id)}
                   className={glassButton}
-                  style={{ backdropFilter: 'blur(16px)' }}
                   aria-label="Make main"
                 >
                   <ArrowLeftRight className={`${full ? 'w-4 h-4' : 'w-3.5 h-3.5'} text-white`} />
@@ -932,7 +929,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               <button
                 onClick={() => toggleMaximizeSlot(id)}
                 className={glassButton}
-                style={{ backdropFilter: 'blur(16px)' }}
               >
                 {isMaximized ? (
                   <Minimize2 className="w-4 h-4 text-white" />
@@ -949,7 +945,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 <button
                   onClick={() => dockSlot(id)}
                   className={glassButton}
-                  style={{ backdropFilter: 'blur(16px)' }}
                 >
                   <Undo2 className="w-4 h-4 text-white" />
                 </button>
@@ -961,7 +956,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               <button
                 onClick={() => removeSlot(id)}
                 className={glassButton}
-                style={{ backgroundColor: 'color-mix(in srgb, rgb(239 68 68) 25%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+                style={{ backgroundImage: 'linear-gradient(rgb(239 68 68 / 0.25), rgb(239 68 68 / 0.25))' }}
               >
                 <XIcon weight="bold" className="w-4 h-4 text-red-400" />
               </button>
@@ -990,7 +985,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               e.stopPropagation();
             }}
             data-no-wheel-volume
-            className="tile-audio-boost-panel liquid-glass-panel absolute bottom-14 right-2 z-[60] overflow-y-auto rounded-xl p-4 cursor-default"
+            className="tile-audio-boost-panel glass-flyout absolute bottom-14 right-2 z-[60] overflow-y-auto rounded-xl !p-4 cursor-default"
             style={{ width: 'min(460px, calc(100% - 16px))', maxHeight: 'calc(100% - 64px)' }}
           >
             <AudioBoostControls

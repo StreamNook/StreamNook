@@ -4,9 +4,10 @@
 // Allow / Deny, which go to Rust -> Helix. Rows leave on the EventSub update.
 
 import { useEffect, useState } from 'react';
-import { Check, ShieldAlert, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAutomodStore, type HeldMessage } from '../../stores/automodStore';
 import { Tooltip } from '../ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER, GLAZE_PILL } from '../ui/glazeButtons';
 
 interface AutomodQueueStripProps {
   /** Lowercase Twitch login of the channel this pane shows. */
@@ -46,61 +47,62 @@ export default function AutomodQueueStrip({ channel }: AutomodQueueStripProps) {
   };
 
   return (
-    <div className="sn-automod-strip flex-shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-textSecondary transition-colors hover:text-textPrimary"
-        aria-expanded={open}
-      >
-        <ShieldAlert size={13} className="flex-shrink-0 text-amber-400" />
-        <span className="font-semibold text-textPrimary tabular-nums">{rows.length}</span>
-        <span className="min-w-0 flex-1 truncate">
-          {rows.length === 1 ? 'message held by AutoMod' : 'messages held by AutoMod'}
-          {!open && rows[0] ? ` · ${rows[0].user_name || rows[0].user_login}: ${rows[0].text}` : ''}
-        </span>
-        {open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-      </button>
-      {open && (
-        <ul className="custom-scrollbar max-h-48 overflow-y-auto border-t border-white/5">
-          {rows.map((row) => (
-            <li key={row.message_id} className="flex items-start gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-white/[0.03]">
-              <div className="min-w-0 flex-1">
+    // A glazed card in the chat column, like the streak and resub banners.
+    <div className="flex-shrink-0 px-2 pb-2">
+      <div className={`${GLAZE_BANNER} overflow-hidden`} style={BANNER_STYLE}>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-textSecondary transition-colors hover:text-textPrimary"
+          aria-expanded={open}
+        >
+          <ShieldAlert size={14} className="flex-shrink-0 text-amber-400" />
+          <span className="font-semibold text-textPrimary tabular-nums">{rows.length}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {rows.length === 1 ? 'message held by AutoMod' : 'messages held by AutoMod'}
+            {!open && rows[0] ? ` · ${rows[0].user_name || rows[0].user_login}: ${rows[0].text}` : ''}
+          </span>
+          {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        </button>
+        {open && (
+          // A soft fade at the bottom instead of a hard cut while more scrolls.
+          <ul className="custom-scrollbar max-h-64 overflow-y-auto border-t border-white/[0.06] divide-y divide-white/[0.06] pb-1 [mask-image:linear-gradient(to_bottom,black_calc(100%-16px),transparent)]">
+            {rows.map((row) => (
+              <li key={row.message_id} className="px-3 py-3 text-xs">
                 <div className="flex items-baseline gap-2">
                   <span className="font-semibold text-textPrimary">{row.user_name || row.user_login}</span>
-                  <span className="truncate text-[10px] text-amber-300/80">{reasonLabel(row)}</span>
+                  <span className="truncate text-[11px] text-amber-300/80">{reasonLabel(row)}</span>
                 </div>
-                <div className="break-words text-textPrimary/90">{row.text}</div>
-              </div>
-              <div className="flex flex-shrink-0 items-center gap-1">
-                <Tooltip content="Allow: the message is posted" side="top">
-                  <button
-                    type="button"
-                    disabled={busy === row.message_id}
-                    onClick={() => void act(row, true)}
-                    className="grid h-6 w-6 place-items-center rounded text-emerald-400 transition-colors hover:bg-emerald-400/15 disabled:opacity-40"
-                    aria-label="Allow message"
-                  >
-                    <Check size={14} />
-                  </button>
-                </Tooltip>
-                <Tooltip content="Deny: the message is dropped" side="top">
-                  <button
-                    type="button"
-                    disabled={busy === row.message_id}
-                    onClick={() => void act(row, false)}
-                    className="grid h-6 w-6 place-items-center rounded text-error transition-colors hover:bg-error/15 disabled:opacity-40"
-                    aria-label="Deny message"
-                  >
-                    <X size={14} />
-                  </button>
-                </Tooltip>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && <div className="px-3 pb-1.5 text-[11px] text-error">{error}</div>}
+                <div className="mt-1 break-words leading-relaxed text-textPrimary/90">{row.text}</div>
+                <div className="mt-2.5 flex gap-2">
+                  <Tooltip content="The message is posted" side="top">
+                    <button
+                      type="button"
+                      disabled={busy === row.message_id}
+                      onClick={() => void act(row, true)}
+                      className={`${ACCENT_BUTTON} h-7 px-4 !text-xs`}
+                      style={ACCENT_FILL}
+                    >
+                      Allow
+                    </button>
+                  </Tooltip>
+                  <Tooltip content="The message is dropped" side="top">
+                    <button
+                      type="button"
+                      disabled={busy === row.message_id}
+                      onClick={() => void act(row, false)}
+                      className={`${GLAZE_PILL} h-7 px-4 text-xs`}
+                    >
+                      Deny
+                    </button>
+                  </Tooltip>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {error && <div className="border-t border-white/[0.06] px-3 py-2 text-xs text-error">{error}</div>}
+      </div>
     </div>
   );
 }

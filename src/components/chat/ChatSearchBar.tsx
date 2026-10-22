@@ -5,7 +5,7 @@
 // is:sub|highlighted|system|first-msg|cheer-msg|redemption|reply|shared|
 // deleted|mention, each negatable with a leading "!".
 //
-// Visual language mirrors CommandAutocomplete: an `.sn-popover` glass panel
+// Visual language mirrors CommandAutocomplete: a `.glass-flyout` panel
 // with a labelled header and kbd hints, a neumorphic input, and rounded rows.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,6 +14,8 @@ import { motion } from 'framer-motion';
 import { Search, X } from 'lucide-react';
 import { Logger } from '../../utils/logger';
 import { isImeComposing } from '../../utils/imeComposing';
+import { GLAZE_PILL } from '../ui/glazeButtons';
+import { Tooltip } from '../ui/Tooltip';
 
 export interface ChatSearchHit {
   id: string;
@@ -162,11 +164,11 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
       initial={{ opacity: 0, y: -6, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
-      className="sn-popover absolute left-2 right-2 top-2 z-30 flex max-h-[60%] origin-top flex-col overflow-hidden"
+      className="glass-flyout rounded-xl !p-0 absolute left-2 right-2 top-2 z-30 flex max-h-[60%] origin-top flex-col overflow-hidden"
       role="search"
     >
       {/* Header: label, scope, kbd hints, close */}
-      <div className="relative z-10 flex items-center justify-between border-b border-white/5 bg-glass-base/50 px-3 py-2 backdrop-blur-md">
+      <div className="relative z-10 flex items-center justify-between border-b border-white/[0.06] px-3 py-2">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">Search chat</span>
           <span className="truncate text-[10px] text-white/35">{scopeLabel}</span>
@@ -181,7 +183,7 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
           <button
             type="button"
             onClick={onClose}
-            className="grid h-5 w-5 place-items-center rounded text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+            className={`${GLAZE_PILL} grid h-5 w-5 place-items-center`}
             aria-label="Close search"
           >
             <X size={12} />
@@ -210,16 +212,16 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
         {!hasQuery && (
           <div className="mt-2 flex flex-wrap items-center gap-1">
             {HINTS.map((h) => (
-              <button
-                key={h.label}
-                type="button"
-                title={h.title}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertHint(h.insert)}
-                className="rounded-[4px] border border-white/5 bg-white/5 px-1.5 py-[2px] font-mono text-[10px] text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-              >
-                {h.label}
-              </button>
+              <Tooltip key={h.label} content={h.title} describe>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => insertHint(h.insert)}
+                  className={`${GLAZE_PILL} h-5 px-2 font-mono text-[10px]`}
+                >
+                  {h.label}
+                </button>
+              </Tooltip>
             ))}
           </div>
         )}
@@ -231,7 +233,7 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
       )}
 
       {visibleHits.length > 0 && (
-        <ul ref={listRef} className="custom-scrollbar min-h-0 flex-1 overflow-y-auto border-t border-white/5 p-1" role="listbox">
+        <ul ref={listRef} className="custom-scrollbar min-h-0 flex-1 overflow-y-auto border-t border-white/[0.06] p-1" role="listbox">
           {visibleHits.map((h, i) => (
             <li
               key={`${h.channel}:${h.id}`}
@@ -239,10 +241,10 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
               aria-selected={i === active}
               onMouseEnter={() => setActive(i)}
               onClick={() => jump(h)}
-              className={`my-0.5 flex cursor-pointer items-baseline gap-2 rounded-lg border px-3 py-1.5 transition-all duration-150 ${
+              className={`my-0.5 flex cursor-pointer items-baseline gap-2 rounded-lg border border-transparent px-3 py-1.5 transition-colors duration-150 ${
                 i === active
-                  ? 'border-white/10 bg-white/5 shadow-[inset_0_0_20px_rgba(255,255,255,0.02)]'
-                  : 'border-transparent hover:bg-white/[0.03]'
+                  ? 'bg-white/[0.08]'
+                  : 'hover:bg-white/[0.06]'
               } ${h.flags & F_DELETED ? 'opacity-50' : ''}`}
             >
               <span className="min-w-[52px] flex-shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-white/35">

@@ -3366,8 +3366,7 @@ const VideoPlayer = () => {
                 <Tooltip content={`Back to ${currentStream.user_name || currentStream.user_login}'s chat`} side="bottom" delay={200}>
                   <button
                     onClick={() => void leaveOfflineRoomVod()}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3386,8 +3385,7 @@ const VideoPlayer = () => {
                       }
                       await exitStream();
                     }}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3400,8 +3398,7 @@ const VideoPlayer = () => {
                       setHomeSelectedCategory(streamOriginCategory);
                       toggleHome();
                     }}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3612,11 +3609,10 @@ const VideoPlayer = () => {
           <button
             onClick={handleFollowClick}
             disabled={followLoading || checkingFollowStatus}
-            className={`flex items-center justify-center p-2 glass-button rounded-lg ${followLoading || checkingFollowStatus
+            className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${followLoading || checkingFollowStatus
               ? 'opacity-60 cursor-wait'
               : ''
               }`}
-            style={{ backdropFilter: 'blur(16px)' }}
           >
             {followLoading || checkingFollowStatus ? (
               <Loader2 className="w-4 h-4 animate-spin text-textSecondary" />
@@ -3656,8 +3652,7 @@ const VideoPlayer = () => {
                   : `${terms.paid} ${currentStream.user_name}`} side="bottom">
           <button
             onClick={handleSubscribeClick}
-            className="flex items-center gap-2 px-4 py-2 glass-button text-white text-sm font-semibold transition-all duration-200"
-            style={{ backdropFilter: 'blur(16px)' }}
+            className="flex items-center gap-2 px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-semibold"
           >
             <span>
               {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
@@ -3685,10 +3680,9 @@ const VideoPlayer = () => {
             <button
               onClick={() => createClip()}
               disabled={isCreatingClip}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isCreatingClip ? 'cursor-wait opacity-70' : ''
               }`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isCreatingClip ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3709,10 +3703,9 @@ const VideoPlayer = () => {
             <button
               onClick={() => handleIdentifySong()}
               disabled={isIdentifyingSong || !AUDIO_GRAPH_SUPPORTED}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isIdentifyingSong ? 'cursor-wait opacity-70' : ''
               } ${!AUDIO_GRAPH_SUPPORTED ? 'opacity-40 cursor-default' : ''}`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isIdentifyingSong ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3729,8 +3722,7 @@ const VideoPlayer = () => {
             <Tooltip content={shareCopied ? 'Link copied!' : `Share ${currentStream.user_name}`} side="bottom">
             <button
               onClick={handleSharePlayer}
-              className="flex items-center justify-center p-2 glass-button rounded-lg"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted"
             >
               <span key={shareCopied ? 'copied' : 'share'} className="inline-flex animate-in zoom-in-50 duration-200">
                 {shareCopied ? (
@@ -3750,8 +3742,7 @@ const VideoPlayer = () => {
           {overlayButtonOn('clipsvods') && isTwitchStream && currentStream && currentStream.user_id && (
             <button
               onClick={() => openStreamerMedia(currentStream)}
-              className="flex items-center justify-center px-3 py-2 glass-button rounded-lg text-sm font-semibold text-white hover:text-accent transition-colors duration-200"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center px-3 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-sm font-semibold text-white hover:text-accent"
             >
               Clips &amp; VODs
             </button>
@@ -3775,8 +3766,7 @@ const VideoPlayer = () => {
             <button
               onClick={handleAddToMultiNook}
               disabled={!canGridProvider(streamProvider(currentStream))}
-              className="flex items-center justify-center p-2 glass-button rounded-lg disabled:opacity-40 disabled:cursor-default"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted disabled:opacity-40 disabled:cursor-default"
             >
               <LayoutGrid className="w-4 h-4 text-white hover:text-accent transition-colors duration-200" />
             </button>
@@ -3797,10 +3787,9 @@ const VideoPlayer = () => {
                 }
               }}
               disabled={isRestarting}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isRestarting ? 'cursor-wait opacity-70' : ''
               }`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isRestarting ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3816,8 +3805,8 @@ const VideoPlayer = () => {
           <Tooltip content="Close Stream" side="bottom">
           <button
             onClick={() => exitStream()}
-            className="flex items-center justify-center p-2 glass-button rounded-lg"
-            style={{ backgroundColor: 'color-mix(in srgb, rgb(239 68 68) 25%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+            className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted"
+            style={{ backgroundImage: 'linear-gradient(rgb(239 68 68 / 0.25), rgb(239 68 68 / 0.25))' }}
           >
             <XIcon weight="bold" className="w-4 h-4 text-red-400" />
           </button>
@@ -3844,7 +3833,7 @@ const VideoPlayer = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
             data-no-wheel-volume
-            className="player-fs-popover liquid-glass-panel absolute bottom-16 right-3 z-[60] rounded-xl p-4"
+            className="player-fs-popover glass-flyout absolute bottom-16 right-3 z-[60] rounded-xl !p-4"
             style={{ width: 'min(460px, calc(100% - 24px))' }}
           >
             <AudioBoostControls

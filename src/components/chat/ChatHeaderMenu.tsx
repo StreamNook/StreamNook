@@ -88,7 +88,7 @@ export default function ChatHeaderMenu({ items }: { items: ChatHeaderMenuItem[] 
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.97 }}
               transition={{ duration: 0.14, ease: 'easeOut' }}
-              className="glass-panel rounded-lg border border-borderLight p-1 shadow-xl"
+              className="glass-flyout rounded-xl"
             >
               {items.map((item) => (
                 <button
@@ -100,7 +100,7 @@ export default function ChatHeaderMenu({ items }: { items: ChatHeaderMenuItem[] 
                     setOpen(false);
                     item.onSelect();
                   }}
-                  className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-glass-hover"
+                  className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/[0.06]"
                 >
                   <span className={`mt-0.5 flex shrink-0 items-center ${item.active ? 'text-accent' : 'text-textSecondary'}`}>
                     {item.icon}

@@ -5,6 +5,8 @@ import EmoteThumb from './EmoteThumb';
 import EmoteProviderLogo, { type EmoteProviderId } from './EmoteProviderLogo';
 import type { EmoteMatchRow } from '../../services/emoteMatch';
 import { emoteOptionId } from '../../utils/chatInputWord';
+import { GLAZE_PILL } from '../ui/glazeButtons';
+import { Tooltip } from '../ui/Tooltip';
 
 interface EmoteSearchListProps {
   /** Listbox id; the textarea points at it with aria-controls. */
@@ -59,10 +61,8 @@ const RowName: React.FC<{ row: EmoteMatchRow }> = ({ row }) => {
  * with where each one comes from. Opened by `:` plus two letters or by Tab; the
  * rows arrive ranked from Rust.
  *
- * The popover itself never scrolls. `.sn-popover` draws its rim light as an
- * absolutely positioned layer, which scrolled away with the rows (and a sticky
- * header blurred over it) when the popover was the scroller, so only the body
- * scrolls here.
+ * The popover itself never scrolls, so its header and key hints stay put and
+ * only the body scrolls here.
  */
 const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
   id,
@@ -90,7 +90,7 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 6, scale: 0.98 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
-      className="sn-popover absolute z-[60] w-full flex flex-col overflow-hidden origin-bottom"
+      className="glass-flyout rounded-xl !p-0 absolute z-[60] w-full flex flex-col overflow-hidden origin-bottom"
       style={{ bottom: '100%', left: 0, right: 0, marginBottom: '8px' }}
       // Keeps the textarea focused (and the list open) when the scrollbar is used.
       onMouseDown={(e) => e.preventDefault()}
@@ -103,19 +103,20 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
           </span>
         )}
         {onSwitchToCarousel && (
-          <button
-            type="button"
-            title="Make Tab open the carousel instead"
-            className="ml-auto shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] leading-none text-white/60 hover:text-textPrimary hover:bg-white/[0.07] transition-colors"
-            // mousedown, not click: the textarea keeps focus and its caret.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSwitchToCarousel();
-            }}
-          >
-            <GalleryHorizontal className="w-3.5 h-3.5" />
-            Carousel
-          </button>
+          <Tooltip content="Make Tab open the carousel instead" describe>
+            <button
+              type="button"
+              className={`${GLAZE_PILL} ml-auto shrink-0 inline-flex h-6 items-center gap-1 px-2.5 text-[11px] leading-none`}
+              // mousedown, not click: the textarea keeps focus and its caret.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSwitchToCarousel();
+              }}
+            >
+              <GalleryHorizontal className="w-3.5 h-3.5" />
+              Carousel
+            </button>
+          </Tooltip>
         )}
       </div>
 
@@ -139,7 +140,7 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
             return (
               <React.Fragment key={`${row.provider}-${row.id}-${row.name}`}>
                 {heading && (
-                  <div className="flex items-center gap-1.5 px-2 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
+                  <div className="flex items-center gap-1.5 px-2 pt-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
                     {headingProvider && <EmoteProviderLogo provider={headingProvider} tinted className="w-3 h-3" />}
                     {heading}
                   </div>
@@ -151,8 +152,8 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
                   id={emoteOptionId(id, index)}
                   role="option"
                   aria-selected={selected}
-                  className={`flex items-center gap-2.5 px-2 py-1 rounded-md cursor-pointer transition-colors ${
-                    selected ? 'bg-accent/15 ring-1 ring-inset ring-accent/30' : 'hover:bg-white/[0.05]'
+                  className={`flex items-center gap-2.5 px-2 py-1 rounded-lg cursor-pointer transition-colors ${
+                    selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
                   }`}
                   // mousedown, not click: the textarea keeps focus and its caret.
                   onMouseDown={(e) => {

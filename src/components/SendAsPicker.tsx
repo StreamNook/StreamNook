@@ -66,8 +66,8 @@ export default function SendAsPicker() {
       </Tooltip>
 
       {open && (
-        <div className="absolute bottom-full left-0 mb-2 w-56 max-h-72 overflow-y-auto scrollbar-thin glass-panel rounded-xl p-1.5 z-50">
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-textMuted">
+        <div className="glass-flyout rounded-xl absolute bottom-full left-0 mb-2 w-56 max-h-72 overflow-y-auto scrollbar-thin z-50">
+          <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Send messages as
           </div>
           {accounts.map((account) => {
@@ -80,8 +80,8 @@ export default function SendAsPicker() {
                   setSendAsId(account.user_id);
                   setOpen(false);
                 }}
-                className={`w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                  active ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'
+                className={`w-full flex items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
+                  active ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
                 }`}
               >
                 <Avatar url={account.avatar_url} size={26} userId={account.user_id} />

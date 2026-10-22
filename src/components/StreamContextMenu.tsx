@@ -138,7 +138,7 @@ export const StreamContextMenu: React.FC = () => {
             closeMenu();
         };
 
-        const rowClass = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-glass-hover transition-all';
+        const rowClass = 'flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-white/[0.06] transition-all';
 
         return (
             <div 
@@ -155,7 +155,7 @@ export const StreamContextMenu: React.FC = () => {
             >
                 <div
                     ref={menuRef}
-                    className={`absolute w-44 glass-panel rounded-xl flex flex-col p-1 shadow-2xl overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
+                    className={`absolute w-44 glass-flyout rounded-xl flex flex-col overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
                     style={placement}
                     onPointerDown={(e) => e.stopPropagation()}
                     onContextMenu={(e) => {
@@ -166,7 +166,7 @@ export const StreamContextMenu: React.FC = () => {
                     {/* Spelling sits above the editing actions: when there IS a
                         correction to offer, it's the reason the menu was opened. */}
                     {spellStatus === 'checking' && (
-                        <div className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-textMuted">
+                        <div className="flex items-center gap-2 px-2 py-2 text-sm font-medium text-textMuted">
                             <Loader2 size={16} className="animate-spin" />
                             <span>Checking spelling...</span>
                         </div>
@@ -187,23 +187,23 @@ export const StreamContextMenu: React.FC = () => {
                                 <BookPlus size={16} />
                                 <span>Add to dictionary</span>
                             </button>
-                            <div className="h-px bg-borderSubtle my-1 mx-2" />
+                            <div className="h-px bg-white/[0.06] my-1 mx-2" />
                         </>
                     )}
                     <button onClick={handleCut} className={rowClass}>
                         <Scissors size={16} />
                         <span>Cut</span>
                     </button>
-                    <button onClick={handleCopy} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-glass-hover transition-all">
+                    <button onClick={handleCopy} className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-white/[0.06] transition-all">
                         <Copy size={16} />
                         <span>Copy</span>
                     </button>
-                    <button onClick={handlePaste} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-glass-hover transition-all">
+                    <button onClick={handlePaste} className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-white/[0.06] transition-all">
                         <ClipboardPaste size={16} />
                         <span>Paste</span>
                     </button>
-                    <div className="h-px bg-borderSubtle my-1 mx-2" />
-                    <button onClick={handleSelectAll} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-glass-hover transition-all">
+                    <div className="h-px bg-white/[0.06] my-1 mx-2" />
+                    <button onClick={handleSelectAll} className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-white/[0.06] transition-all">
                         <Type size={16} />
                         <span>Select All</span>
                     </button>
@@ -240,7 +240,7 @@ export const StreamContextMenu: React.FC = () => {
             >
                 <div
                     ref={menuRef}
-                    className={`absolute w-44 glass-panel rounded-xl flex flex-col p-1 shadow-2xl overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
+                    className={`absolute w-44 glass-flyout rounded-xl flex flex-col overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
                     style={placement}
                     onPointerDown={(e) => e.stopPropagation()}
                     onContextMenu={(e) => {
@@ -248,7 +248,7 @@ export const StreamContextMenu: React.FC = () => {
                         e.stopPropagation();
                     }}
                 >
-                    <button onClick={handleCopy} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-glass-hover transition-all">
+                    <button onClick={handleCopy} className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-white hover:bg-white/[0.06] transition-all">
                         <Copy size={16} />
                         <span>Copy</span>
                     </button>
@@ -406,7 +406,7 @@ export const StreamContextMenu: React.FC = () => {
 
             <div
                 ref={menuRef}
-                className={`absolute w-48 glass-panel rounded-xl flex flex-col p-1 shadow-2xl overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
+                className={`absolute w-48 glass-flyout rounded-xl flex flex-col overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
                 style={placement}
                 onPointerDown={(e) => e.stopPropagation()} // Prevent closing when interacting with menu
                 onContextMenu={(e) => {
@@ -421,7 +421,7 @@ export const StreamContextMenu: React.FC = () => {
                         setProfileModalUser(stream);
                         closeMenu();
                     }}
-                    className="w-full text-left px-3 py-2 border-b border-borderSubtle mb-1 rounded-t-lg hover:bg-glass-hover transition-colors group flex items-center justify-between"
+                    className="w-full text-left px-2 py-2 border-b border-white/[0.06] mb-1 rounded-t-lg hover:bg-white/[0.06] transition-colors group flex items-center justify-between"
                 >
                     <div>
                         <span className="text-xs font-semibold text-textPrimary group-hover:text-accent transition-colors truncate block">
@@ -443,9 +443,9 @@ export const StreamContextMenu: React.FC = () => {
                 <button
                     onClick={handleMultiNook}
                     disabled={!canAddToGrid}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all w-full ${
+                    className={`flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium transition-all w-full ${
                         canAddToGrid
-                            ? 'text-textSecondary hover:text-white hover:bg-glass-hover'
+                            ? 'text-textSecondary hover:text-white hover:bg-white/[0.06]'
                             : 'text-textMuted opacity-50 cursor-not-allowed'
                     }`}
                 >
@@ -458,7 +458,7 @@ export const StreamContextMenu: React.FC = () => {
                     with this channel. Doesn't start the stream; chat only. */}
                 <button
                     onClick={handleOpenInMultiChat}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-glass-hover transition-all"
+                    className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-white/[0.06] transition-all"
                 >
                     <MessageSquarePlus size={16} />
                     <span>Pop out chat</span>
@@ -468,10 +468,10 @@ export const StreamContextMenu: React.FC = () => {
                     label swap to a check + confirmation on copy, with a little pop. */}
                 <button
                     onClick={handleShare}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    className={`flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium transition-all ${
                         copied
                             ? 'text-green-400'
-                            : 'text-textSecondary hover:text-accent hover:bg-glass-hover'
+                            : 'text-textSecondary hover:text-accent hover:bg-white/[0.06]'
                     }`}
                 >
                     <span key={copied ? 'copied' : 'share'} className="inline-flex animate-in zoom-in-50 duration-200">
@@ -484,7 +484,7 @@ export const StreamContextMenu: React.FC = () => {
                 {favoriteId && (
                 <button
                     onClick={handleFavorite}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-pink-400 hover:bg-glass-hover transition-all"
+                    className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-pink-400 hover:bg-white/[0.06] transition-all"
                 >
                     <Heart 
                         size={16} 
@@ -501,7 +501,7 @@ export const StreamContextMenu: React.FC = () => {
                 {favoriteId && (
                 <button
                     onClick={handleHide}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-textPrimary hover:bg-glass-hover transition-all"
+                    className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-textPrimary hover:bg-white/[0.06] transition-all"
                 >
                     {hiddenEntry ? <Eye size={16} /> : <EyeOff size={16} />}
                     <span>{hiddenEntry ? 'Show channel' : 'Hide channel'}</span>
@@ -512,7 +512,7 @@ export const StreamContextMenu: React.FC = () => {
                 <button
                     onClick={handleFollow}
                     disabled={isCheckingFollow || isFollowing === null}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-purple-400 hover:bg-glass-hover transition-all"
+                    className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-purple-400 hover:bg-white/[0.06] transition-all"
                 >
                     {isCheckingFollow ? (
                         <>
