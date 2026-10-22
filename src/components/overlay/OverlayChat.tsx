@@ -928,6 +928,26 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
   // know whether to skip the full-width first-time band — in bubble mode the
   // highlight rides the bubble instead.
   const bubbleOn = style.bubble === true && !atmosphere;
+  // A bubble's side padding, shared with bubbleStyle below so an atmosphere row
+  // can line its text up with the bubbles around it.
+  const bubblePadX = style.bubbleShape === 'pill' ? '0.8em' : '0.6em';
+  // An atmosphere paints behind a message without moving it: its text starts on
+  // the column a plain row uses. Without bubbles that is the bare edge, so the
+  // wash reaches past the text and its side padding is paid back by an equal
+  // negative margin. The reach is the same with or without frost, so every
+  // wash starts on one edge too, and it is wide enough to frame the frost box,
+  // which bleeds by its own 6px. It stays within the container's side padding
+  // (10px times the supersample), so no scale clips the wash. With bubbles on,
+  // the wash takes the bubble's place and padding. A first-time row keeps its
+  // highlight padding (set below), so it neither bleeds nor takes a bubble's.
+  const atmBleed = 10;
+  const atmosphereBox: CSSProperties | null = !atmosphere
+    ? null
+    : firstTime
+      ? { padding: '2px 6px', borderRadius: 6 }
+      : style.bubble === true
+        ? { padding: `0.22em ${bubblePadX}`, borderRadius: 6 }
+        : { padding: `2px ${atmBleed}px`, marginLeft: -atmBleed, marginRight: -atmBleed, borderRadius: 6 };
 
   const rowStyle: CSSProperties = {
     ...enterVar,
@@ -946,7 +966,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
     overflow: atmosphere || (firstTime && !bubbleOn) ? 'hidden' : 'visible',
     lineHeight: style.lineHeight,
     textShadow: rowTextShadow(style),
-    ...(atmosphere ? { padding: '2px 6px', borderRadius: 6 } : null),
+    ...atmosphereBox,
     // Ring/bar thickness is in EM, not px: the overlay renders supersampled
     // (2x, scaled back down) and the builder preview scales tall canvases down
     // further, so a hardcoded 1px stroke lands sub-pixel and fades out. Em
@@ -1494,7 +1514,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
             display: 'inline-block' as const,
             maxWidth: '100%',
             borderRadius: bubbleRadius,
-            padding: bubbleShape === 'pill' ? '0.22em 0.8em' : '0.22em 0.6em',
+            padding: `0.22em ${bubblePadX}`,
             backgroundColor: bubbleBg,
           };
 
@@ -1536,7 +1556,9 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
         )}
         {atmosphereFrost ? (
           // The app's .atm-frost, inline: the overlay page has no app stylesheet.
-          <span style={{ display: 'inline-block', maxWidth: '100%', borderRadius: 6, backgroundColor: 'rgba(5,6,13,0.45)', padding: '0.5px 6px', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
+          // Its side padding is paid back with a negative margin so the text
+          // keeps the plain-row column.
+          <span style={{ display: 'inline-block', boxSizing: 'border-box', maxWidth: 'calc(100% + 12px)', margin: '0 -6px', borderRadius: 6, backgroundColor: 'rgba(5,6,13,0.45)', padding: '0.5px 6px', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
             {line}
           </span>
         ) : (

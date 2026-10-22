@@ -3480,7 +3480,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           <div
             className={`text-[10px] leading-tight mb-0.5 text-textSecondary ${
               atmosphereFrost
-                ? `block w-fit rounded-sm px-1 opacity-80 ${frostClass}`
+                ? `block w-fit rounded-sm px-1 -mx-1 opacity-80 ${frostClass}`
                 : 'opacity-50'
             }`}
           >
@@ -3497,7 +3497,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             text sits on its baseline, so a tall emote grows the line without
             moving the name away from the badges. */}
         <div
-          className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
+          className={atmosphereFrost ? `inline-block max-w-[calc(100%+0.75rem)] rounded-md px-1.5 -mx-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
           style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
         >
           {/* Where this row came from, when it is not the platform being watched.

@@ -1576,7 +1576,7 @@ const ProfileSettings = () => {
           <div
             className={`relative text-sm leading-relaxed ${
               previewFrost
-                ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${features.richAtmospheres ? 'atm-frost' : 'atm-frost atm-frost--flat'}`
+                ? `inline-block max-w-[calc(100%+0.75rem)] rounded-md px-1.5 -mx-1.5 py-0.5 ${features.richAtmospheres ? 'atm-frost' : 'atm-frost atm-frost--flat'}`
                 : ''
             }`}
           >
