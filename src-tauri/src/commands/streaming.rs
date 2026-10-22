@@ -360,12 +360,13 @@ async fn start_provider_stream(
 }
 
 /// "Auto": the quality the link decides. `auto` on every platform. On the
-/// phones "best" is also Auto, which is what they shipped; on the desktop
-/// "best" and "source" stay the fixed source rendition they always were.
+/// phones "best" is also Auto, which is what they shipped, whatever rules the
+/// governor runs; on the desktop "best" and "source" stay the fixed source
+/// rendition they always were.
 pub(crate) fn is_auto_quality(quality: &str) -> bool {
     match quality.trim().to_ascii_lowercase().as_str() {
         "auto" => true,
-        "best" | "source" => crate::services::link_adapt::phone_rules(),
+        "best" | "source" => cfg!(mobile),
         _ => false,
     }
 }
