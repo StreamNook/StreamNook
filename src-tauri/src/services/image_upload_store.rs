@@ -1,9 +1,10 @@
-//! What the image uploader remembers between runs, beside the settings and
-//! owned by the backend alone: the hosts the viewer said yes to (the first
-//! upload to a host asks once) and the images they uploaded, newest first,
-//! for the emote menu's Images section. Kept in `image_uploads.json` in the
-//! cache folder. A picture sent to a host whose links expire also keeps a
-//! copy in `image_uploads/`, so it can be sent again after its link dies.
+//! What the image uploader keeps, owned by the backend alone, in
+//! `image_uploads/` under the app's data folder: `uploads.json` (the hosts
+//! the viewer said yes to, since the first upload to a host asks once, and
+//! the uploads, newest first), `files/` (a copy of each picture sent, so it
+//! can be sent again, also after its link dies) and `thumbs/` (a small
+//! picture of each, which is all the Images section draws, so full-size
+//! pictures never sit decoded in the webview's memory).
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -12,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 /// How many uploads the section keeps.
 pub const MAX_RECENTS: usize = 100;
-/// The kept copies, all together, at most this big; the oldest go first.
-const MAX_COPY_BYTES: u64 = 300 * 1024 * 1024;
+/// The kept files, all together, at most this big; the oldest go first.
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RecentUpload {
@@ -30,9 +31,18 @@ pub struct RecentUpload {
     /// The URL that deletes it on the host (POST), where the host has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delete_url: Option<String>,
-    /// The kept copy's file name in `image_uploads/`.
+    /// The kept file's name in `files/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy: Option<String>,
+    /// The small picture's name in `thumbs/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<String>,
+    /// The file sent, its size and kind ("png", "jpg"); 0 and empty on
+    /// entries from before they were recorded.
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default)]
+    pub ext: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -44,29 +54,67 @@ struct Store {
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
+/// The folder everything here lives in.
+pub fn folder() -> Option<PathBuf> {
+    let dir = crate::services::cache_service::get_app_data_dir().ok()?.join("image_uploads");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 fn file() -> Option<PathBuf> {
-    crate::services::cache_service::get_cache_dir().ok().map(|d| d.join("image_uploads.json"))
+    folder().map(|d| d.join("uploads.json"))
 }
 
-fn copies_dir() -> Option<PathBuf> {
-    crate::services::cache_service::get_cache_dir().ok().map(|d| d.join("image_uploads"))
+fn sub(name: &str) -> Option<PathBuf> {
+    let dir = folder()?.join(name);
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
-/// Where a kept copy lives on disk.
+/// Where a kept file lives on disk.
 pub fn copy_path(name: &str) -> Option<PathBuf> {
-    copies_dir().map(|d| d.join(name))
+    sub("files").map(|d| d.join(name))
+}
+
+/// Where a small picture lives on disk.
+pub fn thumb_path(name: &str) -> Option<PathBuf> {
+    sub("thumbs").map(|d| d.join(name))
+}
+
+/// The store from before it moved out of the cache folder, with its kept
+/// files moved along.
+fn migrate_from_cache() -> Option<Store> {
+    let cache = crate::services::cache_service::get_cache_dir().ok()?;
+    let old = cache.join("image_uploads.json");
+    let store = serde_json::from_slice::<Store>(&std::fs::read(&old).ok()?).ok()?;
+    for name in store.recents.iter().filter_map(|r| r.copy.as_deref()) {
+        if let Some(to) = copy_path(name) {
+            let from = cache.join("image_uploads").join(name);
+            if std::fs::rename(&from, &to).is_err() && std::fs::copy(&from, &to).is_ok() {
+                let _ = std::fs::remove_file(&from);
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&old);
+    let _ = std::fs::remove_dir(cache.join("image_uploads"));
+    Some(store)
 }
 
 fn with_store<R>(write: bool, f: impl FnOnce(&mut Store) -> R) -> R {
     let mut guard = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut migrated = false;
     let store = guard.get_or_insert_with(|| {
         file()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice::<Store>(&bytes).ok())
+            .or_else(|| {
+                migrated = true;
+                migrate_from_cache()
+            })
             .unwrap_or_default()
     });
     let out = f(store);
-    if write {
+    if write || migrated {
         if let (Some(path), Ok(bytes)) = (file(), serde_json::to_vec(store)) {
             if let Err(e) = std::fs::write(&path, bytes) {
                 log::warn!("[image_upload] could not save {}: {}", path.display(), e);
@@ -89,7 +137,7 @@ pub fn accept(host: &str) {
 }
 
 /// The uploads to show at `now_ms`, newest first: an expired link stays only
-/// while its copy does (it can be sent again); the rest are dropped.
+/// while its file does (it can be sent again); the rest are dropped.
 pub fn recents(now_ms: i64) -> Vec<RecentUpload> {
     with_store(false, |s| shown(&s.recents, now_ms, |name| copy_path(name).is_some_and(|p| p.is_file())))
 }
@@ -98,50 +146,91 @@ pub fn find(url: &str) -> Option<RecentUpload> {
     with_store(false, |s| s.recents.iter().find(|r| r.url == url).cloned())
 }
 
-/// Saves a copy of `bytes` for an upload whose link will expire; the file
-/// name to store on its entry.
-pub fn keep_copy(bytes: &[u8], ext: &str) -> Option<String> {
-    let dir = copies_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
+fn keep(dir: Option<PathBuf>, bytes: &[u8], ext: &str) -> Option<String> {
     let name = format!("{:016x}.{ext}", rand::random::<u64>());
-    std::fs::write(dir.join(&name), bytes).ok()?;
+    std::fs::write(dir?.join(&name), bytes).ok()?;
     Some(name)
 }
 
-/// Adds an upload (or replaces the one with `replacing`'s link, keeping its
-/// place), then trims the list and the kept copies to their caps.
-pub fn remember(upload: RecentUpload, replacing: Option<&str>) {
-    let dropped = with_store(true, |s| {
-        let mut dropped = Vec::new();
-        if let Some(old) = replacing.and_then(|u| s.recents.iter().position(|r| r.url == u)) {
-            let prev = std::mem::replace(&mut s.recents[old], upload);
-            if prev.copy != s.recents[old].copy {
-                dropped.extend(prev.copy);
-            }
-        } else {
-            dropped.extend(push(&mut s.recents, upload).into_iter().filter_map(|r| r.copy));
-        }
-        dropped.extend(trim_copies(&mut s.recents));
-        dropped
-    });
-    remove_copies(&dropped);
+/// Saves the picture sent; the file name to store on its entry.
+pub fn keep_copy(bytes: &[u8], ext: &str) -> Option<String> {
+    keep(sub("files"), bytes, ext)
 }
 
-/// Takes an upload off the list, and its kept copy off the disk.
+/// Saves a small picture; the file name to store on its entry.
+pub fn keep_thumb(bytes: &[u8], ext: &str) -> Option<String> {
+    keep(sub("thumbs"), bytes, ext)
+}
+
+/// Gives an entry its small picture (made after the fact, for an upload from
+/// before small pictures were kept).
+pub fn set_thumb(url: &str, name: String) {
+    let stale = with_store(true, |s| {
+        let r = s.recents.iter_mut().find(|r| r.url == url)?;
+        r.thumb.replace(name)
+    });
+    remove_files(&[], &stale.into_iter().collect::<Vec<_>>());
+}
+
+/// The entries still without a small picture: their link, and their kept
+/// file when there is one.
+pub fn missing_thumbs() -> Vec<(String, Option<String>)> {
+    with_store(false, |s| {
+        s.recents
+            .iter()
+            .filter(|r| r.thumb.as_deref().and_then(thumb_path).is_none_or(|p| !p.is_file()))
+            .map(|r| (r.url.clone(), r.copy.clone()))
+            .collect()
+    })
+}
+
+/// Adds an upload (or replaces the one with `replacing`'s link, keeping its
+/// place), then trims the list and the kept files to their caps.
+pub fn remember(upload: RecentUpload, replacing: Option<&str>) {
+    let (files, thumbs) = with_store(true, |s| {
+        let mut gone: Vec<RecentUpload> = Vec::new();
+        if let Some(old) = replacing.and_then(|u| s.recents.iter().position(|r| r.url == u)) {
+            let prev = std::mem::replace(&mut s.recents[old], upload);
+            let now = &s.recents[old];
+            gone.push(RecentUpload {
+                copy: prev.copy.filter(|c| now.copy.as_ref() != Some(c)),
+                thumb: prev.thumb.filter(|t| now.thumb.as_ref() != Some(t)),
+                ..Default::default()
+            });
+        } else {
+            gone.extend(push(&mut s.recents, upload));
+        }
+        let mut files: Vec<String> = gone.iter().filter_map(|r| r.copy.clone()).collect();
+        let thumbs: Vec<String> = gone.iter().filter_map(|r| r.thumb.clone()).collect();
+        files.extend(trim_copies(&mut s.recents));
+        (files, thumbs)
+    });
+    remove_files(&files, &thumbs);
+}
+
+/// Takes an upload off the list, and its files off the disk.
 pub fn forget(url: &str) -> Option<RecentUpload> {
     let gone = with_store(true, |s| {
         let at = s.recents.iter().position(|r| r.url == url)?;
         Some(s.recents.remove(at))
     })?;
-    remove_copies(gone.copy.as_slice());
+    remove_files(gone.copy.as_slice(), gone.thumb.as_slice());
     Some(gone)
 }
 
-fn remove_copies(names: &[String]) {
-    for name in names {
-        if let Some(path) = copy_path(name) {
-            let _ = std::fs::remove_file(path);
-        }
+/// What the kept files and small pictures take on disk.
+pub fn disk_bytes() -> u64 {
+    let size = |dir: Option<PathBuf>| -> u64 {
+        dir.and_then(|d| std::fs::read_dir(d).ok())
+            .map(|entries| entries.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+            .unwrap_or(0)
+    };
+    size(sub("files")) + size(sub("thumbs"))
+}
+
+fn remove_files(files: &[String], thumbs: &[String]) {
+    for path in files.iter().filter_map(|n| copy_path(n)).chain(thumbs.iter().filter_map(|n| thumb_path(n))) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -166,8 +255,8 @@ fn push(list: &mut Vec<RecentUpload>, upload: RecentUpload) -> Vec<RecentUpload>
     dropped
 }
 
-/// Drops the oldest kept copies past `MAX_COPY_BYTES` (their entries stay,
-/// without a copy); returns the file names to delete.
+/// Drops the oldest kept files past `MAX_FILE_BYTES` (their entries stay,
+/// without a file); returns the file names to delete.
 fn trim_copies(list: &mut [RecentUpload]) -> Vec<String> {
     let size = |name: &str| copy_path(name).and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len());
     let mut total: u64 = 0;
@@ -175,7 +264,7 @@ fn trim_copies(list: &mut [RecentUpload]) -> Vec<String> {
     for r in list.iter_mut() {
         let Some(name) = r.copy.clone() else { continue };
         total += size(&name);
-        if total > MAX_COPY_BYTES {
+        if total > MAX_FILE_BYTES {
             dropped.push(name);
             r.copy = None;
         }

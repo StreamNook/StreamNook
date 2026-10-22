@@ -137,9 +137,29 @@ export function setUploadHost(id: string): Promise<void> {
   return updateSettings({ ...settings, chat_input: { ...settings.chat_input, image_uploader: { ...up, preset: id } } });
 }
 
-/** A kept copy as an image source. */
-export function copySrc(path: string): string {
+/** How the Images tab shows uploads (a setting, so it sticks). */
+export function setUploadView(view: 'grid' | 'list'): Promise<void> {
+  const { settings, updateSettings } = useAppStore.getState();
+  const up = settings.chat_input?.image_uploader ?? {};
+  return updateSettings({ ...settings, chat_input: { ...settings.chat_input, image_uploader: { ...up, view } } });
+}
+
+/** Copies an upload's link. */
+export function copyLink(url: string): Promise<boolean> {
+  return navigator.clipboard.writeText(url).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** A file the app keeps (a small picture, a copy) as an image source. */
+export function localSrc(path: string): string {
   return convertFileSrc(path);
+}
+
+/** Shows the folder the uploads are kept in (desktop). */
+export function openUploadsFolder(): Promise<void> {
+  return invoke<void>('open_image_uploads_folder').catch(() => {});
 }
 
 /** Paste and drop: upload, then put the link where the caret is. */

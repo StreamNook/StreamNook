@@ -1361,6 +1361,9 @@ pub struct ImageUploaderSettings {
     /// JSON path, or a `{field}` template (`services::image_upload::link_from_reply`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_path: Option<String>,
+    /// How the Images tab shows uploads: "grid" (pictures) or "list" (details).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -1375,6 +1378,7 @@ impl Default for ImageUploaderSettings {
             form_field: None,
             extra_fields: None,
             response_path: None,
+            view: None,
             extra: HashMap::new(),
         }
     }

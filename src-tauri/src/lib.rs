@@ -40,8 +40,8 @@ use commands::moderation_tools::{
     update_channel_info,
 };
 use commands::image_upload::{
-    accept_image_upload_host, delete_image_upload, image_upload_hosts, image_upload_panel, reupload_image,
-    test_image_upload, upload_chat_image,
+    accept_image_upload_host, delete_image_upload, image_upload_hosts, image_upload_panel, open_image_uploads_folder,
+    reupload_image, test_image_upload, upload_chat_image,
 };
 use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
@@ -2026,6 +2026,7 @@ pub fn run() {
             test_image_upload,
             reupload_image,
             delete_image_upload,
+            open_image_uploads_folder,
             start_multi_chat,
             provider_chat_connect,
             chat_bridge_port,

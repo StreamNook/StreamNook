@@ -78,8 +78,9 @@ scopeguard = "1.2"
 phf = { version = "0.14", features = ["macros"] }
 lru = "0.18"
 # Decoding and re-encoding pictures: screen capture and media glow on the
-# desktop, and chat image uploads on every target (services/image_upload).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# desktop, and chat image uploads on every target (services/image_upload;
+# gif and webp decode only, for the small pictures of uploads).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Sniffs and sizes images from their first bytes (chat image uploads and the
 # size an image link card is drawn at). Header parsing only, no decoders.
 imagesize = { version = "0.14", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "heif"] }

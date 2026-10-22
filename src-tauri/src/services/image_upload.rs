@@ -148,6 +148,8 @@ pub struct UploadHost {
     pub deletes_from_host: bool,
     /// Its links stop working after a while.
     pub expires: bool,
+    /// How long its links last, when the host says (Litterbox 72, uguu 3).
+    pub lifetime_hours: Option<u32>,
 }
 
 /// The request one upload makes.
@@ -183,6 +185,7 @@ impl Target {
             max_mb: (self.max_bytes / (1024 * 1024)) as u32,
             deletes_from_host: !self.delete_template.is_empty(),
             expires: self.expires(),
+            lifetime_hours: self.lifetime_hours,
         }
     }
 
@@ -200,6 +203,7 @@ fn preset_host(p: &Preset) -> UploadHost {
         max_mb: p.max_mb,
         deletes_from_host: !p.delete.is_empty(),
         expires: p.lifetime_hours.is_some() || EXPIRING.contains(&p.id),
+        lifetime_hours: p.lifetime_hours,
     }
 }
 
@@ -222,6 +226,7 @@ pub fn host_for_key(key: &str) -> UploadHost {
         max_mb: (MAX_INPUT_BYTES / (1024 * 1024)) as u32,
         deletes_from_host: false,
         expires: false,
+        lifetime_hours: None,
     }
 }
 
@@ -400,6 +405,30 @@ pub fn prepare(bytes: Vec<u8>, target: &Target) -> Result<Prepared, String> {
         }
         _ if bytes.len() > target.max_bytes => over_limit(bytes.len()),
         _ => Ok(Prepared { bytes, ext, mime, width: w, height: h }),
+    }
+}
+
+/// The longest edge of an upload's small picture.
+const THUMB_EDGE: u32 = 320;
+
+/// A small picture of an upload (a GIF's first frame): JPEG, or PNG when it
+/// has see-through parts. None for what cannot be decoded here (AVIF, BMP).
+/// CPU work: call from `spawn_blocking`.
+pub fn thumbnail(bytes: &[u8]) -> Option<(Vec<u8>, &'static str)> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    reader.limits(decode_limits());
+    let img = reader.decode().ok()?;
+    let small = if img.width().max(img.height()) > THUMB_EDGE {
+        img.thumbnail(THUMB_EDGE, THUMB_EDGE)
+    } else {
+        img
+    };
+    if small.color().has_alpha() {
+        let mut out = Vec::new();
+        small.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+        Some((out, "png"))
+    } else {
+        jpeg(&small, 82, None).ok().map(|out| (out, "jpg"))
     }
 }
 
@@ -706,6 +735,70 @@ fn expiry_from_reply(json: &serde_json::Value) -> Option<i64> {
     }
 }
 
+/// How long ago, in words: "just now", "5 minutes ago", "2 hours ago",
+/// "3 days ago".
+pub fn ago_label(at_ms: i64, now_ms: i64) -> String {
+    let minutes = (now_ms - at_ms).max(0) / 60_000;
+    let (n, unit) = if minutes < 1 {
+        return "just now".into();
+    } else if minutes < 60 {
+        (minutes, "minute")
+    } else if minutes < 48 * 60 {
+        (minutes / 60, "hour")
+    } else {
+        (minutes / (24 * 60), "day")
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// A moment on this device's clock: "Oct 21, 3:40 PM".
+pub fn clock_label(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|t| t.format("%b %-d, %-I:%M %p").to_string())
+        .unwrap_or_default()
+}
+
+/// What an upload is: "1920 × 1080 · PNG · 1.4 MB" (the size left out when
+/// it was not recorded).
+pub fn details_label(width: u32, height: u32, ext: &str, bytes: u64) -> String {
+    let mut parts = Vec::new();
+    if width > 0 && height > 0 {
+        parts.push(format!("{width} × {height}"));
+    }
+    if !ext.is_empty() {
+        parts.push(if ext == "jpg" { "JPG".to_string() } else { ext.to_ascii_uppercase() });
+    }
+    if bytes > 0 {
+        parts.push(size_label(bytes));
+    }
+    parts.join(" · ")
+}
+
+/// "1.4 MB", "12 KB", "1.2 GB".
+pub fn size_label(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    if bytes as f64 >= 1024.0 * MB {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * MB))
+    } else if bytes as f64 >= MB {
+        format!("{:.1} MB", bytes as f64 / MB)
+    } else {
+        format!("{} KB", (bytes / 1024).max(if bytes == 0 { 0 } else { 1 }))
+    }
+}
+
+/// The full expiry line for an upload's details.
+pub fn expiry_label(expires_ms: Option<i64>, host_expires: bool, host_label: &str, now_ms: i64) -> String {
+    match expires_ms {
+        Some(e) if e <= now_ms => format!("Expired {}", clock_label(e)),
+        Some(e) => format!("Expires {} ({})", clock_label(e), time_left_label(e, now_ms)),
+        None if host_expires => format!("Expires after a while; {host_label} doesn't say when"),
+        None => "Kept indefinitely".into(),
+    }
+}
+
 /// How long a link has left, in words: "2 days left", "5 hours left",
 /// "40 minutes left", or "Expired".
 pub fn time_left_label(expires_ms: i64, now_ms: i64) -> String {
@@ -803,6 +896,35 @@ mod tests {
         assert_eq!(time_left_label(90 * 60_000, 0), "90 minutes left");
         assert_eq!(time_left_label(30_000, 0), "1 minute left");
         assert_eq!(time_left_label(0, 5), "Expired");
+    }
+
+    #[test]
+    fn small_pictures_keep_shape_and_transparency() {
+        let (png, ext) = thumbnail(&png_of(1000, 500)).unwrap();
+        assert_eq!(ext, "png", "see-through stays PNG");
+        let small = image::load_from_memory(&png).unwrap();
+        assert_eq!((small.width(), small.height()), (320, 160));
+        let opaque = jpeg(&DynamicImage::new_rgb8(200, 100), 90, None).unwrap();
+        let (jpg, ext) = thumbnail(&opaque).unwrap();
+        assert_eq!(ext, "jpg");
+        assert_eq!(image::load_from_memory(&jpg).unwrap().width(), 200, "never made bigger");
+        assert!(thumbnail(b"not a picture").is_none());
+    }
+
+    #[test]
+    fn detail_words() {
+        let m = 60_000;
+        assert_eq!(ago_label(0, 30_000), "just now");
+        assert_eq!(ago_label(0, m), "1 minute ago");
+        assert_eq!(ago_label(0, 5 * 60 * m), "5 hours ago");
+        assert_eq!(ago_label(0, 3 * 24 * 60 * m), "3 days ago");
+        assert_eq!(details_label(1920, 1080, "png", 1_468_006), "1920 × 1080 · PNG · 1.4 MB");
+        assert_eq!(details_label(64, 64, "jpg", 900), "64 × 64 · JPG · 1 KB");
+        assert_eq!(details_label(10, 10, "gif", 0), "10 × 10 · GIF");
+        assert_eq!(expiry_label(None, false, "kappa.lol", 0), "Kept indefinitely");
+        assert_eq!(expiry_label(None, true, "imgdrip.com", 0), "Expires after a while; imgdrip.com doesn't say when");
+        assert!(expiry_label(Some(10), true, "uguu.se", 20).starts_with("Expired "));
+        assert!(expiry_label(Some(3 * 3_600_000), true, "uguu.se", 0).ends_with("(3 hours left)"));
     }
 
     #[test]

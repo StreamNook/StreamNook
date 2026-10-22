@@ -763,6 +763,8 @@ export interface ImageUploaderSettings {
   // Where the link is in the reply: empty = the body is the link, a dotted
   // JSON path (data.link) or a {field} template ({link}{ext}).
   response_path?: string;
+  // How the Images tab shows uploads: "grid" (pictures) or "list" (details).
+  view?: 'grid' | 'list';
 }
 
 /** One upload (`upload_chat_image`, `reupload_image`, the panel's groups). */
@@ -781,6 +783,19 @@ export interface UploadedImage {
   can_reupload: boolean;
   /** The kept copy on disk, drawn in place of a dead link. */
   copy_path?: string;
+  /** The small picture on disk, which is what the Images section draws. */
+  thumb_path?: string;
+  /** Less than a day left on the link. */
+  urgent: boolean;
+  uploaded_ms: number;
+  /** "2 hours ago". */
+  uploaded: string;
+  /** "Oct 21, 3:40 PM". */
+  uploaded_at: string;
+  /** "Expires Oct 23, 3:40 PM (2 days left)", "Kept indefinitely", ... */
+  expiry: string;
+  /** "1920 × 1080 · PNG · 1.4 MB". */
+  details: string;
 }
 
 /** One image host StreamNook can upload to (`image_upload_hosts`). */
@@ -795,6 +810,8 @@ export interface UploadHost {
   deletes_from_host: boolean;
   /** Its links stop working after a while. */
   expires: boolean;
+  /** How long its links last, when the host says (Litterbox 72, uguu 3). */
+  lifetime_hours?: number | null;
 }
 
 /** The uploads to one host, newest first. */
@@ -811,6 +828,10 @@ export interface ImageUploadPanel {
   needs_consent: boolean;
   /** Uploads by host, the host used most recently first. */
   groups: UploadGroup[];
+  /** "48 MB on this device": what the kept files take. */
+  storage: string;
+  /** The folder can be shown in the file manager (desktop). */
+  can_open_folder: boolean;
 }
 
 export interface ChatInputSettings {
