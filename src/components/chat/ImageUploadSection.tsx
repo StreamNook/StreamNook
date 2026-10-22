@@ -33,6 +33,7 @@ import {
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
 import { Tooltip } from '../ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import { MobileSheet } from '../../mobile/ui/MobileSheet';
 import type { ImageUploadPanel, UploadedImage, UploadGroup, UploadHost } from '../../types';
 import {
@@ -59,12 +60,17 @@ const MAX_ASPECT = 4.5;
 /** Labels go stale (time left, "2 hours ago"); the panel is read again this often. */
 const REFRESH_MS = 60_000;
 
-const headingClass = 'text-[10px] font-bold uppercase tracking-wider text-textSecondary';
+// The glaze set: flat blocks inside the menu (no frost of their own),
+// white/[0.06] dividers, every button a capsule (glazeButtons).
+const headingClass = 'text-[11px] font-semibold uppercase tracking-wider text-white/50';
+const BLOCK = 'rounded-xl bg-white/[0.035]';
+const DIVIDER = 'border-white/[0.06]';
+const ROUND = `flex ${IS_MOBILE ? 'h-8 w-8' : 'h-7 w-7'} flex-shrink-0 items-center justify-center`;
 /** The round glyph on a grid tile's corner (delete, sending again). */
 const badgeClass =
   'absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-glass-ink/90 text-white backdrop-blur-sm';
 /** A round icon button in a list row. */
-const actionClass = `flex ${IS_MOBILE ? 'h-8 w-8' : 'h-7 w-7'} items-center justify-center rounded-full glass-button text-textSecondary transition-colors hover:text-textPrimary disabled:opacity-50`;
+const actionClass = `${GLAZE_PILL} ${ROUND}`;
 
 /** The color an upload's time left takes: amber under a day, red once dead. */
 const timeTone = (item: UploadedImage) => (item.expired ? 'text-error' : item.urgent ? 'text-warning' : 'text-textMuted');
@@ -193,17 +199,14 @@ export default function ImageUploadSection({
 
   // Blocks of a scrolling column: shrink-0, or the clipped card collapses.
   const sendCard = (
-    <div className="glass-tile flex flex-shrink-0 flex-col overflow-hidden">
+    <div className={`${BLOCK} flex flex-shrink-0 flex-col overflow-hidden`}>
       <button
         type="button"
         onClick={choose}
         disabled={busy || !panel}
-        className="flex items-center gap-3 px-3.5 py-3.5 text-left transition-colors hover:bg-white/[0.03] disabled:cursor-default"
+        className="flex items-center gap-3 rounded-t-xl px-3.5 py-3.5 text-left transition-colors hover:bg-white/[0.04] disabled:cursor-default"
       >
-        <span
-          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl text-accent"
-          style={{ background: 'color-mix(in srgb, var(--color-accent) 16%, transparent)' }}
-        >
+        <span className="glaze-inset flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl text-white" style={ACCENT_FILL}>
           {busy ? <Loader2 size={20} className="animate-spin" aria-hidden /> : <ImageUp size={20} aria-hidden />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -216,7 +219,7 @@ export default function ImageUploadSection({
           </span>
         </span>
       </button>
-      <div className="flex items-center gap-2.5 border-t border-borderSubtle px-3.5 py-2.5">
+      <div className={`flex items-center gap-2.5 border-t ${DIVIDER} px-3.5 py-2.5`}>
         {host ? <HostBadge host={host} size={30} /> : <span className="h-[30px] w-[30px] flex-shrink-0" />}
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="truncate text-[12.5px] font-semibold text-textPrimary">{host?.label ?? '…'}</span>
@@ -227,7 +230,7 @@ export default function ImageUploadSection({
           onClick={() => setHostsOpen((v) => !v)}
           disabled={!host}
           aria-expanded={hostsOpen}
-          className="glass-button inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium text-textPrimary"
+          className={`${GLAZE_PILL} inline-flex h-7 flex-shrink-0 items-center gap-1 px-3 text-xs`}
         >
           Change
           <ChevronDown size={12} className={`transition-transform ${hostsOpen ? 'rotate-180' : ''}`} aria-hidden />
@@ -249,13 +252,13 @@ export default function ImageUploadSection({
               type="button"
               onClick={() => setManagerOpen(true)}
               aria-label="Open the uploads manager"
-              className="flex h-7 w-7 items-center justify-center rounded-full glass-button text-textSecondary transition-colors hover:text-textPrimary"
+              className={actionClass}
             >
               <Maximize2 size={12} aria-hidden />
             </button>
           </Tooltip>
         )}
-        <div className="flex items-center gap-0.5 rounded-full p-0.5 glass-button" role="group" aria-label="Show uploads as">
+        <div className="glaze-inset flex items-center gap-0.5 rounded-full bg-white/[0.08] p-0.5" role="group" aria-label="Show uploads as">
           {(
             [
               ['grid', LayoutGrid, 'Pictures'],
@@ -269,8 +272,9 @@ export default function ImageUploadSection({
                 aria-pressed={view === id}
                 aria-label={label}
                 className={`flex h-6 w-7 items-center justify-center rounded-full transition-colors ${
-                  view === id ? 'glass-button-active text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
+                  view === id ? 'glaze-inset text-white' : 'text-white/55 hover:text-white'
                 }`}
+                style={view === id ? ACCENT_FILL : undefined}
               >
                 <Icon size={13} aria-hidden />
               </button>
@@ -281,9 +285,8 @@ export default function ImageUploadSection({
           <button
             type="button"
             onClick={() => setEditing((v) => !v)}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              isEditing ? 'glass-button-active text-accent' : 'glass-button text-textSecondary hover:text-textPrimary'
-            }`}
+            className={`inline-flex h-7 items-center gap-1 px-3 ${isEditing ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`}`}
+            style={isEditing ? ACCENT_FILL : undefined}
           >
             {isEditing ? <Check size={12} aria-hidden /> : <Pencil size={11} aria-hidden />}
             {isEditing ? 'Done' : 'Edit'}
@@ -299,9 +302,10 @@ export default function ImageUploadSection({
                 type="button"
                 onClick={() => setFilter(t.id)}
                 aria-pressed={activeFilter === t.id}
-                className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[11px] transition-all ${
-                  activeFilter === t.id ? 'glass-button-active font-bold text-textPrimary' : 'glass-button text-textSecondary hover:text-white'
+                className={`flex h-7 min-w-0 flex-1 items-center justify-center gap-1 px-2 ${
+                  activeFilter === t.id ? `${ACCENT_BUTTON} !text-[11.5px]` : `${GLAZE_PILL} text-[11.5px]`
                 }`}
+                style={activeFilter === t.id ? ACCENT_FILL : undefined}
               >
                 <span className="truncate">{t.short}</span>
                 <span className="text-[10px] tabular-nums opacity-70">{t.count}</span>
@@ -339,7 +343,7 @@ export default function ImageUploadSection({
                 <div aria-hidden style={{ flexGrow: 10000, flexBasis: 0, height: 0 }} />
               </div>
             ) : (
-              <div className={full && !IS_MOBILE ? 'grid grid-cols-2 gap-2' : 'glass-tile flex flex-col overflow-hidden'}>
+              <div className={full && !IS_MOBILE ? 'grid grid-cols-2 gap-2' : `${BLOCK} flex flex-col overflow-hidden`}>
                 {items.map((item) => (
                   <Row
                     key={item.url}
@@ -377,7 +381,7 @@ export default function ImageUploadSection({
             <button
               type="button"
               onClick={() => void openUploadsFolder()}
-              className="ml-1 inline-flex items-center gap-1 rounded-full glass-button px-2.5 py-1 text-[11px] font-medium text-textSecondary hover:text-textPrimary"
+              className={`${GLAZE_PILL} ml-1 inline-flex h-7 items-center gap-1 px-3 text-xs`}
             >
               <FolderOpen size={12} aria-hidden />
               Open folder
@@ -435,9 +439,9 @@ function UploadsManager({ onClose, onInsert }: { onClose: () => void; onInsert: 
         role="dialog"
         aria-modal
         aria-label="Image uploads"
-        className="sn-popover flex h-[min(760px,92vh)] w-[min(1000px,96vw)] flex-col overflow-hidden"
+        className="glass-flyout flex h-[min(760px,92vh)] w-[min(1000px,96vw)] flex-col overflow-hidden rounded-2xl !p-0"
       >
-        <div className="flex items-center gap-2 border-b border-borderSubtle px-4 py-3">
+        <div className={`flex items-center gap-2 border-b ${DIVIDER} px-4 py-3`}>
           <ImageUp size={16} className="text-accent" aria-hidden />
           <h2 className="text-[14px] font-semibold text-textPrimary">Image uploads</h2>
           <span className="flex-1" />
@@ -446,7 +450,7 @@ function UploadsManager({ onClose, onInsert }: { onClose: () => void; onInsert: 
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="flex h-7 w-7 items-center justify-center rounded-full glass-button text-textSecondary transition-colors hover:text-textPrimary"
+              className={actionClass}
             >
               <X size={14} aria-hidden />
             </button>
@@ -501,8 +505,8 @@ const CHIP_TONE: Record<ChipTone, string> = {
 function Chip({ icon: Icon, tone = 'plain', children }: { icon: typeof Clock3; tone?: ChipTone; children: React.ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border border-borderSubtle px-1.5 py-[1px] text-[10px] font-medium leading-[15px] ${CHIP_TONE[tone]}`}
-      style={{ background: 'color-mix(in srgb, currentColor 8%, transparent)' }}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-semibold leading-[14px] ${CHIP_TONE[tone]}`}
+      style={{ background: 'color-mix(in srgb, currentColor 12%, transparent)' }}
     >
       <Icon size={10} className="flex-shrink-0" aria-hidden />
       {children}
@@ -531,7 +535,7 @@ function HostChips({ host }: { host: UploadHost }) {
 
 function HostList({ hosts, current, onPick }: { hosts: UploadHost[]; current: string; onPick: (h: UploadHost) => void }) {
   return (
-    <div className="flex flex-col gap-1 border-t border-borderSubtle p-1.5" role="listbox" aria-label="Where uploads go">
+    <div className={`flex flex-col gap-1 border-t ${DIVIDER} p-1.5`} role="listbox" aria-label="Where uploads go">
       {hosts.map((h) => {
         const active = h.id === current;
         return (
@@ -542,9 +546,7 @@ function HostList({ hosts, current, onPick }: { hosts: UploadHost[]; current: st
             aria-selected={active}
             onClick={() => onPick(h)}
             className={`flex items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors ${
-              active
-                ? 'bg-white/[0.05] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]'
-                : 'hover:bg-white/[0.04]'
+              active ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
             }`}
           >
             <HostBadge host={h} size={34} />
@@ -644,7 +646,7 @@ function Tile({
         disabled={working}
         aria-label={label}
         title={tip}
-        className={`glass-tile relative w-full overflow-hidden rounded-lg transition-opacity ${
+        className={`relative w-full overflow-hidden rounded-xl bg-white/[0.04] transition-opacity ${
           editing ? 'hover:opacity-80' : 'hover:opacity-90'
         } ${fits ? '' : 'bg-black/30'}`}
         style={{ aspectRatio: `${aspect}` }}
@@ -712,7 +714,7 @@ function Row({
   return (
     <div
       className={`flex gap-3 px-3 py-3 ${
-        full && !IS_MOBILE ? 'glass-tile' : 'border-b border-borderSubtle last:border-b-0'
+        full && !IS_MOBILE ? BLOCK : `border-b ${DIVIDER} last:border-b-0`
       }`}
     >
       <button
@@ -746,7 +748,7 @@ function Row({
         {item.details && <span className="text-[11px] text-textMuted">{item.details}</span>}
         <div className="mt-1 flex items-center gap-1.5">
           <Tooltip content={item.expired ? 'Send again and insert' : 'Insert link'} side="top">
-            <button type="button" onClick={onInsert} disabled={working} aria-label="Insert link" className={actionClass}>
+            <button type="button" onClick={onInsert} disabled={working} aria-label="Insert link" className={`${ACCENT_BUTTON} ${ROUND}`} style={ACCENT_FILL}>
               <MessageSquarePlus size={14} aria-hidden />
             </button>
           </Tooltip>
