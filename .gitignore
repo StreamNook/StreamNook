@@ -75,3 +75,6 @@ ios/CoreLib/
 ios/Sources/SNCore/streamnook_lib.swift
 ios/Sources/streamnook_libFFI/include/streamnook_libFFI.h
 ios/tools/uniffi-bindgen/target/
+
+# iOS re-signing cache (zsign)
+.zsign_cache/
