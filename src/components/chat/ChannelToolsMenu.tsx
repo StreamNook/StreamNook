@@ -11,7 +11,7 @@
 // ChatWidget decides which apply and renders the button only when at least
 // one does, so the row never carries a button that opens an empty menu.
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, ShieldAlert, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench, Pencil, Send, Tv, Megaphone } from 'lucide-react';
+import { Shield, ShieldAlert, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronLeft, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench, Pencil, Send, Tv, Megaphone } from 'lucide-react';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,11 +21,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
 import { useAppStore } from '../../stores/AppStore';
 import { usePinStore } from '../../stores/pinStore';
-import { isImeComposing } from '../../utils/imeComposing';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { managerAct, type ActOutcome, type ManagerAction, type SectionRow, type StreamManagerView } from '../../services/streamManager';
 import type { ManagerPanelKind } from './StreamManagerPanel';
+import BlockedTermsSheet from './BlockedTermsSheet';
+import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 
 export interface DropsTool {
   gameName: string;
@@ -72,7 +73,7 @@ interface ChannelToolsMenuProps {
   };
 }
 
-const SECTION_LABEL = 'text-[10px] font-semibold text-white/40 tracking-wider uppercase';
+const SECTION_LABEL = 'text-[11px] font-semibold text-white/50 tracking-wider uppercase';
 
 const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   broadcasterId,
@@ -101,7 +102,8 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   useFitAbove(menuRef, isOpen, 520);
   const [isPending, setIsPending] = useState(false);
-  const [blockTerm, setBlockTerm] = useState('');
+  // The Blocked terms page takes the menu's body in place of the sections.
+  const [page, setPage] = useState<'tools' | 'blocked'>('tools');
   // Read once per open rather than subscribed: the engine holds this in a plain
   // module Map with no store behind it, and the menu is short-lived anyway.
   const [activeNukeCount, setActiveNukeCount] = useState(0);
@@ -151,6 +153,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
     setIsOpen(false);
     setIsConfirmingClear(false);
     setIsConfirmingShield(false);
+    setPage('tools');
   });
 
   const handleToggleSetting = async (setting: string, currentValue: boolean | number) => {
@@ -240,6 +243,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
           onClick={() => {
             setIsOpen(!isOpen);
             setIsConfirmingClear(false);
+            setPage('tools');
           }}
           aria-label="Channel tools"
           aria-expanded={isOpen}
@@ -264,12 +268,28 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
             transition={{ duration: 0.15, ease: "easeOut" }}
-            className="sn-popover absolute z-[60] bottom-full left-0 right-0 mb-2 max-h-[520px] flex flex-col overflow-hidden origin-bottom"
+            // The glazed controls' menu body, like the chat header's flyouts.
+            className="glass-flyout absolute z-[60] bottom-full left-0 right-0 mb-2 max-h-[520px] flex flex-col overflow-hidden rounded-xl origin-bottom"
           >
-            <div className="px-4 py-3 border-b border-white/5 flex items-center bg-glass-base/50 backdrop-blur-md shadow-sm z-10 relative">
-              <span className="text-[11px] font-semibold text-white/50 tracking-wider uppercase">Tools</span>
+            {/* No frost of its own: the flyout is already the backdrop. */}
+            <div className="px-4 py-3 border-b border-white/[0.06] flex items-center z-10 relative">
+              {page === 'blocked' ? (
+                <button
+                  onClick={() => setPage('tools')}
+                  aria-label="Back to tools"
+                  className="-ml-1 flex items-center gap-1 text-[11px] font-semibold text-white/50 tracking-wider uppercase hover:text-white/80 transition-colors"
+                >
+                  <ChevronLeft size={13} strokeWidth={2.5} />
+                  Blocked terms
+                </button>
+              ) : (
+                <span className="text-[11px] font-semibold text-white/50 tracking-wider uppercase">Tools</span>
+              )}
             </div>
 
+            {page === 'blocked' && canModerate ? (
+              <BlockedTermsSheet key={broadcasterId} broadcasterId={broadcasterId} />
+            ) : (
             <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1">
               {drops && (
                 <div className="p-1.5 flex flex-col gap-1">
@@ -287,7 +307,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
               )}
 
               {canRunPolls && channelRows.length > 0 && (
-                <div className={`p-1.5 flex flex-col gap-1 ${drops ? 'border-t border-white/10' : ''}`}>
+                <div className={`p-1.5 flex flex-col gap-1 ${drops ? 'border-t border-white/[0.06]' : ''}`}>
                   <div className="px-2 pt-1 pb-0.5">
                     <span className={SECTION_LABEL}>{isBroadcaster ? 'Your channel' : 'Channel'}</span>
                   </div>
@@ -340,7 +360,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
 
               {canModerate && (
                 <>
-                  <div className={`p-1.5 flex flex-col gap-1 ${drops || canRunPolls ? 'border-t border-white/10' : ''}`}>
+                  <div className={`p-1.5 flex flex-col gap-1 ${drops || canRunPolls ? 'border-t border-white/[0.06]' : ''}`}>
                     <div className="px-2 pt-1 pb-0.5">
                       <span className={SECTION_LABEL}>Chat modes</span>
                     </div>
@@ -447,7 +467,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                       ))}
                   </div>
 
-                  <div className="p-1.5 border-t border-white/10 flex flex-col gap-1">
+                  <div className="p-1.5 border-t border-white/[0.06] flex flex-col gap-1">
                     <div className="px-2 pt-1 pb-0.5">
                       <span className={SECTION_LABEL}>Moderation</span>
                     </div>
@@ -503,39 +523,14 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                       <span className="text-sm text-white/70 group-hover:text-white">Unpin message</span>
                     </button>
 
-                    {/* Blocked terms. An inline field rather than a sub-panel: adding
-                        one is the whole interaction, and AutoMod's full list already
-                        lives on Twitch. */}
-                    <div className="px-2.5 py-2 flex items-center gap-2.5">
-                      <div className="flex items-center justify-center text-white/40 flex-shrink-0">
-                        <Ban size={14} />
-                      </div>
-                      <input
-                        value={blockTerm}
-                        onChange={(e) => setBlockTerm(e.target.value)}
-                        onKeyDown={async (e) => {
-                          if (e.key !== 'Enter' || isImeComposing(e)) return;
-                          const phrase = blockTerm.trim();
-                          if (!phrase || isPending || !broadcasterId) return;
-                          setIsPending(true);
-                          try {
-                            await invoke('add_blocked_term', { broadcasterId, text: phrase });
-                            addToast(`Blocked "${phrase}"`, 'success');
-                            setBlockTerm('');
-                          } catch (err) {
-                            Logger.error('[ChannelToolsMenu] Failed to block term:', err);
-                            addToast(typeof err === 'string' ? err : 'Could not block that', 'error');
-                          } finally {
-                            setIsPending(false);
-                          }
-                        }}
-                        placeholder="Block a phrase, then Enter"
-                        className="flex-1 min-w-0 bg-white/5 hover:bg-white/10 focus:bg-white/10 rounded px-2 py-1 text-[12px] text-white/90 placeholder-white/30 outline-none transition-colors"
-                      />
-                    </div>
+                    {/* Blocking a phrase and the channel's whole list live on
+                        their own page, which takes the menu's body. */}
+                    {broadcasterId && (
+                      <MenuActionItem icon={<Ban size={14} />} label="Blocked terms" onClick={() => setPage('blocked')} />
+                    )}
                   </div>
 
-                  <div className="p-1.5 border-t border-white/10 flex flex-col gap-1">
+                  <div className="p-1.5 border-t border-white/[0.06] flex flex-col gap-1">
                     <div className="px-2 pt-1 pb-0.5">
                       <span className={SECTION_LABEL}>Your settings</span>
                     </div>
@@ -583,35 +578,37 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                 </>
               )}
             </div>
+            )}
 
-            {canModerate && (
-              <div className="p-1.5 border-t border-white/10 shrink-0 bg-background/50">
+            {canModerate && page === 'tools' && (
+              <div className="p-1.5 border-t border-white/[0.06] shrink-0">
                 {!isConfirmingClear ? (
                   <button
                     onClick={() => setIsConfirmingClear(true)}
                     disabled={isPending}
-                    className="w-full text-left px-2 py-1.5 rounded-md flex items-center gap-2.5 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
+                    className="w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
                   >
                     <Slash size={14} />
                     <span>Clear chat</span>
                   </button>
                 ) : (
-                  <div className="flex items-center justify-between px-2 py-1">
-                    <span className="text-xs text-red-400 font-medium tracking-wide">Clear everyone's chat?</span>
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                    <span className="text-[13px] text-red-400 font-medium">Clear everyone's chat?</span>
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={handleClearChat}
                         disabled={isPending}
-                        className="px-2.5 py-1 text-xs font-semibold bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded transition-colors disabled:opacity-50"
+                        className={`${ACCENT_BUTTON} h-7 px-3.5 !text-xs`}
+                        style={DANGER_FILL}
                       >
-                        Yes
+                        Clear
                       </button>
                       <button
                         onClick={() => setIsConfirmingClear(false)}
                         disabled={isPending}
-                        className="px-2.5 py-1 text-xs font-semibold bg-white/10 hover:bg-white/20 text-white/70 rounded transition-colors disabled:opacity-50"
+                        className={`${GLAZE_PILL} h-7 px-3.5 text-xs`}
                       >
-                        No
+                        Cancel
                       </button>
                     </div>
                   </div>

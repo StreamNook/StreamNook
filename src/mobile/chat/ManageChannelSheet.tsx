@@ -1,6 +1,6 @@
 // The phone's stream manager: one sheet behind the chat menu's "Manage
 // channel" row, shown to the broadcaster and the channel's moderators. A page
-// of sections (Stream, Chat), each opening its form in the same sheet. Rust
+// of sections (Stream, Chat, Moderation), each opening its form in the same sheet. Rust
 // builds the view and runs every write (services/stream_manager.rs); the forms
 // are the desktop builders' own (ManagerForm), so both apps say the same thing.
 import React, { useState } from 'react';
@@ -10,8 +10,9 @@ import { useAppStore } from '../../stores/AppStore';
 import { ManagerForm, TITLES, type ManagerPanelKind } from '../../components/chat/StreamManagerPanel';
 import PollPredictionComposer from '../../components/chat/PollPredictionComposer';
 import { managerAct, useStreamManager, type ManagerAction, type ManagerSection } from '../../services/streamManager';
+import { BlockedTermsPage } from './BlockedTermsPage';
 
-type Page = 'home' | 'poll' | 'prediction' | ManagerPanelKind;
+type Page = 'home' | 'poll' | 'prediction' | 'blocked' | ManagerPanelKind;
 
 interface Props {
   open: boolean;
@@ -54,7 +55,12 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
         ? 'Start a poll'
         : page === 'prediction'
           ? 'Start a prediction'
-          : TITLES[page].title;
+          : page === 'blocked'
+            ? 'Blocked terms'
+            : TITLES[page].title;
+
+  // Blocked terms are a moderator's tool; editors alone cannot read them.
+  const moderates = view?.role === 'broadcaster' || view?.role === 'moderator' || view?.role === 'moderator_editor';
 
   const row = 'sn-touch w-full flex items-center gap-3 px-3 min-h-[48px] text-left active:opacity-70 disabled:opacity-45';
   const group = 'rounded-2xl bg-white/[0.05] overflow-hidden divide-y divide-borderSubtle';
@@ -221,6 +227,18 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
                 </div>
               )}
 
+              {moderates && (
+                <div>
+                  <div className={groupLabel}>Moderation</div>
+                  <div className={group}>
+                    <button onClick={() => setPage('blocked')} className={row}>
+                      <span className="flex-1 text-[15px] text-textPrimary">Blocked terms</span>
+                      <CaretRight size={16} className="text-textMuted" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {view.problems.map((p) => (
                 <p key={p} className="px-1 text-[12.5px] text-textMuted">
                   {p}
@@ -240,7 +258,9 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
             />
           )}
 
-          {view && page !== 'home' && page !== 'poll' && page !== 'prediction' && (
+          {view && page === 'blocked' && <BlockedTermsPage channelId={view.channel_id} />}
+
+          {view && page !== 'home' && page !== 'poll' && page !== 'prediction' && page !== 'blocked' && (
             <div className="pt-1">
               <ManagerForm
                 kind={page}
